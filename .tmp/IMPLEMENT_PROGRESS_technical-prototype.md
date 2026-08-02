@@ -3,12 +3,12 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-08-02T14:43:31+02:00
+- Updated: 2026-08-02T17:30:00+02:00
 
 ## Assumptions
 
-- No git remote → local commits only until origin exists.
-- Parallel off; serial tickets.
+- No git remote → local commits only.
+- Full prod bench hours; --test-policy for smoke.
 
 ## Status
 
@@ -25,15 +25,15 @@
 | T9  | Windows/D3D12 port | blocked_user | 1785ca6 | need Win11 ref PC |
 | T10 | macOS/Metal port | blocked_user | c37a377 | need M4 Mac |
 | T11 | Benchmark + JSON report | done | 6d2047a | |
-| T12 | Zero-allocation contract | pending | — | |
-| T13 | Backend golden correctness | pending | — | blocked_dep T9/T10 |
+| T12 | Zero-allocation contract | done | pending_commit | |
+| T13 | Backend golden correctness | blocked_dep | — | needs T9+T10 |
 | T14 | Trusted local lab CLI | pending | — | |
 | T15 | Ubuntu runner contract | pending | — | |
 | T16 | Ubuntu recovery + attestation | pending | — | physical |
-| T17 | Ubuntu candidate gate | pending | — | physical |
+| T17 | Ubuntu candidate gate | pending | — | needs T12 T13 T16 |
 | T18 | Windows runner contract | pending | — | |
 | T19 | Windows recovery + attestation | pending | — | physical |
-| T20 | Windows candidate gate | pending | — | physical |
+| T20 | Windows candidate gate | pending | — | |
 | T21 | macOS runner contract | pending | — | |
 | T22 | macOS recovery + attestation | pending | — | TODO(user) MDM |
 | T23 | macOS candidate gate | pending | — | |
@@ -44,8 +44,7 @@
 
 ## Log
 
-- T1–T8 done
-- T9 blocked_user need Windows
-- T10 blocked_user need M4
-- T11 start
-- T11 done: bench scale curve + schema + 2-frame queue; release short smoke pass
+- T1–T8 T11 done
+- T9 T10 blocked_user
+- T13 blocked_dep
+- T12 zero-alloc guard + report field + inject flag; dry path rust_allocs=0

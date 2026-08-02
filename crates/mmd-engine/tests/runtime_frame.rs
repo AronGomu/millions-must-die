@@ -34,31 +34,36 @@ fn pause_keeps_checksum() {
     let tick = rt.tick_index();
     rt.apply_action(InputAction::TogglePause);
     assert!(rt.paused());
-    let out = rt.tick_and_render();
+    let out_hash = rt.tick_and_render().state_hash;
     assert_eq!(rt.tick_index(), tick);
     assert_eq!(rt.state_hash(), hash);
-    assert_eq!(out.state_hash, hash);
+    assert_eq!(out_hash, hash);
 }
 
 #[test]
 fn builds_50000_instances() {
     let mut rt = Runtime::load(&gate_scenario(), None).expect("load");
     assert_eq!(rt.agent_count(), 50_000);
-    let out = rt.tick_and_render();
-    let total: usize = out.groups.iter().map(|g| g.instances.len()).sum();
+    let total: usize = {
+        let out = rt.tick_and_render();
+        out.groups.iter().map(|g| g.instances.len()).sum()
+    };
     assert_eq!(total, 50_000);
 }
 
 #[test]
 fn partitions_four_groups() {
     let mut rt = Runtime::load(&gate_scenario(), None).expect("load");
-    let out = rt.tick_and_render();
-    assert_eq!(out.groups.len(), ATLAS_COUNT);
-    let mut counts = [0u32; ATLAS_COUNT];
-    for (i, g) in out.groups.iter().enumerate() {
-        assert_eq!(g.atlas_id as usize, i);
-        counts[i] = g.instances.len() as u32;
-    }
+    let counts = {
+        let out = rt.tick_and_render();
+        assert_eq!(out.groups.len(), ATLAS_COUNT);
+        let mut counts = [0u32; ATLAS_COUNT];
+        for (i, g) in out.groups.iter().enumerate() {
+            assert_eq!(g.atlas_id as usize, i);
+            counts[i] = g.instances.len() as u32;
+        }
+        counts
+    };
     let sum: u32 = counts.iter().sum();
     assert_eq!(sum, 50_000);
     // Exact even split for hard count (50000 % 4 == 0).

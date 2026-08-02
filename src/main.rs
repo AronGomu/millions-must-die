@@ -10,6 +10,11 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+/// Counting allocator for bench zero-alloc gate (inert until MeasureGuard).
+#[global_allocator]
+static GLOBAL: mmd_engine::alloc_guard::CountingAllocator =
+    mmd_engine::alloc_guard::CountingAllocator;
+
 #[derive(Debug, Parser)]
 #[command(
     name = "millions_must_die",
@@ -50,6 +55,9 @@ enum Commands {
         /// CPU-only dry path (no GPU). For offline JSON/exit-code smoke.
         #[arg(long)]
         dry_cpu: bool,
+        /// Inject a Rust heap alloc each measured frame (proves zero-alloc gate).
+        #[arg(long)]
+        inject_frame_alloc: bool,
     },
 }
 
@@ -77,11 +85,13 @@ fn main() -> ExitCode {
             scenario,
             test_policy,
             dry_cpu,
+            inject_frame_alloc,
         } => bench::bench(bench::BenchCliOptions {
             output,
             scenario,
             test_policy,
             dry_cpu,
+            inject_frame_alloc,
         }),
     }
 }

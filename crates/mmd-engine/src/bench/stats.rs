@@ -144,6 +144,24 @@ pub struct SampleBuffer {
 }
 
 impl SampleBuffer {
+    /// Pre-size for measured trial (push must not alloc after reserve).
+    pub fn with_capacity(frames: usize) -> Self {
+        Self {
+            frame_service_ms: Vec::with_capacity(frames),
+            sim_ms: Vec::with_capacity(frames),
+            upload_ms: Vec::with_capacity(frames),
+            // Queue latency samples ≤ frames (often fewer).
+            gpu_queue_latency_ms: Vec::with_capacity(frames),
+        }
+    }
+
+    pub fn reserve(&mut self, frames: usize) {
+        self.frame_service_ms.reserve(frames);
+        self.sim_ms.reserve(frames);
+        self.upload_ms.reserve(frames);
+        self.gpu_queue_latency_ms.reserve(frames);
+    }
+
     pub fn push_frame(&mut self, frame_service_ms: f64, sim_ms: f64, upload_ms: f64) {
         self.frame_service_ms.push(frame_service_ms);
         self.sim_ms.push(sim_ms);

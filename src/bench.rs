@@ -16,6 +16,8 @@ pub struct BenchCliOptions {
     pub test_policy: bool,
     /// CPU-only dry path (no GPU). For offline JSON/exit-code smoke.
     pub dry_cpu: bool,
+    /// Force heap alloc inside measured frames (zero-alloc gate proof).
+    pub inject_frame_alloc: bool,
 }
 
 /// Run bench harness; write JSON; map verdict → process exit code.
@@ -40,12 +42,15 @@ pub fn bench(opts: BenchCliOptions) -> ExitCode {
     });
 
     let dry = opts.dry_cpu || std::env::var_os("MMD_BENCH_DRY").is_some();
+    let inject = opts.inject_frame_alloc
+        || std::env::var_os("MMD_BENCH_INJECT_FRAME_ALLOC").is_some();
 
     let run_opts = BenchOptions {
         policy,
         scenario,
         output: output.clone(),
         dry_cpu_only: dry,
+        inject_frame_alloc: inject,
     };
 
     match run_bench(run_opts) {
@@ -68,13 +73,14 @@ pub fn bench(opts: BenchCliOptions) -> ExitCode {
             );
             for s in &report.scale_results {
                 eprintln!(
-                    "bench: count={} blocking={} verdict={:?} p95={:.3} p99={:.3} max_if={}",
+                    "bench: count={} blocking={} verdict={:?} p95={:.3} p99={:.3} max_if={} rust_allocs={}",
                     s.agent_count,
                     s.blocking,
                     s.verdict,
                     s.median_p95_frame_service_ms,
                     s.median_p99_frame_service_ms,
-                    s.max_in_flight
+                    s.max_in_flight,
+                    s.project_rust_alloc_count
                 );
             }
             exit(report.exit_code())

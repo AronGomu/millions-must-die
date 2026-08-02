@@ -46,19 +46,23 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Headless/offscreen proof: one frame → nonempty groups + checksum move.
-    let frame0 = runtime.tick_and_render();
-    let hash0 = frame0.state_hash;
-    let group_lens: Vec<usize> = frame0.groups.iter().map(|g| g.instances.len()).collect();
+    let (hash0, tick0, sim0, upload0, group_lens) = {
+        let frame0 = runtime.tick_and_render();
+        let hash0 = frame0.state_hash;
+        let group_lens: Vec<usize> = frame0.groups.iter().map(|g| g.instances.len()).collect();
+        let tick0 = frame0.tick_index;
+        let sim0 = frame0.stats.sim_ms;
+        let upload0 = frame0.stats.upload_ms;
+        // Draw while groups borrow still live.
+        renderer.draw_offscreen(frame0.groups)?;
+        (hash0, tick0, sim0, upload0, group_lens)
+    };
     println!(
-        "run: frame0 tick={} groups={group_lens:?} sim={:.3}ms upload={:.3}ms",
-        frame0.tick_index, frame0.stats.sim_ms, frame0.stats.upload_ms
+        "run: frame0 tick={tick0} groups={group_lens:?} sim={sim0:.3}ms upload={upload0:.3}ms"
     );
     if group_lens.contains(&0) {
         return Err("empty instance group after first frame".into());
     }
-
-    // Optional offscreen draw (no full readback every smoke — one draw proves GPU path).
-    renderer.draw_offscreen(&frame0.groups)?;
     println!("run: offscreen draw ok (backend={})", renderer.backend());
 
     let frames_limit = opts.frames.or_else(|| {
@@ -112,8 +116,8 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     let mut quit = false;
     let start = Instant::now();
 
-    // Present first frame; fall back if swapchain unsupported.
-    if let Err(e) = renderer.draw_to_swapchain(&window, &frame0.groups) {
+    // Present last packed groups (still frame0 contents — no further tick yet).
+    if let Err(e) = renderer.draw_to_swapchain(&window, runtime.draw_groups()) {
         eprintln!("run: present failed ({e}); offscreen-only");
         return finish_offscreen(&mut runtime, &mut renderer, hash0, auto_frames);
     }
@@ -144,20 +148,24 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
 
         let frame_start = Instant::now();
         let out = runtime.tick_and_render();
-        renderer.draw_to_swapchain(&window, &out.groups)?;
+        let overlay_visible = out.overlay_visible;
+        let agent_count = out.agent_count;
+        let tick_index = out.tick_index;
+        let paused = out.paused;
+        let mut stats = out.stats;
+        renderer.draw_to_swapchain(&window, out.groups)?;
         let gpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
 
-        if out.overlay_visible {
+        if overlay_visible {
             // stdout HUD (no text GPU path in phase-0).
-            let mut stats = out.stats;
             stats.total_ms = gpu_ms;
             println!(
                 "{}",
                 overlay::format_overlay(
                     renderer.backend(),
-                    out.agent_count,
-                    out.tick_index,
-                    out.paused,
+                    agent_count,
+                    tick_index,
+                    paused,
                     stats,
                 )
             );
@@ -201,8 +209,8 @@ fn finish_offscreen(
     let already = runtime.tick_index().max(1);
     for _ in already..n {
         let f = runtime.tick_and_render();
-        renderer.draw_offscreen(&f.groups)?;
         last = f.state_hash;
+        renderer.draw_offscreen(f.groups)?;
     }
     if !runtime.paused() && last == hash0 {
         return Err("state hash unchanged across offscreen frames".into());

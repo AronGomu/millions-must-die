@@ -90,6 +90,8 @@ pub struct SpriteRenderer {
     sampler: Sampler,
     offscreen: Texture<'static>,
     frame_slot: usize,
+    /// Reused contiguous pack for GPU upload (reserved at construct).
+    pack_scratch: Vec<SpriteInstance>,
     /// Device/SDL ownership — must drop after all GPU objects above.
     pub ctx: GpuContext,
 }
@@ -298,6 +300,7 @@ impl SpriteRenderer {
             sampler,
             offscreen,
             frame_slot: 0,
+            pack_scratch: Vec::with_capacity(MAX_INSTANCES as usize),
             ctx,
         };
         Ok(out)
@@ -353,19 +356,19 @@ impl SpriteRenderer {
         let slot = self.frame_slot % FRAMES_IN_FLIGHT;
         self.frame_slot = self.frame_slot.wrapping_add(1);
 
-        // Pack instances contiguously; record per-group ranges.
-        let mut packed: Vec<SpriteInstance> = Vec::new();
+        // Pack instances contiguously into reused scratch; record per-group ranges.
+        self.pack_scratch.clear();
         let mut ranges: [(u32, u32); ATLAS_COUNT] = [(0, 0); ATLAS_COUNT];
         for (i, g) in groups.iter().enumerate() {
-            let start = packed.len() as u32;
-            packed.extend_from_slice(&g.instances);
+            let start = self.pack_scratch.len() as u32;
+            self.pack_scratch.extend_from_slice(&g.instances);
             let count = g.instances.len() as u32;
             ranges[i] = (start, count);
         }
-        if packed.len() as u32 > MAX_INSTANCES {
+        if self.pack_scratch.len() as u32 > MAX_INSTANCES {
             return Err(RenderError::Sdl(format!(
                 "too many instances {}",
-                packed.len()
+                self.pack_scratch.len()
             )));
         }
 
@@ -373,10 +376,11 @@ impl SpriteRenderer {
         {
             let cmd = device.acquire_command_buffer()?;
             let copy = device.begin_copy_pass(&cmd)?;
-            let nbytes = (packed.len() * std::mem::size_of::<SpriteInstance>()) as u32;
+            let nbytes =
+                (self.pack_scratch.len() * std::mem::size_of::<SpriteInstance>()) as u32;
             if nbytes > 0 {
                 let mut map = self.upload_xfer.map::<SpriteInstance>(device, true);
-                map.mem_mut()[..packed.len()].copy_from_slice(&packed);
+                map.mem_mut()[..self.pack_scratch.len()].copy_from_slice(&self.pack_scratch);
                 map.unmap();
                 copy.upload_to_gpu_buffer(
                     TransferBufferLocation::new()

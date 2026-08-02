@@ -149,11 +149,27 @@ impl<F> FenceQueue<F> {
     }
 
     /// Non-blocking poll: complete any ready fences from front (in order).
-    pub fn poll_ready<Q>(&mut self, mut is_ready: Q, now: Instant) -> Vec<CompletedFrame>
+    ///
+    /// Prefer [`Self::poll_ready_into`] on measured paths (avoids Vec alloc).
+    pub fn poll_ready<Q>(&mut self, is_ready: Q, now: Instant) -> Vec<CompletedFrame>
     where
         Q: FnMut(&F) -> bool,
     {
         let mut out = Vec::new();
+        self.poll_ready_into(is_ready, now, &mut out);
+        out
+    }
+
+    /// Non-blocking poll into caller buffer (`clear` then push; capacity reused).
+    pub fn poll_ready_into<Q>(
+        &mut self,
+        mut is_ready: Q,
+        now: Instant,
+        out: &mut Vec<CompletedFrame>,
+    ) where
+        Q: FnMut(&F) -> bool,
+    {
+        out.clear();
         while let Some(front) = self.pending.front() {
             if !is_ready(&front.fence) {
                 break;
@@ -161,7 +177,11 @@ impl<F> FenceQueue<F> {
             let done = self.pending.pop_front().expect("front");
             out.push(self.complete_waited(done, now));
         }
-        out
+    }
+
+    /// Ensure latency sample buffer can accept `extra` more completes without alloc.
+    pub fn reserve_latency_samples(&mut self, extra: usize) {
+        self.completed_latencies_ms.reserve(extra);
     }
 
     /// Pop all remaining frames for caller drain-wait. After waits, call `finish_drain`.

@@ -207,8 +207,40 @@ fn other_counts_never_block() {
     assert!(json.contains("benchmark-report-v1"));
     assert!(json.contains("gpu_queue_latency"));
     assert!(json.contains("not true GPU"));
+    assert!(json.contains("project_rust_alloc_count"));
+    assert!(json.contains("project_alloc_visibility_note"));
+    assert!(json.contains("SDL/driver C malloc"));
     let back: mmd_engine::bench::BenchmarkReport = serde_json::from_str(&json).unwrap();
     assert_eq!(back.verdict, VerdictStatus::Pass);
+    assert_eq!(back.scale_results[2].project_rust_alloc_count, 0);
+}
+
+#[test]
+fn allocation_count_fails_blocking_scale() {
+    let policy = BenchPolicy::production();
+    let good_p95 = [10.0, 10.1, 10.2, 10.0, 10.05, 10.15, 9.95];
+    let good_p99 = [12.0, 12.1, 12.2, 12.0, 12.05, 12.15, 11.95];
+    let mut scale = synthetic_scale_from_trial_p99s(&policy, GATE_AGENT_COUNT, good_p95, good_p99);
+    // Simulate post-warmup project Rust allocs observed during measure.
+    scale.project_rust_alloc_count = 3;
+    let (v, reason) = mmd_engine::bench::scale_verdict(
+        &policy,
+        GATE_AGENT_COUNT,
+        &TrialAggregate {
+            median_p95_ms: scale.median_p95_frame_service_ms,
+            median_p99_ms: scale.median_p99_frame_service_ms,
+            nmad_p95: scale.nmad_p95,
+            nmad_p99: scale.nmad_p99,
+            noisy: false,
+        },
+        scale.submitted_frames,
+        scale.completed_frames,
+        scale.max_in_flight,
+        3,
+    );
+    assert_eq!(v, VerdictStatus::Fail);
+    assert!(reason.contains("project Rust frame allocations"));
+    assert!(reason.contains("SDL/driver"));
 }
 
 #[test]

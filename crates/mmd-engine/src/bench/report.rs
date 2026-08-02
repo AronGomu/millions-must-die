@@ -2,6 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::alloc_guard::ALLOC_VISIBILITY_NOTE;
+
 use super::policy::BenchPolicy;
 use super::stats::{TrialAggregate, TrialPercentiles};
 
@@ -60,6 +62,8 @@ pub struct ReportManifests {
     pub frames_in_flight: usize,
     /// Honest label: fence latency is queue proxy, not GPU execution time.
     pub gpu_queue_latency_note: String,
+    /// Honest label: only Rust global allocator is counted.
+    pub project_alloc_visibility_note: String,
 }
 
 impl ReportManifests {
@@ -83,6 +87,7 @@ impl ReportManifests {
             frames_in_flight: policy.frames_in_flight,
             gpu_queue_latency_note: "async submit-to-fence completion proxy; not true GPU execution time"
                 .into(),
+            project_alloc_visibility_note: ALLOC_VISIBILITY_NOTE.into(),
         }
     }
 }
@@ -114,6 +119,8 @@ pub struct ScaleResult {
     pub submitted_frames: u64,
     pub completed_frames: u64,
     pub max_in_flight: usize,
+    /// Sum of project Rust global allocations across measured trial frames.
+    pub project_rust_alloc_count: u64,
     pub verdict: VerdictStatus,
     pub verdict_reason: String,
 }
@@ -178,6 +185,7 @@ pub fn scale_verdict(
     submitted: u64,
     completed: u64,
     max_in_flight: usize,
+    project_rust_alloc_count: u64,
 ) -> (VerdictStatus, String) {
     if submitted != completed {
         return (
@@ -191,6 +199,14 @@ pub fn scale_verdict(
             format!(
                 "frames in flight {} exceeded cap {}",
                 max_in_flight, policy.frames_in_flight
+            ),
+        );
+    }
+    if project_rust_alloc_count > 0 {
+        return (
+            VerdictStatus::Fail,
+            format!(
+                "project Rust frame allocations = {project_rust_alloc_count} (limit 0); {ALLOC_VISIBILITY_NOTE}"
             ),
         );
     }
@@ -294,6 +310,7 @@ pub fn build_scale_result(
     submitted_frames: u64,
     completed_frames: u64,
     max_in_flight: usize,
+    project_rust_alloc_count: u64,
 ) -> ScaleResult {
     let (verdict, verdict_reason) = scale_verdict(
         policy,
@@ -302,6 +319,7 @@ pub fn build_scale_result(
         submitted_frames,
         completed_frames,
         max_in_flight,
+        project_rust_alloc_count,
     );
     ScaleResult {
         agent_count,
@@ -316,6 +334,7 @@ pub fn build_scale_result(
         submitted_frames,
         completed_frames,
         max_in_flight,
+        project_rust_alloc_count,
         verdict,
         verdict_reason,
     }

@@ -48,13 +48,16 @@ pub struct FrameStats {
 }
 
 /// Result of one runtime frame.
-#[derive(Debug, Clone)]
-pub struct FrameOutput {
+///
+/// `groups` borrows reusable pack buffers on [`Runtime`] — valid until next
+/// [`Runtime::tick_and_render`].
+#[derive(Debug, Clone, Copy)]
+pub struct FrameOutput<'a> {
     pub tick_index: u64,
     pub agent_count: usize,
     pub paused: bool,
     pub overlay_visible: bool,
-    pub groups: [DrawGroup; ATLAS_COUNT],
+    pub groups: &'a [DrawGroup; ATLAS_COUNT],
     pub stats: FrameStats,
     pub state_hash: [u8; 32],
 }
@@ -80,6 +83,8 @@ pub struct Runtime {
     paused: bool,
     overlay_visible: bool,
     last_stats: FrameStats,
+    /// Reused atlas buckets (capacity reserved at load → post-warmup pack is zero-alloc).
+    groups: [DrawGroup; ATLAS_COUNT],
 }
 
 impl Runtime {
@@ -124,6 +129,13 @@ impl Runtime {
             )
         };
 
+        // Worst case: all agents land in one atlas → reserve full count per group.
+        let n = count as usize;
+        let groups = std::array::from_fn(|i| DrawGroup {
+            atlas_id: i as u32,
+            instances: Vec::with_capacity(n),
+        });
+
         Ok(Self {
             scenario_version: scenario.version().to_string(),
             cell_size_px: scenario.cell_size_px() as f32,
@@ -132,6 +144,7 @@ impl Runtime {
             paused: false,
             overlay_visible: false,
             last_stats: FrameStats::default(),
+            groups,
         })
     }
 
@@ -163,6 +176,11 @@ impl Runtime {
         self.sim.state_hash()
     }
 
+    /// Borrow last packed draw groups (updated by [`Self::tick_and_render`]).
+    pub fn draw_groups(&self) -> &[DrawGroup; ATLAS_COUNT] {
+        &self.groups
+    }
+
     /// Apply one input action. `Quit` is observed by caller (no local side effect).
     pub fn apply_action(&mut self, action: InputAction) {
         match action {
@@ -172,8 +190,8 @@ impl Runtime {
         }
     }
 
-    /// One frame: optional sim tick + rebuild draw groups.
-    pub fn tick_and_render(&mut self) -> FrameOutput {
+    /// One frame: optional sim tick + rebuild draw groups into reused buffers.
+    pub fn tick_and_render(&mut self) -> FrameOutput<'_> {
         let t0 = Instant::now();
 
         let sim_ms = if self.paused {
@@ -185,8 +203,12 @@ impl Runtime {
         };
 
         let u0 = Instant::now();
-        let groups =
-            build_instance_groups(self.sim.agents(), self.cell_size_px, self.sprite_size_px);
+        pack_instance_groups(
+            self.sim.agents(),
+            self.cell_size_px,
+            self.sprite_size_px,
+            &mut self.groups,
+        );
         let upload_ms = u0.elapsed().as_secs_f64() * 1000.0;
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
 
@@ -202,40 +224,54 @@ impl Runtime {
             agent_count: self.sim.agent_count(),
             paused: self.paused,
             overlay_visible: self.overlay_visible,
-            groups,
+            groups: &self.groups,
             stats,
             state_hash: self.sim.state_hash(),
         }
     }
 }
 
-/// Convert SoA agent view → 4 atlas draw groups (pixel space, top-left origin).
-pub fn build_instance_groups(
+/// Pack SoA agents into existing atlas groups (clear + push; no realloc if capacity holds).
+pub fn pack_instance_groups(
     agents: crate::sim::AgentsView<'_>,
     cell_size_px: f32,
     sprite_size_px: f32,
-) -> [DrawGroup; ATLAS_COUNT] {
+    out: &mut [DrawGroup; ATLAS_COUNT],
+) {
+    for (i, g) in out.iter_mut().enumerate() {
+        g.atlas_id = i as u32;
+        g.instances.clear();
+    }
+
     let half = sprite_size_px * 0.5;
     let size = [sprite_size_px, sprite_size_px];
     let n = agents.x.len();
-    let mut buckets: [Vec<SpriteInstance>; ATLAS_COUNT] =
-        std::array::from_fn(|_| Vec::with_capacity(n / ATLAS_COUNT + 1));
 
     for i in 0..n {
         let atlas = agents.atlas[i] as usize % ATLAS_COUNT;
         let px = agents.x[i] * cell_size_px - half;
         let py = agents.y[i] * cell_size_px - half;
         let uv = frame_uv_rect(u32::from(agents.dir[i]), u32::from(agents.frame[i]));
-        buckets[atlas].push(SpriteInstance::new(
+        out[atlas].instances.push(SpriteInstance::new(
             [px, py],
             size,
             uv,
             SpriteInstance::WHITE,
         ));
     }
+}
 
-    std::array::from_fn(|i| DrawGroup {
+/// Convert SoA agent view → 4 atlas draw groups (allocating; prefer [`pack_instance_groups`]).
+pub fn build_instance_groups(
+    agents: crate::sim::AgentsView<'_>,
+    cell_size_px: f32,
+    sprite_size_px: f32,
+) -> [DrawGroup; ATLAS_COUNT] {
+    let n = agents.x.len();
+    let mut out = std::array::from_fn(|i| DrawGroup {
         atlas_id: i as u32,
-        instances: std::mem::take(&mut buckets[i]),
-    })
+        instances: Vec::with_capacity(n),
+    });
+    pack_instance_groups(agents, cell_size_px, sprite_size_px, &mut out);
+    out
 }

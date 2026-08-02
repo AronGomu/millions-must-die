@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::alloc_guard::MeasureGuard;
 use crate::render::{DrawGroup, FRAMES_IN_FLIGHT, SpriteRenderer};
 use crate::runtime::{Runtime, RuntimeError};
 use crate::version;
@@ -42,6 +43,8 @@ pub struct BenchOptions {
     pub output: Option<PathBuf>,
     /// Skip real GPU; synthesize frame timings (unit / dry). Not production gate.
     pub dry_cpu_only: bool,
+    /// Force a Rust heap alloc inside each measured frame (gate proof).
+    pub inject_frame_alloc: bool,
 }
 
 impl Default for BenchOptions {
@@ -51,6 +54,7 @@ impl Default for BenchOptions {
             scenario: default_scenario_path(),
             output: None,
             dry_cpu_only: false,
+            inject_frame_alloc: false,
         }
     }
 }
@@ -94,8 +98,22 @@ pub fn run_bench(opts: BenchOptions) -> Result<BenchmarkReport, BenchError> {
     let mut scale_results = Vec::with_capacity(policy.scale_counts.len());
     for &count in &policy.scale_counts {
         let result = match gpu.as_mut() {
-            Some(r) => run_scale_point(&policy, &scenario_path, count, Some(r), false)?,
-            None => run_scale_point(&policy, &scenario_path, count, None, true)?,
+            Some(r) => run_scale_point(
+                &policy,
+                &scenario_path,
+                count,
+                Some(r),
+                false,
+                opts.inject_frame_alloc,
+            )?,
+            None => run_scale_point(
+                &policy,
+                &scenario_path,
+                count,
+                None,
+                true,
+                opts.inject_frame_alloc,
+            )?,
         };
         scale_results.push(result);
     }
@@ -123,6 +141,7 @@ fn run_scale_point(
     agent_count: u32,
     mut renderer: Option<&mut SpriteRenderer>,
     dry: bool,
+    inject_frame_alloc: bool,
 ) -> Result<ScaleResult, BenchError> {
     let mut runtime = Runtime::load(scenario_path, Some(agent_count))?;
     assert!(!runtime.paused());
@@ -130,6 +149,9 @@ fn run_scale_point(
     let mut queue: FenceQueue<BenchFence> = FenceQueue::new(policy.frames_in_flight);
     assert_eq!(policy.frames_in_flight, FRAMES_IN_FLIGHT);
 
+    // Warmup: allocations allowed (buffer growth, first GPU paths, etc.).
+    let warmup_cap = estimate_frame_cap(policy.warmup, policy.min_frames_warmup);
+    queue.reserve_latency_samples(warmup_cap.saturating_mul(2));
     run_phase(
         &mut runtime,
         renderer.as_deref_mut(),
@@ -138,14 +160,28 @@ fn run_scale_point(
         policy.min_frames_warmup,
         dry,
         false,
-        &mut SampleBuffer::default(),
+        inject_frame_alloc,
+        &mut SampleBuffer::with_capacity(warmup_cap),
+        &mut Vec::with_capacity(policy.frames_in_flight),
     )?;
 
     let mut trial_rows = Vec::with_capacity(policy.trial_count as usize);
     let mut trial_pcts = Vec::with_capacity(policy.trial_count as usize);
+    let mut project_rust_alloc_count = 0u64;
+    let trial_cap = estimate_frame_cap(policy.trial_duration, policy.min_frames_trial);
+    // Latency samples across all trials + backpressure completes.
+    queue.reserve_latency_samples(
+        trial_cap
+            .saturating_mul(policy.trial_count as usize)
+            .saturating_mul(2)
+            .saturating_add(64),
+    );
+    let mut poll_scratch = Vec::with_capacity(policy.frames_in_flight);
 
     for i in 0..policy.trial_count {
-        let mut samples = SampleBuffer::default();
+        let mut samples = SampleBuffer::with_capacity(trial_cap);
+        // Measured trial frames: project Rust allocs must stay 0.
+        let guard = MeasureGuard::enter();
         run_phase(
             &mut runtime,
             renderer.as_deref_mut(),
@@ -154,8 +190,12 @@ fn run_scale_point(
             policy.min_frames_trial,
             dry,
             true,
+            inject_frame_alloc,
             &mut samples,
+            &mut poll_scratch,
         )?;
+        project_rust_alloc_count = project_rust_alloc_count.saturating_add(guard.finish());
+
         let tp = samples.trial_frame_service();
         trial_pcts.push(tp);
         trial_rows.push(trial_report(
@@ -181,7 +221,17 @@ fn run_scale_point(
         queue.submitted(),
         queue.completed(),
         queue.max_observed_in_flight(),
+        project_rust_alloc_count,
     ))
+}
+
+/// Headroom for sample/latency reserves (duration × 120 fps + min + pad).
+fn estimate_frame_cap(duration: Duration, min_frames: u32) -> usize {
+    let from_dur = (duration.as_secs_f64() * 120.0).ceil() as usize;
+    from_dur
+        .max(min_frames as usize)
+        .saturating_add(32)
+        .max(16)
 }
 
 enum BenchFence {
@@ -197,7 +247,9 @@ fn run_phase(
     min_frames: u32,
     dry: bool,
     record: bool,
+    inject_frame_alloc: bool,
     samples: &mut SampleBuffer,
+    poll_scratch: &mut Vec<CompletedFrame>,
 ) -> Result<(), BenchError> {
     let deadline = Instant::now() + duration;
     let mut frames = 0u32;
@@ -209,21 +261,28 @@ fn run_phase(
         let bp_ms = apply_backpressure(queue, renderer.as_deref_mut(), dry);
         let _begin = queue.begin_after_backpressure(bp_ms);
 
+        if inject_frame_alloc && record {
+            // Deliberate heap touch so the zero-alloc gate can hard-fail.
+            let forced = vec![frames as u8; 64];
+            std::hint::black_box(forced);
+        }
+
         let out = runtime.tick_and_render();
         let sim_ms = out.stats.sim_ms;
         let upload_ms = out.stats.upload_ms;
+        let agent_count = out.agent_count;
 
         let submit_at = Instant::now();
-        let fence = submit_frame(renderer.as_deref_mut(), dry, &out.groups, out.agent_count)?;
+        let fence = submit_frame(renderer.as_deref_mut(), dry, out.groups, agent_count)?;
         queue
             .submit(fence, submit_at)
             .map_err(|e| BenchError::FenceQueue(e.to_string()))?;
 
         let frame_service_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
-        let done = poll_ready(queue, renderer.as_deref());
+        poll_ready_into(queue, renderer.as_deref(), poll_scratch);
         if record {
             samples.push_frame(frame_service_ms, sim_ms, upload_ms);
-            for c in done {
+            for c in poll_scratch.iter() {
                 samples.push_queue_latency(c.gpu_queue_latency_ms);
             }
         }
@@ -280,19 +339,21 @@ fn submit_frame(
     Ok(BenchFence::Real(f))
 }
 
-fn poll_ready(
+fn poll_ready_into(
     queue: &mut FenceQueue<BenchFence>,
     renderer: Option<&SpriteRenderer>,
-) -> Vec<CompletedFrame> {
+    out: &mut Vec<CompletedFrame>,
+) {
     let now = Instant::now();
     let device = renderer.map(|r| &r.ctx.device);
-    queue.poll_ready(
+    queue.poll_ready_into(
         |f| match f {
             BenchFence::Real(fence) => device.map(|d| fence.query(d)).unwrap_or(false),
             BenchFence::Dry { ready_at } => now >= *ready_at,
         },
         now,
-    )
+        out,
+    );
 }
 
 fn drain_queue(
@@ -385,5 +446,5 @@ pub fn synthetic_scale_from_trial_p99s(
         .enumerate()
         .map(|(i, t)| trial_report(i as u32, t, 1.0, 1.0, 1.0))
         .collect();
-    build_scale_result(policy, agent_count, rows, &agg, 0.5, 100, 100, 2)
+    build_scale_result(policy, agent_count, rows, &agg, 0.5, 100, 100, 2, 0)
 }
