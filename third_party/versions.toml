@@ -63,5 +63,6 @@ canonical = "shaders/sprite.hlsl"
 generated_dir = "shaders/generated"
 # Backend formats required in generated manifest (slots always present).
 formats = ["spirv", "dxil", "metallib"]
-# DXIL/metallib native regen deferred; tracked placeholders satisfy hash contract until T9/T10.
+# DXIL/metallib native regen host-gated; tracked placeholders satisfy hash contract until T9/T10.
+# Engine load paths exist; real DXBC/MTLB blobs + drop deferred on ref hosts.
 deferred_native_regen = { dxil = "T9", metallib = "T10" }

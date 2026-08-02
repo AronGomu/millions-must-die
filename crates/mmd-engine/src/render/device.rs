@@ -6,6 +6,8 @@ use sdl3::video::Window;
 use sdl3::{Sdl, VideoSubsystem};
 
 use super::RenderError;
+#[cfg(target_os = "macos")]
+use super::backend::validate_macos_host_arch;
 use super::backend::{
     REQUIRED_BACKEND, assert_device_backend, validate_adapter_name, validate_backend_name,
 };
@@ -29,11 +31,19 @@ impl GpuContext {
     /// Create host-required GPU device (Vulkan/Linux, D3D12/Windows, Metal/macOS).
     pub fn new(debug_mode: bool) -> Result<Self, RenderError> {
         validate_backend_name(REQUIRED_BACKEND)?;
+        // Portable arch gate also runs on macOS before SDL init (compile-time aarch64 + runtime).
+        #[cfg(target_os = "macos")]
+        {
+            validate_macos_host_arch(std::env::consts::ARCH)?;
+        }
 
         // Headless hosts: offscreen video driver (GPU backend still forced).
+        // macOS has no DISPLAY/WAYLAND; leave default video unless caller set SDL_VIDEODRIVER.
         if std::env::var_os("SDL_VIDEODRIVER").is_none()
             && std::env::var_os("DISPLAY").is_none()
             && std::env::var_os("WAYLAND_DISPLAY").is_none()
+            && !cfg!(target_os = "macos")
+            && !cfg!(target_os = "windows")
         {
             let _ = sdl3::hint::set("SDL_VIDEODRIVER", "offscreen");
         }
@@ -144,15 +154,20 @@ fn create_device_windows_d3d12(debug_mode: bool) -> Result<Device, RenderError> 
     })
 }
 
+/// Force Metal + metallib. No Vulkan/MoltenVK props. Apple Silicon only (caller + compile gate).
 #[cfg(target_os = "macos")]
 fn create_device_macos_metal(debug_mode: bool) -> Result<Device, RenderError> {
     let props = Properties::new()?;
     props.set("SDL.gpu.device.create.debugmode", debug_mode)?;
+    // Explicit driver name — never fall through to MoltenVK/Vulkan.
     props.set("SDL.gpu.device.create.name", REQUIRED_BACKEND)?;
     props.set("SDL.gpu.device.create.shaders.metallib", true)?;
+    // Do not enable SPIR-V on macOS (would invite MoltenVK).
+    props.set("SDL.gpu.device.create.shaders.spirv", false)?;
+    props.set("SDL.gpu.device.create.preferlowpower", false)?;
     Device::new_with_properties(props).map_err(|e| {
         RenderError::Sdl(format!(
-            "metal device failed ({e}). Need macOS Metal GPU + metallib shaders (T10)"
+            "metal device failed ({e}). Need macOS 15 arm64 + Metal + native metallib; no MoltenVK. See docs/platform/macos-bootstrap.md"
         ))
     })
 }

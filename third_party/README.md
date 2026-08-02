@@ -40,7 +40,7 @@ cargo run -p xtask -- bootstrap --check
 
 `--check` validates pins + lockfile pairing only; it does not download.
 
-Linux shared-lib build commands live under `[sdl3.build.linux]` in `versions.toml`. Windows/macOS command blocks are recorded; **native Windows build/DXIL regen still needs ref-host validation (T9)** and macOS/metallib remains **T10**. Windows operator steps: [`docs/platform/windows-bootstrap.md`](../docs/platform/windows-bootstrap.md).
+Linux shared-lib build commands live under `[sdl3.build.linux]` in `versions.toml`. Windows/macOS command blocks are recorded; **native Windows build/DXIL regen still needs ref-host validation (T9)** and **native macOS build/metallib regen still needs M4 validation (T10)**. Operator steps: [`docs/platform/windows-bootstrap.md`](../docs/platform/windows-bootstrap.md), [`docs/platform/macos-bootstrap.md`](../docs/platform/macos-bootstrap.md).
 
 ### Offline Cargo
 
@@ -78,4 +78,17 @@ $env:PATH = "$env:MMD_SDL3_PREFIX\bin;$env:PATH"
 cargo test --workspace --locked
 cargo run -- run --agents 50000
 # expect backend=direct3d12; reject Basic Render Driver
+```
+
+## T10 runtime (macOS)
+
+See [`docs/platform/macos-bootstrap.md`](../docs/platform/macos-bootstrap.md).
+
+```bash
+export MMD_SDL3_PREFIX="$HOME/.cache/mmd/native/sdl3/3.4.12/prefix-macos"
+export PKG_CONFIG_PATH="$MMD_SDL3_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+# Apple Silicon only; uname -m → arm64
+cargo test --workspace --locked
+cargo run -- run --agents 50000
+# expect backend=metal; no MoltenVK
 ```

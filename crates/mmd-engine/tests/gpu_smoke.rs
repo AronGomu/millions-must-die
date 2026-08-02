@@ -3,13 +3,13 @@
 //!
 //! GPU cases share process-global SDL; run serially (`--test-threads=1`).
 
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+use mmd_engine::render::validate_device_props;
 use mmd_engine::render::{
     ATLAS_COUNT, DrawGroup, REQUIRED_BACKEND, SPRITE_SIZE_PX, SpriteInstance, SpriteRenderer,
     VIEW_HEIGHT, VIEW_WIDTH, expected_sprite_center_pixel, required_backend, validate_adapter_name,
-    validate_backend_name,
+    validate_backend_name, validate_macos_host_arch,
 };
-#[cfg(target_os = "windows")]
-use mmd_engine::render::validate_device_props;
 use mmd_engine::workspace_root;
 
 #[test]
@@ -50,6 +50,35 @@ fn rejects_basic_renderer() {
         assert!(validate_device_props(REQUIRED_BACKEND, "Microsoft Basic Render Driver").is_err());
         validate_device_props(REQUIRED_BACKEND, "AMD Radeon RX 6400").expect("rx6400");
     }
+}
+
+#[test]
+fn metal_backend_required() {
+    #[cfg(target_os = "macos")]
+    {
+        assert_eq!(required_backend(), "metal");
+        validate_device_props(REQUIRED_BACKEND, "Apple M4").expect("m4 metal");
+        assert!(validate_device_props("vulkan", "Apple M4").is_err());
+        assert!(validate_adapter_name("MoltenVK").is_err());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        assert_ne!(required_backend(), "metal");
+        assert!(validate_backend_name("metal").is_err());
+        assert!(validate_adapter_name("MoltenVK").is_err());
+    }
+}
+
+#[test]
+fn rejects_non_arm64_manifest() {
+    validate_macos_host_arch("aarch64").expect("ok");
+    validate_macos_host_arch("arm64").expect("ok");
+    let err = validate_macos_host_arch("x86_64").expect_err("x86");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("x86_64") && msg.to_ascii_lowercase().contains("arch"),
+        "{msg}"
+    );
 }
 
 fn make_renderer() -> SpriteRenderer {

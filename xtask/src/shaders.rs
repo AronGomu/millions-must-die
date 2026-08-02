@@ -174,9 +174,17 @@ fn validate_deferred_placeholders(
         ));
     }
 
-    if metal.deferred.as_deref() != Some("T10") {
+    // Real metallib starts with MTLB magic; placeholders remain deferred=T10 until native regen.
+    let metal_real = metallib_blobs_look_native(out_dir, metal)?;
+    if metal_real {
+        if metal.deferred.is_some() || metal.status != "tracked" {
+            return Err(ShaderError::Check(
+                "native metallib present: set status=tracked and drop deferred".into(),
+            ));
+        }
+    } else if metal.deferred.as_deref() != Some("T10") {
         return Err(ShaderError::Check(
-            "metallib slot must declare deferred = T10 until macOS regen".into(),
+            "metallib slot must declare deferred = T10 until macOS native regen".into(),
         ));
     }
     Ok(())
@@ -185,6 +193,11 @@ fn validate_deferred_placeholders(
 /// DXIL container magic is ASCII `DXBC` (DirectX Bytecode container housing DXIL).
 fn is_dxbc_magic(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes[0..4] == *b"DXBC"
+}
+
+/// Apple Metal library magic is ASCII `MTLB`.
+fn is_mtlb_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && bytes[0..4] == *b"MTLB"
 }
 
 fn dxil_blobs_look_native(out_dir: &Path, slot: &FormatSlot) -> Result<bool, ShaderError> {
@@ -202,6 +215,27 @@ fn dxil_blobs_look_native(out_dir: &Path, slot: &FormatSlot) -> Result<bool, Sha
         if !bytes.starts_with(b"MMD_PLACEHOLDER_DXIL") {
             return Err(ShaderError::Check(format!(
                 "{} is neither DXBC/DXIL nor MMD_PLACEHOLDER_DXIL",
+                file.file
+            )));
+        }
+    }
+    Ok(any && all_native)
+}
+
+fn metallib_blobs_look_native(out_dir: &Path, slot: &FormatSlot) -> Result<bool, ShaderError> {
+    let mut any = false;
+    let mut all_native = true;
+    for file in &slot.files {
+        any = true;
+        let path = out_dir.join(&file.file);
+        let bytes = fs::read(&path).map_err(|e| ShaderError::Io(e.to_string()))?;
+        if is_mtlb_magic(&bytes) {
+            continue;
+        }
+        all_native = false;
+        if !bytes.starts_with(b"MMD_PLACEHOLDER_METALLIB") {
+            return Err(ShaderError::Check(format!(
+                "{} is neither MTLB/metallib nor MMD_PLACEHOLDER_METALLIB",
                 file.file
             )));
         }
@@ -291,13 +325,16 @@ pub fn run_shaders(check: bool) -> Result<(), ShaderError> {
     if check {
         check_shaders(&root)?;
         build_has_no_network_fetch(&root)?;
-        println!("shaders: ok (spirv+dxil+metallib; dxil/metallib placeholders deferred T9/T10)");
+        println!(
+            "shaders: ok (spirv+dxil+metallib; native DXIL/metallib regen still host-gated T9/T10)"
+        );
         return Ok(());
     }
-    // T6: blobs are tracked; regen of DXIL/metallib is host-native later.
+    // Tracked blobs always present; DXIL/metallib native regen is host-native (T9/T10).
     check_shaders(&root)?;
     println!("shaders: tracked artifacts already present; use --check in gates");
-    println!("  DXIL native regen deferred T9; metallib native regen deferred T10");
+    println!("  DXIL native regen: Windows DXC (docs/platform/windows-bootstrap.md)");
+    println!("  metallib native regen: macOS Metal tools (docs/platform/macos-bootstrap.md)");
     Ok(())
 }
 
@@ -366,5 +403,24 @@ mod tests {
         assert!(is_dxbc_magic(b"DXBC\0rest"));
         assert!(!is_dxbc_magic(b"MMD_PLACEHOLDER_DXIL"));
         assert!(!is_dxbc_magic(b"DXB"));
+    }
+
+    #[test]
+    fn metallib_placeholder_not_native_magic() {
+        let root = workspace_root_from_xtask_manifest();
+        let dir = generated_dir(&root);
+        let manifest = load_manifest(&dir).expect("manifest");
+        let metal = &manifest.formats["metallib"];
+        // Until macOS native regen, placeholders must not look like MTLB.
+        let native = metallib_blobs_look_native(&dir, metal).expect("read");
+        assert!(!native, "metallib still placeholder until T10 macOS regen");
+        assert_eq!(metal.deferred.as_deref(), Some("T10"));
+    }
+
+    #[test]
+    fn mtlb_magic_helper() {
+        assert!(is_mtlb_magic(b"MTLB\0rest"));
+        assert!(!is_mtlb_magic(b"MMD_PLACEHOLDER_METALLIB"));
+        assert!(!is_mtlb_magic(b"MTL"));
     }
 }

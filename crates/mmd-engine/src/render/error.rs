@@ -8,8 +8,15 @@ pub enum RenderError {
     #[error("wrong GPU backend: got {got:?}, required {required:?}")]
     WrongBackend { got: String, required: &'static str },
 
-    #[error("rejected GPU adapter: {name:?} (Basic Render Driver / software not allowed)")]
+    #[error(
+        "rejected GPU adapter: {name:?} (Basic Render Driver / MoltenVK / software not allowed)"
+    )]
     RejectedAdapter { name: String },
+
+    #[error(
+        "rejected host arch: got {got:?}, required {required:?} (macOS Metal = Apple Silicon only)"
+    )]
+    RejectedHostArch { got: String, required: &'static str },
 
     #[error("SDL error: {0}")]
     Sdl(String),

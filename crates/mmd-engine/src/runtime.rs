@@ -106,10 +106,7 @@ impl Runtime {
         }
         let cap = scenario.stretch_agent_count();
         if count > cap {
-            return Err(RuntimeError::AgentCount {
-                got: count,
-                cap,
-            });
+            return Err(RuntimeError::AgentCount { got: count, cap });
         }
 
         let field = FlowField::from_scenario(&scenario);
@@ -188,11 +185,8 @@ impl Runtime {
         };
 
         let u0 = Instant::now();
-        let groups = build_instance_groups(
-            self.sim.agents(),
-            self.cell_size_px,
-            self.sprite_size_px,
-        );
+        let groups =
+            build_instance_groups(self.sim.agents(), self.cell_size_px, self.sprite_size_px);
         let upload_ms = u0.elapsed().as_secs_f64() * 1000.0;
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

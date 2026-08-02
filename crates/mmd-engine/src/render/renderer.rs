@@ -33,7 +33,8 @@ pub const FRAMES_IN_FLIGHT: usize = 2;
 /// Max sprites uploaded per frame across all groups (hard 50k; stretch 100k).
 pub const MAX_INSTANCES: u32 = 100_000;
 
-// Host shader blobs: SPIR-V (Linux), DXIL (Windows). metallib lands T10.
+// Host shader blobs: SPIR-V (Linux), DXIL (Windows), metallib (macOS).
+// macOS uses one library blob for both stages (entry points differ).
 #[cfg(target_os = "linux")]
 const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.spv");
 #[cfg(target_os = "linux")]
@@ -42,11 +43,10 @@ const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.
 const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.dxil");
 #[cfg(target_os = "windows")]
 const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.dxil");
-// macOS metallib path deferred T10 — keep compile green with SPIR-V include unused on metal host until T10.
 #[cfg(target_os = "macos")]
-const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.spv");
+const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.metallib");
 #[cfg(target_os = "macos")]
-const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.spv");
+const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.metallib");
 
 /// One atlas draw group.
 #[derive(Clone, Debug)]
@@ -526,7 +526,7 @@ impl SpriteRenderer {
 }
 
 /// Host shader format + entry points.
-/// Linux SPIR-V from GLSL mirror uses `main`; DXIL from HLSL keeps VSMain/PSMain.
+/// Linux SPIR-V from GLSL mirror uses `main`; DXIL/metallib from HLSL keep VSMain/PSMain.
 fn host_shader_spec() -> (ShaderFormat, &'static CStr, &'static CStr) {
     #[cfg(target_os = "linux")]
     {
@@ -538,8 +538,7 @@ fn host_shader_spec() -> (ShaderFormat, &'static CStr, &'static CStr) {
     }
     #[cfg(target_os = "macos")]
     {
-        // T10 replaces with metallib + Metal entries.
-        (ShaderFormat::SPIRV, c"main", c"main")
+        (ShaderFormat::METALLIB, c"VSMain", c"PSMain")
     }
 }
 

@@ -25,18 +25,41 @@ fn configure_prefix(prefix: &Path) {
 
 fn configure_unix_like(prefix: &Path, linux_rpath: bool) {
     let lib = first_existing(&[prefix.join("lib64"), prefix.join("lib")]);
-    if !lib.is_dir() {
-        return;
+    if lib.is_dir() {
+        println!("cargo:rustc-link-search=native={}", lib.display());
+        if linux_rpath {
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+            println!("cargo:rustc-link-arg=-Wl,--enable-new-dtags");
+        } else {
+            // macOS dylib: rpath to prefix lib for dev runs.
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+        }
+        emit_pkg_config_path(&lib.join("pkgconfig"));
     }
-    println!("cargo:rustc-link-search=native={}", lib.display());
-    if linux_rpath {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
-        println!("cargo:rustc-link-arg=-Wl,--enable-new-dtags");
-    } else {
-        // macOS: rpath to prefix lib for dev runs.
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
+    // Optional framework install layout (SDL3.framework under prefix/lib or prefix/Frameworks).
+    if !linux_rpath {
+        configure_macos_frameworks(prefix);
     }
-    emit_pkg_config_path(&lib.join("pkgconfig"));
+}
+
+fn configure_macos_frameworks(prefix: &Path) {
+    let candidates = [
+        prefix.join("lib"),
+        prefix.join("Frameworks"),
+        prefix.join("Library/Frameworks"),
+    ];
+    for dir in candidates {
+        if !dir.is_dir() {
+            continue;
+        }
+        let fw = dir.join("SDL3.framework");
+        if fw.is_dir() {
+            println!("cargo:rustc-link-search=framework={}", dir.display());
+            println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
+            println!("cargo:rustc-env=MMD_SDL3_FRAMEWORK_DIR={}", dir.display());
+            break;
+        }
+    }
 }
 
 fn configure_windows(prefix: &Path) {

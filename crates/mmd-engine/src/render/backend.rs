@@ -1,7 +1,8 @@
 //! Backend selection contract (host-forced GPU driver + adapter gate).
 //!
-//! Linux → `vulkan`, Windows → `direct3d12`, macOS → `metal`.
+//! Linux → `vulkan`, Windows → `direct3d12`, macOS → `metal` (Apple Silicon only).
 //! Shared sim/runtime stays backend-neutral; only device create + shader format branch.
+//! No MoltenVK path on macOS.
 
 use super::RenderError;
 
@@ -24,9 +25,15 @@ pub const REQUIRED_BACKEND: &str = BACKEND_METAL;
 /// Unsupported host: fail compile (phase-0 matrix is linux/windows/macos only).
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 compile_error!("mmd-engine render backend supports linux, windows, macos only");
+/// macOS phase-0 is Apple Silicon only (no Intel Mac / no Rosetta gate host).
+#[cfg(all(target_os = "macos", not(target_arch = "aarch64")))]
+compile_error!("macOS Metal prototype requires Apple Silicon aarch64");
 
 /// Linux alias kept for existing call sites / docs.
 pub const REQUIRED_LINUX_BACKEND: &str = BACKEND_VULKAN;
+
+/// Required CPU arch label for macOS Metal lane (`aarch64` / `arm64`).
+pub const REQUIRED_MACOS_ARCH: &str = "aarch64";
 
 /// Names never accepted as the forced host backend.
 #[cfg_attr(not(test), allow(dead_code))]
@@ -34,8 +41,14 @@ pub const REJECTED_BACKENDS: &[&str] = &["software", "opengles2", ""];
 
 /// Substrings matched case-insensitively against `SDL.gpu.device.name`.
 /// Microsoft WARP / Basic Render Driver is not a valid prototype ref adapter.
-pub const REJECTED_ADAPTER_SUBSTRINGS: &[&str] =
-    &["microsoft basic render driver", "basic render driver"];
+/// MoltenVK must never appear as a Metal-lane adapter (no Vulkan-on-macOS path).
+pub const REJECTED_ADAPTER_SUBSTRINGS: &[&str] = &[
+    "microsoft basic render driver",
+    "basic render driver",
+    "moltenvk",
+    "llvmpipe",
+    "swiftshader",
+];
 
 /// Required backend for current compile target.
 pub fn required_backend() -> &'static str {
@@ -66,12 +79,12 @@ pub fn is_rejected_adapter(adapter_name: &str) -> bool {
         .any(|needle| lower.contains(needle))
 }
 
-/// Reject Microsoft Basic Render Driver and empty adapter names on Windows path.
+/// Reject Microsoft Basic Render Driver / MoltenVK / software adapters.
 pub fn validate_adapter_name(adapter_name: &str) -> Result<(), RenderError> {
     let trimmed = adapter_name.trim();
     if trimmed.is_empty() {
-        // Empty name is tolerated on Linux Vulkan (some ICDs omit it); Windows gate
-        // still rejects Basic Render via substring match when present.
+        // Empty name is tolerated on Linux Vulkan (some ICDs omit it); Windows/macOS
+        // still reject Basic Render / MoltenVK via substring match when present.
         return Ok(());
     }
     if is_rejected_adapter(trimmed) {
@@ -80,6 +93,25 @@ pub fn validate_adapter_name(adapter_name: &str) -> Result<(), RenderError> {
         });
     }
     Ok(())
+}
+
+/// True when arch string is Apple Silicon (`aarch64` / `arm64`).
+pub fn is_apple_silicon_arch(arch: &str) -> bool {
+    matches!(
+        arch.trim().to_ascii_lowercase().as_str(),
+        "aarch64" | "arm64" | "arm64e"
+    )
+}
+
+/// macOS Metal lane requires Apple Silicon. Portable: pass fake arch in tests.
+pub fn validate_macos_host_arch(arch: &str) -> Result<(), RenderError> {
+    if is_apple_silicon_arch(arch) {
+        return Ok(());
+    }
+    Err(RenderError::RejectedHostArch {
+        got: arch.trim().to_string(),
+        required: REQUIRED_MACOS_ARCH,
+    })
 }
 
 /// Combined driver + adapter props check (unit-testable with fake strings).
@@ -173,5 +205,54 @@ mod tests {
             let err = validate_adapter_name("Microsoft Basic Render Driver").expect_err("basic");
             assert!(matches!(err, RenderError::RejectedAdapter { .. }));
         }
+    }
+
+    #[test]
+    fn metal_backend_required_contract() {
+        // Portable: macOS forces metal; other hosts reject metal driver name.
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(REQUIRED_BACKEND, BACKEND_METAL);
+            validate_device_props(BACKEND_METAL, "Apple M4").expect("mac metal");
+            assert!(validate_device_props(BACKEND_VULKAN, "Apple M4").is_err());
+            assert!(validate_device_props(BACKEND_D3D12, "Apple M4").is_err());
+            let err = validate_adapter_name("MoltenVK").expect_err("moltenvk");
+            assert!(matches!(err, RenderError::RejectedAdapter { .. }));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_ne!(REQUIRED_BACKEND, BACKEND_METAL);
+            assert!(validate_device_props(BACKEND_METAL, "Apple M4").is_err());
+            let err = validate_adapter_name("MoltenVK ICD").expect_err("moltenvk");
+            assert!(matches!(err, RenderError::RejectedAdapter { .. }));
+        }
+    }
+
+    #[test]
+    fn rejects_non_arm64_manifest() {
+        validate_macos_host_arch("aarch64").expect("aarch64");
+        validate_macos_host_arch("arm64").expect("arm64");
+        validate_macos_host_arch("ARM64").expect("ARM64");
+        validate_macos_host_arch("arm64e").expect("arm64e");
+        for bad in ["x86_64", "x86", "i386", "amd64", "", "riscv64"] {
+            let err = validate_macos_host_arch(bad).expect_err(bad);
+            match err {
+                RenderError::RejectedHostArch { got, required } => {
+                    assert_eq!(got, bad.trim());
+                    assert_eq!(required, REQUIRED_MACOS_ARCH);
+                }
+                other => panic!("unexpected error for {bad}: {other}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_moltenvk_adapter() {
+        for name in ["MoltenVK", "moltenvk", "Lavapipe via MoltenVK"] {
+            let err = validate_adapter_name(name).expect_err(name);
+            assert!(matches!(err, RenderError::RejectedAdapter { .. }), "{name}");
+        }
+        validate_adapter_name("Apple M4").expect("m4");
+        validate_adapter_name("Apple M4 Pro").expect("m4 pro");
     }
 }

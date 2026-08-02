@@ -5,5 +5,5 @@
 # After building a prefix, set via environment (not forced here):
 #   Linux:  MMD_SDL3_PREFIX=.../prefix-linux  PKG_CONFIG_PATH=.../lib64/pkgconfig
 #   Windows: MMD_SDL3_PREFIX=.../prefix-windows  PATH=.../bin;%PATH%
-#   macOS:  MMD_SDL3_PREFIX=.../prefix-macos (T10)
+#   macOS:  MMD_SDL3_PREFIX=.../prefix-macos  (arm64 only; see docs/platform/macos-bootstrap.md)
 # build.rs maps prefix-<os> from MMD_NATIVE_CACHE when MMD_SDL3_PREFIX unset.

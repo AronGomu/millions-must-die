@@ -325,7 +325,7 @@ pub fn run_bootstrap(check: bool) -> Result<(), BootstrapError> {
         check_bootstrap(&root)?;
         let v = load_versions(&root)?;
         println!(
-            "bootstrap: ok (SDL {} / sdl3 {} / sdl3-sys {}; win/mac native deferred T9/T10)",
+            "bootstrap: ok (SDL {} / sdl3 {} / sdl3-sys {}; win/mac native host-gated T9/T10)",
             v.sdl3.source.release, v.sdl3.crates.sdl3, v.sdl3.crates.sdl3_sys
         );
         return Ok(());
@@ -363,6 +363,17 @@ pub fn run_bootstrap(check: bool) -> Result<(), BootstrapError> {
         println!("  host=windows → see docs/platform/windows-bootstrap.md");
         println!("  set MMD_SDL3_PREFIX to prefix-windows after cmake install");
         println!("  put SDL3.dll on PATH (prefix-windows/bin) before cargo run");
+    }
+    if cfg!(target_os = "macos") {
+        println!("  host=macos → see docs/platform/macos-bootstrap.md");
+        println!("  Apple Silicon only (aarch64); no Intel Mac / no MoltenVK");
+        println!("  set MMD_SDL3_PREFIX to prefix-macos after cmake install");
+        if std::env::consts::ARCH != "aarch64" {
+            println!(
+                "  WARN: host arch {} is not aarch64 — Metal lane rejects non-arm64",
+                std::env::consts::ARCH
+            );
+        }
     }
     println!("  run with --check for offline verification");
     Ok(())

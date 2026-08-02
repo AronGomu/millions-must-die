@@ -6,7 +6,7 @@ Canonical source: [`../sprite.hlsl`](../sprite.hlsl).
 | --- | --- | --- |
 | SPIR-V | `sprite.vert.spv`, `sprite.frag.spv` | Generated on Linux via GLSL mirror + `glslc` (semantics match HLSL). Prefer DXC/SDL_shadercross when available. |
 | DXIL | `sprite.vert.dxil`, `sprite.frag.dxil` | **Placeholder** (`MMD_PLACEHOLDER_DXIL_*`) until Windows DXC regen. Load path + `direct3d12` device hooks are in engine; replace blobs + drop `deferred` on ref PC (see `docs/platform/windows-bootstrap.md`). |
-| metallib | `sprite.metallib` | **Placeholder** — native regen on macOS in **T10**. |
+| metallib | `sprite.metallib` | **Placeholder** (`MMD_PLACEHOLDER_METALLIB_*`) until macOS Metal regen. Load path + `metal` device hooks are in engine; replace blob + drop `deferred` on M4 ref (see `docs/platform/macos-bootstrap.md`). |
 
 Verify:
 

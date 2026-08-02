@@ -9,7 +9,6 @@
 
 - No git remote → local commits only until origin exists.
 - Parallel off; serial tickets.
-- Headless GPU env documented T7.
 
 ## Status
 
@@ -23,11 +22,11 @@
 | T6  | Pinned native deps + shaders | done | 5ecc832 | |
 | T7  | Linux SDL3 GPU static slice | done | ee607f8 | |
 | T8  | Moving 50k interactive slice | done | 5ada751 | |
-| T9  | Windows/D3D12 port | blocked_user | 2fd3f25 | Linux prep landed; Windows 11 25H2 + RX6400 validation missing |
-| T10 | macOS/Metal port | pending | — | needs M4 host |
+| T9  | Windows/D3D12 port | blocked_user | 1785ca6 | need Win11 25H2 ref PC; prep only |
+| T10 | macOS/Metal port | blocked_user | d454791 | need M4 macOS 15; prep only |
 | T11 | Benchmark + JSON report | pending | — | |
 | T12 | Zero-allocation contract | pending | — | |
-| T13 | Backend golden correctness | pending | — | needs T9/T10 |
+| T13 | Backend golden correctness | pending | — | blocked_dep if T9/T10 stay blocked |
 | T14 | Trusted local lab CLI | pending | — | |
 | T15 | Ubuntu runner contract | pending | — | |
 | T16 | Ubuntu recovery + attestation | pending | — | physical |
@@ -46,4 +45,5 @@
 ## Log
 
 - T1–T8 done
-- T9 Linux-safe prep: host backend selection (`direct3d12` on Windows), Basic Render Driver reject + unit tests, DXIL shader load path, Windows build.rs prefix/bin, docs/platform/windows-bootstrap.md, DXIL DXBC magic check hooks. DXIL blobs still placeholders (`deferred=T9`). Native Windows matrix NOT run — State=blocked_user.
+- T9 blocked_user 1785ca6 need Windows ref PC
+- T10 blocked_user d454791 prep only; need M4 Mac mini macOS 15 + Xcode Metal toolchain

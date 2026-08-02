@@ -14,8 +14,9 @@ pub use atlas::{
 };
 pub use backend::{
     BACKEND_D3D12, BACKEND_METAL, BACKEND_VULKAN, REQUIRED_BACKEND, REQUIRED_LINUX_BACKEND,
-    assert_device_backend, is_rejected_adapter, required_backend, validate_adapter_name,
-    validate_backend_name, validate_device_props,
+    REQUIRED_MACOS_ARCH, assert_device_backend, is_apple_silicon_arch, is_rejected_adapter,
+    required_backend, validate_adapter_name, validate_backend_name, validate_device_props,
+    validate_macos_host_arch,
 };
 pub use device::GpuContext;
 pub use error::RenderError;

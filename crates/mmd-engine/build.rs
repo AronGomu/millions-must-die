@@ -41,6 +41,20 @@ fn configure_prefix(prefix: &Path) {
                 }
                 emit_pkg_config_path(&lib.join("pkgconfig"));
             }
+            if other == "macos" {
+                for dir in [
+                    prefix.join("lib"),
+                    prefix.join("Frameworks"),
+                    prefix.join("Library/Frameworks"),
+                ] {
+                    if dir.join("SDL3.framework").is_dir() {
+                        println!("cargo:rustc-link-search=framework={}", dir.display());
+                        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
+                        println!("cargo:rustc-env=MMD_SDL3_FRAMEWORK_DIR={}", dir.display());
+                        break;
+                    }
+                }
+            }
         }
     }
 }
