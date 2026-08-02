@@ -1,0 +1,7 @@
+# Workspace cargo config.
+# Native SDL3 shared libs are built/cached outside Git (see third_party/README.md).
+# Do not add network-fetching build overrides here.
+#
+# After `cargo run -p xtask -- bootstrap` builds a prefix, T7 may set e.g.:
+#   PKG_CONFIG_PATH = "<cache>/sdl3/3.4.12/prefix-linux/lib/pkgconfig"
+# via environment rather than forcing build-from-source (network).

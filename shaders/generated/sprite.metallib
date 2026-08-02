@@ -1,0 +1,4 @@
+MMD_PLACEHOLDER_METALLIB_v1
+source=shaders/sprite.hlsl
+entries=VSMain,PSMain
+deferred=T10

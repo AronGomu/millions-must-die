@@ -6,6 +6,9 @@ pub mod nav;
 pub mod scenario;
 pub mod sim;
 
+#[cfg(feature = "gpu-api-spike")]
+pub mod gpu_api_spike;
+
 /// Crate version string from Cargo package metadata.
 pub fn version() -> &'static str {
     env!("CARGO_PKG_VERSION")

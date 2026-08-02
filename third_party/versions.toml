@@ -1,0 +1,67 @@
+# Pinned native dependency contract (normative for bootstrap --check).
+# Caches live outside Git. Cargo build.rs must not fetch network.
+
+[schema]
+version = 1
+
+[sdl3.source]
+name = "SDL"
+release = "3.4.12"
+tag = "release-3.4.12"
+tarball = "SDL3-3.4.12.tar.gz"
+url = "https://github.com/libsdl-org/SDL/releases/download/release-3.4.12/SDL3-3.4.12.tar.gz"
+sha256 = "f07b958a9ac5020fb7a44cadb957f658b2149c3c8abb4f63145fac9303249db7"
+
+[sdl3.crates]
+# Verified pairing 2026-08-02:
+# - crates.io sdl3 0.18.4
+# - crates.io sdl3-sys 0.6.7+SDL-3.4.12 (matches source pin)
+# - sdl3 pulls sdl3-sys ^0.6.5; workspace locks exact 0.6.7
+sdl3 = "0.18.4"
+sdl3-sys = "0.6.7"
+sdl3_sys_full = "0.6.7+SDL-3.4.12"
+
+[sdl3.cache]
+# Resolved as $MMD_NATIVE_CACHE if set, else $HOME/<cache_root_default>
+cache_root_env = "MMD_NATIVE_CACHE"
+cache_root_default = ".cache/mmd/native"
+# Layout: {cache}/sdl3/{release}/src|build-{os}|prefix-{os}
+
+[sdl3.build.linux]
+shared = true
+os = "linux"
+# Placeholders expanded by xtask bootstrap (non-check):
+# {src} {build} {prefix}
+commands = [
+  "cmake -S {src} -B {build} -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_TEST_LIBRARY=OFF -DSDL_EXAMPLES=OFF -DCMAKE_INSTALL_PREFIX={prefix}",
+  "cmake --build {build} --config Release --parallel",
+  "cmake --install {build} --prefix {prefix}",
+]
+
+[sdl3.build.windows]
+shared = true
+os = "windows"
+deferred = "T9"
+commands = [
+  "cmake -S {src} -B {build} -G \"Visual Studio 17 2022\" -A x64 -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_TEST_LIBRARY=OFF -DCMAKE_INSTALL_PREFIX={prefix}",
+  "cmake --build {build} --config Release --parallel",
+  "cmake --install {build} --prefix {prefix} --config Release",
+]
+
+[sdl3.build.macos]
+shared = true
+os = "macos"
+deferred = "T10"
+commands = [
+  "cmake -S {src} -B {build} -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_TEST_LIBRARY=OFF -DCMAKE_INSTALL_PREFIX={prefix}",
+  "cmake --build {build} --config Release --parallel",
+  "cmake --install {build} --prefix {prefix}",
+]
+
+[shaders]
+canonical = "shaders/sprite.hlsl"
+generated_dir = "shaders/generated"
+# Backend formats required in generated manifest (slots always present).
+formats = ["spirv", "dxil", "metallib"]
+# DXIL/metallib native regen deferred; tracked placeholders satisfy hash contract until T9/T10.
+deferred_native_regen = { dxil = "T9", metallib = "T10" }

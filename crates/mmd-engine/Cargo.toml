@@ -6,12 +6,20 @@ license.workspace = true
 description = "Millions Must Die engine library"
 publish = false
 
+[features]
+default = []
+# Compile-only SDL3 GPU API surface check (no native link). Enabled in T6 spike tests.
+gpu-api-spike = ["dep:sdl3", "dep:sdl3-sys"]
+
 [dependencies]
 hex.workspace = true
 ron.workspace = true
 serde.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
+# Optional pin + API spike (T6). Renderer wiring lands in T7 with real shared lib.
+sdl3 = { workspace = true, optional = true }
+sdl3-sys = { workspace = true, optional = true, features = ["no-link", "metadata"] }
 
 [dev-dependencies]
 hex.workspace = true

@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "canonical": "shaders/sprite.hlsl",
+  "canonical_sha256": "642bc3f247f9b9fe00fde7d928200c96967c95bf70003a96624ebb07fe4b1855",
+  "generator": "mmd-shader-pin-v1",
+  "entry_points": {
+    "vertex": "VSMain",
+    "fragment": "PSMain"
+  },
+  "resources": {
+    "uniform_buffers": 1,
+    "samplers": 1,
+    "sampled_textures": 1,
+    "storage_buffers": 0,
+    "storage_textures": 0
+  },
+  "formats": {
+    "spirv": {
+      "status": "tracked",
+      "files": [
+        {
+          "stage": "vertex",
+          "file": "sprite.vert.spv",
+          "sha256": "d45e85f391ba93925df9fc0184b749cbc22f78bbe143648340e03b962d18badd"
+        },
+        {
+          "stage": "fragment",
+          "file": "sprite.frag.spv",
+          "sha256": "a3841a152d0a8591b06468845fed44a1cc8223dc6af89fc5f7991253d0d23838"
+        }
+      ]
+    },
+    "dxil": {
+      "status": "placeholder",
+      "deferred": "T9",
+      "files": [
+        {
+          "stage": "vertex",
+          "file": "sprite.vert.dxil",
+          "sha256": "55adb1dc0898788f22afb35fb28780788ad5ed9cc15a8244818ed669479c6edb"
+        },
+        {
+          "stage": "fragment",
+          "file": "sprite.frag.dxil",
+          "sha256": "759374ea9af31724eaca9a1218d48068665cf0dfb8f43da0eb1ba2a6089c6b71"
+        }
+      ]
+    },
+    "metallib": {
+      "status": "placeholder",
+      "deferred": "T10",
+      "files": [
+        {
+          "stage": "library",
+          "file": "sprite.metallib",
+          "sha256": "bdf510fe2dd676475feacb738c978ee8436a4b11c07884b0762c03a00ea13d48"
+        }
+      ]
+    }
+  }
+}

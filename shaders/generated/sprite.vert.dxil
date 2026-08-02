@@ -1,0 +1,5 @@
+MMD_PLACEHOLDER_DXIL_v1
+source=shaders/sprite.hlsl
+stage=vertex
+entry=VSMain
+deferred=T9

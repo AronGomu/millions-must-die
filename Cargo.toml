@@ -13,11 +13,15 @@ hex = "0.4.3"
 mmd-engine = { path = "crates/mmd-engine" }
 png = "0.18.1"
 ron = "0.10.1"
+# Pinned in T6 (third_party/versions.toml). Exact; no caret floats.
+sdl3 = { version = "=0.18.4", default-features = false }
+sdl3-sys = { version = "=0.6.7", default-features = false }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10.9"
 tempfile = "3.20.0"
 thiserror = "2.0.12"
+toml = { version = "0.8.23", default-features = false, features = ["parse"] }
 
 [package]
 name = "millions_must_die"

@@ -34,11 +34,16 @@ cargo run -- run --help
 cargo run -- bench --help
 cargo run -p mmd-lab -- --help
 cargo run -p xtask -- --help
+cargo run -p xtask -- bootstrap --check
+cargo run -p xtask -- shaders --check
+cargo run -p xtask -- atlases --check
 cargo test --workspace --locked
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 nix flake check
 ```
+
+Pinned SDL3 source + crate versions: [`third_party/`](third_party/). Offline shader blobs: [`shaders/`](shaders/). Native SDL build caches stay outside Git (`MMD_NATIVE_CACHE` / `~/.cache/mmd/native`).
 
 ## Documentation
 

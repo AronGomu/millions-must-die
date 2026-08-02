@@ -1,6 +1,9 @@
 //! Build/bootstrap task runner.
 
 mod atlases;
+mod bootstrap;
+mod digest;
+mod shaders;
 
 use clap::{Parser, Subcommand};
 
@@ -17,8 +20,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Placeholder for SDL/shader bootstrap
-    Bootstrap,
+    /// Pin/check SDL3 native bootstrap contract
+    Bootstrap {
+        /// Offline verification only (no network)
+        #[arg(long)]
+        check: bool,
+    },
+    /// Verify tracked offline shader backend blobs
+    Shaders {
+        /// Verify manifests + digests
+        #[arg(long)]
+        check: bool,
+    },
     /// Generate or verify deterministic sprite atlases
     Atlases {
         /// Verify tracked atlases match clean regeneration
@@ -30,8 +43,17 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Bootstrap => {
-            println!("bootstrap: shell only; native deps land in later tickets");
+        Commands::Bootstrap { check } => {
+            if let Err(err) = bootstrap::run_bootstrap(check) {
+                eprintln!("bootstrap error: {err}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Shaders { check } => {
+            if let Err(err) = shaders::run_shaders(check) {
+                eprintln!("shaders error: {err}");
+                std::process::exit(1);
+            }
         }
         Commands::Atlases { check } => {
             if let Err(err) = atlases::run_atlases(check) {
