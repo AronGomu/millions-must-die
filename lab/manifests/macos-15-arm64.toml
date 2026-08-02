@@ -1,0 +1,43 @@
+# macOS ref runner contract (host attestation). Not candidate evidence.
+# Candidate perf/behavior lives in lab-host-evidence-v1 after a run.
+# Placeholder build/MDM/EACS pins freeze contract shape until T22 physical calibration.
+
+schema_version = "macos-runner-manifest-v1"
+runner_id = "macos-ref"
+platform = "macos-arm64"
+os_name = "macOS"
+os_version = "15"
+# macOS 15 exact build pin (placeholder until physical freeze).
+os_build = "24A335"
+arch = "arm64"
+backend = "metal"
+
+[hardware]
+model_contains = "Mac mini"
+chip_contains = "M4"
+memory_gb = 16
+
+[metal]
+require_metal = true
+device_name_contains = "Apple M4"
+reject_substrings = [
+  "MoltenVK",
+  "llvmpipe",
+  "SwiftShader",
+  "softpipe",
+]
+
+[security]
+security_mode = "Full Security"
+ssv_valid_required = true
+full_security_required = true
+
+[enrollment]
+ade_required = true
+mdm_enrolled_required = true
+# Frozen MDM profile id pin; provider account selected before T22.
+mdm_profile_id = "mmd-lab-macos-ref"
+
+[eacs]
+reset_ack_required = true
+preflight_ok_required = true

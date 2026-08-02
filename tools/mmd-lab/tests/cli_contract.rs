@@ -17,6 +17,7 @@ fn lab_help_lists_core_commands() {
         "doctor",
         "attest-ubuntu",
         "attest-windows",
+        "attest-macos",
         "ubuntu-recover-simulate",
         "windows-recover-simulate",
         "install",

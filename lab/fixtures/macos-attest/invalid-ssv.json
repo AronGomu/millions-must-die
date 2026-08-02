@@ -1,0 +1,23 @@
+{
+  "schema_version": "macos-host-attestation-v1",
+  "runner_id": "macos-ref",
+  "platform": "macos-arm64",
+  "os_name": "macOS",
+  "os_version": "15",
+  "os_build": "24A335",
+  "arch": "arm64",
+  "backend": "metal",
+  "hardware_model": "Mac mini (2024)",
+  "chip": "Apple M4",
+  "memory_gb": 16,
+  "metal_available": true,
+  "metal_device_name": "Apple M4",
+  "security_mode": "Full Security",
+  "ssv_valid": false,
+  "full_security": true,
+  "ade_enrolled": true,
+  "mdm_enrolled": true,
+  "mdm_profile_id": "mmd-lab-macos-ref",
+  "eacs_preflight_ok": true,
+  "eacs_reset_ack": true
+}

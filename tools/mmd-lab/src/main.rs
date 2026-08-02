@@ -2,6 +2,7 @@
 
 mod archive;
 mod install;
+mod macos;
 mod pr_summary;
 mod report;
 mod ssh;
@@ -22,6 +23,10 @@ use toml::Value as TomlValue;
 use archive::{pack_tree, write_archive_file, ArchiveBlob};
 use install::{
     default_binary_path, default_manifest_path, install_current_exe, self_check, sha256_file,
+};
+use macos::{
+    load_attestation as load_macos_attestation, load_manifest as load_macos_manifest,
+    validate_macos_attestation, MacosAttestVerdict,
 };
 use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
@@ -68,6 +73,15 @@ enum Commands {
     /// Validate Windows host attestation against frozen runner contract
     AttestWindows {
         /// Frozen Windows runner manifest (TOML)
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Observed host attestation JSON (fixture or inspect output)
+        #[arg(long)]
+        observed: PathBuf,
+    },
+    /// Validate macOS host attestation against frozen runner contract
+    AttestMacos {
+        /// Frozen macOS runner manifest (TOML)
         #[arg(long)]
         manifest: PathBuf,
         /// Observed host attestation JSON (fixture or inspect output)
@@ -171,6 +185,7 @@ fn main() -> ExitCode {
         Commands::Doctor { runner } => cmd_doctor(runner),
         Commands::AttestUbuntu { manifest, observed } => cmd_attest_ubuntu(manifest, observed),
         Commands::AttestWindows { manifest, observed } => cmd_attest_windows(manifest, observed),
+        Commands::AttestMacos { manifest, observed } => cmd_attest_macos(manifest, observed),
         Commands::UbuntuRecoverSimulate {
             image_manifest,
             runner_manifest,
@@ -748,6 +763,40 @@ fn cmd_attest_windows(manifest: PathBuf, observed: PathBuf) -> ExitCode {
         WindowsAttestVerdict::Quarantine
         | WindowsAttestVerdict::MaintenanceBlock
         | WindowsAttestVerdict::Reject => ExitCode::from(1),
+    }
+}
+
+fn cmd_attest_macos(manifest: PathBuf, observed: PathBuf) -> ExitCode {
+    let expected = match load_macos_manifest(&manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("attest-macos: load manifest failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let obs = match load_macos_attestation(&observed) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("attest-macos: load observed failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let result = validate_macos_attestation(&expected, &obs);
+    let verdict = match result.verdict {
+        MacosAttestVerdict::ReadyForRecovery => "ready-for-recovery",
+        MacosAttestVerdict::Quarantine => "quarantine",
+        MacosAttestVerdict::MaintenanceBlock => "maintenance-block",
+        MacosAttestVerdict::Reject => "reject",
+    };
+    println!("verdict {verdict}");
+    for r in &result.reasons {
+        println!("reason {r}");
+    }
+    match result.verdict {
+        MacosAttestVerdict::ReadyForRecovery => ExitCode::SUCCESS,
+        MacosAttestVerdict::Quarantine
+        | MacosAttestVerdict::MaintenanceBlock
+        | MacosAttestVerdict::Reject => ExitCode::from(1),
     }
 }
 
