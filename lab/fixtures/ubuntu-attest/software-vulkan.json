@@ -1,0 +1,20 @@
+{
+  "schema_version": "ubuntu-host-attestation-v1",
+  "runner_id": "ubuntu-ref",
+  "platform": "linux-x86_64",
+  "os_name": "Ubuntu",
+  "os_version": "24.04",
+  "arch": "x86_64",
+  "backend": "vulkan",
+  "cpu_model": "AMD Ryzen 5 8600G w/ Radeon 760M Graphics",
+  "gpu_model": "llvmpipe (LLVM 17.0.6, 256 bits)",
+  "gpu_vram_mb": 0,
+  "driver_name": "llvmpipe",
+  "driver_version": "0.0.1",
+  "bios_version": "F1a",
+  "vbios_version": "113-D5040100-100",
+  "secure_boot": true,
+  "image_digest_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "vulkan_device_name": "llvmpipe (LLVM 17.0.6, 256 bits)",
+  "vulkan_device_type": "cpu"
+}

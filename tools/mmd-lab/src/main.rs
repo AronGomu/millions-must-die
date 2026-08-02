@@ -5,6 +5,7 @@ mod install;
 mod pr_summary;
 mod report;
 mod ssh;
+mod ubuntu;
 mod verify;
 
 use std::fs;
@@ -21,6 +22,9 @@ use install::{
 use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
 use ssh::{run_fake_matrix, FakeAgent};
+use ubuntu::{
+    load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict,
+};
 use verify::verify_matrix;
 
 #[derive(Debug, Parser)]
@@ -38,6 +42,15 @@ struct Cli {
 enum Commands {
     /// Inspect lab host readiness (shell; full checks in later tickets)
     Doctor,
+    /// Validate Ubuntu host attestation against frozen runner contract
+    AttestUbuntu {
+        /// Frozen Ubuntu runner manifest (TOML)
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Observed host attestation JSON (fixture or inspect output)
+        #[arg(long)]
+        observed: PathBuf,
+    },
     /// Install this binary as trusted coordinator + write out-of-tree digest
     Install {
         /// Destination binary path (default: $HOME/.local/bin/mmd-lab)
@@ -100,6 +113,7 @@ fn main() -> ExitCode {
             println!("doctor: shell only; host checks land in later tickets");
             ExitCode::SUCCESS
         }
+        Commands::AttestUbuntu { manifest, observed } => cmd_attest_ubuntu(manifest, observed),
         Commands::Install { bin, manifest } => cmd_install(bin, manifest),
         Commands::SelfCheck { manifest } => cmd_self_check(manifest),
         Commands::Archive { root, out_dir } => cmd_archive(root, out_dir),
@@ -124,6 +138,38 @@ fn main() -> ExitCode {
             retain_dir,
             summary_out,
         }),
+    }
+}
+
+fn cmd_attest_ubuntu(manifest: PathBuf, observed: PathBuf) -> ExitCode {
+    let expected = match load_manifest(&manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("attest-ubuntu: load manifest failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let obs = match load_attestation(&observed) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("attest-ubuntu: load observed failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let result = validate_ubuntu_attestation(&expected, &obs);
+    let verdict = match result.verdict {
+        AttestVerdict::ReadyForRecovery => "ready-for-recovery",
+        AttestVerdict::Quarantine => "quarantine",
+        AttestVerdict::Reject => "reject",
+    };
+    println!("verdict {verdict}");
+    for r in &result.reasons {
+        println!("reason {r}");
+    }
+    match result.verdict {
+        AttestVerdict::ReadyForRecovery => ExitCode::SUCCESS,
+        AttestVerdict::Quarantine => ExitCode::from(1),
+        AttestVerdict::Reject => ExitCode::from(1),
     }
 }
 

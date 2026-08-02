@@ -15,6 +15,7 @@ fn lab_help_lists_core_commands() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     for cmd in [
         "doctor",
+        "attest-ubuntu",
         "install",
         "self-check",
         "archive",

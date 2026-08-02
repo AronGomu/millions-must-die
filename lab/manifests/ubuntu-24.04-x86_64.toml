@@ -1,0 +1,37 @@
+# Ubuntu ref runner contract (host attestation). Not candidate evidence.
+# Candidate perf/behavior lives in lab-host-evidence-v1 after a run.
+# Placeholder firmware/image pins freeze the contract shape until T16 physical calibration.
+
+schema_version = "ubuntu-runner-manifest-v1"
+runner_id = "ubuntu-ref"
+platform = "linux-x86_64"
+os_name = "Ubuntu"
+os_version = "24.04"
+arch = "x86_64"
+backend = "vulkan"
+
+[cpu]
+model_contains = "8600G"
+
+[gpu]
+model_contains = "RX 6400"
+vram_mb = 4096
+
+[driver]
+name = "amdgpu"
+# Frozen expected driver string; recalibrate on scheduled maintenance.
+version = "23.2.1"
+
+[firmware]
+bios_version = "F1a"
+vbios_version = "113-D5040100-100"
+secure_boot_required = true
+
+[image]
+# SHA-256 of frozen raw whole-disk image (placeholder until recovery image lands).
+digest_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+[vulkan]
+allow_software = false
+device_name_contains = "RX 6400"
+reject_substrings = ["llvmpipe", "lavapipe", "SwiftShader", "softpipe"]

@@ -1,0 +1,20 @@
+{
+  "schema_version": "ubuntu-host-attestation-v1",
+  "runner_id": "ubuntu-ref",
+  "platform": "linux-x86_64",
+  "os_name": "Ubuntu",
+  "os_version": "24.04",
+  "arch": "x86_64",
+  "backend": "vulkan",
+  "cpu_model": "AMD Ryzen 5 8600G w/ Radeon 760M Graphics",
+  "gpu_model": "AMD Radeon RX 6400",
+  "gpu_vram_mb": 4096,
+  "driver_name": "amdgpu",
+  "driver_version": "23.2.1",
+  "bios_version": "F1a",
+  "vbios_version": "113-D5040100-100",
+  "secure_boot": true,
+  "image_digest_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "vulkan_device_name": "AMD Radeon RX 6400 (RADV NAVI24)",
+  "vulkan_device_type": "discrete_gpu"
+}
