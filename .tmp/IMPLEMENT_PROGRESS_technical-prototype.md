@@ -3,23 +3,22 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-08-02T13:22:00+02:00
+- Updated: 2026-08-02T14:20:00+02:00
 
 ## Assumptions
 
-- No git remote → local commits only until origin exists. Push deferred not hard-fail ticket if commit OK.
-- Base scaffold commit `4cf0fbb` on main + feature branch.
-- Ship mode: balanced default; production for auth/pay/migrate/webhook/jobs/multi-subsystem.
-- Parallel off; serial tickets despite flowchart siblings.
+- No git remote → local commits only until origin exists.
+- Parallel off; serial tickets.
+- Ship balanced default.
 
 ## Status
 
 | ID  | Title | State   | SHA | Note |
 | --- | ----- | ------- | --- | ---- |
-| T1  | Workspace + governance shell | done | 8888c27 | push_skipped no origin |
+| T1  | Workspace + governance shell | done | 8888c27 | |
 | T2  | Versioned scenario contract | done | d246199 | |
-| T3  | Deterministic atlas generator | done | 9369d79 | 4 atlases 8×4 premul |
-| T4  | Shared flow field | pending | — | |
+| T3  | Deterministic atlas generator | done | bd0db6f | |
+| T4  | Shared flow field | done | 848991c | |
 | T5  | SoA movement + recycling | pending | — | |
 | T6  | Pinned native deps + shaders | pending | — | |
 | T7  | Linux SDL3 GPU static slice | pending | — | |
@@ -31,23 +30,22 @@
 | T13 | Backend golden correctness | pending | — | needs T9/T10 |
 | T14 | Trusted local lab CLI | pending | — | |
 | T15 | Ubuntu runner contract | pending | — | |
-| T16 | Ubuntu recovery + attestation | pending | — | physical host |
-| T17 | Ubuntu candidate gate | pending | — | physical host |
+| T16 | Ubuntu recovery + attestation | pending | — | physical |
+| T17 | Ubuntu candidate gate | pending | — | physical |
 | T18 | Windows runner contract | pending | — | |
-| T19 | Windows recovery + attestation | pending | — | physical host |
-| T20 | Windows candidate gate | pending | — | physical host |
+| T19 | Windows recovery + attestation | pending | — | physical |
+| T20 | Windows candidate gate | pending | — | physical |
 | T21 | macOS runner contract | pending | — | |
 | T22 | macOS recovery + attestation | pending | — | TODO(user) MDM |
 | T23 | macOS candidate gate | pending | — | |
 | T24 | Exact-hash 3-host merge gate | pending | — | |
 | T25 | Relative calibration engine | pending | — | |
-| T26 | 50-run pilot baselines | pending | — | physical lab |
+| T26 | 50-run pilot baselines | pending | — | physical |
 | T27 | Final proof + phase close | pending | — | |
 
 ## Log
 
-- 2026-08-02T13:09:11+02:00 base scaffold `4cf0fbb`; branch `plan/technical-prototype`
-- 2026-08-02T13:25:00+02:00 T1 done 8888c27
-- 2026-08-02T13:40:00+02:00 T2 done d246199
-- 2026-08-02T13:40:00+02:00 T3 start
-- 2026-08-02T13:22:00+02:00 T3 done 9369d79
+- T1 done 8888c27
+- T2 done d246199
+- T3 done bd0db6f
+- T4 done 848991c

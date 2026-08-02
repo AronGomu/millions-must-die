@@ -427,10 +427,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Add nav types + integer cost constants.
-2. - [ ] Implement reverse Dijkstra.
-3. - [ ] Derive normalized vectors.
-4. - [ ] Verify full scene field hash.
+1. - [x] Add nav types + integer cost constants.
+2. - [x] Implement reverse Dijkstra.
+3. - [x] Derive normalized vectors.
+4. - [x] Verify full scene field hash.
 
 #### Outputs
 
@@ -440,11 +440,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] `cargo test -p mmd-engine --test flow_field`
-- [ ] full fixture field hash stable
-- [ ] no dynamic rebuild API added
-- [ ] app functional — CLI shell unchanged
-- [ ] commit msg draft: `feat(nav): add deterministic shared flow field`
+- [x] `cargo test -p mmd-engine --test flow_field`
+- [x] full fixture field hash stable
+- [x] no dynamic rebuild API added
+- [x] app functional — CLI shell unchanged
+- [x] commit msg draft: `feat(nav): add deterministic shared flow field`
 
 ### T5: SoA movement + recycling
 

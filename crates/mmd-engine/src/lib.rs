@@ -1,7 +1,8 @@
 //! Engine core for Millions Must Die phase-0 prototype.
 //!
-//! Navigation, simulation, renderer, and benchmark logic land in later tickets.
+//! Simulation, renderer, and benchmark logic land in later tickets.
 
+pub mod nav;
 pub mod scenario;
 
 /// Crate version string from Cargo package metadata.
