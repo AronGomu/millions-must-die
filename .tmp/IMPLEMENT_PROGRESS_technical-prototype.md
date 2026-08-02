@@ -3,12 +3,7 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-08-02T15:04:59+02:00
-
-## Assumptions
-
-- No git remote → local commits only.
-- T13 blocked until T9+T10 native hosts.
+- Updated: 2026-08-02T18:15:00+02:00
 
 ## Status
 
@@ -28,9 +23,9 @@
 | T12 | Zero-allocation contract | done | 2943a8e | |
 | T13 | Backend golden correctness | blocked_dep | — | needs T9+T10 |
 | T14 | Trusted local lab CLI | done | e625451 | |
-| T15 | Ubuntu runner contract | pending | — | |
+| T15 | Ubuntu runner contract | done | 979bd14 | |
 | T16 | Ubuntu recovery + attestation | pending | — | physical |
-| T17 | Ubuntu candidate gate | pending | — | needs T12 T13 T16 |
+| T17 | Ubuntu candidate gate | pending | — | needs T13 T16 |
 | T18 | Windows runner contract | pending | — | |
 | T19 | Windows recovery + attestation | pending | — | physical |
 | T20 | Windows candidate gate | pending | — | |
@@ -44,5 +39,5 @@
 
 ## Log
 
-- T12 done 2943a8e
 - T14 done e625451
+- T15 done 979bd14
