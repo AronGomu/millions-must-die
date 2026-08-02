@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/lab-raw-sample-v1.schema.json",
+  "title": "lab-raw-sample-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["agent_count", "trial_index", "frame_service_ms"],
+  "properties": {
+    "agent_count": { "type": "integer", "minimum": 1 },
+    "trial_index": { "type": "integer", "minimum": 0 },
+    "frame_service_ms": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "number" }
+    }
+  }
+}

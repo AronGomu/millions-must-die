@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/lab-host-evidence-v1.schema.json",
+  "title": "lab-host-evidence-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "host_manifest",
+    "archive_sha256",
+    "remote_archive_verified",
+    "raw_trials"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "lab-host-evidence-v1" },
+    "host_manifest": { "$ref": "lab-host-manifest-v1.schema.json" },
+    "archive_sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+    "remote_archive_verified": { "type": "boolean" },
+    "raw_trials": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "lab-raw-sample-v1.schema.json" }
+    },
+    "claimed": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["median_p95_ms", "median_p99_ms", "verdict"],
+      "properties": {
+        "median_p95_ms": { "type": "number" },
+        "median_p99_ms": { "type": "number" },
+        "verdict": { "type": "string" }
+      }
+    },
+    "project_rust_alloc_count": { "type": "integer", "minimum": 0 },
+    "submitted_frames": { "type": "integer", "minimum": 0 },
+    "completed_frames": { "type": "integer", "minimum": 0 },
+    "max_in_flight": { "type": "integer", "minimum": 0, "maximum": 2 }
+  }
+}

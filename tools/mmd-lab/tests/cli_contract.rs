@@ -5,7 +5,7 @@ fn lab_bin() -> Command {
 }
 
 #[test]
-fn lab_help_lists_doctor_and_validate() {
+fn lab_help_lists_core_commands() {
     let output = lab_bin().arg("--help").output().expect("run lab --help");
     assert!(
         output.status.success(),
@@ -13,9 +13,13 @@ fn lab_help_lists_doctor_and_validate() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("doctor"), "help missing doctor:\n{stdout}");
-    assert!(
-        stdout.contains("validate"),
-        "help missing validate:\n{stdout}"
-    );
+    for cmd in [
+        "doctor",
+        "install",
+        "self-check",
+        "archive",
+        "validate",
+    ] {
+        assert!(stdout.contains(cmd), "help missing {cmd}:\n{stdout}");
+    }
 }

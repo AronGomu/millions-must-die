@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/lab-archive-v1.schema.json",
+  "title": "lab-archive-v1",
+  "description": "Logical schema for MMDARC01 content-addressed source archive.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["magic", "sha256", "entries"],
+  "properties": {
+    "magic": { "type": "string", "const": "MMDARC01" },
+    "sha256": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "description": "SHA-256 of full archive bytes including magic."
+    },
+    "content_id": {
+      "type": "string",
+      "pattern": "^sha256-[0-9a-f]{64}$"
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "size"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "minLength": 64, "maxLength": 64 },
+          "size": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

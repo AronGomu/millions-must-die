@@ -333,6 +333,14 @@ name = "mmd-lab"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hex",
+ "mmd-engine",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "toml",
 ]
 
 [[package]]

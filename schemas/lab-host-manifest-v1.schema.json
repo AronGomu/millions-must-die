@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/lab-host-manifest-v1.schema.json",
+  "title": "lab-host-manifest-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "host_id",
+    "platform",
+    "backend",
+    "os_build"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "lab-host-manifest-v1" },
+    "host_id": { "type": "string", "minLength": 1 },
+    "platform": {
+      "type": "string",
+      "enum": ["linux-x86_64", "windows-x86_64", "macos-arm64"]
+    },
+    "backend": { "type": "string", "minLength": 1 },
+    "os_build": { "type": "string", "minLength": 1 },
+    "cpu": { "type": "string" },
+    "gpu": { "type": "string" },
+    "attested": { "type": "boolean" }
+  }
+}

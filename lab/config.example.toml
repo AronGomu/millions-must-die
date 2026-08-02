@@ -1,0 +1,34 @@
+# Example lab coordinator config. Copy out-of-tree; do not commit secrets/home paths.
+
+schema_version = "lab-config-v1"
+ordinary_retain_days = 90
+
+[[agents]]
+id = "ubuntu-ref"
+platform = "linux-x86_64"
+backend = "vulkan"
+transport = "fake"
+fixture = "fixtures/fake-agents/ubuntu-ref.json"
+# Negative (forged stats) samples live under fixtures/fake-agents/negative/.
+
+[[agents]]
+id = "windows-ref"
+platform = "windows-x86_64"
+backend = "d3d12"
+transport = "fake"
+fixture = "fixtures/fake-agents/windows-ref.json"
+
+[[agents]]
+id = "macos-ref"
+platform = "macos-arm64"
+backend = "metal"
+transport = "fake"
+fixture = "fixtures/fake-agents/macos-ref.json"
+
+# Real SSH agents (T15+):
+# [[agents]]
+# id = "ubuntu-ref"
+# platform = "linux-x86_64"
+# backend = "vulkan"
+# transport = "ssh"
+# host = "lab-ubuntu.example"
