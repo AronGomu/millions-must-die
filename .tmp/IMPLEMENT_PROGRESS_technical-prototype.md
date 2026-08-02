@@ -24,7 +24,7 @@
 | T8  | Moving 50k interactive slice | done | 5ada751 | |
 | T9  | Windows/D3D12 port | blocked_user | 1785ca6 | need Win11 ref PC |
 | T10 | macOS/Metal port | blocked_user | c37a377 | need M4 Mac |
-| T11 | Benchmark + JSON report | done | cf22e70 | |
+| T11 | Benchmark + JSON report | done | 6d2047a | |
 | T12 | Zero-allocation contract | pending | — | |
 | T13 | Backend golden correctness | pending | — | blocked_dep T9/T10 |
 | T14 | Trusted local lab CLI | pending | — | |
