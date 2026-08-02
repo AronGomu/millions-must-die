@@ -51,3 +51,19 @@ Linux shared-lib build commands live under `[sdl3.build.linux]` in `versions.tom
 ### License
 
 SDL3 retains zlib license terms from upstream. Project-authored files stay MIT-0.
+
+## T7 runtime (Linux)
+
+Link against pinned prefix:
+
+```sh
+export MMD_SDL3_PREFIX="${MMD_NATIVE_CACHE:-$HOME/.cache/mmd/native}/sdl3/3.4.12/prefix-linux"
+export PKG_CONFIG_PATH="$MMD_SDL3_PREFIX/lib64/pkgconfig:${PKG_CONFIG_PATH:-}"
+export LD_LIBRARY_PATH="$MMD_SDL3_PREFIX/lib64:/run/opengl-driver/lib:$(nix-build '<nixpkgs>' -A vulkan-loader --no-out-link)/lib:${LD_LIBRARY_PATH:-}"
+# Headless / no usable DISPLAY:
+export SDL_VIDEODRIVER=offscreen
+cargo test -p mmd-engine --test gpu_smoke -- --ignored --test-threads=1
+cargo run -- run
+```
+
+`build.rs` auto-adds rpath for the pinned prefix when present.

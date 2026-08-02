@@ -1,5 +1,7 @@
 //! App binary: interactive `run` and timed `bench` entry points.
 
+mod run;
+
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -25,7 +27,10 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Commands::Run => {
-            println!("run: shell only (engine {})", mmd_engine::version());
+            if let Err(e) = run::run() {
+                eprintln!("run failed: {e}");
+                std::process::exit(1);
+            }
         }
         Commands::Bench => {
             println!("bench: shell only (engine {})", mmd_engine::version());

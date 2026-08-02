@@ -38,3 +38,4 @@ path = "src/main.rs"
 [dependencies]
 clap.workspace = true
 mmd-engine.workspace = true
+sdl3 = { workspace = true }

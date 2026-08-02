@@ -298,6 +298,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "mmd-engine",
+ "sdl3",
 ]
 
 [[package]]
@@ -315,6 +316,7 @@ name = "mmd-engine"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "png",
  "ron",
  "sdl3",
  "sdl3-sys",
