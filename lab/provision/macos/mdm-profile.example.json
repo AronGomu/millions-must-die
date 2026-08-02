@@ -1,0 +1,31 @@
+{
+  "schema_version": "macos-mdm-profile-example-v1",
+  "profile_id": "mmd-lab-macos-ref",
+  "provider": "TODO(user)-select-mdm-provider",
+  "abm_ade_account": "TODO(user)-provision-abm-ade-account",
+  "ade_required": true,
+  "mdm_enrolled_required": true,
+  "restore": {
+    "initiator": "external-controller",
+    "primary_path": "eacs",
+    "fallback_path": "dfu",
+    "dfu_requires_second_mac": true,
+    "dfu_requires_usb_c_data_cable": true
+  },
+  "recovery_allowlist": [
+    "apple-business-manager",
+    "ade",
+    "mdm-provider-api",
+    "apns",
+    "eacs"
+  ],
+  "networks": {
+    "order": ["recovery", "provisioning", "candidate"],
+    "candidate_egress_policy": "deny"
+  },
+  "notes": [
+    "Select/provision real MDM provider + Apple Business Manager/ADE before T22 physical drill.",
+    "This file freezes protocol shape only; it is not a live enrollment profile payload.",
+    "Candidate OS never initiates restore or supplies attestation truth."
+  ]
+}

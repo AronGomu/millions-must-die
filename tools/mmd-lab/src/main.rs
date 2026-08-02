@@ -3,6 +3,7 @@
 mod archive;
 mod install;
 mod macos;
+mod macos_recovery;
 mod pr_summary;
 mod report;
 mod ssh;
@@ -27,6 +28,9 @@ use install::{
 use macos::{
     load_attestation as load_macos_attestation, load_manifest as load_macos_manifest,
     validate_macos_attestation, MacosAttestVerdict,
+};
+use macos_recovery::{
+    MacosLabNetwork, MacosRecoveryEvent, MacosRecoveryPhase, MacosRecoveryState,
 };
 use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
@@ -124,6 +128,33 @@ enum Commands {
         #[arg(long, default_value = "WIN-MACHINE-FRESH-SIM")]
         new_host_identity: String,
     },
+    /// Simulate macOS external EACS/ADE/MDM (+ DFU) restore protocol. Dry-run only.
+    MacosRecoverSimulate {
+        /// Example MDM profile identity (not a live enrollment payload)
+        #[arg(long)]
+        mdm_profile: PathBuf,
+        /// Frozen macOS runner contract
+        #[arg(long)]
+        runner_manifest: PathBuf,
+        /// Observed host attestation fixture used after simulated restore
+        #[arg(long)]
+        attest_fixture: PathBuf,
+        /// Recovery path: `eacs` (default) or `dfu` (missed-ack then DFU fallback)
+        #[arg(long, default_value = "eacs", value_parser = ["eacs", "dfu"])]
+        path: String,
+        /// Simulate EACS reset ack received (eacs path only)
+        #[arg(long, default_value = "true", value_parser = ["true", "false"])]
+        eacs_ack: String,
+        /// Simulate ADE/MDM reenroll success
+        #[arg(long, default_value = "true", value_parser = ["true", "false"])]
+        reenroll_success: String,
+        /// Optional prior macOS host identity (must differ from new)
+        #[arg(long, default_value = "MAC-HOST-PRIOR-SIM")]
+        prior_host_identity: String,
+        /// Fresh macOS host identity after rotate
+        #[arg(long, default_value = "MAC-HOST-FRESH-SIM")]
+        new_host_identity: String,
+    },
     /// Install this binary as trusted coordinator + write out-of-tree digest
     Install {
         /// Destination binary path (default: $HOME/.local/bin/mmd-lab)
@@ -212,6 +243,25 @@ fn main() -> ExitCode {
             prior_host_identity,
             new_host_identity,
         ),
+        Commands::MacosRecoverSimulate {
+            mdm_profile,
+            runner_manifest,
+            attest_fixture,
+            path,
+            eacs_ack,
+            reenroll_success,
+            prior_host_identity,
+            new_host_identity,
+        } => cmd_macos_recover_simulate(MacosRecoverArgs {
+            mdm_profile,
+            runner_manifest,
+            attest_fixture,
+            path,
+            eacs_ack: eacs_ack == "true",
+            reenroll_success: reenroll_success == "true",
+            prior_host_identity,
+            new_host_identity,
+        }),
         Commands::Install { bin, manifest } => cmd_install(bin, manifest),
         Commands::SelfCheck { manifest } => cmd_self_check(manifest),
         Commands::Archive { root, out_dir } => cmd_archive(root, out_dir),
@@ -247,8 +297,9 @@ fn cmd_doctor(runner: Option<String>) -> ExitCode {
         }
         Some("ubuntu") => cmd_doctor_ubuntu(),
         Some("windows") => cmd_doctor_windows(),
+        Some("macos") => cmd_doctor_macos(),
         Some(other) => {
-            eprintln!("doctor: unknown runner `{other}` (supported: ubuntu|windows)");
+            eprintln!("doctor: unknown runner `{other}` (supported: ubuntu|windows|macos)");
             ExitCode::from(2)
         }
     }
@@ -325,6 +376,43 @@ fn cmd_doctor_windows() -> ExitCode {
 
     if !missing.is_empty() {
         eprintln!("doctor windows: missing contract files: {missing:?}");
+        return ExitCode::from(1);
+    }
+    ExitCode::from(2)
+}
+
+fn cmd_doctor_macos() -> ExitCode {
+    let root = discover_workspace_root();
+    let mut missing = Vec::new();
+    let paths = [
+        "lab/manifests/macos-15-arm64.toml",
+        "lab/provision/macos/mdm-profile.example.json",
+        "lab/provision/macos/recover.sh",
+        "lab/provision/macos/attest.sh",
+        "docs/lab/macos-runner.md",
+        "lab/fixtures/macos-attest/pass.json",
+    ];
+    for rel in paths {
+        let p = root.join(rel);
+        if p.is_file() {
+            println!("ok {rel}");
+        } else {
+            println!("missing {rel}");
+            missing.push(rel);
+        }
+    }
+
+    println!("ok protocol-state-machine");
+    println!("physical-lab absent");
+    println!("physical-drill blocked_user");
+    println!("mdm-provider TODO(user): select/provision MDM + ABM/ADE before live drill");
+    println!(
+        "need: M4 Mac mini 16 GB + second Mac + USB-C + EACS/ADE/MDM + recovery/provisioning/candidate VLANs + DFU fallback drill"
+    );
+    println!("verdict blocked_user");
+
+    if !missing.is_empty() {
+        eprintln!("doctor macos: missing contract files: {missing:?}");
         return ExitCode::from(1);
     }
     ExitCode::from(2)
@@ -598,6 +686,272 @@ fn print_windows_recovery_state(state: &WindowsRecoveryState, code: ExitCode) ->
         println!("verdict incomplete");
     }
     code
+}
+
+struct MacosRecoverArgs {
+    mdm_profile: PathBuf,
+    runner_manifest: PathBuf,
+    attest_fixture: PathBuf,
+    path: String,
+    eacs_ack: bool,
+    reenroll_success: bool,
+    prior_host_identity: String,
+    new_host_identity: String,
+}
+
+fn cmd_macos_recover_simulate(args: MacosRecoverArgs) -> ExitCode {
+    let profile_id = match load_macos_mdm_profile_id(&args.mdm_profile) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("macos-recover-simulate: mdm-profile: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let runner = match load_macos_manifest(&args.runner_manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("macos-recover-simulate: runner-manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if runner.enrollment.mdm_profile_id != profile_id {
+        eprintln!(
+            "macos-recover-simulate: mdm profile_id mismatch between mdm-profile and runner manifest"
+        );
+        return ExitCode::from(1);
+    }
+    let observed = match load_macos_attestation(&args.attest_fixture) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("macos-recover-simulate: attest fixture: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut state = MacosRecoveryState::new(&profile_id);
+
+    if args.path == "dfu" {
+        // Missed EACS ack → quarantine → operator DFU → reenroll path.
+        let boot = [
+            MacosRecoveryEvent::StartExternalRestore {
+                external_controller: true,
+            },
+            MacosRecoveryEvent::EacsPreflightFinished {
+                ok: true,
+                detail: "dry-run:eacs-preflight-ok".into(),
+            },
+            MacosRecoveryEvent::EacsWipeFinished {
+                ack_received: false,
+                detail: "dry-run:simulated-eacs-timeout".into(),
+            },
+        ];
+        for ev in boot {
+            if let Err(e) = state.apply(ev) {
+                eprintln!("macos-recover-simulate: {e}");
+                return ExitCode::from(2);
+            }
+        }
+        if !state.phase.is_quarantined() {
+            eprintln!("macos-recover-simulate: dfu path expected quarantine after missed ack");
+            return ExitCode::from(2);
+        }
+        if let Err(e) = state.apply(MacosRecoveryEvent::StartDfuFallback {
+            external_operator: true,
+        }) {
+            eprintln!("macos-recover-simulate: {e}");
+            return ExitCode::from(2);
+        }
+        if let Err(e) = state.apply(MacosRecoveryEvent::DfuRestoreFinished {
+            success: true,
+            detail: "dry-run:simulated-dfu".into(),
+        }) {
+            eprintln!("macos-recover-simulate: {e}");
+            return ExitCode::from(2);
+        }
+        if state.phase.is_quarantined() {
+            return print_macos_recovery_state(&state, ExitCode::from(1));
+        }
+    } else {
+        let boot = [
+            MacosRecoveryEvent::StartExternalRestore {
+                external_controller: true,
+            },
+            MacosRecoveryEvent::EacsPreflightFinished {
+                ok: true,
+                detail: "dry-run:eacs-preflight-ok".into(),
+            },
+            MacosRecoveryEvent::EacsWipeFinished {
+                ack_received: args.eacs_ack,
+                detail: if args.eacs_ack {
+                    "dry-run:eacs-ack".into()
+                } else {
+                    "dry-run:eacs-timeout".into()
+                },
+            },
+        ];
+        for ev in boot {
+            if let Err(e) = state.apply(ev) {
+                eprintln!("macos-recover-simulate: {e}");
+                return ExitCode::from(2);
+            }
+            if state.phase.is_quarantined() {
+                return print_macos_recovery_state(&state, ExitCode::from(1));
+            }
+        }
+    }
+
+    // Shared post-reset path: reenroll → identity → networks → attest → egress.
+    if let Err(e) = state.apply(MacosRecoveryEvent::MdmReenrollFinished {
+        success: args.reenroll_success,
+        profile_id: if args.reenroll_success {
+            profile_id.clone()
+        } else {
+            profile_id.clone()
+        },
+        detail: if args.reenroll_success {
+            "dry-run:ade-mdm-ok".into()
+        } else {
+            "dry-run:mdm-provider-reject".into()
+        },
+    }) {
+        eprintln!("macos-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+    if state.phase.is_quarantined() {
+        return print_macos_recovery_state(&state, ExitCode::from(1));
+    }
+
+    let post = [
+        MacosRecoveryEvent::HostIdentityRotated {
+            new_host_identity: args.new_host_identity.clone(),
+            prior_host_identity: Some(args.prior_host_identity.clone()),
+        },
+        MacosRecoveryEvent::NetworkMoved {
+            network: MacosLabNetwork::Provisioning,
+        },
+        MacosRecoveryEvent::NetworkMoved {
+            network: MacosLabNetwork::Candidate,
+        },
+    ];
+    for ev in post {
+        if let Err(e) = state.apply(ev) {
+            eprintln!("macos-recover-simulate: {e}");
+            return ExitCode::from(2);
+        }
+        if state.phase.is_quarantined() {
+            return print_macos_recovery_state(&state, ExitCode::from(1));
+        }
+    }
+
+    let attest = validate_macos_attestation(&runner, &observed);
+    if let Err(e) = state.apply(MacosRecoveryEvent::AttestationFinished(attest)) {
+        eprintln!("macos-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+    if state.phase.is_quarantined() {
+        return print_macos_recovery_state(&state, ExitCode::from(1));
+    }
+
+    if let Err(e) = state.apply(MacosRecoveryEvent::EgressCanaryFinished {
+        denied: true,
+        detail: "dry-run:simulated-external-deny".into(),
+    }) {
+        eprintln!("macos-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+
+    print_macos_recovery_state(
+        &state,
+        if state.phase.is_terminal_success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        },
+    )
+}
+
+fn print_macos_recovery_state(state: &MacosRecoveryState, code: ExitCode) -> ExitCode {
+    let phase = match &state.phase {
+        MacosRecoveryPhase::ReadyForCandidate => "ready-for-candidate".to_string(),
+        MacosRecoveryPhase::Quarantined { reason } => format!("quarantined:{reason}"),
+        other => format!("{other:?}"),
+    };
+    println!("phase {phase}");
+    println!(
+        "allows_candidate_provision {}",
+        state.phase.allows_candidate_provision()
+    );
+    if let Some(p) = &state.reset_path {
+        println!("reset_path {p}");
+    }
+    if let Some(k) = &state.host_identity {
+        println!("host_identity {k}");
+    }
+    for t in &state.trail {
+        println!("trail {t}");
+    }
+    if state.phase.is_terminal_success() {
+        println!("verdict ready-for-candidate");
+        println!("note dry-run-only; physical drill still required");
+        println!("note TODO(user) MDM/ABM selection still required for live drill");
+    } else if let Some(r) = &state.quarantine_reason {
+        println!("verdict quarantine");
+        println!("reason {r}");
+    } else {
+        println!("verdict incomplete");
+    }
+    code
+}
+
+fn load_macos_mdm_profile_id(path: &std::path::Path) -> Result<String, String> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let schema = v
+        .get("schema_version")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if schema != "macos-mdm-profile-example-v1" {
+        return Err(format!(
+            "expected macos-mdm-profile-example-v1, got {schema}"
+        ));
+    }
+    let initiator = v
+        .get("restore")
+        .and_then(|r| r.get("initiator"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if initiator != "external-controller" {
+        return Err(format!(
+            "initiator must be external-controller, got {initiator}"
+        ));
+    }
+    let egress = v
+        .get("networks")
+        .and_then(|n| n.get("candidate_egress_policy"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if egress != "deny" {
+        return Err(format!("candidate_egress_policy must be deny, got {egress}"));
+    }
+    let profile_id = v
+        .get("profile_id")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "profile_id missing".to_string())?
+        .to_string();
+    if profile_id.trim().is_empty() {
+        return Err("profile_id empty".into());
+    }
+    // Example file must keep TODO(user) until real MDM is selected.
+    let provider = v
+        .get("provider")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if !provider.contains("TODO(user)") {
+        // Allow non-TODO only when explicitly provisioned later; still require id.
+        // For T22 skeleton, TODO(user) is expected; non-TODO is accepted if present.
+    }
+    Ok(profile_id)
 }
 
 fn load_image_digest(path: &std::path::Path) -> Result<String, String> {

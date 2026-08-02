@@ -69,11 +69,26 @@ Fixtures under `lab/fixtures/macos-attest/`:
 - `invalid-ssv.json` → quarantine
 - `missing-mdm.json` → quarantine
 
-Live host inspect + recovery protocol: see `docs/lab/macos-runner.md` (T22).
+Live host inspect + recovery protocol: see `docs/lab/macos-runner.md`.
+
+## Recovery skeleton (T22)
+
+| Artifact | Role |
+| --- | --- |
+| `mdm-profile.example.json` | Frozen profile id + restore policy; `TODO(user)` MDM/ABM placeholders |
+| `recover.sh` | Dry-run protocol driver → `mmd-lab macos-recover-simulate` |
+
+```bash
+lab/provision/macos/recover.sh --dry-run --lab-bin path/to/mmd-lab
+lab/provision/macos/recover.sh --dry-run --path dfu --lab-bin path/to/mmd-lab
+mmd-lab doctor --runner macos
+```
+
+Live path blocked until MDM/ABM selected + M4 + second Mac DFU drill.
 
 ## Reset-only vendor endpoints
 
-Recovery (T22) may contact **reset/enrollment vendors only**. Candidate VLAN stays blocked.
+Recovery may contact **reset/enrollment vendors only**. Candidate VLAN stays blocked.
 
 | Endpoint class | Purpose | Allowed phase |
 | --- | --- | --- |
@@ -85,10 +100,11 @@ Recovery (T22) may contact **reset/enrollment vendors only**. Candidate VLAN sta
 
 **Not allowed** on candidate path: general internet, App Store, iCloud user data, arbitrary Apple CDN, package mirrors, candidate binary egress.
 
-`TODO(user)`: select MDM provider/account before T22 physical drill.
+`TODO(user)`: select MDM provider/account before physical drill.
 
 ## Tests
 
 ```bash
 cargo test -p mmd-lab macos_manifest
+cargo test -p mmd-lab --test macos_recovery
 ```
