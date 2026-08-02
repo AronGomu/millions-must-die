@@ -25,7 +25,7 @@
 | T9  | Windows/D3D12 port | blocked_user | 1785ca6 | need Win11 ref PC |
 | T10 | macOS/Metal port | blocked_user | c37a377 | need M4 Mac |
 | T11 | Benchmark + JSON report | done | 6d2047a | |
-| T12 | Zero-allocation contract | done | pending_commit | |
+| T12 | Zero-allocation contract | done | 2943a8e | |
 | T13 | Backend golden correctness | blocked_dep | — | needs T9+T10 |
 | T14 | Trusted local lab CLI | pending | — | |
 | T15 | Ubuntu runner contract | pending | — | |
