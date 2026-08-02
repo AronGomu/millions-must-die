@@ -10,7 +10,7 @@ Frozen host attestation for Windows 11 25H2 x86_64 ref PC. **Not** candidate evi
 | Host attestation (observed) | `windows-host-attestation-v1` | Inspected host fields only |
 | Candidate evidence | `lab-host-evidence-v1` | Archive hash + raw trials + claimed stats (untrusted) |
 
-Candidate reports never supply attestation truth. Coordinator validates host state against the frozen manifest before recovery/candidate paths (T19+).
+Candidate reports never supply attestation truth. Coordinator validates host state against the frozen manifest before recovery/candidate paths (T19/T20).
 
 ## Contract fields
 
@@ -66,7 +66,22 @@ Fixtures under `lab/fixtures/windows-attest/`:
 - `basic-renderer.json` → reject
 - `build-drift.json` → maintenance-block
 
-Live host inspect + recovery protocol: T19 (WinPE/FFU).
+Live host inspect + recovery protocol: see `docs/lab/windows-runner.md` (T19).
+
+## Recovery skeleton (T19)
+
+| Artifact | Role |
+| --- | --- |
+| `image-manifest.toml` | RO FFU identity + external WinPE/DISM restore policy |
+| `recover.ps1` | Dry-run protocol driver → `mmd-lab windows-recover-simulate` |
+| `docs/lab/windows-runner.md` | Operator runbook |
+
+```powershell
+lab/provision/windows/recover.ps1 --dry-run --lab-bin path/to/mmd-lab
+mmd-lab doctor --runner windows   # contracts ok → blocked_user until physical drill
+```
+
+Physical WinPE/FFU/power/VLAN drill remains **blocked_user** without ref lab hardware.
 
 ## Tests
 

@@ -18,6 +18,7 @@ fn lab_help_lists_core_commands() {
         "attest-ubuntu",
         "attest-windows",
         "ubuntu-recover-simulate",
+        "windows-recover-simulate",
         "install",
         "self-check",
         "archive",

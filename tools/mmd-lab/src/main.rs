@@ -9,6 +9,7 @@ mod ubuntu;
 mod ubuntu_recovery;
 mod verify;
 mod windows;
+mod windows_recovery;
 
 use std::fs;
 use std::path::PathBuf;
@@ -31,6 +32,9 @@ use verify::verify_matrix;
 use windows::{
     load_attestation as load_windows_attestation, load_manifest as load_windows_manifest,
     validate_windows_attestation, WindowsAttestVerdict,
+};
+use windows_recovery::{
+    WindowsLabNetwork, WindowsRecoveryEvent, WindowsRecoveryPhase, WindowsRecoveryState,
 };
 
 #[derive(Debug, Parser)]
@@ -87,6 +91,24 @@ enum Commands {
         /// Fresh SSH host key fp after rotate
         #[arg(long, default_value = "ssh-ed25519 AAAAfresh-sim")]
         new_host_key_fp: String,
+    },
+    /// Simulate Windows external WinPE/FFU restore protocol (no DISM/disk). Dry-run only.
+    WindowsRecoverSimulate {
+        /// RO FFU identity manifest
+        #[arg(long)]
+        image_manifest: PathBuf,
+        /// Frozen Windows runner contract
+        #[arg(long)]
+        runner_manifest: PathBuf,
+        /// Observed host attestation fixture used after simulated restore
+        #[arg(long)]
+        attest_fixture: PathBuf,
+        /// Optional prior Windows host identity (must differ from new)
+        #[arg(long, default_value = "WIN-MACHINE-PRIOR-SIM")]
+        prior_host_identity: String,
+        /// Fresh Windows host identity after rotate
+        #[arg(long, default_value = "WIN-MACHINE-FRESH-SIM")]
+        new_host_identity: String,
     },
     /// Install this binary as trusted coordinator + write out-of-tree digest
     Install {
@@ -162,6 +184,19 @@ fn main() -> ExitCode {
             prior_host_key_fp,
             new_host_key_fp,
         ),
+        Commands::WindowsRecoverSimulate {
+            image_manifest,
+            runner_manifest,
+            attest_fixture,
+            prior_host_identity,
+            new_host_identity,
+        } => cmd_windows_recover_simulate(
+            image_manifest,
+            runner_manifest,
+            attest_fixture,
+            prior_host_identity,
+            new_host_identity,
+        ),
         Commands::Install { bin, manifest } => cmd_install(bin, manifest),
         Commands::SelfCheck { manifest } => cmd_self_check(manifest),
         Commands::Archive { root, out_dir } => cmd_archive(root, out_dir),
@@ -196,8 +231,9 @@ fn cmd_doctor(runner: Option<String>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("ubuntu") => cmd_doctor_ubuntu(),
+        Some("windows") => cmd_doctor_windows(),
         Some(other) => {
-            eprintln!("doctor: unknown runner `{other}` (supported: ubuntu)");
+            eprintln!("doctor: unknown runner `{other}` (supported: ubuntu|windows)");
             ExitCode::from(2)
         }
     }
@@ -240,6 +276,42 @@ fn cmd_doctor_ubuntu() -> ExitCode {
         return ExitCode::from(1);
     }
     // Contracts present; physical still blocked → exit 2 (not ready).
+    ExitCode::from(2)
+}
+
+fn cmd_doctor_windows() -> ExitCode {
+    let root = discover_workspace_root();
+    let mut missing = Vec::new();
+    let paths = [
+        "lab/manifests/windows-11-25h2-x86_64.toml",
+        "lab/provision/windows/image-manifest.toml",
+        "lab/provision/windows/recover.ps1",
+        "lab/provision/windows/attest.ps1",
+        "docs/lab/windows-runner.md",
+        "lab/fixtures/windows-attest/pass.json",
+    ];
+    for rel in paths {
+        let p = root.join(rel);
+        if p.is_file() {
+            println!("ok {rel}");
+        } else {
+            println!("missing {rel}");
+            missing.push(rel);
+        }
+    }
+
+    println!("ok protocol-state-machine");
+    println!("physical-lab absent");
+    println!("physical-drill blocked_user");
+    println!(
+        "need: Windows 11 25H2 ref PC + WinPE/FFU + external controller + recovery/provisioning/candidate VLANs"
+    );
+    println!("verdict blocked_user");
+
+    if !missing.is_empty() {
+        eprintln!("doctor windows: missing contract files: {missing:?}");
+        return ExitCode::from(1);
+    }
     ExitCode::from(2)
 }
 
@@ -387,6 +459,132 @@ fn print_recovery_state(state: &RecoveryState, code: ExitCode) -> ExitCode {
     code
 }
 
+fn cmd_windows_recover_simulate(
+    image_manifest: PathBuf,
+    runner_manifest: PathBuf,
+    attest_fixture: PathBuf,
+    prior_host_identity: String,
+    new_host_identity: String,
+) -> ExitCode {
+    let expected_digest = match load_windows_image_digest(&image_manifest) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("windows-recover-simulate: image-manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let runner = match load_windows_manifest(&runner_manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("windows-recover-simulate: runner-manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if runner.ffu.digest_sha256.to_ascii_lowercase() != expected_digest {
+        eprintln!(
+            "windows-recover-simulate: ffu digest mismatch between image-manifest and runner manifest"
+        );
+        return ExitCode::from(1);
+    }
+    let observed = match load_windows_attestation(&attest_fixture) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("windows-recover-simulate: attest fixture: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut state = WindowsRecoveryState::new(&expected_digest);
+    let boot = [
+        WindowsRecoveryEvent::StartExternalRestore {
+            external_controller: true,
+        },
+        WindowsRecoveryEvent::WinPeBootConfirmed,
+        WindowsRecoveryEvent::FfuApplyFinished {
+            success: true,
+            readback_digest_sha256: expected_digest.clone(),
+            detail: "dry-run:simulated-dism-apply".into(),
+        },
+        WindowsRecoveryEvent::HostIdentityRotated {
+            new_host_identity: new_host_identity.clone(),
+            prior_host_identity: Some(prior_host_identity.clone()),
+        },
+        WindowsRecoveryEvent::NetworkMoved {
+            network: WindowsLabNetwork::Provisioning,
+        },
+        WindowsRecoveryEvent::NetworkMoved {
+            network: WindowsLabNetwork::Candidate,
+        },
+    ];
+    for ev in boot {
+        if let Err(e) = state.apply(ev) {
+            eprintln!("windows-recover-simulate: {e}");
+            return ExitCode::from(2);
+        }
+        if state.phase.is_quarantined() {
+            return print_windows_recovery_state(&state, ExitCode::from(1));
+        }
+    }
+
+    let attest = validate_windows_attestation(&runner, &observed);
+    if let Err(e) = state.apply(WindowsRecoveryEvent::AttestationFinished(attest)) {
+        eprintln!("windows-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+    if state.phase.is_quarantined() {
+        return print_windows_recovery_state(&state, ExitCode::from(1));
+    }
+
+    if let Err(e) = state.apply(WindowsRecoveryEvent::EgressCanaryFinished {
+        denied: true,
+        detail: "dry-run:simulated-external-deny".into(),
+    }) {
+        eprintln!("windows-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+
+    print_windows_recovery_state(
+        &state,
+        if state.phase.is_terminal_success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        },
+    )
+}
+
+fn print_windows_recovery_state(state: &WindowsRecoveryState, code: ExitCode) -> ExitCode {
+    let phase = match &state.phase {
+        WindowsRecoveryPhase::ReadyForCandidate => "ready-for-candidate".to_string(),
+        WindowsRecoveryPhase::Quarantined { reason } => format!("quarantined:{reason}"),
+        other => format!("{other:?}"),
+    };
+    println!("phase {phase}");
+    println!(
+        "allows_candidate_provision {}",
+        state.phase.allows_candidate_provision()
+    );
+    if let Some(d) = &state.verified_readback_digest {
+        println!("verified_readback_digest {d}");
+    }
+    if let Some(k) = &state.host_identity {
+        println!("host_identity {k}");
+    }
+    for t in &state.trail {
+        println!("trail {t}");
+    }
+    if state.phase.is_terminal_success() {
+        println!("verdict ready-for-candidate");
+        println!("note dry-run-only; physical drill still required");
+    } else if let Some(r) = &state.quarantine_reason {
+        println!("verdict quarantine");
+        println!("reason {r}");
+    } else {
+        println!("verdict incomplete");
+    }
+    code
+}
+
 fn load_image_digest(path: &std::path::Path) -> Result<String, String> {
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
     let v: TomlValue = text.parse::<TomlValue>().map_err(|e| e.to_string())?;
@@ -421,6 +619,68 @@ fn load_image_digest(path: &std::path::Path) -> Result<String, String> {
         .to_ascii_lowercase();
     if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("image.digest_sha256 must be 64 hex chars".into());
+    }
+    Ok(digest)
+}
+
+fn load_windows_image_digest(path: &std::path::Path) -> Result<String, String> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: TomlValue = text.parse::<TomlValue>().map_err(|e| e.to_string())?;
+    let schema = v
+        .get("schema_version")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if schema != "windows-image-manifest-v1" {
+        return Err(format!("expected windows-image-manifest-v1, got {schema}"));
+    }
+    let initiator = v
+        .get("restore")
+        .and_then(|r| r.get("initiator"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if initiator != "external-controller" {
+        return Err(format!("initiator must be external-controller, got {initiator}"));
+    }
+    let boot_env = v
+        .get("restore")
+        .and_then(|r| r.get("boot_env"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if boot_env != "winpe" {
+        return Err(format!("boot_env must be winpe, got {boot_env}"));
+    }
+    let read_only = v
+        .get("ffu")
+        .and_then(|i| i.get("read_only"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if !read_only {
+        return Err("ffu.read_only must be true".into());
+    }
+    let apply_tool = v
+        .get("ffu")
+        .and_then(|i| i.get("apply_tool"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if apply_tool != "dism" {
+        return Err(format!("apply_tool must be dism, got {apply_tool}"));
+    }
+    let egress = v
+        .get("networks")
+        .and_then(|n| n.get("candidate_egress_policy"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if egress != "deny" {
+        return Err(format!("candidate_egress_policy must be deny, got {egress}"));
+    }
+    let digest = v
+        .get("ffu")
+        .and_then(|i| i.get("digest_sha256"))
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "ffu.digest_sha256 missing".to_string())?
+        .to_ascii_lowercase();
+    if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("ffu.digest_sha256 must be 64 hex chars".into());
     }
     Ok(digest)
 }

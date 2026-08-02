@@ -53,7 +53,7 @@ if ($Help) {
 }
 
 if (-not $DryRun) {
-    Write-Error 'live host inspect not implemented (T19). use --dry-run --fixture <json>'
+    Write-Error 'live host inspect requires physical Windows ref + WinPE lane. use --dry-run --fixture <json>'
     exit 2
 }
 

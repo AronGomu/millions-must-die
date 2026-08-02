@@ -1,0 +1,37 @@
+# Read-only Windows ref whole-disk FFU contract (recovery plane).
+# FFU bytes live on external RO store; this file freezes identity only.
+# Placeholder digest matches lab/manifests/windows-11-25h2-x86_64.toml until physical FFU lands.
+
+schema_version = "windows-image-manifest-v1"
+runner_id = "windows-ref"
+os_name = "Windows"
+os_version = "11"
+arch = "x86_64"
+
+[ffu]
+# Frozen FFU whole-disk image SHA-256 (read-only store object).
+digest_sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+# Logical name on external image store (not a repo path).
+store_object = "windows-11-25h2-x86_64-ref.ffu"
+# Media: full-drive FFU; restore via external WinPE + DISM only.
+format = "ffu"
+read_only = true
+apply_tool = "dism"
+
+[restore]
+# Candidate OS must never invoke restore.
+initiator = "external-controller"
+# Boot environment for apply path.
+boot_env = "winpe"
+# Controller compares post-apply readback to digest_sha256 before identity rotate.
+require_readback_digest = true
+# After restore: mint fresh host identity + unprivileged lab user.
+require_fresh_host_identity = true
+# Exact power plan pin enforced at attestation (runner manifest).
+require_exact_power_plan = true
+
+[networks]
+# Ordered transition enforced by external controller / state machine.
+order = ["recovery", "provisioning", "candidate"]
+# Candidate VLAN egress must fail external canary before ReadyForCandidate.
+candidate_egress_policy = "deny"
