@@ -1,5 +1,6 @@
 //! Engine core for Millions Must Die phase-0 prototype.
 
+pub mod bench;
 pub mod nav;
 pub mod render;
 pub mod runtime;

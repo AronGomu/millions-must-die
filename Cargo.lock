@@ -299,6 +299,7 @@ dependencies = [
  "clap",
  "mmd-engine",
  "sdl3",
+ "serde_json",
 ]
 
 [[package]]
@@ -321,6 +322,7 @@ dependencies = [
  "sdl3",
  "sdl3-sys",
  "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror",

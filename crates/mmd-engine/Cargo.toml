@@ -19,6 +19,7 @@ hex.workspace = true
 png.workspace = true
 ron.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 sdl3 = { workspace = true, features = ["test-mode"] }

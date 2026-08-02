@@ -1,10 +1,12 @@
 //! App binary: interactive `run` and timed `bench` entry points.
 
+mod bench;
 mod input;
 mod overlay;
 mod run;
 
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
@@ -34,10 +36,24 @@ enum Commands {
         frames: Option<u64>,
     },
     /// Run benchmark harness and emit JSON report
-    Bench,
+    Bench {
+        /// Write versioned JSON report to this path
+        #[arg(long)]
+        output: Option<PathBuf>,
+        /// Scenario path override
+        #[arg(long)]
+        scenario: Option<PathBuf>,
+        /// Injectable short policy for local smoke (also MMD_BENCH_TEST_POLICY).
+        /// Production defaults stay locked without this flag.
+        #[arg(long)]
+        test_policy: bool,
+        /// CPU-only dry path (no GPU). For offline JSON/exit-code smoke.
+        #[arg(long)]
+        dry_cpu: bool,
+    },
 }
 
-fn main() {
+fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
         Commands::Run {
@@ -52,11 +68,20 @@ fn main() {
             };
             if let Err(e) = run::run(opts) {
                 eprintln!("run failed: {e}");
-                std::process::exit(1);
+                return ExitCode::from(1);
             }
+            ExitCode::SUCCESS
         }
-        Commands::Bench => {
-            println!("bench: shell only (engine {})", mmd_engine::version());
-        }
+        Commands::Bench {
+            output,
+            scenario,
+            test_policy,
+            dry_cpu,
+        } => bench::bench(bench::BenchCliOptions {
+            output,
+            scenario,
+            test_policy,
+            dry_cpu,
+        }),
     }
 }

@@ -334,6 +334,19 @@ impl SpriteRenderer {
 
     /// Upload instances + draw 4 atlas groups into offscreen 1920×1080 (no readback).
     pub fn draw_offscreen(&mut self, groups: &[DrawGroup]) -> Result<(), RenderError> {
+        let _fence = self.draw_offscreen_acquire_fence(groups)?;
+        // Drop fence without waiting — interactive path does not track queue depth here.
+        Ok(())
+    }
+
+    /// Draw offscreen and return fence for the render submit (bench 2-frame queue).
+    ///
+    /// Caller owns backpressure: must not reuse a slot until its prior fence completes.
+    /// Fence completion latency is submit→signal proxy — not true GPU execution time.
+    pub fn draw_offscreen_acquire_fence(
+        &mut self,
+        groups: &[DrawGroup],
+    ) -> Result<sdl3::gpu::Fence, RenderError> {
         self.validate_groups(groups)?;
 
         let device = &self.ctx.device;
@@ -380,66 +393,63 @@ impl SpriteRenderer {
             cmd.submit()?;
         }
 
-        // Render pass → offscreen.
-        {
-            let cmd = device.acquire_command_buffer()?;
-            let uniforms = FrameUniforms {
-                view_size: [VIEW_WIDTH as f32, VIEW_HEIGHT as f32],
-                _pad: [0.0, 0.0],
-            };
-            cmd.push_vertex_uniform_data(0, &uniforms);
+        // Render pass → offscreen; acquire fence for queue-depth + latency proxy.
+        let cmd = device.acquire_command_buffer()?;
+        let uniforms = FrameUniforms {
+            view_size: [VIEW_WIDTH as f32, VIEW_HEIGHT as f32],
+            _pad: [0.0, 0.0],
+        };
+        cmd.push_vertex_uniform_data(0, &uniforms);
 
-            let color_targets = [ColorTargetInfo::default()
-                .with_texture(&self.offscreen)
-                .with_load_op(LoadOp::CLEAR)
-                .with_store_op(StoreOp::STORE)
-                .with_clear_color(Color::RGBA(0, 0, 0, 0))];
-            let pass = device.begin_render_pass(&cmd, &color_targets, None)?;
-            pass.bind_graphics_pipeline(&self.pipeline);
-            pass.bind_vertex_buffers(
-                0,
-                &[
-                    BufferBinding::new()
-                        .with_buffer(&self.quad_vb)
-                        .with_offset(0),
-                    BufferBinding::new()
-                        .with_buffer(&self.instance_bufs[slot])
-                        .with_offset(0),
-                ],
-            );
-            pass.bind_index_buffer(
-                &BufferBinding::new()
-                    .with_buffer(&self.quad_ib)
+        let color_targets = [ColorTargetInfo::default()
+            .with_texture(&self.offscreen)
+            .with_load_op(LoadOp::CLEAR)
+            .with_store_op(StoreOp::STORE)
+            .with_clear_color(Color::RGBA(0, 0, 0, 0))];
+        let pass = device.begin_render_pass(&cmd, &color_targets, None)?;
+        pass.bind_graphics_pipeline(&self.pipeline);
+        pass.bind_vertex_buffers(
+            0,
+            &[
+                BufferBinding::new()
+                    .with_buffer(&self.quad_vb)
                     .with_offset(0),
-                IndexElementSize::_16BIT,
-            );
+                BufferBinding::new()
+                    .with_buffer(&self.instance_bufs[slot])
+                    .with_offset(0),
+            ],
+        );
+        pass.bind_index_buffer(
+            &BufferBinding::new()
+                .with_buffer(&self.quad_ib)
+                .with_offset(0),
+            IndexElementSize::_16BIT,
+        );
 
-            for (atlas_i, (start, count)) in ranges.iter().enumerate() {
-                if *count == 0 {
-                    continue;
-                }
-                pass.bind_fragment_samplers(
-                    0,
-                    &[TextureSamplerBinding::new()
-                        .with_texture(&self.atlas_tex[atlas_i])
-                        .with_sampler(&self.sampler)],
-                );
-                // Re-bind instance buffer with per-group byte offset.
-                let byte_off = start * SpriteInstance::STRIDE;
-                pass.bind_vertex_buffers(
-                    1,
-                    &[BufferBinding::new()
-                        .with_buffer(&self.instance_bufs[slot])
-                        .with_offset(byte_off)],
-                );
-                pass.draw_indexed_primitives(6, *count, 0, 0, 0);
+        for (atlas_i, (start, count)) in ranges.iter().enumerate() {
+            if *count == 0 {
+                continue;
             }
-
-            device.end_render_pass(pass);
-            cmd.submit()?;
+            pass.bind_fragment_samplers(
+                0,
+                &[TextureSamplerBinding::new()
+                    .with_texture(&self.atlas_tex[atlas_i])
+                    .with_sampler(&self.sampler)],
+            );
+            // Re-bind instance buffer with per-group byte offset.
+            let byte_off = start * SpriteInstance::STRIDE;
+            pass.bind_vertex_buffers(
+                1,
+                &[BufferBinding::new()
+                    .with_buffer(&self.instance_bufs[slot])
+                    .with_offset(byte_off)],
+            );
+            pass.draw_indexed_primitives(6, *count, 0, 0, 0);
         }
 
-        Ok(())
+        device.end_render_pass(pass);
+        let fence = cmd.submit_and_acquire_fence(device)?;
+        Ok(fence)
     }
 
     /// Draw groups into offscreen 1920×1080 and read RGBA8 pixels back.
