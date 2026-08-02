@@ -3,12 +3,12 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-08-02T17:30:00+02:00
+- Updated: 2026-08-02T15:04:59+02:00
 
 ## Assumptions
 
 - No git remote → local commits only.
-- Full prod bench hours; --test-policy for smoke.
+- T13 blocked until T9+T10 native hosts.
 
 ## Status
 
@@ -27,7 +27,7 @@
 | T11 | Benchmark + JSON report | done | 6d2047a | |
 | T12 | Zero-allocation contract | done | 2943a8e | |
 | T13 | Backend golden correctness | blocked_dep | — | needs T9+T10 |
-| T14 | Trusted local lab CLI | pending | — | |
+| T14 | Trusted local lab CLI | done | e625451 | |
 | T15 | Ubuntu runner contract | pending | — | |
 | T16 | Ubuntu recovery + attestation | pending | — | physical |
 | T17 | Ubuntu candidate gate | pending | — | needs T12 T13 T16 |
@@ -44,7 +44,5 @@
 
 ## Log
 
-- T1–T8 T11 done
-- T9 T10 blocked_user
-- T13 blocked_dep
-- T12 zero-alloc guard + report field + inject flag; dry path rust_allocs=0
+- T12 done 2943a8e
+- T14 done e625451
