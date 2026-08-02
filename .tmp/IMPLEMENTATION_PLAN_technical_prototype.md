@@ -319,10 +319,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Define versioned scenario schema.
-2. - [ ] Add tracked scene + hash.
-3. - [ ] Add parser, validators, deterministic seed contract.
-4. - [ ] Add fixture mutation tests.
+1. - [x] Define versioned scenario schema.
+2. - [x] Add tracked scene + hash.
+3. - [x] Add parser, validators, deterministic seed contract.
+4. - [x] Add fixture mutation tests.
 
 #### Outputs
 
@@ -334,10 +334,10 @@ flowchart TD
 
 #### Validation
 
-- [ ] `cargo test -p mmd-engine --test scenario_contract`
-- [ ] fixture byte edit demonstrably fails hash test
-- [ ] app functional — CLI shell unchanged
-- [ ] commit msg draft: `feat(scenario): freeze phase-zero workload`
+- [x] `cargo test -p mmd-engine --test scenario_contract` (4 passed)
+- [x] fixture byte edit demonstrably fails hash test (`rejects_wrong_hash`)
+- [x] app functional — CLI shell unchanged (`run`/`bench` --help)
+- [x] commit msg draft: `feat(scenario): freeze phase-zero workload`
 
 ### T3: Deterministic atlas generator
 
