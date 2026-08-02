@@ -4,6 +4,7 @@
 
 pub mod nav;
 pub mod scenario;
+pub mod sim;
 
 /// Crate version string from Cargo package metadata.
 pub fn version() -> &'static str {
