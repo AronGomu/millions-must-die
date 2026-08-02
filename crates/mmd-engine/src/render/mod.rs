@@ -1,4 +1,4 @@
-//! SDL3 GPU sprite renderer (Linux/Vulkan static slice).
+//! SDL3 GPU sprite renderer (host backend: Vulkan / D3D12 / Metal).
 
 mod atlas;
 mod backend;
@@ -12,7 +12,11 @@ pub use atlas::{
     ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_WIDTH_PX, AtlasRgba, SPRITE_SIZE_PX,
     expected_sprite_center_pixel, frame_uv_rect, load_atlases, sprite_pixel,
 };
-pub use backend::{REQUIRED_LINUX_BACKEND, assert_device_backend, validate_backend_name};
+pub use backend::{
+    BACKEND_D3D12, BACKEND_METAL, BACKEND_VULKAN, REQUIRED_BACKEND, REQUIRED_LINUX_BACKEND,
+    assert_device_backend, is_rejected_adapter, required_backend, validate_adapter_name,
+    validate_backend_name, validate_device_props,
+};
 pub use device::GpuContext;
 pub use error::RenderError;
 pub use instance::{FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, SpriteInstance};

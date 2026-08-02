@@ -40,7 +40,7 @@ cargo run -p xtask -- bootstrap --check
 
 `--check` validates pins + lockfile pairing only; it does not download.
 
-Linux shared-lib build commands live under `[sdl3.build.linux]` in `versions.toml`. Windows/macOS command blocks are recorded but **native regen is deferred to T9/T10**.
+Linux shared-lib build commands live under `[sdl3.build.linux]` in `versions.toml`. Windows/macOS command blocks are recorded; **native Windows build/DXIL regen still needs ref-host validation (T9)** and macOS/metallib remains **T10**. Windows operator steps: [`docs/platform/windows-bootstrap.md`](../docs/platform/windows-bootstrap.md).
 
 ### Offline Cargo
 
@@ -66,4 +66,16 @@ cargo test -p mmd-engine --test gpu_smoke -- --ignored --test-threads=1
 cargo run -- run
 ```
 
-`build.rs` auto-adds rpath for the pinned prefix when present.
+`build.rs` auto-adds rpath (Linux/macOS) or lib/bin link search (Windows) for the pinned `prefix-<os>` when present.
+
+## T9 runtime (Windows)
+
+See [`docs/platform/windows-bootstrap.md`](../docs/platform/windows-bootstrap.md).
+
+```powershell
+$env:MMD_SDL3_PREFIX = "$env:USERPROFILE\.cache\mmd\native\sdl3\3.4.12\prefix-windows"
+$env:PATH = "$env:MMD_SDL3_PREFIX\bin;$env:PATH"
+cargo test --workspace --locked
+cargo run -- run --agents 50000
+# expect backend=direct3d12; reject Basic Render Driver
+```

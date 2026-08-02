@@ -3,15 +3,13 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-03-22T00:00:00+00:00
+- Updated: 2026-08-02T16:30:00+02:00
 
 ## Assumptions
 
 - No git remote → local commits only until origin exists.
 - Parallel off; serial tickets.
-- Headless GPU: SDL_VIDEODRIVER=offscreen + MMD_SDL3_PREFIX + LD_LIBRARY_PATH vulkan.
-- T7: visible swapchain may clear only; sprites proven offscreen.
-- T8: offscreen driver skips present; proves via draw_offscreen + hash move. Real display blits offscreen→swapchain.
+- Headless GPU env documented T7.
 
 ## Status
 
@@ -24,8 +22,8 @@
 | T5  | SoA movement + recycling | done | 15f421c | |
 | T6  | Pinned native deps + shaders | done | 5ecc832 | |
 | T7  | Linux SDL3 GPU static slice | done | ee607f8 | |
-| T8  | Moving 50k interactive slice | done | 7bda26a | runtime+50k draw; commit next |
-| T9  | Windows/D3D12 port | pending | — | needs Windows host |
+| T8  | Moving 50k interactive slice | done | 5ada751 | |
+| T9  | Windows/D3D12 port | blocked_user | 2fd3f25 | Linux prep landed; Windows 11 25H2 + RX6400 validation missing |
 | T10 | macOS/Metal port | pending | — | needs M4 host |
 | T11 | Benchmark + JSON report | pending | — | |
 | T12 | Zero-allocation contract | pending | — | |
@@ -47,5 +45,5 @@
 
 ## Log
 
-- T1–T7 done
-- T8: Runtime composition, instance partition, Esc/F1/Space, overlay stdout, MAX_INSTANCES=100k, present_blit. Tests runtime_frame 5/5. Offscreen run --agents 50000 --frames 5 ok.
+- T1–T8 done
+- T9 Linux-safe prep: host backend selection (`direct3d12` on Windows), Basic Render Driver reject + unit tests, DXIL shader load path, Windows build.rs prefix/bin, docs/platform/windows-bootstrap.md, DXIL DXBC magic check hooks. DXIL blobs still placeholders (`deferred=T9`). Native Windows matrix NOT run — State=blocked_user.

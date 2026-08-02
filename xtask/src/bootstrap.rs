@@ -349,7 +349,21 @@ pub fn run_bootstrap(check: bool) -> Result<(), BootstrapError> {
     println!("  cache root {}", cache.display());
     println!("  expected prefix {}", prefix.display());
     println!("  linux cmds: {}", v.sdl3.build.linux.commands.len());
-    println!("  windows/macOS shared builds deferred (T9/T10)");
+    println!(
+        "  windows cmds: {} (deferred={:?})",
+        v.sdl3.build.windows.commands.len(),
+        v.sdl3.build.windows.deferred
+    );
+    println!(
+        "  macos cmds: {} (deferred={:?})",
+        v.sdl3.build.macos.commands.len(),
+        v.sdl3.build.macos.deferred
+    );
+    if cfg!(target_os = "windows") {
+        println!("  host=windows → see docs/platform/windows-bootstrap.md");
+        println!("  set MMD_SDL3_PREFIX to prefix-windows after cmake install");
+        println!("  put SDL3.dll on PATH (prefix-windows/bin) before cargo run");
+    }
     println!("  run with --check for offline verification");
     Ok(())
 }

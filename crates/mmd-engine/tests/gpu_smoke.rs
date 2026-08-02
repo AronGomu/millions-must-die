@@ -1,12 +1,15 @@
-//! GPU smoke tests (Linux/Vulkan). Unit layout/backend tests always run;
+//! GPU smoke tests. Unit layout/backend tests always run;
 //! device tests are `#[ignore]` and need a real GPU + SDL3.
 //!
 //! GPU cases share process-global SDL; run serially (`--test-threads=1`).
 
 use mmd_engine::render::{
-    ATLAS_COUNT, DrawGroup, REQUIRED_LINUX_BACKEND, SPRITE_SIZE_PX, SpriteInstance, SpriteRenderer,
-    VIEW_HEIGHT, VIEW_WIDTH, expected_sprite_center_pixel, validate_backend_name,
+    ATLAS_COUNT, DrawGroup, REQUIRED_BACKEND, SPRITE_SIZE_PX, SpriteInstance, SpriteRenderer,
+    VIEW_HEIGHT, VIEW_WIDTH, expected_sprite_center_pixel, required_backend, validate_adapter_name,
+    validate_backend_name,
 };
+#[cfg(target_os = "windows")]
+use mmd_engine::render::validate_device_props;
 use mmd_engine::workspace_root;
 
 #[test]
@@ -24,21 +27,40 @@ fn instance_layout_is_stable() {
 
 #[test]
 fn wrong_backend_rejected() {
-    for bad in ["software", "direct3d12", "metal", "opengles2", ""] {
+    for bad in ["software", "opengles2", ""] {
         assert!(validate_backend_name(bad).is_err(), "{bad}");
     }
-    assert!(validate_backend_name(REQUIRED_LINUX_BACKEND).is_ok());
-}
-
-fn make_renderer() -> SpriteRenderer {
-    SpriteRenderer::new(&workspace_root(), true).expect("create vulkan renderer")
+    assert!(validate_backend_name(required_backend()).is_ok());
+    assert_eq!(required_backend(), REQUIRED_BACKEND);
 }
 
 #[test]
-#[ignore = "requires Linux Vulkan GPU + SDL3"]
+fn rejects_basic_renderer() {
+    let err = validate_adapter_name("Microsoft Basic Render Driver").expect_err("basic");
+    let msg = err.to_string();
+    assert!(
+        msg.to_ascii_lowercase().contains("basic render")
+            || msg.to_ascii_lowercase().contains("rejected"),
+        "{msg}"
+    );
+    // Combined props: correct host backend + Basic Render still fails adapter gate.
+    // On non-Windows, driver check fails first when forcing d3d12 — call adapter alone above.
+    #[cfg(target_os = "windows")]
+    {
+        assert!(validate_device_props(REQUIRED_BACKEND, "Microsoft Basic Render Driver").is_err());
+        validate_device_props(REQUIRED_BACKEND, "AMD Radeon RX 6400").expect("rx6400");
+    }
+}
+
+fn make_renderer() -> SpriteRenderer {
+    SpriteRenderer::new(&workspace_root(), true).expect("create host GPU renderer")
+}
+
+#[test]
+#[ignore = "requires host GPU + SDL3"]
 fn readback_is_1920x1080() {
     let mut r = make_renderer();
-    assert_eq!(r.backend(), "vulkan");
+    assert_eq!(r.backend(), required_backend());
     let rb = r
         .draw_offscreen_readback(&SpriteRenderer::static_demo_groups())
         .expect("readback");
@@ -48,7 +70,7 @@ fn readback_is_1920x1080() {
 }
 
 #[test]
-#[ignore = "requires Linux Vulkan GPU + SDL3"]
+#[ignore = "requires host GPU + SDL3"]
 fn known_static_pixels_match() {
     let mut r = make_renderer();
     let groups = SpriteRenderer::static_demo_groups();
@@ -75,7 +97,7 @@ fn known_static_pixels_match() {
 }
 
 #[test]
-#[ignore = "requires Linux Vulkan GPU + SDL3"]
+#[ignore = "requires host GPU + SDL3"]
 fn four_groups_drawn() {
     let mut r = make_renderer();
     let groups = SpriteRenderer::static_demo_groups();
@@ -104,7 +126,7 @@ fn four_groups_drawn() {
 }
 
 #[test]
-#[ignore = "requires Linux Vulkan GPU + SDL3"]
+#[ignore = "requires host GPU + SDL3"]
 fn static_instance_covers_sprite_size() {
     let g = &SpriteRenderer::static_demo_groups()[0];
     let inst: &SpriteInstance = &g.instances[0];

@@ -147,26 +147,66 @@ fn validate_resources(resources: &Resources) -> Result<(), ShaderError> {
     Ok(())
 }
 
-fn validate_deferred_placeholders(manifest: &ShaderManifest) -> Result<(), ShaderError> {
+fn validate_deferred_placeholders(
+    out_dir: &Path,
+    manifest: &ShaderManifest,
+) -> Result<(), ShaderError> {
     let dxil = manifest
         .formats
         .get("dxil")
         .ok_or_else(|| ShaderError::Check("dxil missing".into()))?;
-    if dxil.deferred.as_deref() != Some("T9") {
-        return Err(ShaderError::Check(
-            "dxil slot must declare deferred = T9 until Windows regen".into(),
-        ));
-    }
     let metal = manifest
         .formats
         .get("metallib")
         .ok_or_else(|| ShaderError::Check("metallib missing".into()))?;
+
+    // Real DXIL starts with DXBC magic; placeholders remain deferred=T9 until native regen.
+    let dxil_real = dxil_blobs_look_native(out_dir, dxil)?;
+    if dxil_real {
+        if dxil.deferred.is_some() || dxil.status != "tracked" {
+            return Err(ShaderError::Check(
+                "native DXIL present: set status=tracked and drop deferred".into(),
+            ));
+        }
+    } else if dxil.deferred.as_deref() != Some("T9") {
+        return Err(ShaderError::Check(
+            "dxil slot must declare deferred = T9 until Windows native regen".into(),
+        ));
+    }
+
     if metal.deferred.as_deref() != Some("T10") {
         return Err(ShaderError::Check(
             "metallib slot must declare deferred = T10 until macOS regen".into(),
         ));
     }
     Ok(())
+}
+
+/// DXIL container magic is ASCII `DXBC` (DirectX Bytecode container housing DXIL).
+fn is_dxbc_magic(bytes: &[u8]) -> bool {
+    bytes.len() >= 4 && bytes[0..4] == *b"DXBC"
+}
+
+fn dxil_blobs_look_native(out_dir: &Path, slot: &FormatSlot) -> Result<bool, ShaderError> {
+    let mut any = false;
+    let mut all_native = true;
+    for file in &slot.files {
+        any = true;
+        let path = out_dir.join(&file.file);
+        let bytes = fs::read(&path).map_err(|e| ShaderError::Io(e.to_string()))?;
+        if is_dxbc_magic(&bytes) {
+            continue;
+        }
+        all_native = false;
+        // Placeholder path must keep the MMD marker so accidental binary junk fails loud.
+        if !bytes.starts_with(b"MMD_PLACEHOLDER_DXIL") {
+            return Err(ShaderError::Check(format!(
+                "{} is neither DXBC/DXIL nor MMD_PLACEHOLDER_DXIL",
+                file.file
+            )));
+        }
+    }
+    Ok(any && all_native)
 }
 
 /// Full offline shader check.
@@ -192,7 +232,7 @@ pub fn check_shaders(root: &Path) -> Result<(), ShaderError> {
     }
     validate_resources(&manifest.resources)?;
     manifest_has_all_shader_formats(&manifest)?;
-    validate_deferred_placeholders(&manifest)?;
+    validate_deferred_placeholders(&out_dir, &manifest)?;
     artifact_hashes_match(root, &manifest)?;
 
     // SPIR-V magic word 0x07230203 little-endian
@@ -307,5 +347,24 @@ mod tests {
     fn check_shaders_tracked_tree() {
         let root = workspace_root_from_xtask_manifest();
         check_shaders(&root).expect("check");
+    }
+
+    #[test]
+    fn dxil_placeholder_not_native_magic() {
+        let root = workspace_root_from_xtask_manifest();
+        let dir = generated_dir(&root);
+        let manifest = load_manifest(&dir).expect("manifest");
+        let dxil = &manifest.formats["dxil"];
+        // Until Windows native regen, placeholders must not look like DXBC.
+        let native = dxil_blobs_look_native(&dir, dxil).expect("read");
+        assert!(!native, "DXIL still placeholder until T9 Windows regen");
+        assert_eq!(dxil.deferred.as_deref(), Some("T9"));
+    }
+
+    #[test]
+    fn dxbc_magic_helper() {
+        assert!(is_dxbc_magic(b"DXBC\0rest"));
+        assert!(!is_dxbc_magic(b"MMD_PLACEHOLDER_DXIL"));
+        assert!(!is_dxbc_magic(b"DXB"));
     }
 }

@@ -8,6 +8,9 @@ pub enum RenderError {
     #[error("wrong GPU backend: got {got:?}, required {required:?}")]
     WrongBackend { got: String, required: &'static str },
 
+    #[error("rejected GPU adapter: {name:?} (Basic Render Driver / software not allowed)")]
+    RejectedAdapter { name: String },
+
     #[error("SDL error: {0}")]
     Sdl(String),
 

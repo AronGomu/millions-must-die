@@ -16,22 +16,12 @@ const WINDOW_W: u32 = VIEW_WIDTH;
 const WINDOW_H: u32 = VIEW_HEIGHT;
 
 /// CLI options for interactive / headless smoke.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RunOptions {
     pub agents: Option<u32>,
     pub scenario: Option<PathBuf>,
     /// Auto-exit after N frames (CI/smoke). `None` = interactive until quit.
     pub frames: Option<u64>,
-}
-
-impl Default for RunOptions {
-    fn default() -> Self {
-        Self {
-            agents: None,
-            scenario: None,
-            frames: None,
-        }
-    }
 }
 
 /// Run full prototype: scenario → sim → instances → 4 draws.
@@ -45,8 +35,9 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     let mut renderer = SpriteRenderer::new(&root, true)?;
 
     println!(
-        "run: backend={} view={}x{} agents={} scenario={} (engine {})",
+        "run: backend={} adapter={} view={}x{} agents={} scenario={} (engine {})",
         renderer.backend(),
+        renderer.ctx.adapter,
         VIEW_WIDTH,
         VIEW_HEIGHT,
         runtime.agent_count(),
@@ -62,7 +53,7 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         "run: frame0 tick={} groups={group_lens:?} sim={:.3}ms upload={:.3}ms",
         frame0.tick_index, frame0.stats.sim_ms, frame0.stats.upload_ms
     );
-    if group_lens.iter().any(|&n| n == 0) {
+    if group_lens.contains(&0) {
         return Err("empty instance group after first frame".into());
     }
 
@@ -89,7 +80,7 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         match renderer
             .ctx
             .video
-            .window("millions_must_die — T8 moving 50k", WINDOW_W, WINDOW_H)
+            .window("millions_must_die — moving 50k", WINDOW_W, WINDOW_H)
             .position_centered()
             .build()
         {
@@ -173,10 +164,10 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         frame_i += 1;
-        if let Some(limit) = auto_frames {
-            if frame_i >= limit {
-                break;
-            }
+        if let Some(limit) = auto_frames
+            && frame_i >= limit
+        {
+            break;
         }
 
         // Soft pace toward 60 Hz when running interactively without frame cap.

@@ -1,5 +1,6 @@
 //! Static sprite batch renderer: 4 atlas groups, offscreen readback, swapchain.
 
+use std::ffi::CStr;
 use std::path::Path;
 
 use sdl3::gpu::{
@@ -32,8 +33,20 @@ pub const FRAMES_IN_FLIGHT: usize = 2;
 /// Max sprites uploaded per frame across all groups (hard 50k; stretch 100k).
 pub const MAX_INSTANCES: u32 = 100_000;
 
-const VERT_SPV: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.spv");
-const FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.spv");
+// Host shader blobs: SPIR-V (Linux), DXIL (Windows). metallib lands T10.
+#[cfg(target_os = "linux")]
+const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.spv");
+#[cfg(target_os = "linux")]
+const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.spv");
+#[cfg(target_os = "windows")]
+const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.dxil");
+#[cfg(target_os = "windows")]
+const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.dxil");
+// macOS metallib path deferred T10 — keep compile green with SPIR-V include unused on metal host until T10.
+#[cfg(target_os = "macos")]
+const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.spv");
+#[cfg(target_os = "macos")]
+const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.spv");
 
 /// One atlas draw group.
 #[derive(Clone, Debug)]
@@ -84,7 +97,7 @@ pub struct SpriteRenderer {
 impl SpriteRenderer {
     /// Build renderer; loads atlases from workspace `assets/sprites/generated`.
     pub fn new(workspace_root: &Path, debug_mode: bool) -> Result<Self, RenderError> {
-        let ctx = GpuContext::new_vulkan(debug_mode)?;
+        let ctx = GpuContext::new(debug_mode)?;
         let atlas_dir = default_atlas_dir(workspace_root);
         Self::with_context(ctx, &atlas_dir)
     }
@@ -94,18 +107,18 @@ impl SpriteRenderer {
         let device = &ctx.device;
         let atlases_cpu = load_atlases(atlas_dir)?;
 
-        // SPIR-V blobs are GLSL-cross-compiled; entry is `main` (HLSL names stay in source).
+        let (format, vert_entry, frag_entry) = host_shader_spec();
         let vert = device
             .create_shader()
-            .with_code(ShaderFormat::SPIRV, VERT_SPV, ShaderStage::Vertex)
+            .with_code(format, VERT_SHADER, ShaderStage::Vertex)
             .with_uniform_buffers(1)
-            .with_entrypoint(c"main")
+            .with_entrypoint(vert_entry)
             .build()?;
         let frag = device
             .create_shader()
-            .with_code(ShaderFormat::SPIRV, FRAG_SPV, ShaderStage::Fragment)
+            .with_code(format, FRAG_SHADER, ShaderStage::Fragment)
             .with_samplers(1)
-            .with_entrypoint(c"main")
+            .with_entrypoint(frag_entry)
             .build()?;
 
         let blend = ColorTargetBlendState::new()
@@ -509,6 +522,24 @@ impl SpriteRenderer {
             }
         }
         Ok(())
+    }
+}
+
+/// Host shader format + entry points.
+/// Linux SPIR-V from GLSL mirror uses `main`; DXIL from HLSL keeps VSMain/PSMain.
+fn host_shader_spec() -> (ShaderFormat, &'static CStr, &'static CStr) {
+    #[cfg(target_os = "linux")]
+    {
+        (ShaderFormat::SPIRV, c"main", c"main")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        (ShaderFormat::DXIL, c"VSMain", c"PSMain")
+    }
+    #[cfg(target_os = "macos")]
+    {
+        // T10 replaces with metallib + Metal entries.
+        (ShaderFormat::SPIRV, c"main", c"main")
     }
 }
 

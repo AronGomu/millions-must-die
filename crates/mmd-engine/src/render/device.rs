@@ -1,4 +1,4 @@
-//! SDL3 GPU device ownership (Linux/Vulkan).
+//! SDL3 GPU device ownership (host-forced backend).
 
 use sdl3::gpu::Device;
 use sdl3::properties::{Properties, Setter};
@@ -6,15 +6,19 @@ use sdl3::video::Window;
 use sdl3::{Sdl, VideoSubsystem};
 
 use super::RenderError;
-use super::backend::{REQUIRED_LINUX_BACKEND, assert_device_backend, validate_backend_name};
+use super::backend::{
+    REQUIRED_BACKEND, assert_device_backend, validate_adapter_name, validate_backend_name,
+};
 use super::unsafe_sys;
 
-/// Owned SDL context + forced-Vulkan GPU device.
+/// Owned SDL context + host-forced GPU device.
 ///
 /// Drop order: `device` first, then `video`, then `sdl` (declaration order).
 pub struct GpuContext {
     pub device: Device,
     pub backend: String,
+    /// Adapter name from `SDL.gpu.device.name` (may be empty on some ICDs).
+    pub adapter: String,
     /// Keep video subsystem alive (drop would SDL_QuitSubSystem video).
     pub video: VideoSubsystem,
     /// Keep SDL alive last.
@@ -22,11 +26,11 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// Create Vulkan GPU device. Rejects non-Vulkan backends.
-    pub fn new_vulkan(debug_mode: bool) -> Result<Self, RenderError> {
-        validate_backend_name(REQUIRED_LINUX_BACKEND)?;
+    /// Create host-required GPU device (Vulkan/Linux, D3D12/Windows, Metal/macOS).
+    pub fn new(debug_mode: bool) -> Result<Self, RenderError> {
+        validate_backend_name(REQUIRED_BACKEND)?;
 
-        // Headless hosts: offscreen video driver (SDL GPU still uses Vulkan).
+        // Headless hosts: offscreen video driver (GPU backend still forced).
         if std::env::var_os("SDL_VIDEODRIVER").is_none()
             && std::env::var_os("DISPLAY").is_none()
             && std::env::var_os("WAYLAND_DISPLAY").is_none()
@@ -46,16 +50,25 @@ impl GpuContext {
             }
         };
 
-        let device = create_device_named_vulkan(debug_mode)?;
+        let device = create_host_device(debug_mode)?;
         let backend = unsafe_sys::device_driver_name(&device);
         assert_device_backend(&backend)?;
+        let adapter = unsafe_sys::device_adapter_name(&device);
+        validate_adapter_name(&adapter)?;
 
         Ok(Self {
             device,
             backend,
+            adapter,
             video,
             sdl,
         })
+    }
+
+    /// Linux alias: same as [`Self::new`].
+    #[deprecated(note = "use GpuContext::new; backend is host-selected")]
+    pub fn new_vulkan(debug_mode: bool) -> Result<Self, RenderError> {
+        Self::new(debug_mode)
     }
 
     /// Claim `window` for swapchain present on this device.
@@ -73,10 +86,26 @@ fn try_init_sdl() -> Result<(Sdl, VideoSubsystem), String> {
     Ok((sdl, video))
 }
 
-fn create_device_named_vulkan(debug_mode: bool) -> Result<Device, RenderError> {
+fn create_host_device(debug_mode: bool) -> Result<Device, RenderError> {
+    #[cfg(target_os = "linux")]
+    {
+        create_device_linux_vulkan(debug_mode)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        create_device_windows_d3d12(debug_mode)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        create_device_macos_metal(debug_mode)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn create_device_linux_vulkan(debug_mode: bool) -> Result<Device, RenderError> {
     let props = Properties::new()?;
     props.set("SDL.gpu.device.create.debugmode", debug_mode)?;
-    props.set("SDL.gpu.device.create.name", REQUIRED_LINUX_BACKEND)?;
+    props.set("SDL.gpu.device.create.name", REQUIRED_BACKEND)?;
     props.set("SDL.gpu.device.create.shaders.spirv", true)?;
     // Prefer real GPU. If this fails (e.g. only lavapipe), retry without the flag.
     props.set(
@@ -88,7 +117,7 @@ fn create_device_named_vulkan(debug_mode: bool) -> Result<Device, RenderError> {
         Err(hard_err) => {
             let props = Properties::new()?;
             props.set("SDL.gpu.device.create.debugmode", debug_mode)?;
-            props.set("SDL.gpu.device.create.name", REQUIRED_LINUX_BACKEND)?;
+            props.set("SDL.gpu.device.create.name", REQUIRED_BACKEND)?;
             props.set("SDL.gpu.device.create.shaders.spirv", true)?;
             Device::new_with_properties(props).map_err(|e| {
                 RenderError::Sdl(format!(
@@ -97,4 +126,33 @@ fn create_device_named_vulkan(debug_mode: bool) -> Result<Device, RenderError> {
             })
         }
     }
+}
+
+/// Force D3D12 + DXIL. Rejects non-D3D12 selection at props + post-create assert.
+#[cfg(target_os = "windows")]
+fn create_device_windows_d3d12(debug_mode: bool) -> Result<Device, RenderError> {
+    let props = Properties::new()?;
+    props.set("SDL.gpu.device.create.debugmode", debug_mode)?;
+    props.set("SDL.gpu.device.create.name", REQUIRED_BACKEND)?;
+    props.set("SDL.gpu.device.create.shaders.dxil", true)?;
+    // Prefer discrete / high-performance adapter when driver offers the choice.
+    props.set("SDL.gpu.device.create.preferlowpower", false)?;
+    Device::new_with_properties(props).map_err(|e| {
+        RenderError::Sdl(format!(
+            "direct3d12 device failed ({e}). Need Windows 11 + D3D12 GPU (not Basic Render Driver); SDL3.dll on PATH"
+        ))
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn create_device_macos_metal(debug_mode: bool) -> Result<Device, RenderError> {
+    let props = Properties::new()?;
+    props.set("SDL.gpu.device.create.debugmode", debug_mode)?;
+    props.set("SDL.gpu.device.create.name", REQUIRED_BACKEND)?;
+    props.set("SDL.gpu.device.create.shaders.metallib", true)?;
+    Device::new_with_properties(props).map_err(|e| {
+        RenderError::Sdl(format!(
+            "metal device failed ({e}). Need macOS Metal GPU + metallib shaders (T10)"
+        ))
+    })
 }

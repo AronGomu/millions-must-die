@@ -2,6 +2,8 @@
 # Native SDL3 shared libs are built/cached outside Git (see third_party/README.md).
 # Do not add network-fetching build overrides here.
 #
-# After `cargo run -p xtask -- bootstrap` builds a prefix, T7 may set e.g.:
-#   PKG_CONFIG_PATH = "<cache>/sdl3/3.4.12/prefix-linux/lib/pkgconfig"
-# via environment rather than forcing build-from-source (network).
+# After building a prefix, set via environment (not forced here):
+#   Linux:  MMD_SDL3_PREFIX=.../prefix-linux  PKG_CONFIG_PATH=.../lib64/pkgconfig
+#   Windows: MMD_SDL3_PREFIX=.../prefix-windows  PATH=.../bin;%PATH%
+#   macOS:  MMD_SDL3_PREFIX=.../prefix-macos (T10)
+# build.rs maps prefix-<os> from MMD_NATIVE_CACHE when MMD_SDL3_PREFIX unset.

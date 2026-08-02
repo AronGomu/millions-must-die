@@ -1,5 +1,8 @@
 //! Narrow `sdl3-sys` escape hatch.
 //!
+//! Command buffers are submitted via raw SDL and then `mem::forget` so the safe
+//! wrapper does not double-free; clippy `forget_non_drop` is expected here.
+//!
 //! # Invariants
 //!
 //! 1. Callers hold a live `sdl3::gpu::Device` / `CopyPass` / `TransferBuffer` /
@@ -13,18 +16,21 @@
 //!    cancel). Caller must not use `cmd` after these return.
 //! 5. No other module may call `sdl3_sys` GPU entry points directly.
 
+#![allow(clippy::forget_non_drop)]
+#![allow(clippy::field_reassign_with_default)]
+
 use std::ffi::CStr;
 use std::ptr;
 
 use sdl3::gpu::{CommandBuffer, CopyPass, Device, Texture, TransferBuffer};
+use sdl3::properties::Properties;
 use sdl3::video::Window;
 use sdl3_sys::gpu::{
     SDL_BeginGPURenderPass, SDL_BlitGPUTexture, SDL_CancelGPUCommandBuffer,
-    SDL_DownloadFromGPUTexture, SDL_EndGPURenderPass, SDL_GPU_FILTER_NEAREST,
-    SDL_GPU_LOADOP_CLEAR, SDL_GPU_STOREOP_STORE, SDL_GPUBlitInfo, SDL_GPUBlitRegion,
-    SDL_GPUColorTargetInfo, SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo,
-    SDL_GetGPUDeviceDriver, SDL_SubmitGPUCommandBuffer,
-    SDL_WaitAndAcquireGPUSwapchainTexture,
+    SDL_DownloadFromGPUTexture, SDL_EndGPURenderPass, SDL_GPU_FILTER_NEAREST, SDL_GPU_LOADOP_CLEAR,
+    SDL_GPU_STOREOP_STORE, SDL_GPUBlitInfo, SDL_GPUBlitRegion, SDL_GPUColorTargetInfo,
+    SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo, SDL_GetGPUDeviceDriver,
+    SDL_GetGPUDeviceProperties, SDL_SubmitGPUCommandBuffer, SDL_WaitAndAcquireGPUSwapchainTexture,
 };
 use sdl3_sys::pixels::SDL_FColor;
 use sdl3_sys::surface::SDL_FLIP_NONE;
@@ -40,6 +46,26 @@ pub fn device_driver_name(device: &Device) -> String {
             return String::new();
         }
         CStr::from_ptr(ptr).to_string_lossy().into_owned()
+    }
+}
+
+/// Read adapter name from device properties (`SDL.gpu.device.name`).
+///
+/// Used to reject Microsoft Basic Render Driver. Empty string when unavailable.
+///
+/// # Safety invariants
+/// `device` must be a live `Device` from this process. Properties ID is owned by
+/// SDL device; wrap as constant so Drop does not destroy it.
+pub fn device_adapter_name(device: &Device) -> String {
+    unsafe {
+        let props_id = SDL_GetGPUDeviceProperties(device.raw());
+        if props_id == 0 {
+            return String::new();
+        }
+        let props = Properties::const_from_ll(props_id);
+        props
+            .get_string("SDL.gpu.device.name", "")
+            .unwrap_or_default()
     }
 }
 
