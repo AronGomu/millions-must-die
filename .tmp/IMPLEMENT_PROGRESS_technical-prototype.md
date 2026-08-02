@@ -25,7 +25,7 @@
 | T15 | Ubuntu runner contract | done | 979bd14 | |
 | T16 | Ubuntu recovery + attestation | blocked_user | 6297174 | need physical Ubuntu lab |
 | T17 | Ubuntu candidate gate | blocked_dep | — | needs T13 T16 |
-| T18 | Windows runner contract | done | 838b6a2 | |
+| T18 | Windows runner contract | done | 4c87635 | |
 | T19 | Windows recovery + attestation | pending | — | physical |
 | T20 | Windows candidate gate | pending | — | |
 | T21 | macOS runner contract | pending | — | |
@@ -39,4 +39,4 @@
 ## Log
 
 - T16 blocked_user 6297174
-- T18 done 838b6a2 windows runner contract
+- T18 done 4c87635 windows runner contract
