@@ -2,6 +2,7 @@
 
 pub mod nav;
 pub mod render;
+pub mod runtime;
 pub mod scenario;
 pub mod sim;
 

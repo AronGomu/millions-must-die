@@ -29,8 +29,8 @@ pub const VIEW_WIDTH: u32 = 1920;
 pub const VIEW_HEIGHT: u32 = 1080;
 /// Frames-in-flight for cycled instance uploads.
 pub const FRAMES_IN_FLIGHT: usize = 2;
-/// Max sprites uploaded per frame across all groups (static slice is tiny).
-pub const MAX_INSTANCES: u32 = 64;
+/// Max sprites uploaded per frame across all groups (hard 50k; stretch 100k).
+pub const MAX_INSTANCES: u32 = 100_000;
 
 const VERT_SPV: &[u8] = include_bytes!("../../../../shaders/generated/sprite.vert.spv");
 const FRAG_SPV: &[u8] = include_bytes!("../../../../shaders/generated/sprite.frag.spv");
@@ -319,25 +319,9 @@ impl SpriteRenderer {
         })
     }
 
-    /// Draw groups into offscreen 1920×1080 and read RGBA8 pixels back.
-    pub fn draw_offscreen_readback(
-        &mut self,
-        groups: &[DrawGroup],
-    ) -> Result<Readback, RenderError> {
-        if groups.len() != ATLAS_COUNT {
-            return Err(RenderError::GroupCount {
-                got: groups.len(),
-                expected: ATLAS_COUNT,
-            });
-        }
-        for (i, g) in groups.iter().enumerate() {
-            if g.atlas_id as usize != i {
-                return Err(RenderError::Atlas(format!(
-                    "group {i} atlas_id {}",
-                    g.atlas_id
-                )));
-            }
-        }
+    /// Upload instances + draw 4 atlas groups into offscreen 1920×1080 (no readback).
+    pub fn draw_offscreen(&mut self, groups: &[DrawGroup]) -> Result<(), RenderError> {
+        self.validate_groups(groups)?;
 
         let device = &self.ctx.device;
         let slot = self.frame_slot % FRAMES_IN_FLIGHT;
@@ -442,7 +426,21 @@ impl SpriteRenderer {
             cmd.submit()?;
         }
 
-        // Download offscreen.
+        Ok(())
+    }
+
+    /// Draw groups into offscreen 1920×1080 and read RGBA8 pixels back.
+    pub fn draw_offscreen_readback(
+        &mut self,
+        groups: &[DrawGroup],
+    ) -> Result<Readback, RenderError> {
+        self.draw_offscreen(groups)?;
+        self.readback_offscreen()
+    }
+
+    /// Download current offscreen target (after [`Self::draw_offscreen`]).
+    pub fn readback_offscreen(&mut self) -> Result<Readback, RenderError> {
+        let device = &self.ctx.device;
         let rgba_bytes = VIEW_WIDTH * VIEW_HEIGHT * 4;
         let cmd = device.acquire_command_buffer()?;
         let copy = device.begin_copy_pass(&cmd)?;
@@ -471,29 +469,45 @@ impl SpriteRenderer {
         })
     }
 
-    /// Draw groups to claimed window swapchain (visible smoke).
+    /// Draw groups to offscreen, blit to claimed window swapchain.
     ///
-    /// Sprite pixels validated via offscreen readback. Visible path clears the
-    /// swapchain (proves present) through the unsafe seam — sdl3 0.18.4 ties
-    /// swapchain `Texture` lifetime to `&mut CommandBuffer`, clashing with
-    /// `begin_render_pass(&cmd)`.
+    /// Offscreen path is authoritative for pixels. Swapchain present uses the
+    /// unsafe blit seam — sdl3 0.18.4 ties swapchain `Texture` lifetime to
+    /// `&mut CommandBuffer`, clashing with `begin_render_pass(&cmd)`.
     pub fn draw_to_swapchain(
         &mut self,
         window: &Window,
         groups: &[DrawGroup],
     ) -> Result<(), RenderError> {
-        // Keep offscreen path warm / correct each visible frame.
-        let _ = self.draw_offscreen_readback(groups)?;
+        self.draw_offscreen(groups)?;
         let cmd = self.ctx.device.acquire_command_buffer()?;
-        unsafe_sys::present_clear(
+        unsafe_sys::present_blit(
             &self.ctx.device,
             window,
             cmd,
-            12.0 / 255.0,
-            16.0 / 255.0,
-            28.0 / 255.0,
+            &self.offscreen,
+            VIEW_WIDTH,
+            VIEW_HEIGHT,
         )
         .map_err(RenderError::Sdl)?;
+        Ok(())
+    }
+
+    fn validate_groups(&self, groups: &[DrawGroup]) -> Result<(), RenderError> {
+        if groups.len() != ATLAS_COUNT {
+            return Err(RenderError::GroupCount {
+                got: groups.len(),
+                expected: ATLAS_COUNT,
+            });
+        }
+        for (i, g) in groups.iter().enumerate() {
+            if g.atlas_id as usize != i {
+                return Err(RenderError::Atlas(format!(
+                    "group {i} atlas_id {}",
+                    g.atlas_id
+                )));
+            }
+        }
         Ok(())
     }
 }

@@ -650,11 +650,11 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Add runtime composition.
-2. - [ ] Convert SoA render views to instance buffer.
-3. - [ ] Add input actions.
-4. - [ ] Add optional overlay.
-5. - [ ] Add full 50k manual scene.
+1. - [x] Add runtime composition.
+2. - [x] Convert SoA render views to instance buffer.
+3. - [x] Add input actions.
+4. - [x] Add optional overlay.
+5. - [x] Add full 50k manual scene.
 
 #### Outputs
 
@@ -664,11 +664,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] `cargo test -p mmd-engine --test runtime_frame`
-- [ ] `cargo run -- run --agents 50000`
+- [x] `cargo test -p mmd-engine --test runtime_frame`
+- [x] `cargo run -- run --agents 50000`
 - [ ] manual: all visible; movement; pause; overlay; exit
-- [ ] app functional — Linux interactive technical prototype
-- [ ] commit msg draft: `feat(prototype): render moving fifty-thousand-agent horde`
+- [x] app functional — Linux interactive technical prototype
+- [x] commit msg draft: `feat(prototype): render moving fifty-thousand-agent horde`
 
 ### T9: Windows/D3D12 port
 

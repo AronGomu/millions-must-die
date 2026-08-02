@@ -1,6 +1,10 @@
 //! App binary: interactive `run` and timed `bench` entry points.
 
+mod input;
+mod overlay;
 mod run;
+
+use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -17,8 +21,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run interactive prototype scene
-    Run,
+    /// Run interactive prototype scene (moving flow-field horde)
+    Run {
+        /// Agent count override (default: scenario hard count = 50000)
+        #[arg(long)]
+        agents: Option<u32>,
+        /// Scenario path (default: assets/scenarios/technical_prototype_v1.ron)
+        #[arg(long)]
+        scenario: Option<PathBuf>,
+        /// Auto-exit after N frames (CI/smoke). Omit for interactive.
+        #[arg(long)]
+        frames: Option<u64>,
+    },
     /// Run benchmark harness and emit JSON report
     Bench,
 }
@@ -26,8 +40,17 @@ enum Commands {
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Run => {
-            if let Err(e) = run::run() {
+        Commands::Run {
+            agents,
+            scenario,
+            frames,
+        } => {
+            let opts = run::RunOptions {
+                agents,
+                scenario,
+                frames,
+            };
+            if let Err(e) = run::run(opts) {
                 eprintln!("run failed: {e}");
                 std::process::exit(1);
             }

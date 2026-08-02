@@ -9,8 +9,8 @@
 //!    device that owns `texture` and `transfer`.
 //! 3. After download, caller must submit with a fence and wait before mapping
 //!    the transfer buffer.
-//! 4. `present_clear` consumes the command buffer (submit or cancel). Caller
-//!    must not use `cmd` after this returns.
+//! 4. `present_clear` / `present_blit` consume the command buffer (submit or
+//!    cancel). Caller must not use `cmd` after these return.
 //! 5. No other module may call `sdl3_sys` GPU entry points directly.
 
 use std::ffi::CStr;
@@ -19,12 +19,15 @@ use std::ptr;
 use sdl3::gpu::{CommandBuffer, CopyPass, Device, Texture, TransferBuffer};
 use sdl3::video::Window;
 use sdl3_sys::gpu::{
-    SDL_BeginGPURenderPass, SDL_CancelGPUCommandBuffer, SDL_DownloadFromGPUTexture,
-    SDL_EndGPURenderPass, SDL_GPU_LOADOP_CLEAR, SDL_GPU_STOREOP_STORE, SDL_GPUColorTargetInfo,
-    SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo, SDL_GetGPUDeviceDriver,
-    SDL_SubmitGPUCommandBuffer, SDL_WaitAndAcquireGPUSwapchainTexture,
+    SDL_BeginGPURenderPass, SDL_BlitGPUTexture, SDL_CancelGPUCommandBuffer,
+    SDL_DownloadFromGPUTexture, SDL_EndGPURenderPass, SDL_GPU_FILTER_NEAREST,
+    SDL_GPU_LOADOP_CLEAR, SDL_GPU_STOREOP_STORE, SDL_GPUBlitInfo, SDL_GPUBlitRegion,
+    SDL_GPUColorTargetInfo, SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo,
+    SDL_GetGPUDeviceDriver, SDL_SubmitGPUCommandBuffer,
+    SDL_WaitAndAcquireGPUSwapchainTexture,
 };
 use sdl3_sys::pixels::SDL_FColor;
+use sdl3_sys::surface::SDL_FLIP_NONE;
 
 /// Read SDL GPU driver name for `device` (`"vulkan"`, `"direct3d12"`, `"metal"`).
 ///
@@ -84,6 +87,7 @@ pub fn download_texture(
 /// - `device` claimed `window` via `ClaimWindowForGPUDevice`.
 /// - `cmd` freshly acquired and not otherwise recorded.
 /// - On return, `cmd` is consumed (submitted or cancelled); do not reuse.
+#[allow(dead_code)] // kept for clear-only fallback / non-blit hosts
 pub fn present_clear(
     device: &Device,
     window: &Window,
@@ -137,5 +141,87 @@ pub fn present_clear(
     }
     std::mem::forget(cmd);
     let _ = (width, height);
+    Ok(())
+}
+
+/// Acquire swapchain, blit `source` (full `src_w`×`src_h`) into it, submit.
+///
+/// Scales with nearest filter when swapchain size ≠ source. Must not run inside
+/// another pass. `source` needs `SAMPLER` usage.
+///
+/// # Safety invariants
+/// - `device` claimed `window` via `ClaimWindowForGPUDevice`.
+/// - `cmd` freshly acquired; not otherwise recorded.
+/// - `source` live texture on same device; usage includes sampler.
+/// - On return, `cmd` is consumed; do not reuse.
+pub fn present_blit(
+    device: &Device,
+    window: &Window,
+    cmd: CommandBuffer,
+    source: &Texture,
+    src_w: u32,
+    src_h: u32,
+) -> Result<(), String> {
+    let _ = device;
+    let mut swapchain = ptr::null_mut();
+    let mut width = 0u32;
+    let mut height = 0u32;
+    let ok = unsafe {
+        SDL_WaitAndAcquireGPUSwapchainTexture(
+            cmd.raw(),
+            window.raw(),
+            &mut swapchain,
+            &mut width,
+            &mut height,
+        )
+    };
+    if !ok || swapchain.is_null() {
+        unsafe {
+            SDL_CancelGPUCommandBuffer(cmd.raw());
+        }
+        std::mem::forget(cmd);
+        return Ok(());
+    }
+
+    let info = SDL_GPUBlitInfo {
+        source: SDL_GPUBlitRegion {
+            texture: source.raw(),
+            mip_level: 0,
+            layer_or_depth_plane: 0,
+            x: 0,
+            y: 0,
+            w: src_w,
+            h: src_h,
+        },
+        destination: SDL_GPUBlitRegion {
+            texture: swapchain,
+            mip_level: 0,
+            layer_or_depth_plane: 0,
+            x: 0,
+            y: 0,
+            w: width,
+            h: height,
+        },
+        load_op: SDL_GPU_LOADOP_CLEAR,
+        clear_color: SDL_FColor {
+            r: 12.0 / 255.0,
+            g: 16.0 / 255.0,
+            b: 28.0 / 255.0,
+            a: 1.0,
+        },
+        flip_mode: SDL_FLIP_NONE,
+        filter: SDL_GPU_FILTER_NEAREST,
+        cycle: false,
+        ..Default::default()
+    };
+
+    unsafe {
+        SDL_BlitGPUTexture(cmd.raw(), &info);
+        if !SDL_SubmitGPUCommandBuffer(cmd.raw()) {
+            std::mem::forget(cmd);
+            return Err("SubmitGPUCommandBuffer failed".into());
+        }
+    }
+    std::mem::forget(cmd);
     Ok(())
 }

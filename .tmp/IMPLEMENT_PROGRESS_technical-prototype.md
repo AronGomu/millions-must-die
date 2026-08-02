@@ -3,15 +3,15 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-08-02T15:15:00+02:00
+- Updated: 2026-03-22T00:00:00+00:00
 
 ## Assumptions
 
 - No git remote → local commits only until origin exists.
 - Parallel off; serial tickets.
-- Ship balanced default.
-- T6: DXIL/metallib placeholders until T9/T10.
-- T7: pinned SDL3 3.4.12 under `$MMD_NATIVE_CACHE` (or `~/.cache/mmd/native`); needs `libvulkan` + ICD on `LD_LIBRARY_PATH`. Headless: `SDL_VIDEODRIVER=offscreen`.
+- Headless GPU: SDL_VIDEODRIVER=offscreen + MMD_SDL3_PREFIX + LD_LIBRARY_PATH vulkan.
+- T7: visible swapchain may clear only; sprites proven offscreen.
+- T8: offscreen driver skips present; proves via draw_offscreen + hash move. Real display blits offscreen→swapchain.
 
 ## Status
 
@@ -22,9 +22,9 @@
 | T3  | Deterministic atlas generator | done | bd0db6f | |
 | T4  | Shared flow field | done | ba15068 | |
 | T5  | SoA movement + recycling | done | 15f421c | |
-| T6  | Pinned native deps + shaders | done | 5ecc832 | DXIL/metallib placeholder |
-| T7  | Linux SDL3 GPU static slice | done | c180d21 | Vulkan offscreen + window |
-| T8  | Moving 50k interactive slice | pending | — | |
+| T6  | Pinned native deps + shaders | done | 5ecc832 | |
+| T7  | Linux SDL3 GPU static slice | done | ee607f8 | |
+| T8  | Moving 50k interactive slice | done | 7bda26a | runtime+50k draw; commit next |
 | T9  | Windows/D3D12 port | pending | — | needs Windows host |
 | T10 | macOS/Metal port | pending | — | needs M4 host |
 | T11 | Benchmark + JSON report | pending | — | |
@@ -47,5 +47,5 @@
 
 ## Log
 
-- T1–T6 done
-- T7 done: Linux/Vulkan static 4-atlas draw + 1920×1080 readback; `run` CLI wires offscreen+window
+- T1–T7 done
+- T8: Runtime composition, instance partition, Esc/F1/Space, overlay stdout, MAX_INSTANCES=100k, present_blit. Tests runtime_frame 5/5. Offscreen run --agents 50000 --frames 5 ok.
