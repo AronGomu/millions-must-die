@@ -2,7 +2,7 @@
 
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
-- Updated: 2026-08-02T15:31:14+02:00
+- Updated: 2026-08-02T20:00:00+02:00
 
 ## Status
 
@@ -29,19 +29,14 @@
 | T19 | Windows recovery + attestation | blocked_user | 9702913 | physical Windows |
 | T20 | Windows candidate gate | blocked_dep | — | T13 T19 |
 | T21 | macOS runner contract | done | feeab47 | |
-| T22 | macOS recovery + attestation | blocked_user | b0bc1ec | protocol+docs landed; TODO(user) MDM + M4/DFU lab |
-| T23 | macOS candidate gate | pending | — | |
-| T24 | Exact-hash 3-host merge gate | pending | — | |
-| T25 | Relative calibration engine | pending | — | |
-| T26 | 50-run pilot baselines | pending | — | physical |
-| T27 | Final proof + phase close | pending | — | |
+| T22 | macOS recovery + attestation | blocked_user | f3fce59 | TODO(user) MDM + Mac lab |
+| T23 | macOS candidate gate | blocked_dep | — | T13 T22 |
+| T24 | Exact-hash 3-host merge gate | blocked_dep | — | T17 T20 T23 |
+| T25 | Relative calibration engine | done | f802b90 | |
+| T26 | 50-run pilot baselines | blocked_dep | — | T24 T25 |
+| T27 | Final proof + phase close | blocked_dep | — | T26 |
 
 ## Log
 
-- T21 done feeab47
-- T22 blocked_user b0bc1ec protocol/docs/skeleton; MDM TODO(user) + no M4/ABM/DFU lab
-  - macos_recovery SM + macos-recover-simulate + doctor --runner macos
-  - lab/provision/macos/{recover.sh,mdm-profile.example.json}
-  - docs/lab/macos-runner.md
-  - cargo test -p mmd-lab --test macos_recovery (9) + unit SM (10) pass
-  - Human: (1) select MDM+ABM/ADE (2) M4 + second Mac + USB-C (3) drill EACS+DFU
+- T22 blocked_user f3fce59
+- T25 done f802b90
