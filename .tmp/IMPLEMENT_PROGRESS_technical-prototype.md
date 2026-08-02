@@ -23,7 +23,7 @@
 | T7  | Linux SDL3 GPU static slice | done | ee607f8 | |
 | T8  | Moving 50k interactive slice | done | 5ada751 | |
 | T9  | Windows/D3D12 port | blocked_user | 1785ca6 | need Win11 25H2 ref PC; prep only |
-| T10 | macOS/Metal port | blocked_user | d454791 | need M4 macOS 15; prep only |
+| T10 | macOS/Metal port | blocked_user | c37a377 | need M4 macOS 15; prep only |
 | T11 | Benchmark + JSON report | pending | — | |
 | T12 | Zero-allocation contract | pending | — | |
 | T13 | Backend golden correctness | pending | — | blocked_dep if T9/T10 stay blocked |
@@ -46,4 +46,4 @@
 
 - T1–T8 done
 - T9 blocked_user 1785ca6 need Windows ref PC
-- T10 blocked_user d454791 prep only; need M4 Mac mini macOS 15 + Xcode Metal toolchain
+- T10 blocked_user c37a377 prep only; need M4 Mac mini macOS 15 + Xcode Metal toolchain
