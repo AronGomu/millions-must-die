@@ -1,6 +1,28 @@
-[package]
-name = "millions_must_die"
+[workspace]
+members = [".", "crates/mmd-engine", "tools/mmd-lab", "xtask"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
+license = "MIT-0"
+
+[workspace.dependencies]
+clap = { version = "4.5.53", features = ["derive"] }
+mmd-engine = { path = "crates/mmd-engine" }
+
+[package]
+name = "millions_must_die"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Millions Must Die phase-0 technical prototype app"
+publish = false
+
+[[bin]]
+name = "millions_must_die"
+path = "src/main.rs"
 
 [dependencies]
+clap.workspace = true
+mmd-engine.workspace = true

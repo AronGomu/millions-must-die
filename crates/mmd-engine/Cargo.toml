@@ -1,0 +1,9 @@
+[package]
+name = "mmd-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Millions Must Die engine library"
+publish = false
+
+[dependencies]
