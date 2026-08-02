@@ -1,0 +1,177 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/baseline-v1.schema.json",
+  "title": "baseline-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "enabled",
+    "review_required",
+    "platform",
+    "backend",
+    "manifest",
+    "sample_count",
+    "nmad_limit",
+    "metrics",
+    "review"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "baseline-v1"
+    },
+    "enabled": {
+      "type": "boolean",
+      "description": "false until explicit owner review/enable. Never auto-enable."
+    },
+    "review_required": {
+      "type": "boolean"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["linux-x86_64", "windows-x86_64", "macos-arm64"]
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_version",
+        "scenario_sha256",
+        "shader_manifest_version",
+        "os_build",
+        "driver",
+        "cpu",
+        "gpu",
+        "policy_id"
+      ],
+      "properties": {
+        "scenario_version": { "type": "string", "minLength": 1 },
+        "scenario_sha256": { "type": "string", "minLength": 1 },
+        "shader_manifest_version": { "type": "integer", "minimum": 1 },
+        "os_build": { "type": "string", "minLength": 1 },
+        "driver": { "type": "string" },
+        "cpu": { "type": "string" },
+        "gpu": { "type": "string" },
+        "policy_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sample_count": {
+      "type": "integer",
+      "minimum": 50
+    },
+    "nmad_limit": {
+      "type": "number",
+      "const": 0.03
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "median_p95_frame_service_ms",
+        "median_p99_frame_service_ms",
+        "median_sim_ms",
+        "median_upload_ms",
+        "median_gpu_queue_latency_ms"
+      ],
+      "properties": {
+        "median_p95_frame_service_ms": { "$ref": "#/$defs/metricBaseline" },
+        "median_p99_frame_service_ms": { "$ref": "#/$defs/metricBaseline" },
+        "median_sim_ms": { "$ref": "#/$defs/metricBaseline" },
+        "median_upload_ms": { "$ref": "#/$defs/metricBaseline" },
+        "median_gpu_queue_latency_ms": { "$ref": "#/$defs/metricBaseline" }
+      }
+    },
+    "review": {
+      "description": "null on candidate; required when enabled=true",
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/reviewRecord" }
+      ]
+    }
+  },
+  "$defs": {
+    "metricBaseline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_ms",
+        "noise_nmad",
+        "noise_envelope_ms",
+        "margin",
+        "relative_limit_ms"
+      ],
+      "properties": {
+        "baseline_ms": {
+          "type": "number",
+          "description": "Median of clean calibration runs for this metric."
+        },
+        "noise_nmad": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Normalized MAD across calibration runs (unitless)."
+        },
+        "noise_envelope_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "baseline_ms * noise_nmad absolute envelope."
+        },
+        "margin": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Explicit reviewed relative margin (fraction). Must exceed noise_nmad."
+        },
+        "relative_limit_ms": {
+          "type": "number",
+          "description": "baseline_ms * (1 + margin). Gate uses this after enable."
+        }
+      }
+    },
+    "reviewRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reviewer", "reviewed_at", "evidence_ref"],
+      "properties": {
+        "reviewer": { "type": "string", "minLength": 1 },
+        "reviewed_at": {
+          "type": "string",
+          "minLength": 1,
+          "description": "ISO-8601 UTC timestamp"
+        },
+        "evidence_ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path/URL/id of calibration evidence archive"
+        },
+        "notes": { "type": "string" }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "enabled": { "const": true } }
+      },
+      "then": {
+        "properties": {
+          "review_required": { "const": false },
+          "review": { "$ref": "#/$defs/reviewRecord" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "enabled": { "const": false } }
+      },
+      "then": {
+        "properties": {
+          "review_required": { "const": true }
+        }
+      }
+    }
+  ]
+}

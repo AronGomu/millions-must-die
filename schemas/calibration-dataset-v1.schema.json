@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/calibration-dataset-v1.schema.json",
+  "title": "calibration-dataset-v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "platform",
+    "backend",
+    "manifest",
+    "samples"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "calibration-dataset-v1"
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["linux-x86_64", "windows-x86_64", "macos-arm64"]
+    },
+    "backend": {
+      "type": "string",
+      "minLength": 1
+    },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_version",
+        "scenario_sha256",
+        "shader_manifest_version",
+        "os_build",
+        "driver",
+        "cpu",
+        "gpu",
+        "policy_id"
+      ],
+      "properties": {
+        "scenario_version": { "type": "string", "minLength": 1 },
+        "scenario_sha256": { "type": "string", "minLength": 1 },
+        "shader_manifest_version": { "type": "integer", "minimum": 1 },
+        "os_build": { "type": "string", "minLength": 1 },
+        "driver": { "type": "string" },
+        "cpu": { "type": "string" },
+        "gpu": { "type": "string" },
+        "policy_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "run_id",
+          "median_p95_frame_service_ms",
+          "median_p99_frame_service_ms",
+          "median_sim_ms",
+          "median_upload_ms",
+          "median_gpu_queue_latency_ms"
+        ],
+        "properties": {
+          "run_id": { "type": "string", "minLength": 1 },
+          "median_p95_frame_service_ms": { "type": "number" },
+          "median_p99_frame_service_ms": { "type": "number" },
+          "median_sim_ms": { "type": "number" },
+          "median_upload_ms": { "type": "number" },
+          "median_gpu_queue_latency_ms": { "type": "number" },
+          "manifest_override": {
+            "description": "Optional per-sample manifest; must match dataset.manifest when present",
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scenario_version",
+              "scenario_sha256",
+              "shader_manifest_version",
+              "os_build",
+              "driver",
+              "cpu",
+              "gpu",
+              "policy_id"
+            ],
+            "properties": {
+              "scenario_version": { "type": "string", "minLength": 1 },
+              "scenario_sha256": { "type": "string", "minLength": 1 },
+              "shader_manifest_version": { "type": "integer", "minimum": 1 },
+              "os_build": { "type": "string", "minLength": 1 },
+              "driver": { "type": "string" },
+              "cpu": { "type": "string" },
+              "gpu": { "type": "string" },
+              "policy_id": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

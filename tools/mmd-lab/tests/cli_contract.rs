@@ -24,6 +24,7 @@ fn lab_help_lists_core_commands() {
         "self-check",
         "archive",
         "validate",
+        "calibrate",
     ] {
         assert!(stdout.contains(cmd), "help missing {cmd}:\n{stdout}");
     }

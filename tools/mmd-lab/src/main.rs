@@ -1,6 +1,7 @@
 //! Trusted local lab CLI. Candidate archives must never supply this binary.
 
 mod archive;
+mod calibrate;
 mod install;
 mod macos;
 mod macos_recovery;
@@ -22,6 +23,10 @@ use mmd_engine::bench::BenchPolicy;
 use toml::Value as TomlValue;
 
 use archive::{pack_tree, write_archive_file, ArchiveBlob};
+use calibrate::{
+    derive_baseline_candidate, enable_reviewed_baseline, Baseline, CalibrationDataset,
+    ReviewRecord,
+};
 use install::{
     default_binary_path, default_manifest_path, install_current_exe, self_check, sha256_file,
 };
@@ -208,6 +213,36 @@ enum Commands {
         #[arg(long)]
         summary_out: Option<PathBuf>,
     },
+    /// Derive disabled relative baseline candidate, or enable after owner review
+    Calibrate {
+        /// calibration-dataset-v1 JSON (derive mode)
+        #[arg(long)]
+        dataset: Option<PathBuf>,
+        /// Explicit relative margin fraction; must exceed noise nmad (derive mode)
+        #[arg(long)]
+        margin: Option<f64>,
+        /// Output baseline JSON path
+        #[arg(long)]
+        out: PathBuf,
+        /// Enable previously derived candidate after explicit human review
+        #[arg(long, default_value_t = false)]
+        enable_reviewed: bool,
+        /// Disabled baseline candidate path (enable mode)
+        #[arg(long)]
+        candidate: Option<PathBuf>,
+        /// Reviewer identity (enable mode)
+        #[arg(long)]
+        reviewer: Option<String>,
+        /// Evidence archive/path id (enable mode)
+        #[arg(long)]
+        evidence_ref: Option<String>,
+        /// Optional review notes (enable mode)
+        #[arg(long)]
+        notes: Option<String>,
+        /// ISO-8601 review timestamp (enable mode; default: now UTC)
+        #[arg(long)]
+        reviewed_at: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -265,6 +300,27 @@ fn main() -> ExitCode {
         Commands::Install { bin, manifest } => cmd_install(bin, manifest),
         Commands::SelfCheck { manifest } => cmd_self_check(manifest),
         Commands::Archive { root, out_dir } => cmd_archive(root, out_dir),
+        Commands::Calibrate {
+            dataset,
+            margin,
+            out,
+            enable_reviewed,
+            candidate,
+            reviewer,
+            evidence_ref,
+            notes,
+            reviewed_at,
+        } => cmd_calibrate(CalibrateArgs {
+            dataset,
+            margin,
+            out,
+            enable_reviewed,
+            candidate,
+            reviewer,
+            evidence_ref,
+            notes,
+            reviewed_at,
+        }),
         Commands::Validate {
             mode,
             root,
@@ -1220,6 +1276,139 @@ fn cmd_archive(root: Option<PathBuf>, out_dir: Option<PathBuf>) -> ExitCode {
         }
         Err(e) => {
             eprintln!("archive failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+struct CalibrateArgs {
+    dataset: Option<PathBuf>,
+    margin: Option<f64>,
+    out: PathBuf,
+    enable_reviewed: bool,
+    candidate: Option<PathBuf>,
+    reviewer: Option<String>,
+    evidence_ref: Option<String>,
+    notes: Option<String>,
+    reviewed_at: Option<String>,
+}
+
+fn cmd_calibrate(args: CalibrateArgs) -> ExitCode {
+    if args.enable_reviewed {
+        return cmd_calibrate_enable(args);
+    }
+    let dataset_path = match args.dataset {
+        Some(p) => p,
+        None => {
+            eprintln!("calibrate derive requires --dataset");
+            return ExitCode::from(2);
+        }
+    };
+    let margin = match args.margin {
+        Some(m) => m,
+        None => {
+            eprintln!("calibrate derive requires --margin");
+            return ExitCode::from(2);
+        }
+    };
+    let dataset = match CalibrationDataset::load(&dataset_path) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("calibrate failed: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    match derive_baseline_candidate(&dataset, margin) {
+        Ok(candidate) => match candidate.write(&args.out) {
+            Ok(()) => {
+                println!("baseline_path {}", args.out.display());
+                println!("enabled false");
+                println!("review_required true");
+                println!("sample_count {}", candidate.sample_count);
+                println!(
+                    "noise_nmad_p95 {:.6}",
+                    candidate.metrics.median_p95_frame_service_ms.noise_nmad
+                );
+                println!(
+                    "margin {}",
+                    candidate.metrics.median_p95_frame_service_ms.margin
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("calibrate write failed: {e}");
+                ExitCode::from(1)
+            }
+        },
+        Err(e) => {
+            eprintln!("calibrate failed: {e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn cmd_calibrate_enable(args: CalibrateArgs) -> ExitCode {
+    let candidate_path = match args.candidate {
+        Some(p) => p,
+        None => {
+            eprintln!("calibrate --enable-reviewed requires --candidate");
+            return ExitCode::from(2);
+        }
+    };
+    let reviewer = match args.reviewer {
+        Some(r) if !r.trim().is_empty() => r,
+        _ => {
+            eprintln!("calibrate --enable-reviewed requires --reviewer");
+            return ExitCode::from(2);
+        }
+    };
+    let evidence_ref = match args.evidence_ref {
+        Some(r) if !r.trim().is_empty() => r,
+        _ => {
+            eprintln!("calibrate --enable-reviewed requires --evidence-ref");
+            return ExitCode::from(2);
+        }
+    };
+    let reviewed_at = args.reviewed_at.unwrap_or_else(|| {
+        // Stable enough without chrono dep: unix secs UTC label.
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("{secs}")
+    });
+    let candidate = match Baseline::load(&candidate_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("calibrate failed: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let review = ReviewRecord {
+        reviewer,
+        reviewed_at,
+        evidence_ref,
+        notes: args.notes.unwrap_or_default(),
+    };
+    match enable_reviewed_baseline(&candidate, review) {
+        Ok(enabled) => match enabled.write(&args.out) {
+            Ok(()) => {
+                println!("baseline_path {}", args.out.display());
+                println!("enabled true");
+                println!("review_required false");
+                println!(
+                    "reviewer {}",
+                    enabled.review.as_ref().map(|r| r.reviewer.as_str()).unwrap_or("")
+                );
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("calibrate write failed: {e}");
+                ExitCode::from(1)
+            }
+        },
+        Err(e) => {
+            eprintln!("calibrate failed: {e}");
             ExitCode::from(1)
         }
     }
