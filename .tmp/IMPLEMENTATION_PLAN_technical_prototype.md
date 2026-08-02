@@ -372,10 +372,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Add atlas manifest schema.
-2. - [ ] Write generator + `xtask atlases`/`--check`.
-3. - [ ] Generate/track PNGs + manifest.
-4. - [ ] Add clean-regeneration test.
+1. - [x] Add atlas manifest schema.
+2. - [x] Write generator + `xtask atlases`/`--check`.
+3. - [x] Generate/track PNGs + manifest.
+4. - [x] Add clean-regeneration test.
 
 #### Outputs
 
@@ -385,11 +385,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] `cargo test -p xtask atlas`
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] regen → `git diff --exit-code -- assets/sprites/generated`
-- [ ] app functional — CLI shell unchanged
-- [ ] commit msg draft: `feat(assets): generate deterministic sprite atlases`
+- [x] `cargo test -p xtask atlas`
+- [x] `cargo run -p xtask -- atlases --check`
+- [x] regen → `git diff --exit-code -- assets/sprites/generated`
+- [x] app functional — CLI shell unchanged
+- [x] commit msg draft: `feat(assets): generate deterministic sprite atlases`
 
 ### T4: Shared 8-neighbor flow field
 

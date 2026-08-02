@@ -1,4 +1,6 @@
-//! Build/bootstrap task runner shell.
+//! Build/bootstrap task runner.
+
+mod atlases;
 
 use clap::{Parser, Subcommand};
 
@@ -15,8 +17,14 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Placeholder for SDL/shader/atlas bootstrap
+    /// Placeholder for SDL/shader bootstrap
     Bootstrap,
+    /// Generate or verify deterministic sprite atlases
+    Atlases {
+        /// Verify tracked atlases match clean regeneration
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() {
@@ -24,6 +32,12 @@ fn main() {
     match cli.command {
         Commands::Bootstrap => {
             println!("bootstrap: shell only; native deps land in later tickets");
+        }
+        Commands::Atlases { check } => {
+            if let Err(err) = atlases::run_atlases(check) {
+                eprintln!("atlases error: {err}");
+                std::process::exit(1);
+            }
         }
     }
 }

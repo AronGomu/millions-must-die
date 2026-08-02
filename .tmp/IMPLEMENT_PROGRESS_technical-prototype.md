@@ -3,7 +3,7 @@
 - Branch: plan/technical-prototype
 - Plan: .tmp/IMPLEMENTATION_PLAN_technical_prototype.md
 - Started: 2026-08-02T13:09:11+02:00
-- Updated: 2026-08-02T13:30:00+02:00
+- Updated: 2026-08-02T13:22:00+02:00
 
 ## Assumptions
 
@@ -17,8 +17,8 @@
 | ID  | Title | State   | SHA | Note |
 | --- | ----- | ------- | --- | ---- |
 | T1  | Workspace + governance shell | done | 8888c27 | push_skipped no origin |
-| T2  | Versioned scenario contract | done | 1457f9b | push_skipped no origin |
-| T3  | Deterministic atlas generator | pending | — | |
+| T2  | Versioned scenario contract | done | d246199 | |
+| T3  | Deterministic atlas generator | done | 9369d79 | 4 atlases 8×4 premul |
 | T4  | Shared flow field | pending | — | |
 | T5  | SoA movement + recycling | pending | — | |
 | T6  | Pinned native deps + shaders | pending | — | |
@@ -46,9 +46,8 @@
 
 ## Log
 
-- 2026-08-02T13:09:11+02:00 base scaffold `4cf0fbb`; branch `plan/technical-prototype`; plan Impl boxes added
-- 2026-08-02T13:09:11+02:00 T1 start
-- 2026-08-02T13:25:00+02:00 T1 done 8888c27 ship=locally-verified push_skipped
-- 2026-08-02T13:25:00+02:00 T2 start
-- 2026-08-02T13:30:00+02:00 T2 green scenario_contract 4/4; ship locally-verified
-- 2026-08-02T13:31:00+02:00 T2 done 1457f9b push_skipped no origin
+- 2026-08-02T13:09:11+02:00 base scaffold `4cf0fbb`; branch `plan/technical-prototype`
+- 2026-08-02T13:25:00+02:00 T1 done 8888c27
+- 2026-08-02T13:40:00+02:00 T2 done d246199
+- 2026-08-02T13:40:00+02:00 T3 start
+- 2026-08-02T13:22:00+02:00 T3 done 9369d79
