@@ -6,6 +6,7 @@ mod pr_summary;
 mod report;
 mod ssh;
 mod ubuntu;
+mod ubuntu_recovery;
 mod verify;
 
 use std::fs;
@@ -14,6 +15,7 @@ use std::process::{Command, ExitCode};
 
 use clap::{Parser, Subcommand};
 use mmd_engine::bench::BenchPolicy;
+use toml::Value as TomlValue;
 
 use archive::{pack_tree, write_archive_file, ArchiveBlob};
 use install::{
@@ -22,9 +24,8 @@ use install::{
 use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
 use ssh::{run_fake_matrix, FakeAgent};
-use ubuntu::{
-    load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict,
-};
+use ubuntu::{load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict};
+use ubuntu_recovery::{LabNetwork, RecoveryEvent, RecoveryPhase, RecoveryState};
 use verify::verify_matrix;
 
 #[derive(Debug, Parser)]
@@ -40,8 +41,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Inspect lab host readiness (shell; full checks in later tickets)
-    Doctor,
+    /// Inspect lab host readiness
+    Doctor {
+        /// Runner id to check (`ubuntu`). Omit for generic shell status.
+        #[arg(long)]
+        runner: Option<String>,
+    },
     /// Validate Ubuntu host attestation against frozen runner contract
     AttestUbuntu {
         /// Frozen Ubuntu runner manifest (TOML)
@@ -50,6 +55,24 @@ enum Commands {
         /// Observed host attestation JSON (fixture or inspect output)
         #[arg(long)]
         observed: PathBuf,
+    },
+    /// Simulate Ubuntu external restore protocol (no PXE/disk). Dry-run only.
+    UbuntuRecoverSimulate {
+        /// RO image identity manifest
+        #[arg(long)]
+        image_manifest: PathBuf,
+        /// Frozen Ubuntu runner contract
+        #[arg(long)]
+        runner_manifest: PathBuf,
+        /// Observed host attestation fixture used after simulated restore
+        #[arg(long)]
+        attest_fixture: PathBuf,
+        /// Optional prior SSH host key fp (must differ from new)
+        #[arg(long, default_value = "ssh-ed25519 AAAAprior-sim")]
+        prior_host_key_fp: String,
+        /// Fresh SSH host key fp after rotate
+        #[arg(long, default_value = "ssh-ed25519 AAAAfresh-sim")]
+        new_host_key_fp: String,
     },
     /// Install this binary as trusted coordinator + write out-of-tree digest
     Install {
@@ -109,11 +132,21 @@ enum Commands {
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Doctor => {
-            println!("doctor: shell only; host checks land in later tickets");
-            ExitCode::SUCCESS
-        }
+        Commands::Doctor { runner } => cmd_doctor(runner),
         Commands::AttestUbuntu { manifest, observed } => cmd_attest_ubuntu(manifest, observed),
+        Commands::UbuntuRecoverSimulate {
+            image_manifest,
+            runner_manifest,
+            attest_fixture,
+            prior_host_key_fp,
+            new_host_key_fp,
+        } => cmd_ubuntu_recover_simulate(
+            image_manifest,
+            runner_manifest,
+            attest_fixture,
+            prior_host_key_fp,
+            new_host_key_fp,
+        ),
         Commands::Install { bin, manifest } => cmd_install(bin, manifest),
         Commands::SelfCheck { manifest } => cmd_self_check(manifest),
         Commands::Archive { root, out_dir } => cmd_archive(root, out_dir),
@@ -139,6 +172,242 @@ fn main() -> ExitCode {
             summary_out,
         }),
     }
+}
+
+fn cmd_doctor(runner: Option<String>) -> ExitCode {
+    match runner.as_deref() {
+        None => {
+            println!("doctor: shell ok; pass --runner ubuntu|windows|macos for host lane");
+            ExitCode::SUCCESS
+        }
+        Some("ubuntu") => cmd_doctor_ubuntu(),
+        Some(other) => {
+            eprintln!("doctor: unknown runner `{other}` (supported: ubuntu)");
+            ExitCode::from(2)
+        }
+    }
+}
+
+fn cmd_doctor_ubuntu() -> ExitCode {
+    let root = discover_workspace_root();
+    let mut missing = Vec::new();
+    let paths = [
+        "lab/manifests/ubuntu-24.04-x86_64.toml",
+        "lab/provision/ubuntu/image-manifest.toml",
+        "lab/provision/ubuntu/recover.sh",
+        "lab/provision/ubuntu/attest.sh",
+        "docs/lab/ubuntu-runner.md",
+        "lab/fixtures/ubuntu-attest/pass.json",
+    ];
+    for rel in paths {
+        let p = root.join(rel);
+        if p.is_file() {
+            println!("ok {rel}");
+        } else {
+            println!("missing {rel}");
+            missing.push(rel);
+        }
+    }
+
+    // Protocol unit surface present if this binary linked recovery module.
+    println!("ok protocol-state-machine");
+
+    // Physical lab not available on developer workstation path.
+    println!("physical-lab absent");
+    println!("physical-drill blocked_user");
+    println!(
+        "need: Ubuntu 24.04 ref PC + PXE/raw image store + external controller + recovery/provisioning/candidate VLANs"
+    );
+    println!("verdict blocked_user");
+
+    if !missing.is_empty() {
+        eprintln!("doctor ubuntu: missing contract files: {missing:?}");
+        return ExitCode::from(1);
+    }
+    // Contracts present; physical still blocked → exit 2 (not ready).
+    ExitCode::from(2)
+}
+
+fn discover_workspace_root() -> PathBuf {
+    // Prefer cwd when it looks like the repo; else walk from exe (dev target/).
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if cwd.join("lab/manifests/ubuntu-24.04-x86_64.toml").is_file() {
+        return cwd;
+    }
+    if let Ok(mut dir) = std::env::current_exe() {
+        for _ in 0..6 {
+            if dir.join("lab/manifests/ubuntu-24.04-x86_64.toml").is_file() {
+                return dir;
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+    cwd
+}
+
+fn cmd_ubuntu_recover_simulate(
+    image_manifest: PathBuf,
+    runner_manifest: PathBuf,
+    attest_fixture: PathBuf,
+    prior_host_key_fp: String,
+    new_host_key_fp: String,
+) -> ExitCode {
+    let expected_digest = match load_image_digest(&image_manifest) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("ubuntu-recover-simulate: image-manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let runner = match load_manifest(&runner_manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("ubuntu-recover-simulate: runner-manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    if runner.image.digest_sha256.to_ascii_lowercase() != expected_digest {
+        eprintln!(
+            "ubuntu-recover-simulate: image digest mismatch between image-manifest and runner manifest"
+        );
+        return ExitCode::from(1);
+    }
+    let observed = match load_attestation(&attest_fixture) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("ubuntu-recover-simulate: attest fixture: {e}");
+            return ExitCode::from(2);
+        }
+    };
+
+    // Drive full protocol; inject real attestation result mid-path.
+    let mut state = RecoveryState::new(&expected_digest);
+    let boot = [
+        RecoveryEvent::StartExternalRestore {
+            external_controller: true,
+        },
+        RecoveryEvent::RecoveryBootConfirmed,
+        RecoveryEvent::ImageWriteFinished {
+            readback_digest_sha256: expected_digest.clone(),
+        },
+        RecoveryEvent::HostIdentityRotated {
+            new_host_key_fp: new_host_key_fp.clone(),
+            prior_host_key_fp: Some(prior_host_key_fp.clone()),
+        },
+        RecoveryEvent::NetworkMoved {
+            network: LabNetwork::Provisioning,
+        },
+        RecoveryEvent::NetworkMoved {
+            network: LabNetwork::Candidate,
+        },
+    ];
+    for ev in boot {
+        if let Err(e) = state.apply(ev) {
+            eprintln!("ubuntu-recover-simulate: {e}");
+            return ExitCode::from(2);
+        }
+        if state.phase.is_quarantined() {
+            return print_recovery_state(&state, ExitCode::from(1));
+        }
+    }
+
+    let attest = validate_ubuntu_attestation(&runner, &observed);
+    if let Err(e) = state.apply(RecoveryEvent::AttestationFinished(attest)) {
+        eprintln!("ubuntu-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+    if state.phase.is_quarantined() {
+        return print_recovery_state(&state, ExitCode::from(1));
+    }
+
+    if let Err(e) = state.apply(RecoveryEvent::EgressCanaryFinished {
+        denied: true,
+        detail: "dry-run:simulated-external-deny".into(),
+    }) {
+        eprintln!("ubuntu-recover-simulate: {e}");
+        return ExitCode::from(2);
+    }
+
+    print_recovery_state(
+        &state,
+        if state.phase.is_terminal_success() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(1)
+        },
+    )
+}
+
+fn print_recovery_state(state: &RecoveryState, code: ExitCode) -> ExitCode {
+    let phase = match &state.phase {
+        RecoveryPhase::ReadyForCandidate => "ready-for-candidate".to_string(),
+        RecoveryPhase::Quarantined { reason } => format!("quarantined:{reason}"),
+        other => format!("{other:?}"),
+    };
+    println!("phase {phase}");
+    println!(
+        "allows_candidate_provision {}",
+        state.phase.allows_candidate_provision()
+    );
+    if let Some(d) = &state.verified_readback_digest {
+        println!("verified_readback_digest {d}");
+    }
+    if let Some(k) = &state.host_key_fp {
+        println!("host_key_fp {k}");
+    }
+    for t in &state.trail {
+        println!("trail {t}");
+    }
+    if state.phase.is_terminal_success() {
+        println!("verdict ready-for-candidate");
+        println!("note dry-run-only; physical drill still required");
+    } else if let Some(r) = &state.quarantine_reason {
+        println!("verdict quarantine");
+        println!("reason {r}");
+    } else {
+        println!("verdict incomplete");
+    }
+    code
+}
+
+fn load_image_digest(path: &std::path::Path) -> Result<String, String> {
+    let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let v: TomlValue = text.parse::<TomlValue>().map_err(|e| e.to_string())?;
+    let schema = v
+        .get("schema_version")
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if schema != "ubuntu-image-manifest-v1" {
+        return Err(format!("expected ubuntu-image-manifest-v1, got {schema}"));
+    }
+    let initiator = v
+        .get("restore")
+        .and_then(|r| r.get("initiator"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    if initiator != "external-controller" {
+        return Err(format!("initiator must be external-controller, got {initiator}"));
+    }
+    let read_only = v
+        .get("image")
+        .and_then(|i| i.get("read_only"))
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if !read_only {
+        return Err("image.read_only must be true".into());
+    }
+    let digest = v
+        .get("image")
+        .and_then(|i| i.get("digest_sha256"))
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "image.digest_sha256 missing".to_string())?
+        .to_ascii_lowercase();
+    if digest.len() != 64 || !digest.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("image.digest_sha256 must be 64 hex chars".into());
+    }
+    Ok(digest)
 }
 
 fn cmd_attest_ubuntu(manifest: PathBuf, observed: PathBuf) -> ExitCode {

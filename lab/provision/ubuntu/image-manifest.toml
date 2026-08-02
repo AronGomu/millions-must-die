@@ -1,0 +1,32 @@
+# Read-only Ubuntu ref whole-disk image contract (recovery plane).
+# Image bytes live on external RO store; this file freezes identity only.
+# Placeholder digest matches lab/manifests/ubuntu-24.04-x86_64.toml until physical image lands.
+
+schema_version = "ubuntu-image-manifest-v1"
+runner_id = "ubuntu-ref"
+os_name = "Ubuntu"
+os_version = "24.04"
+arch = "x86_64"
+
+[image]
+# Frozen raw whole-disk image SHA-256 (read-only store object).
+digest_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+# Logical name on external image store (not a repo path).
+store_object = "ubuntu-24.04-x86_64-ref-raw.img"
+# Media: raw whole-disk; restore via external PXE/recovery env only.
+format = "raw"
+read_only = true
+
+[restore]
+# Candidate OS must never invoke restore.
+initiator = "external-controller"
+# Controller compares post-write readback to digest_sha256 before identity rotate.
+require_readback_digest = true
+# After restore: mint new SSH host keys + unprivileged lab user.
+require_fresh_host_identity = true
+
+[networks]
+# Ordered transition enforced by external controller / state machine.
+order = ["recovery", "provisioning", "candidate"]
+# Candidate VLAN egress must fail external canary before ReadyForCandidate.
+candidate_egress_policy = "deny"

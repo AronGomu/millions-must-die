@@ -62,10 +62,26 @@ Fixtures under `lab/fixtures/ubuntu-attest/`:
 - `software-vulkan.json` → reject
 - `vbios-drift.json` → quarantine
 
-Live host inspect lands in T16. No physical candidate run in T15.
+Live host inspect + recovery protocol: see `docs/lab/ubuntu-runner.md` (T16).
+
+## Recovery skeleton (T16)
+
+| Artifact | Role |
+| --- | --- |
+| `image-manifest.toml` | RO raw image identity; external-controller initiator |
+| `recover.sh --dry-run` | Protocol simulation via `mmd-lab ubuntu-recover-simulate` |
+| `docs/lab/ubuntu-runner.md` | Operator runbook |
+
+```bash
+lab/provision/ubuntu/recover.sh --dry-run --lab-bin path/to/mmd-lab
+mmd-lab doctor --runner ubuntu   # contracts ok → blocked_user until physical drill
+```
+
+Physical PXE/power/VLAN drill remains **blocked_user** without ref lab hardware.
 
 ## Tests
 
 ```bash
 cargo test -p mmd-lab ubuntu_manifest
+cargo test -p mmd-lab ubuntu_recovery
 ```
