@@ -16,6 +16,7 @@ fn lab_help_lists_core_commands() {
     for cmd in [
         "doctor",
         "attest-ubuntu",
+        "attest-windows",
         "ubuntu-recover-simulate",
         "install",
         "self-check",

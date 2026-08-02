@@ -1,0 +1,23 @@
+{
+  "schema_version": "windows-host-attestation-v1",
+  "runner_id": "windows-ref",
+  "platform": "windows-x86_64",
+  "os_name": "Windows",
+  "os_version": "11",
+  "os_build": "26200.6584",
+  "arch": "x86_64",
+  "backend": "d3d12",
+  "cpu_model": "AMD Ryzen 5 8600G w/ Radeon 760M Graphics",
+  "gpu_model": "Microsoft Basic Render Driver",
+  "gpu_vram_mb": 0,
+  "driver_name": "Microsoft Basic Render Driver",
+  "driver_version": "10.0.26100.1",
+  "bios_version": "F1a",
+  "vbios_version": "113-D5040100-100",
+  "secure_boot": true,
+  "measured_boot": true,
+  "ffu_digest_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "power_plan_name": "MMD High Performance",
+  "d3d12_adapter_name": "Microsoft Basic Render Driver",
+  "d3d12_adapter_type": "basic"
+}

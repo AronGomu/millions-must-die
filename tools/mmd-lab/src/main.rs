@@ -8,6 +8,7 @@ mod ssh;
 mod ubuntu;
 mod ubuntu_recovery;
 mod verify;
+mod windows;
 
 use std::fs;
 use std::path::PathBuf;
@@ -27,6 +28,10 @@ use ssh::{run_fake_matrix, FakeAgent};
 use ubuntu::{load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict};
 use ubuntu_recovery::{LabNetwork, RecoveryEvent, RecoveryPhase, RecoveryState};
 use verify::verify_matrix;
+use windows::{
+    load_attestation as load_windows_attestation, load_manifest as load_windows_manifest,
+    validate_windows_attestation, WindowsAttestVerdict,
+};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -50,6 +55,15 @@ enum Commands {
     /// Validate Ubuntu host attestation against frozen runner contract
     AttestUbuntu {
         /// Frozen Ubuntu runner manifest (TOML)
+        #[arg(long)]
+        manifest: PathBuf,
+        /// Observed host attestation JSON (fixture or inspect output)
+        #[arg(long)]
+        observed: PathBuf,
+    },
+    /// Validate Windows host attestation against frozen runner contract
+    AttestWindows {
+        /// Frozen Windows runner manifest (TOML)
         #[arg(long)]
         manifest: PathBuf,
         /// Observed host attestation JSON (fixture or inspect output)
@@ -134,6 +148,7 @@ fn main() -> ExitCode {
     match cli.command {
         Commands::Doctor { runner } => cmd_doctor(runner),
         Commands::AttestUbuntu { manifest, observed } => cmd_attest_ubuntu(manifest, observed),
+        Commands::AttestWindows { manifest, observed } => cmd_attest_windows(manifest, observed),
         Commands::UbuntuRecoverSimulate {
             image_manifest,
             runner_manifest,
@@ -439,6 +454,40 @@ fn cmd_attest_ubuntu(manifest: PathBuf, observed: PathBuf) -> ExitCode {
         AttestVerdict::ReadyForRecovery => ExitCode::SUCCESS,
         AttestVerdict::Quarantine => ExitCode::from(1),
         AttestVerdict::Reject => ExitCode::from(1),
+    }
+}
+
+fn cmd_attest_windows(manifest: PathBuf, observed: PathBuf) -> ExitCode {
+    let expected = match load_windows_manifest(&manifest) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("attest-windows: load manifest failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let obs = match load_windows_attestation(&observed) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("attest-windows: load observed failed: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let result = validate_windows_attestation(&expected, &obs);
+    let verdict = match result.verdict {
+        WindowsAttestVerdict::ReadyForRecovery => "ready-for-recovery",
+        WindowsAttestVerdict::Quarantine => "quarantine",
+        WindowsAttestVerdict::MaintenanceBlock => "maintenance-block",
+        WindowsAttestVerdict::Reject => "reject",
+    };
+    println!("verdict {verdict}");
+    for r in &result.reasons {
+        println!("reason {r}");
+    }
+    match result.verdict {
+        WindowsAttestVerdict::ReadyForRecovery => ExitCode::SUCCESS,
+        WindowsAttestVerdict::Quarantine
+        | WindowsAttestVerdict::MaintenanceBlock
+        | WindowsAttestVerdict::Reject => ExitCode::from(1),
     }
 }
 

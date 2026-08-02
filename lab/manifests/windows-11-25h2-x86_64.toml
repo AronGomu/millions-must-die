@@ -1,0 +1,48 @@
+# Windows ref runner contract (host attestation). Not candidate evidence.
+# Candidate perf/behavior lives in lab-host-evidence-v1 after a run.
+# Placeholder firmware/FFU/driver pins freeze contract shape until T19 physical calibration.
+
+schema_version = "windows-runner-manifest-v1"
+runner_id = "windows-ref"
+platform = "windows-x86_64"
+os_name = "Windows"
+os_version = "11"
+# Windows 11 25H2 exact build pin (placeholder until physical freeze).
+os_build = "26200.6584"
+arch = "x86_64"
+backend = "d3d12"
+
+[cpu]
+model_contains = "8600G"
+
+[gpu]
+model_contains = "RX 6400"
+vram_mb = 4096
+
+[driver]
+name = "AMD Adrenalin"
+# Frozen expected driver string; recalibrate on scheduled maintenance.
+version = "24.12.1"
+
+[firmware]
+bios_version = "F1a"
+vbios_version = "113-D5040100-100"
+secure_boot_required = true
+measured_boot_required = true
+
+[ffu]
+# SHA-256 of frozen WinPE/FFU whole-disk image (placeholder until recovery image lands).
+digest_sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
+[power]
+plan_name = "MMD High Performance"
+
+[d3d12]
+allow_basic_render = false
+device_name_contains = "RX 6400"
+reject_substrings = [
+  "Microsoft Basic Render Driver",
+  "Basic Render Driver",
+  "WARP",
+  "Microsoft Basic Render",
+]
