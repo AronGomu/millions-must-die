@@ -29,11 +29,76 @@ use sdl3_sys::gpu::{
     SDL_BeginGPURenderPass, SDL_BlitGPUTexture, SDL_CancelGPUCommandBuffer,
     SDL_DownloadFromGPUTexture, SDL_EndGPURenderPass, SDL_GPU_FILTER_NEAREST, SDL_GPU_LOADOP_CLEAR,
     SDL_GPU_STOREOP_STORE, SDL_GPUBlitInfo, SDL_GPUBlitRegion, SDL_GPUColorTargetInfo,
-    SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo, SDL_GetGPUDeviceDriver,
-    SDL_GetGPUDeviceProperties, SDL_SubmitGPUCommandBuffer, SDL_WaitAndAcquireGPUSwapchainTexture,
+    SDL_GPUDevice, SDL_GPUFence, SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo,
+    SDL_GetGPUDeviceDriver, SDL_GetGPUDeviceProperties, SDL_QueryGPUFence, SDL_ReleaseGPUFence,
+    SDL_SubmitGPUCommandBuffer, SDL_SubmitGPUCommandBufferAndAcquireFence,
+    SDL_WaitAndAcquireGPUSwapchainTexture, SDL_WaitForGPUFences,
 };
 use sdl3_sys::pixels::SDL_FColor;
 use sdl3_sys::surface::SDL_FLIP_NONE;
+
+/// Raw per-frame GPU fence, released on drop via C call only.
+///
+/// Why: sdl3 0.18.4's safe `Fence` wraps `Arc<FenceContainer>` — `Arc::new`
+/// is one project-Rust heap allocation inside every measured bench frame,
+/// which trips the zero-alloc gate (limit 0). `Device::wait_fences` further
+/// collects a `Vec` of raw handles per call. This raw handle keeps the
+/// measured loop allocation-free: query/wait/release are plain SDL C calls.
+///
+/// # Safety invariants
+/// - The owning `Device` outlives every `RawFrameFence` created from it
+///   (bench drains its fence queue before renderer teardown).
+/// - Single-threaded use on the bench loop.
+#[derive(Debug)]
+pub struct RawFrameFence {
+    fence: *mut SDL_GPUFence,
+    device: *mut SDL_GPUDevice,
+}
+
+impl RawFrameFence {
+    /// Non-blocking completion query (`SDL_QueryGPUFence`).
+    pub fn query(&self) -> bool {
+        unsafe { SDL_QueryGPUFence(self.device, self.fence) }
+    }
+
+    /// Block until the fence signals (`SDL_WaitForGPUFences`, single handle,
+    /// stack storage — no heap use).
+    pub fn wait(&self) {
+        unsafe {
+            SDL_WaitForGPUFences(self.device, true, &self.fence, 1);
+        }
+    }
+}
+
+impl Drop for RawFrameFence {
+    fn drop(&mut self) {
+        unsafe {
+            SDL_ReleaseGPUFence(self.device, self.fence);
+        }
+    }
+}
+
+/// Submit `cmd` and acquire a raw fence (consumes `cmd`; no Rust heap use on
+/// the success path).
+///
+/// # Safety invariants
+/// - `cmd` was acquired from `device` and is fully recorded (all passes ended).
+/// - On return, `cmd` is consumed; do not reuse.
+/// - Returned fence must not outlive `device` (see `RawFrameFence`).
+pub fn submit_acquire_raw_fence(
+    device: &Device,
+    cmd: CommandBuffer,
+) -> Result<RawFrameFence, String> {
+    let raw = unsafe { SDL_SubmitGPUCommandBufferAndAcquireFence(cmd.raw()) };
+    std::mem::forget(cmd);
+    if raw.is_null() {
+        return Err("SubmitGPUCommandBufferAndAcquireFence failed".into());
+    }
+    Ok(RawFrameFence {
+        fence: raw,
+        device: device.raw(),
+    })
+}
 
 /// Read SDL GPU driver name for `device` (`"vulkan"`, `"direct3d12"`, `"metal"`).
 ///

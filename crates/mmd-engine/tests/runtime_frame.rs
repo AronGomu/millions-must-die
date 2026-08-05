@@ -18,7 +18,7 @@ fn gate_scenario() -> PathBuf {
 
 #[test]
 fn frame_ticks_once() {
-    let mut rt = Runtime::load(&gate_scenario(), None).expect("load");
+    let mut rt = Runtime::load(gate_scenario(), None).expect("load");
     assert_eq!(rt.tick_index(), 0);
     let before = rt.tick_index();
     let _ = rt.tick_and_render();
@@ -27,7 +27,7 @@ fn frame_ticks_once() {
 
 #[test]
 fn pause_keeps_checksum() {
-    let mut rt = Runtime::load(&gate_scenario(), Some(256)).expect("load");
+    let mut rt = Runtime::load(gate_scenario(), Some(256)).expect("load");
     // Warm one tick so state is past spawn-only.
     let _ = rt.tick_and_render();
     let hash = rt.state_hash();
@@ -42,7 +42,7 @@ fn pause_keeps_checksum() {
 
 #[test]
 fn builds_50000_instances() {
-    let mut rt = Runtime::load(&gate_scenario(), None).expect("load");
+    let mut rt = Runtime::load(gate_scenario(), None).expect("load");
     assert_eq!(rt.agent_count(), 50_000);
     let total: usize = {
         let out = rt.tick_and_render();
@@ -56,7 +56,7 @@ fn builds_50000_instances() {
 
 #[test]
 fn partitions_four_groups() {
-    let mut rt = Runtime::load(&gate_scenario(), None).expect("load");
+    let mut rt = Runtime::load(gate_scenario(), None).expect("load");
     let counts = {
         let out = rt.tick_and_render();
         assert_eq!(out.groups.len(), ATLAS_COUNT);

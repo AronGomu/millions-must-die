@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/release-proof-v1.schema.json",
+  "title": "release-proof-v1",
+  "description": "T27 phase-close release proof. Under the 2026-08-05 Hardware deferral policy the only claimable pass status is linux-verified-deferred-hw; the v1 validator rejects full-pass unconditionally (no native Windows/macOS evidence model exists). The enum value is reserved for a future schema revision.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "status",
+    "claim",
+    "candidate_commit",
+    "scale_results",
+    "absolute_gate",
+    "relative_gates",
+    "lanes",
+    "bench_evidence",
+    "retention"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "release-proof-v1"
+    },
+    "release_id": { "type": "string", "minLength": 1 },
+    "status": {
+      "type": "string",
+      "enum": ["linux-verified-deferred-hw", "failed", "full-pass"]
+    },
+    "claim": { "type": "string", "minLength": 1 },
+    "candidate_commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+    "scale_results": {
+      "type": "array",
+      "minItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "agent_count",
+          "blocking",
+          "median_p95_frame_service_ms",
+          "median_p99_frame_service_ms",
+          "nmad_p95",
+          "nmad_p99",
+          "verdict"
+        ],
+        "properties": {
+          "agent_count": { "type": "integer", "minimum": 1 },
+          "blocking": { "type": "boolean" },
+          "median_p95_frame_service_ms": { "type": "number", "minimum": 0 },
+          "median_p99_frame_service_ms": { "type": "number", "minimum": 0 },
+          "nmad_p95": { "type": "number", "minimum": 0 },
+          "nmad_p99": { "type": "number", "minimum": 0 },
+          "verdict": {
+            "type": "string",
+            "enum": ["pass", "fail", "inconclusive", "recorded", "error"]
+          }
+        }
+      }
+    },
+    "absolute_gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_count",
+        "median_p95_limit_ms",
+        "median_p99_limit_ms",
+        "nmad_limit",
+        "verdict",
+        "reason"
+      ],
+      "properties": {
+        "agent_count": { "type": "integer", "const": 50000 },
+        "median_p95_limit_ms": { "type": "number", "const": 16.67 },
+        "median_p99_limit_ms": { "type": "number", "const": 25.0 },
+        "nmad_limit": { "type": "number", "const": 0.03 },
+        "verdict": {
+          "type": "string",
+          "enum": ["pass", "fail", "inconclusive", "recorded", "error"]
+        },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "relative_gates": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["enabled", "reason"],
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "reason": { "type": "string", "minLength": 1 }
+      }
+    },
+    "lanes": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "lane_id",
+          "platform",
+          "backend",
+          "state",
+          "reason",
+          "profiler_capture"
+        ],
+        "properties": {
+          "lane_id": { "type": "string", "minLength": 1 },
+          "platform": { "type": "string", "minLength": 1 },
+          "backend": { "type": "string", "minLength": 1 },
+          "state": {
+            "type": "string",
+            "enum": ["verified", "deferred-hw", "failed"]
+          },
+          "reason": { "type": "string", "minLength": 1 },
+          "profiler_capture": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["state", "reference"],
+            "properties": {
+              "state": {
+                "type": "string",
+                "enum": ["captured", "procedure-documented", "deferred-hw"]
+              },
+              "reference": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    },
+    "bench_evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "policy_id", "backend", "adapter"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "policy_id": { "type": "string", "const": "production-v1" },
+        "backend": { "type": "string", "minLength": 1 },
+        "adapter": { "type": "string", "minLength": 1 }
+      }
+    },
+    "retention": { "type": "string", "const": "forever" },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

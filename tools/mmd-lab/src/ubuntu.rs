@@ -128,7 +128,6 @@ impl AttestResult {
             reasons: Vec::new(),
         }
     }
-
 }
 
 pub fn load_manifest(path: &Path) -> Result<UbuntuRunnerManifest, UbuntuContractError> {
@@ -145,11 +144,7 @@ pub fn parse_manifest_toml(text: &str) -> Result<UbuntuRunnerManifest, UbuntuCon
         )));
     }
     if m.image.digest_sha256.len() != 64
-        || !m
-            .image
-            .digest_sha256
-            .chars()
-            .all(|c| c.is_ascii_hexdigit())
+        || !m.image.digest_sha256.chars().all(|c| c.is_ascii_hexdigit())
     {
         return Err(UbuntuContractError::Schema(
             "image.digest_sha256 must be 64 hex chars".into(),

@@ -74,24 +74,21 @@ pub fn build_archive(mut entries: Vec<ArchiveEntry>) -> Result<ArchiveBlob, Arch
     // Reject duplicates after sort.
     for w in entries.windows(2) {
         if w[0].path == w[1].path {
-            return Err(ArchiveError::Msg(format!(
-                "duplicate path: {}",
-                w[0].path
-            )));
+            return Err(ArchiveError::Msg(format!("duplicate path: {}", w[0].path)));
         }
     }
 
     let mut bytes = Vec::new();
     bytes.extend_from_slice(ARCHIVE_MAGIC);
-    let count = u32::try_from(entries.len())
-        .map_err(|_| ArchiveError::Msg("too many entries".into()))?;
+    let count =
+        u32::try_from(entries.len()).map_err(|_| ArchiveError::Msg("too many entries".into()))?;
     bytes.extend_from_slice(&count.to_be_bytes());
     for e in &entries {
         let path_b = e.path.as_bytes();
-        let path_len = u32::try_from(path_b.len())
-            .map_err(|_| ArchiveError::Msg("path too long".into()))?;
-        let data_len = u64::try_from(e.data.len())
-            .map_err(|_| ArchiveError::Msg("file too large".into()))?;
+        let path_len =
+            u32::try_from(path_b.len()).map_err(|_| ArchiveError::Msg("path too long".into()))?;
+        let data_len =
+            u64::try_from(e.data.len()).map_err(|_| ArchiveError::Msg("file too large".into()))?;
         bytes.extend_from_slice(&path_len.to_be_bytes());
         bytes.extend_from_slice(path_b);
         bytes.extend_from_slice(&data_len.to_be_bytes());
@@ -114,8 +111,7 @@ pub fn parse_archive(bytes: &[u8]) -> Result<Vec<ArchiveEntry>, ArchiveError> {
         if off + 4 > bytes.len() {
             return Err(ArchiveError::Msg("truncated path_len".into()));
         }
-        let path_len =
-            u32::from_be_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
+        let path_len = u32::from_be_bytes(bytes[off..off + 4].try_into().unwrap()) as usize;
         off += 4;
         if off + path_len + 8 > bytes.len() {
             return Err(ArchiveError::Msg("truncated path/data_len".into()));
@@ -124,8 +120,7 @@ pub fn parse_archive(bytes: &[u8]) -> Result<Vec<ArchiveEntry>, ArchiveError> {
             .map_err(|_| ArchiveError::Msg("path not utf8".into()))?
             .to_string();
         off += path_len;
-        let data_len =
-            u64::from_be_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
+        let data_len = u64::from_be_bytes(bytes[off..off + 8].try_into().unwrap()) as usize;
         off += 8;
         if off + data_len > bytes.len() {
             return Err(ArchiveError::Msg("truncated data".into()));
@@ -217,10 +212,7 @@ fn collect_entries(
                 .collect::<Vec<_>>()
                 .join("/");
             let data = fs::read(&path)?;
-            out.push(ArchiveEntry {
-                path: rel_s,
-                data,
-            });
+            out.push(ArchiveEntry { path: rel_s, data });
         }
     }
     Ok(())

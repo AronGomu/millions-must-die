@@ -130,11 +130,7 @@ impl MeasureGuard {
     /// Result form of zero check.
     pub fn check_zero(&self) -> Result<(), u64> {
         let n = self.allocations();
-        if n == 0 {
-            Ok(())
-        } else {
-            Err(n)
-        }
+        if n == 0 { Ok(()) } else { Err(n) }
     }
 
     /// End scope early; returns allocation delta. Idempotent with Drop.

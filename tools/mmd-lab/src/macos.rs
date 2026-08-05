@@ -248,9 +248,11 @@ pub fn validate_macos_attestation(
 
     // Metal: require real device; reject software/MoltenVK-style adapters.
     let device = observed.metal_device_name.to_ascii_lowercase();
-    let hit_reject_sub = expected.metal.reject_substrings.iter().any(|s| {
-        device.contains(&s.to_ascii_lowercase())
-    });
+    let hit_reject_sub = expected
+        .metal
+        .reject_substrings
+        .iter()
+        .any(|s| device.contains(&s.to_ascii_lowercase()));
     if expected.metal.require_metal && !observed.metal_available {
         reject.push("metal required but unavailable".into());
     } else if hit_reject_sub {
@@ -286,9 +288,7 @@ pub fn validate_macos_attestation(
     if expected.enrollment.mdm_enrolled_required && !observed.mdm_enrolled {
         quarantine.push("mdm enrollment missing".into());
     }
-    if observed.mdm_enrolled
-        && observed.mdm_profile_id != expected.enrollment.mdm_profile_id
-    {
+    if observed.mdm_enrolled && observed.mdm_profile_id != expected.enrollment.mdm_profile_id {
         quarantine.push(format!(
             "mdm_profile_id '{}' != '{}'",
             observed.mdm_profile_id, expected.enrollment.mdm_profile_id

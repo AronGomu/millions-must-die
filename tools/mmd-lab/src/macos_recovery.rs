@@ -89,10 +89,7 @@ pub enum MacosRecoveryEvent {
         external_controller: bool,
     },
     /// EACS preflight result from recovery plane.
-    EacsPreflightFinished {
-        ok: bool,
-        detail: String,
-    },
+    EacsPreflightFinished { ok: bool, detail: String },
     /// EACS wipe finished; ack must arrive or path quarantines.
     EacsWipeFinished {
         /// False on timeout / missing reset ack → quarantine.
@@ -128,10 +125,7 @@ pub enum MacosRecoveryEvent {
         external_operator: bool,
     },
     /// DFU restore finished on recovery bench.
-    DfuRestoreFinished {
-        success: bool,
-        detail: String,
-    },
+    DfuRestoreFinished { success: bool, detail: String },
     /// Explicit re-quarantine (manual, drift watch, or failed post-run EACS).
     ForceQuarantine { reason: String },
 }
@@ -267,9 +261,7 @@ impl MacosRecoveryState {
                         self.enter(MacosRecoveryPhase::ExternalRecoveryControl);
                         Ok(())
                     }
-                    ref other => Err(format!(
-                        "StartExternalRestore invalid in phase {other:?}"
-                    )),
+                    ref other => Err(format!("StartExternalRestore invalid in phase {other:?}")),
                 }
             }
 
@@ -359,9 +351,7 @@ impl MacosRecoveryState {
                 }
                 if let Some(prior) = prior_host_identity.as_ref() {
                     if prior == &new_host_identity {
-                        self.quarantine(
-                            "stale macos identity: fingerprint unchanged after rotate",
-                        );
+                        self.quarantine("stale macos identity: fingerprint unchanged after rotate");
                         return Ok(());
                     }
                     self.retired_host_identity = Some(prior.clone());
@@ -447,22 +437,16 @@ impl MacosRecoveryState {
                     self.quarantine("egress canary without candidate network");
                     return Ok(());
                 }
-                if !self.reset_completed
-                    || !self.mdm_reenrolled
-                    || self.host_identity.is_none()
-                {
+                if !self.reset_completed || !self.mdm_reenrolled || self.host_identity.is_none() {
                     self.quarantine("egress canary missing reset, mdm, or host identity");
                     return Ok(());
                 }
-                self.trail
-                    .push(format!("egress-canary-denied:{detail}"));
+                self.trail.push(format!("egress-canary-denied:{detail}"));
                 self.enter(MacosRecoveryPhase::ReadyForCandidate);
                 Ok(())
             }
 
-            MacosRecoveryEvent::StartDfuFallback {
-                external_operator,
-            } => {
+            MacosRecoveryEvent::StartDfuFallback { external_operator } => {
                 if !external_operator {
                     self.quarantine("candidate-initiated dfu rejected");
                     return Ok(());
@@ -478,9 +462,7 @@ impl MacosRecoveryState {
                         self.enter(MacosRecoveryPhase::DfuFallback);
                         Ok(())
                     }
-                    ref other => Err(format!(
-                        "StartDfuFallback invalid in phase {other:?}"
-                    )),
+                    ref other => Err(format!("StartDfuFallback invalid in phase {other:?}")),
                 }
             }
 
@@ -653,10 +635,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("missed eacs ack"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("missed eacs ack"), "reason={reason}");
     }
 
     #[test]
@@ -677,10 +656,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("reenroll failure"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("reenroll failure"), "reason={reason}");
     }
 
     #[test]
@@ -744,10 +720,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("egress canary"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("egress canary"), "reason={reason}");
     }
 
     #[test]
@@ -771,10 +744,7 @@ mod tests {
         .unwrap();
         assert!(s.phase.is_quarantined());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("stale macos identity"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("stale macos identity"), "reason={reason}");
     }
 
     #[test]
@@ -786,8 +756,10 @@ mod tests {
         })
         .unwrap();
         assert!(s.phase.is_quarantined());
-        s.apply(MacosRecoveryEvent::AttestationFinished(MacosAttestResult::ok()))
-            .unwrap();
+        s.apply(MacosRecoveryEvent::AttestationFinished(
+            MacosAttestResult::ok(),
+        ))
+        .unwrap();
         assert!(s.phase.is_quarantined());
         assert!(!s.phase.allows_candidate_provision());
         s.apply(MacosRecoveryEvent::EgressCanaryFinished {
@@ -797,9 +769,7 @@ mod tests {
         .unwrap();
         assert!(s.phase.is_quarantined());
         assert!(
-            s.trail
-                .iter()
-                .any(|t| t.contains("quarantine-persistence")),
+            s.trail.iter().any(|t| t.contains("quarantine-persistence")),
             "trail={:?}",
             s.trail
         );
@@ -828,11 +798,7 @@ mod tests {
 
     #[test]
     fn happy_path_eacs_ready_for_candidate() {
-        let s = simulate_successful_macos_eacs_drill(
-            PROFILE,
-            "MAC-HOST-NEW",
-            Some("MAC-HOST-OLD"),
-        );
+        let s = simulate_successful_macos_eacs_drill(PROFILE, "MAC-HOST-NEW", Some("MAC-HOST-OLD"));
         assert!(s.phase.is_terminal_success(), "{:?}", s.phase);
         assert!(s.phase.allows_candidate_provision());
         assert_eq!(s.network, Some(MacosLabNetwork::Candidate));
@@ -849,11 +815,7 @@ mod tests {
 
     #[test]
     fn happy_path_dfu_fallback_after_missed_ack() {
-        let s = simulate_successful_macos_dfu_drill(
-            PROFILE,
-            "MAC-HOST-DFU",
-            Some("MAC-HOST-OLD"),
-        );
+        let s = simulate_successful_macos_dfu_drill(PROFILE, "MAC-HOST-DFU", Some("MAC-HOST-OLD"));
         assert!(s.phase.is_terminal_success(), "{:?}", s.phase);
         assert!(s.phase.allows_candidate_provision());
         assert_eq!(s.reset_path.as_deref(), Some("dfu"));

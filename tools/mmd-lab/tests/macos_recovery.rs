@@ -289,7 +289,5 @@ fn doctor_runner_macos_reports_blocked_user() {
 fn recovery_files_exist() {
     assert!(mdm_profile().is_file());
     assert!(Path::new(&recover_sh()).is_file());
-    assert!(workspace_root()
-        .join("docs/lab/macos-runner.md")
-        .is_file());
+    assert!(workspace_root().join("docs/lab/macos-runner.md").is_file());
 }

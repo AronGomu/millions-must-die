@@ -324,6 +324,9 @@ pub fn build_report(
 }
 
 /// Build a ScaleResult from aggregates + trial rows.
+// Report row mirrors the JSON schema field-for-field; grouping into a struct
+// would only rename the same nine values (mechanical clippy allowance).
+#[allow(clippy::too_many_arguments)]
 pub fn build_scale_result(
     policy: &BenchPolicy,
     agent_count: u32,

@@ -167,7 +167,13 @@ fn recover_ps1_dry_run_matrix() {
 
         // Live without dry-run must refuse (no physical controller).
         let live = Command::new(shell)
-            .args(["-NoProfile", "-File", script.to_str().unwrap(), "--lab-bin", lab])
+            .args([
+                "-NoProfile",
+                "-File",
+                script.to_str().unwrap(),
+                "--lab-bin",
+                lab,
+            ])
             .output()
             .expect("recover.ps1 live");
         assert_eq!(
@@ -228,7 +234,9 @@ fn doctor_runner_windows_reports_blocked_user() {
 fn image_manifest_files_exist() {
     assert!(image_manifest().is_file());
     assert!(Path::new(&recover_ps1()).is_file());
-    assert!(workspace_root()
-        .join("docs/lab/windows-runner.md")
-        .is_file());
+    assert!(
+        workspace_root()
+            .join("docs/lab/windows-runner.md")
+            .is_file()
+    );
 }

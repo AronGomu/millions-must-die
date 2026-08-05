@@ -144,9 +144,15 @@ fn windows_manifest_dry_run_script_matrix() {
     ];
 
     // Prefer pwsh/powershell when present; else rust CLI matrix covers same cases.
-    let shell = ["pwsh", "powershell"]
-        .into_iter()
-        .find(|c| Command::new(c).arg("-NoProfile").arg("-Command").arg("$PSVersionTable").output().map(|o| o.status.success()).unwrap_or(false));
+    let shell = ["pwsh", "powershell"].into_iter().find(|c| {
+        Command::new(c)
+            .arg("-NoProfile")
+            .arg("-Command")
+            .arg("$PSVersionTable")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
 
     if let Some(shell) = shell {
         for (name, expect_ok, verdict) in cases {

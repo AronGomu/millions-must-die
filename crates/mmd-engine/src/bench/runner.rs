@@ -209,7 +209,7 @@ fn run_scale_point(
     }
 
     let drain_t0 = Instant::now();
-    drain_queue(&mut queue, renderer, dry)?;
+    drain_queue(&mut queue)?;
     let final_drain_ms = drain_t0.elapsed().as_secs_f64() * 1000.0;
 
     let agg = TrialAggregate::from_trials(&trial_pcts);
@@ -233,10 +233,16 @@ fn estimate_frame_cap(duration: Duration, min_frames: u32) -> usize {
 }
 
 enum BenchFence {
-    Real(sdl3::gpu::Fence),
-    Dry { ready_at: Instant },
+    /// Raw fence handle (zero-alloc measured path; releases C-side on drop).
+    Real(crate::render::RawFrameFence),
+    Dry {
+        ready_at: Instant,
+    },
 }
 
+// Phase runner threads the whole measurement context; boxing it into a
+// struct would not change behavior (mechanical clippy allowance).
+#[allow(clippy::too_many_arguments)]
 fn run_phase(
     runtime: &mut Runtime,
     mut renderer: Option<&mut SpriteRenderer>,
@@ -256,7 +262,7 @@ fn run_phase(
         // Frame service starts before oldest-fence backpressure / sim.
         let frame_t0 = Instant::now();
 
-        let bp_ms = apply_backpressure(queue, renderer.as_deref_mut(), dry);
+        let bp_ms = apply_backpressure(queue);
         let _begin = queue.begin_after_backpressure(bp_ms);
 
         if inject_frame_alloc && record {
@@ -277,7 +283,7 @@ fn run_phase(
             .map_err(|e| BenchError::FenceQueue(e.to_string()))?;
 
         let frame_service_ms = frame_t0.elapsed().as_secs_f64() * 1000.0;
-        poll_ready_into(queue, renderer.as_deref(), poll_scratch);
+        poll_ready_into(queue, poll_scratch);
         if record {
             samples.push_frame(frame_service_ms, sim_ms, upload_ms);
             for c in poll_scratch.iter() {
@@ -289,11 +295,7 @@ fn run_phase(
     Ok(())
 }
 
-fn apply_backpressure(
-    queue: &mut FenceQueue<BenchFence>,
-    renderer: Option<&mut SpriteRenderer>,
-    dry: bool,
-) -> f64 {
+fn apply_backpressure(queue: &mut FenceQueue<BenchFence>) -> f64 {
     let Some(oldest) = queue.take_oldest_if_full() else {
         return 0.0;
     };
@@ -303,7 +305,7 @@ fn apply_backpressure(
         submit_at,
         frame_index,
     } = oldest;
-    wait_fence(fence, renderer, dry);
+    wait_fence(fence);
     let done_at = Instant::now();
     let _ = queue.complete_waited(
         InflightFrame {
@@ -335,16 +337,11 @@ fn submit_frame(
     Ok(BenchFence::Real(f))
 }
 
-fn poll_ready_into(
-    queue: &mut FenceQueue<BenchFence>,
-    renderer: Option<&SpriteRenderer>,
-    out: &mut Vec<CompletedFrame>,
-) {
+fn poll_ready_into(queue: &mut FenceQueue<BenchFence>, out: &mut Vec<CompletedFrame>) {
     let now = Instant::now();
-    let device = renderer.map(|r| &r.ctx.device);
     queue.poll_ready_into(
         |f| match f {
-            BenchFence::Real(fence) => device.map(|d| fence.query(d)).unwrap_or(false),
+            BenchFence::Real(fence) => fence.query(),
             BenchFence::Dry { ready_at } => now >= *ready_at,
         },
         now,
@@ -352,11 +349,7 @@ fn poll_ready_into(
     );
 }
 
-fn drain_queue(
-    queue: &mut FenceQueue<BenchFence>,
-    mut renderer: Option<&mut SpriteRenderer>,
-    dry: bool,
-) -> Result<(), BenchError> {
+fn drain_queue(queue: &mut FenceQueue<BenchFence>) -> Result<(), BenchError> {
     let pending = queue.take_all_pending();
     for frame in pending {
         let InflightFrame {
@@ -364,7 +357,7 @@ fn drain_queue(
             submit_at,
             frame_index,
         } = frame;
-        wait_fence(fence, renderer.as_deref_mut(), dry);
+        wait_fence(fence);
         let done_at = Instant::now();
         let _ = queue.complete_waited(
             InflightFrame {
@@ -380,7 +373,7 @@ fn drain_queue(
         .map_err(|e| BenchError::FenceQueue(e.to_string()))
 }
 
-fn wait_fence(fence: BenchFence, renderer: Option<&mut SpriteRenderer>, dry: bool) {
+fn wait_fence(fence: BenchFence) {
     match fence {
         BenchFence::Dry { ready_at } => {
             let now = Instant::now();
@@ -388,14 +381,8 @@ fn wait_fence(fence: BenchFence, renderer: Option<&mut SpriteRenderer>, dry: boo
                 std::thread::sleep(ready_at - now);
             }
         }
-        BenchFence::Real(f) => {
-            if dry {
-                return;
-            }
-            if let Some(r) = renderer {
-                let _ = r.ctx.device.wait_fences(true, &[f]);
-            }
-        }
+        // Raw wait, single handle, stack storage; fence released on drop.
+        BenchFence::Real(f) => f.wait(),
     }
 }
 
@@ -403,7 +390,7 @@ fn read_sidecar_sha256(scenario_path: &Path) -> Result<String, BenchError> {
     let side = scenario_path.with_extension("sha256");
     if side.is_file() {
         let s = fs::read_to_string(&side).map_err(|e| BenchError::Io(e.to_string()))?;
-        return Ok(s.trim().split_whitespace().next().unwrap_or("").to_string());
+        return Ok(s.split_whitespace().next().unwrap_or("").to_string());
     }
     sha256_file(scenario_path)
 }

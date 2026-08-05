@@ -88,7 +88,10 @@ pub fn verify_host(
     let host_id = evidence.host_manifest.host_id.clone();
     let platform = evidence.host_manifest.platform.clone();
 
-    if !evidence.archive_sha256.eq_ignore_ascii_case(expected_archive_sha256) {
+    if !evidence
+        .archive_sha256
+        .eq_ignore_ascii_case(expected_archive_sha256)
+    {
         return HostVerdict {
             host_id,
             platform,
@@ -160,8 +163,16 @@ pub fn verify_host(
         }
         reason = format!(
             "claimed stats mismatch coordinator recompute (claimed p95={} p99={}; recomputed p95={:.6} p99={:.6}); {reason}",
-            evidence.claimed.as_ref().map(|c| c.median_p95_ms).unwrap_or(f64::NAN),
-            evidence.claimed.as_ref().map(|c| c.median_p99_ms).unwrap_or(f64::NAN),
+            evidence
+                .claimed
+                .as_ref()
+                .map(|c| c.median_p95_ms)
+                .unwrap_or(f64::NAN),
+            evidence
+                .claimed
+                .as_ref()
+                .map(|c| c.median_p99_ms)
+                .unwrap_or(f64::NAN),
             agg.median_p95_ms,
             agg.median_p99_ms
         );

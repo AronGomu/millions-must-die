@@ -18,8 +18,11 @@ pub use report::{
     ScaleResult, TrialReport, VerdictStatus, WorkloadIdentity, build_report, build_scale_result,
     scale_verdict, trial_report,
 };
-pub use runner::{BenchError, BenchOptions, default_scenario_path, run_bench, synthetic_scale_from_trial_p99s};
+pub use runner::{
+    BenchError, BenchOptions, default_scenario_path, run_bench, synthetic_scale_from_trial_p99s,
+};
 pub use stats::{
-    GATE_P95_MS, GATE_P99_MS, MAD_SCALE, NMAD_LIMIT, SampleBuffer, TrialAggregate, TrialPercentiles,
-    is_noisy, mad, median, normalized_mad, percentile_type7, percentile_type7_unsorted,
+    GATE_P95_MS, GATE_P99_MS, MAD_SCALE, NMAD_LIMIT, SampleBuffer, TrialAggregate,
+    TrialPercentiles, is_noisy, mad, median, normalized_mad, percentile_type7,
+    percentile_type7_unsorted,
 };

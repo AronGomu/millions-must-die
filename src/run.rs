@@ -161,13 +161,7 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
             stats.total_ms = gpu_ms;
             println!(
                 "{}",
-                overlay::format_overlay(
-                    renderer.backend(),
-                    agent_count,
-                    tick_index,
-                    paused,
-                    stats,
-                )
+                overlay::format_overlay(renderer.backend(), agent_count, tick_index, paused, stats,)
             );
         }
 

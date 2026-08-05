@@ -192,14 +192,7 @@ fn recomputes_stats_from_samples() {
         ("windows-ref", "windows-x86_64", "d3d12", 11.0, false),
         ("macos-ref", "macos-arm64", "metal", 9.5, false),
     ] {
-        write_forged_or_honest(
-            &fix.join(format!("{id}.json")),
-            id,
-            plat,
-            back,
-            base,
-            forge,
-        );
+        write_forged_or_honest(&fix.join(format!("{id}.json")), id, plat, back, base, forge);
     }
 
     let src = dir.path().join("src");
@@ -405,8 +398,5 @@ fn fake_matrix_fail_on_slow_host() {
         .arg(&fix)
         .output()
         .unwrap();
-    assert!(
-        !output.status.success(),
-        "slow host must fail matrix"
-    );
+    assert!(!output.status.success(), "slow host must fail matrix");
 }

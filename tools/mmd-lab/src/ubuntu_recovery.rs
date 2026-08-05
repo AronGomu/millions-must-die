@@ -46,10 +46,7 @@ pub enum RecoveryPhase {
     /// Minting fresh SSH host key + unprivileged user; old identity discarded.
     RotatingHostIdentity,
     /// Moving host across recovery → provisioning → candidate VLANs.
-    NetworkTransition {
-        from: LabNetwork,
-        to: LabNetwork,
-    },
+    NetworkTransition { from: LabNetwork, to: LabNetwork },
     /// Host attestation against frozen Ubuntu runner contract.
     Attesting,
     /// External egress canary from candidate VLAN must be denied.
@@ -221,9 +218,7 @@ impl RecoveryState {
                         self.enter(RecoveryPhase::ExternalRecoveryBoot);
                         Ok(())
                     }
-                    ref other => Err(format!(
-                        "StartExternalRestore invalid in phase {other:?}"
-                    )),
+                    ref other => Err(format!("StartExternalRestore invalid in phase {other:?}")),
                 }
             }
 
@@ -374,8 +369,7 @@ impl RecoveryState {
                     self.quarantine("egress canary missing digest or host identity");
                     return Ok(());
                 }
-                self.trail
-                    .push(format!("egress-canary-denied:{detail}"));
+                self.trail.push(format!("egress-canary-denied:{detail}"));
                 self.enter(RecoveryPhase::ReadyForCandidate);
                 Ok(())
             }
@@ -459,10 +453,7 @@ mod tests {
         assert!(!s.phase.allows_candidate_provision());
         assert!(s.verified_readback_digest.is_none());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("digest mismatch"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("digest mismatch"), "reason={reason}");
     }
 
     #[test]
@@ -477,10 +468,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("stale host key"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("stale host key"), "reason={reason}");
     }
 
     #[test]
@@ -517,10 +505,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("egress canary"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("egress canary"), "reason={reason}");
     }
 
     #[test]
@@ -544,9 +529,7 @@ mod tests {
         .unwrap();
         assert!(s.phase.is_quarantined());
         assert!(
-            s.trail
-                .iter()
-                .any(|t| t.contains("quarantine-persistence")),
+            s.trail.iter().any(|t| t.contains("quarantine-persistence")),
             "trail={:?}",
             s.trail
         );
@@ -573,7 +556,8 @@ mod tests {
 
     #[test]
     fn happy_path_ready_for_candidate() {
-        let s = simulate_successful_drill(DIGEST_A, "ssh-ed25519 AAAAnew", Some("ssh-ed25519 AAAAold"));
+        let s =
+            simulate_successful_drill(DIGEST_A, "ssh-ed25519 AAAAnew", Some("ssh-ed25519 AAAAold"));
         assert!(s.phase.is_terminal_success(), "{:?}", s.phase);
         assert!(s.phase.allows_candidate_provision());
         assert_eq!(s.network, Some(LabNetwork::Candidate));

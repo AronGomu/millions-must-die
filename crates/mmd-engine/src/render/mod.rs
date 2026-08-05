@@ -31,3 +31,4 @@ pub use instance::{FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, Sprit
 pub use renderer::{
     DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
 };
+pub use unsafe_sys::RawFrameFence;

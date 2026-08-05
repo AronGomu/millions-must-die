@@ -346,10 +346,15 @@ impl SpriteRenderer {
     ///
     /// Caller owns backpressure: must not reuse a slot until its prior fence completes.
     /// Fence completion latency is submit→signal proxy — not true GPU execution time.
+    ///
+    /// Returns a raw fence (`unsafe_sys` escape): the safe sdl3 `Fence`
+    /// allocates an `Arc` per acquire, which would put one Rust heap
+    /// allocation inside every measured bench frame and trip the zero-alloc
+    /// gate. Drop releases the fence C-side.
     pub fn draw_offscreen_acquire_fence(
         &mut self,
         groups: &[DrawGroup],
-    ) -> Result<sdl3::gpu::Fence, RenderError> {
+    ) -> Result<unsafe_sys::RawFrameFence, RenderError> {
         self.validate_groups(groups)?;
 
         let device = &self.ctx.device;
@@ -376,8 +381,7 @@ impl SpriteRenderer {
         {
             let cmd = device.acquire_command_buffer()?;
             let copy = device.begin_copy_pass(&cmd)?;
-            let nbytes =
-                (self.pack_scratch.len() * std::mem::size_of::<SpriteInstance>()) as u32;
+            let nbytes = (self.pack_scratch.len() * std::mem::size_of::<SpriteInstance>()) as u32;
             if nbytes > 0 {
                 let mut map = self.upload_xfer.map::<SpriteInstance>(device, true);
                 map.mem_mut()[..self.pack_scratch.len()].copy_from_slice(&self.pack_scratch);
@@ -452,8 +456,7 @@ impl SpriteRenderer {
         }
 
         device.end_render_pass(pass);
-        let fence = cmd.submit_and_acquire_fence(device)?;
-        Ok(fence)
+        unsafe_sys::submit_acquire_raw_fence(device, cmd).map_err(RenderError::Sdl)
     }
 
     /// Draw groups into offscreen 1920×1080 and read RGBA8 pixels back.

@@ -47,10 +47,7 @@ pub fn render_pr_summary(
     }
     lines.push(format!("- archive_sha256: `{}`", matrix.archive_sha256));
     lines.push(format!("- dirty_worktree: {dirty_worktree}"));
-    lines.push(format!(
-        "- overall: **{}**",
-        verdict_label(matrix.overall)
-    ));
+    lines.push(format!("- overall: **{}**", verdict_label(matrix.overall)));
     lines.push(format!("- reason: {}", matrix.reason));
     lines.push(String::new());
     lines.push("| host | platform | p95_ms | p99_ms | claimed_ok | verdict |".into());

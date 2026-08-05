@@ -20,7 +20,9 @@ fn manifest_path() -> PathBuf {
 }
 
 fn fixture(name: &str) -> PathBuf {
-    workspace_root().join("lab/fixtures/ubuntu-attest").join(name)
+    workspace_root()
+        .join("lab/fixtures/ubuntu-attest")
+        .join(name)
 }
 
 fn attest(observed: &Path) -> std::process::Output {
@@ -110,7 +112,11 @@ fn ubuntu_manifest_fixture_passes() {
 
 #[test]
 fn ubuntu_manifest_file_parses() {
-    assert!(manifest_path().is_file(), "missing {}", manifest_path().display());
+    assert!(
+        manifest_path().is_file(),
+        "missing {}",
+        manifest_path().display()
+    );
     let out = lab_bin()
         .args(["attest-ubuntu", "--manifest"])
         .arg(manifest_path())

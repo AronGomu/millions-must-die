@@ -225,9 +225,7 @@ impl WindowsRecoveryState {
                         self.enter(WindowsRecoveryPhase::ExternalWinPeBoot);
                         Ok(())
                     }
-                    ref other => Err(format!(
-                        "StartExternalRestore invalid in phase {other:?}"
-                    )),
+                    ref other => Err(format!("StartExternalRestore invalid in phase {other:?}")),
                 }
             }
 
@@ -384,8 +382,7 @@ impl WindowsRecoveryState {
                     self.quarantine("egress canary missing digest or host identity");
                     return Ok(());
                 }
-                self.trail
-                    .push(format!("egress-canary-denied:{detail}"));
+                self.trail.push(format!("egress-canary-denied:{detail}"));
                 self.enter(WindowsRecoveryPhase::ReadyForCandidate);
                 Ok(())
             }
@@ -477,10 +474,7 @@ mod tests {
         assert!(!s.phase.allows_candidate_provision());
         assert!(s.verified_readback_digest.is_none());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("ffu apply failure"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("ffu apply failure"), "reason={reason}");
     }
 
     #[test]
@@ -489,10 +483,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("digest mismatch"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("digest mismatch"), "reason={reason}");
     }
 
     #[test]
@@ -510,10 +501,7 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("stale windows identity"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("stale windows identity"), "reason={reason}");
     }
 
     #[test]
@@ -552,18 +540,17 @@ mod tests {
         assert!(s.phase.is_quarantined(), "{:?}", s.phase);
         assert!(!s.phase.allows_candidate_provision());
         let reason = s.quarantine_reason.as_deref().unwrap_or("");
-        assert!(
-            reason.contains("egress canary"),
-            "reason={reason}"
-        );
+        assert!(reason.contains("egress canary"), "reason={reason}");
     }
 
     #[test]
     fn quarantine_persists_until_external_restore() {
         let mut s = start_through_ffu(DIGEST_A, false);
         assert!(s.phase.is_quarantined());
-        s.apply(WindowsRecoveryEvent::AttestationFinished(WindowsAttestResult::ok()))
-            .unwrap();
+        s.apply(WindowsRecoveryEvent::AttestationFinished(
+            WindowsAttestResult::ok(),
+        ))
+        .unwrap();
         assert!(s.phase.is_quarantined());
         assert!(!s.phase.allows_candidate_provision());
         s.apply(WindowsRecoveryEvent::NetworkMoved {
@@ -578,9 +565,7 @@ mod tests {
         .unwrap();
         assert!(s.phase.is_quarantined());
         assert!(
-            s.trail
-                .iter()
-                .any(|t| t.contains("quarantine-persistence")),
+            s.trail.iter().any(|t| t.contains("quarantine-persistence")),
             "trail={:?}",
             s.trail
         );
@@ -589,10 +574,7 @@ mod tests {
             external_controller: true,
         })
         .unwrap();
-        assert!(matches!(
-            s.phase,
-            WindowsRecoveryPhase::ExternalWinPeBoot
-        ));
+        assert!(matches!(s.phase, WindowsRecoveryPhase::ExternalWinPeBoot));
         assert!(s.quarantine_reason.is_none());
     }
 
@@ -609,11 +591,8 @@ mod tests {
 
     #[test]
     fn happy_path_ready_for_candidate() {
-        let s = simulate_successful_windows_drill(
-            DIGEST_A,
-            "WIN-MACHINE-NEW",
-            Some("WIN-MACHINE-OLD"),
-        );
+        let s =
+            simulate_successful_windows_drill(DIGEST_A, "WIN-MACHINE-NEW", Some("WIN-MACHINE-OLD"));
         assert!(s.phase.is_terminal_success(), "{:?}", s.phase);
         assert!(s.phase.allows_candidate_provision());
         assert_eq!(s.network, Some(WindowsLabNetwork::Candidate));
@@ -652,10 +631,12 @@ mod tests {
         ] {
             s.apply(ev).unwrap();
         }
-        s.apply(WindowsRecoveryEvent::AttestationFinished(WindowsAttestResult {
-            verdict: WindowsAttestVerdict::Reject,
-            reasons: vec!["basic render driver".into()],
-        }))
+        s.apply(WindowsRecoveryEvent::AttestationFinished(
+            WindowsAttestResult {
+                verdict: WindowsAttestVerdict::Reject,
+                reasons: vec!["basic render driver".into()],
+            },
+        ))
         .unwrap();
         assert!(s.phase.is_quarantined());
         assert!(!s.phase.allows_candidate_provision());

@@ -3,9 +3,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use mmd_engine::bench::{
-    BenchExitCode, BenchOptions, BenchPolicy, run_bench,
-};
+use mmd_engine::bench::{BenchExitCode, BenchOptions, BenchPolicy, run_bench};
 
 /// CLI options for timed bench.
 #[derive(Debug, Clone, Default)]
@@ -24,26 +22,22 @@ pub struct BenchCliOptions {
 pub fn bench(opts: BenchCliOptions) -> ExitCode {
     let policy = BenchPolicy::resolve(opts.test_policy);
     if policy.policy_id == "test-short-v1" {
-        eprintln!(
-            "bench: using injectable short policy (not production gate; full prod is hours)"
-        );
+        eprintln!("bench: using injectable short policy (not production gate; full prod is hours)");
     } else {
-        eprintln!(
-            "bench: production policy — 4 counts × (10s warmup + 7×60s trials); long run"
-        );
+        eprintln!("bench: production policy — 4 counts × (10s warmup + 7×60s trials); long run");
     }
 
     let scenario = opts
         .scenario
         .unwrap_or_else(mmd_engine::bench::default_scenario_path);
 
-    let output = opts.output.or_else(|| {
-        std::env::var_os("MMD_BENCH_OUTPUT").map(PathBuf::from)
-    });
+    let output = opts
+        .output
+        .or_else(|| std::env::var_os("MMD_BENCH_OUTPUT").map(PathBuf::from));
 
     let dry = opts.dry_cpu || std::env::var_os("MMD_BENCH_DRY").is_some();
-    let inject = opts.inject_frame_alloc
-        || std::env::var_os("MMD_BENCH_INJECT_FRAME_ALLOC").is_some();
+    let inject =
+        opts.inject_frame_alloc || std::env::var_os("MMD_BENCH_INJECT_FRAME_ALLOC").is_some();
 
     let run_opts = BenchOptions {
         policy,

@@ -265,10 +265,10 @@ impl Baseline {
 
     pub fn write(&self, path: &Path) -> Result<(), CalibrateError> {
         let s = self.to_json_pretty()?;
-        if let Some(parent) = path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|e| CalibrateError::Io(e.to_string()))?;
-            }
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            fs::create_dir_all(parent).map_err(|e| CalibrateError::Io(e.to_string()))?;
         }
         fs::write(path, s).map_err(|e| CalibrateError::Io(e.to_string()))
     }
@@ -307,15 +307,15 @@ pub fn derive_baseline_candidate(
 
     let expected_fp = dataset.manifest.fingerprint();
     for s in &dataset.samples {
-        if let Some(ref m) = s.manifest_override {
-            if m.fingerprint() != expected_fp {
-                return Err(CalibrateError::MixedManifest(format!(
-                    "sample {} fp={} expected {}",
-                    s.run_id,
-                    m.fingerprint(),
-                    expected_fp
-                )));
-            }
+        if let Some(ref m) = s.manifest_override
+            && m.fingerprint() != expected_fp
+        {
+            return Err(CalibrateError::MixedManifest(format!(
+                "sample {} fp={} expected {}",
+                s.run_id,
+                m.fingerprint(),
+                expected_fp
+            )));
         }
     }
 

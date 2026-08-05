@@ -9,6 +9,7 @@ mod macos_gate;
 mod macos_recovery;
 mod pilot;
 mod pr_summary;
+mod release;
 mod report;
 mod ssh;
 mod ubuntu;
@@ -328,6 +329,42 @@ enum Commands {
         #[arg(long)]
         golden_review_out: Option<PathBuf>,
     },
+    /// Freeze the T27 release-proof manifest from a real bench report.
+    /// A failed 50k gate freezes an honest `failed` proof (exit 1).
+    ReleaseFreeze {
+        /// Real production-policy benchmark-report-v2 JSON
+        #[arg(long)]
+        bench_report: PathBuf,
+        /// Exact candidate commit the bench evidence was produced from
+        #[arg(long)]
+        commit: String,
+        /// Release id recorded in the proof
+        #[arg(long, default_value = "technical-prototype-v1")]
+        release_id: String,
+        /// Output proof path (e.g. lab/releases/technical-prototype-v1.json)
+        #[arg(long)]
+        out: PathBuf,
+        /// Repo-relative evidence path recorded in the proof (default: --bench-report as given)
+        #[arg(long)]
+        evidence_path: Option<String>,
+        /// Free-form audit notes (repeatable)
+        #[arg(long)]
+        note: Vec<String>,
+    },
+    /// Validate a release-proof manifest against the exact gate commit.
+    /// Exit: 0 linux-verified (deferred-hw scope), 1 honest phase failure,
+    /// 2 proof rejected, 3 io/parse error.
+    ReleaseCheck {
+        /// release-proof-v1 JSON path
+        #[arg(long)]
+        proof: PathBuf,
+        /// Expected gate candidate commit
+        #[arg(long)]
+        commit: String,
+        /// Optional raw bench report to cross-check hash + stats binding
+        #[arg(long)]
+        bench_report: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -463,6 +500,168 @@ fn main() -> ExitCode {
             windows_evidence_fixture,
             macos_evidence_fixture,
         }),
+        Commands::ReleaseFreeze {
+            bench_report,
+            commit,
+            release_id,
+            out,
+            evidence_path,
+            note,
+        } => cmd_release_freeze(bench_report, commit, release_id, out, evidence_path, note),
+        Commands::ReleaseCheck {
+            proof,
+            commit,
+            bench_report,
+        } => cmd_release_check(proof, commit, bench_report),
+    }
+}
+
+/// Load + hash a benchmark-report-v2 JSON file.
+fn load_bench_report(
+    path: &std::path::Path,
+) -> Result<(mmd_engine::bench::BenchmarkReport, String), String> {
+    let digest = sha256_file(path).map_err(|e| format!("hash {}: {e}", path.display()))?;
+    let raw = fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let report: mmd_engine::bench::BenchmarkReport =
+        serde_json::from_str(&raw).map_err(|e| format!("parse {}: {e}", path.display()))?;
+    Ok((report, digest))
+}
+
+fn cmd_release_freeze(
+    bench_report: PathBuf,
+    commit: String,
+    release_id: String,
+    out: PathBuf,
+    evidence_path: Option<String>,
+    notes: Vec<String>,
+) -> ExitCode {
+    let (report, digest) = match load_bench_report(&bench_report) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("release-freeze: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let evidence_path = evidence_path.unwrap_or_else(|| bench_report.display().to_string());
+    let proof = release::freeze_release_proof(
+        &report,
+        &release_id,
+        &commit,
+        &evidence_path,
+        &digest,
+        notes,
+    );
+    // Self-check the frozen proof before writing.
+    let verdict = match release::validate_release_proof(&proof, &commit, &BenchPolicy::production())
+    {
+        Ok(v) => v,
+        Err(errs) => {
+            eprintln!("release-freeze: frozen proof failed self-validation:");
+            for e in &errs {
+                eprintln!("  - {e}");
+            }
+            return ExitCode::from(2);
+        }
+    };
+    let json = match proof.to_json_pretty() {
+        Ok(j) => j,
+        Err(e) => {
+            eprintln!("release-freeze: serialize: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    if let Some(parent) = out.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Err(e) = fs::write(&out, format!("{json}\n")) {
+        eprintln!("release-freeze: write {}: {e}", out.display());
+        return ExitCode::from(3);
+    }
+    println!("release_proof {}", out.display());
+    println!("release_status {}", proof.status);
+    println!("release_claim {}", proof.claim);
+    match verdict {
+        release::ReleaseVerdict::LinuxVerifiedDeferredHw => ExitCode::SUCCESS,
+        release::ReleaseVerdict::PhaseFailed => {
+            eprintln!("release-freeze: honest phase-failure proof written");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn cmd_release_check(
+    proof_path: PathBuf,
+    commit: String,
+    bench_report: Option<PathBuf>,
+) -> ExitCode {
+    let raw = match fs::read_to_string(&proof_path) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("release-check: read {}: {e}", proof_path.display());
+            return ExitCode::from(3);
+        }
+    };
+    let proof = match release::ReleaseProof::from_json(&raw) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("release-check: parse {}: {e}", proof_path.display());
+            return ExitCode::from(3);
+        }
+    };
+
+    let mut errs: Vec<String> = Vec::new();
+    let verdict = match release::validate_release_proof(&proof, &commit, &BenchPolicy::production())
+    {
+        Ok(v) => Some(v),
+        Err(mut e) => {
+            errs.append(&mut e);
+            None
+        }
+    };
+
+    if let Some(report_path) = bench_report {
+        match load_bench_report(&report_path) {
+            Ok((report, digest)) => {
+                if let Err(mut e) =
+                    release::verify_bench_evidence(&proof, &report_path, &digest, &report)
+                {
+                    errs.append(&mut e);
+                }
+            }
+            Err(e) => {
+                eprintln!("release-check: {e}");
+                return ExitCode::from(3);
+            }
+        }
+    }
+
+    if !errs.is_empty() {
+        eprintln!("release-check: proof rejected:");
+        for e in &errs {
+            eprintln!("  - {e}");
+        }
+        return ExitCode::from(2);
+    }
+
+    println!("release_id {}", proof.release_id);
+    println!("release_status {}", proof.status);
+    println!("release_claim {}", proof.claim);
+    for lane in &proof.lanes {
+        println!(
+            "lane {} state={} profiler={} ref={}",
+            lane.lane_id, lane.state, lane.profiler_capture.state, lane.profiler_capture.reference
+        );
+    }
+    match verdict {
+        Some(release::ReleaseVerdict::LinuxVerifiedDeferredHw) => {
+            println!("verdict linux-verified (native cross-platform matrix deferred-hw)");
+            ExitCode::SUCCESS
+        }
+        Some(release::ReleaseVerdict::PhaseFailed) => {
+            println!("verdict honest phase failure recorded");
+            ExitCode::from(1)
+        }
+        None => unreachable!("errs handled above"),
     }
 }
 
@@ -980,11 +1179,8 @@ fn cmd_macos_recover_simulate(args: MacosRecoverArgs) -> ExitCode {
     // Shared post-reset path: reenroll → identity → networks → attest → egress.
     if let Err(e) = state.apply(MacosRecoveryEvent::MdmReenrollFinished {
         success: args.reenroll_success,
-        profile_id: if args.reenroll_success {
-            profile_id.clone()
-        } else {
-            profile_id.clone()
-        },
+        // Same id either way: failure keeps the last-known profile identity.
+        profile_id: profile_id.clone(),
         detail: if args.reenroll_success {
             "dry-run:ade-mdm-ok".into()
         } else {

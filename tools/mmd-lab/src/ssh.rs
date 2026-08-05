@@ -5,7 +5,7 @@ use std::path::Path;
 
 use thiserror::Error;
 
-use crate::archive::{verify_bytes_hash, ArchiveBlob, ArchiveError};
+use crate::archive::{ArchiveBlob, ArchiveError, verify_bytes_hash};
 use crate::report::HostEvidence;
 
 #[derive(Debug, Error)]
@@ -24,7 +24,10 @@ pub enum TransportError {
 #[allow(dead_code)] // trait surface for fake + future SSH
 pub trait AgentTransport {
     fn agent_id(&self) -> &str;
-    fn deliver_and_collect(&mut self, archive: &ArchiveBlob) -> Result<HostEvidence, TransportError>;
+    fn deliver_and_collect(
+        &mut self,
+        archive: &ArchiveBlob,
+    ) -> Result<HostEvidence, TransportError>;
 }
 
 /// Fake SSH agent driven by fixture evidence + local hash check.
@@ -139,7 +142,7 @@ impl AgentTransport for SshTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::archive::{build_archive, ArchiveEntry};
+    use crate::archive::{ArchiveEntry, build_archive};
     use crate::report::{HostManifest, RawTrialSamples};
     use mmd_engine::bench::GATE_AGENT_COUNT;
 
@@ -184,9 +187,6 @@ mod tests {
         let mut agent = FakeAgent::from_evidence(sample_evidence("u"));
         agent.corrupt_archive = true;
         let err = agent.deliver_and_collect(&blob).unwrap_err();
-        assert!(
-            err.to_string().contains("hash mismatch"),
-            "err={err}"
-        );
+        assert!(err.to_string().contains("hash mismatch"), "err={err}");
     }
 }

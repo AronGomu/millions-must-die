@@ -43,10 +43,7 @@ fn stdout_contains(out: &std::process::Output, needle: &str) -> bool {
 fn restore_digest_mismatch_quarantines_via_cli_fixture_path() {
     // Attest fixture with wrong image after simulated restore → quarantine.
     let out = lab_bin()
-        .args([
-            "ubuntu-recover-simulate",
-            "--image-manifest",
-        ])
+        .args(["ubuntu-recover-simulate", "--image-manifest"])
         .arg(image_manifest())
         .arg("--runner-manifest")
         .arg(runner_manifest())
@@ -75,10 +72,7 @@ fn restore_digest_mismatch_quarantines_via_cli_fixture_path() {
 #[test]
 fn stale_host_key_fails_via_cli() {
     let out = lab_bin()
-        .args([
-            "ubuntu-recover-simulate",
-            "--image-manifest",
-        ])
+        .args(["ubuntu-recover-simulate", "--image-manifest"])
         .arg(image_manifest())
         .arg("--runner-manifest")
         .arg(runner_manifest())
@@ -187,7 +181,10 @@ fn doctor_runner_ubuntu_reports_blocked_user() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("verdict blocked_user"), "stdout={stdout}");
     assert!(stdout.contains("physical-lab absent"), "stdout={stdout}");
-    assert!(stdout.contains("ok lab/provision/ubuntu/recover.sh"), "stdout={stdout}");
+    assert!(
+        stdout.contains("ok lab/provision/ubuntu/recover.sh"),
+        "stdout={stdout}"
+    );
     assert!(
         stdout.contains("ok lab/provision/ubuntu/image-manifest.toml"),
         "stdout={stdout}"
@@ -198,7 +195,5 @@ fn doctor_runner_ubuntu_reports_blocked_user() {
 fn image_manifest_files_exist() {
     assert!(image_manifest().is_file());
     assert!(Path::new(&recover_sh()).is_file());
-    assert!(workspace_root()
-        .join("docs/lab/ubuntu-runner.md")
-        .is_file());
+    assert!(workspace_root().join("docs/lab/ubuntu-runner.md").is_file());
 }

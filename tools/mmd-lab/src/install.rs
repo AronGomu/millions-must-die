@@ -332,9 +332,6 @@ mod tests {
         m.sha256 = "0".repeat(64);
         write_manifest(&man_path, &m).unwrap();
         let err = self_check_binary(&man_path, &dest).unwrap_err();
-        assert!(
-            err.to_string().contains("digest mismatch"),
-            "err={err}"
-        );
+        assert!(err.to_string().contains("digest mismatch"), "err={err}");
     }
 }
