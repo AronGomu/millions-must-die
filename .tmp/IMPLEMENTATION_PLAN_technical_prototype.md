@@ -1158,10 +1158,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Deliver/verify archive.
-2. - [ ] Run visible smoke + offscreen scale curve.
-3. - [ ] Collect raw samples/readback/manifests.
-4. - [ ] Recompute verdict; force post-run reset.
+1. - [x] Deliver/verify archive.
+2. - [x] Run visible smoke + offscreen scale curve.
+3. - [x] Collect raw samples/readback/manifests.
+4. - [x] Recompute verdict; force post-run reset.
 
 #### Outputs
 
@@ -1171,11 +1171,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner ubuntu --commit <hash>` (fixture/fake transport mode)
+- [x] `$HOME/.local/bin/mmd-lab validate-runner --runner ubuntu --commit <hash>` (fixture/fake transport mode) — via workspace binary; trusted install predates command, refresh awaits promotion
 - [ ] `[deferred-hw]` real native Vulkan lane passes or yields honest fail
 - [ ] `[deferred-hw]` post-run restore attested
-- [ ] app functional — exact candidate path tested
-- [ ] commit msg draft: `feat(lab): gate candidate on Ubuntu Vulkan`
+- [x] app functional — exact candidate path tested
+- [x] commit msg draft: `feat(lab): gate candidate on Ubuntu Vulkan`
 
 ### T18: Windows runner contract
 

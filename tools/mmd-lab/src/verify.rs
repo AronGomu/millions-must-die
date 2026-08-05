@@ -309,7 +309,7 @@ fn fold_overall(hosts: &[HostVerdict]) -> (VerdictStatus, String) {
     (worst, reason)
 }
 
-fn worse(a: VerdictStatus, b: VerdictStatus) -> VerdictStatus {
+pub(crate) fn worse(a: VerdictStatus, b: VerdictStatus) -> VerdictStatus {
     use VerdictStatus::*;
     let rank = |v: VerdictStatus| match v {
         Pass | Recorded => 0,

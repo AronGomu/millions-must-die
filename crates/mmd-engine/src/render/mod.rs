@@ -24,8 +24,8 @@ pub use error::RenderError;
 pub use golden::{
     GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_SCENE_STATIC_DEMO, GOLDEN_SCHEMA_VERSION,
     GOLDEN_STATUS_CAPTURED, GOLDEN_STATUS_PLACEHOLDER, GoldenError, GoldenManifest, HostBinding,
-    compare_readback, encode_rgba_png, golden_family_dir, host_binding_hashes, load_golden_image,
-    load_golden_manifest, verify_report_binding, write_golden,
+    compare_readback, decode_readback_png, encode_rgba_png, golden_family_dir, host_binding_hashes,
+    load_golden_image, load_golden_manifest, verify_report_binding, write_golden,
 };
 pub use instance::{FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, SpriteInstance};
 pub use renderer::{

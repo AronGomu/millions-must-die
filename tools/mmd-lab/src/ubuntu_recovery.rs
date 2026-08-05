@@ -394,7 +394,6 @@ fn is_sha256_hex(s: &str) -> bool {
 
 /// Canonical happy-path event sequence for unit/simulation drills.
 /// `prior_host_key_fp` must differ from `new_host_key_fp` when provided.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn simulate_successful_drill(
     expected_digest: &str,
     new_host_key_fp: &str,

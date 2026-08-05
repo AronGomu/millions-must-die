@@ -9,6 +9,7 @@ mod pr_summary;
 mod report;
 mod ssh;
 mod ubuntu;
+mod ubuntu_gate;
 mod ubuntu_recovery;
 mod verify;
 mod windows;
@@ -41,7 +42,10 @@ use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
 use ssh::{run_fake_matrix, FakeAgent};
 use ubuntu::{load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict};
-use ubuntu_recovery::{LabNetwork, RecoveryEvent, RecoveryPhase, RecoveryState};
+use ubuntu_gate::{ProtocolResetController, UbuntuGateParams, run_ubuntu_gate};
+use ubuntu_recovery::{
+    LabNetwork, RecoveryEvent, RecoveryPhase, RecoveryState, simulate_successful_drill,
+};
 use verify::verify_matrix;
 use windows::{
     load_attestation as load_windows_attestation, load_manifest as load_windows_manifest,
@@ -213,6 +217,39 @@ enum Commands {
         #[arg(long)]
         summary_out: Option<PathBuf>,
     },
+    /// Run one runner's candidate gate lane (fixture/fake transport; native deferred-hw)
+    ValidateRunner {
+        /// Runner lane id (`ubuntu`; others land in later tickets)
+        #[arg(long, value_parser = ["ubuntu"])]
+        runner: String,
+        /// Exact candidate commit label bound into the lane output
+        #[arg(long)]
+        commit: Option<String>,
+        /// Candidate source root to archive (default: workspace root)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Frozen runner contract TOML (default: lab/manifests/<runner>.toml)
+        #[arg(long)]
+        runner_manifest: Option<PathBuf>,
+        /// Observed host attestation fixture (identity only)
+        #[arg(long)]
+        attest_fixture: Option<PathBuf>,
+        /// Candidate raw evidence fixture (samples + claimed report)
+        #[arg(long)]
+        evidence_fixture: Option<PathBuf>,
+        /// Candidate readback PNG fixture (raw golden-diff evidence)
+        #[arg(long)]
+        readback_fixture: Option<PathBuf>,
+        /// Golden family dir (default: lab/goldens/linux-vulkan)
+        #[arg(long)]
+        golden_dir: Option<PathBuf>,
+        /// Skip install self-check (dev tests only; never for ops)
+        #[arg(long, default_value_t = false)]
+        skip_self_check: bool,
+        /// Trusted manifest for self-check
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+    },
     /// Derive disabled relative baseline candidate, or enable after owner review
     Calibrate {
         /// calibration-dataset-v1 JSON (derive mode)
@@ -320,6 +357,29 @@ fn main() -> ExitCode {
             evidence_ref,
             notes,
             reviewed_at,
+        }),
+        Commands::ValidateRunner {
+            runner,
+            commit,
+            root,
+            runner_manifest,
+            attest_fixture,
+            evidence_fixture,
+            readback_fixture,
+            golden_dir,
+            skip_self_check,
+            manifest,
+        } => cmd_validate_runner(ValidateRunnerArgs {
+            runner,
+            commit,
+            root,
+            runner_manifest,
+            attest_fixture,
+            evidence_fixture,
+            readback_fixture,
+            golden_dir,
+            skip_self_check,
+            manifest,
         }),
         Commands::Validate {
             mode,
@@ -1524,6 +1584,197 @@ fn cmd_validate(args: ValidateArgs) -> ExitCode {
     }
 
     match matrix.overall {
+        mmd_engine::bench::VerdictStatus::Pass => ExitCode::SUCCESS,
+        mmd_engine::bench::VerdictStatus::Inconclusive => ExitCode::from(2),
+        mmd_engine::bench::VerdictStatus::Fail => ExitCode::from(1),
+        mmd_engine::bench::VerdictStatus::Error => ExitCode::from(3),
+        mmd_engine::bench::VerdictStatus::Recorded => ExitCode::SUCCESS,
+    }
+}
+
+struct ValidateRunnerArgs {
+    runner: String,
+    commit: Option<String>,
+    root: Option<PathBuf>,
+    runner_manifest: Option<PathBuf>,
+    attest_fixture: Option<PathBuf>,
+    evidence_fixture: Option<PathBuf>,
+    readback_fixture: Option<PathBuf>,
+    golden_dir: Option<PathBuf>,
+    skip_self_check: bool,
+    manifest: Option<PathBuf>,
+}
+
+/// Ubuntu candidate gate lane (T17). Fixture/fake transport; the native
+/// Vulkan run + physical post-run reset are deferred-hw.
+fn cmd_validate_runner(args: ValidateRunnerArgs) -> ExitCode {
+    if args.runner != "ubuntu" {
+        eprintln!("validate-runner: unsupported runner `{}`", args.runner);
+        return ExitCode::from(2);
+    }
+
+    // Coordinator self-check first — never dispatch from an unverified binary.
+    if !args.skip_self_check {
+        let man = match args
+            .manifest
+            .clone()
+            .or_else(|| default_manifest_path().ok())
+        {
+            Some(p) => p,
+            None => {
+                eprintln!("validate-runner: manifest path unresolved");
+                return ExitCode::from(2);
+            }
+        };
+        if let Err(e) = self_check(&man) {
+            eprintln!("validate-runner: self-check failed (no dispatch): {e}");
+            return ExitCode::from(1);
+        }
+    }
+
+    let ws = discover_workspace_root();
+    let root = args.root.unwrap_or_else(|| ws.clone());
+    let runner_manifest_path = args
+        .runner_manifest
+        .unwrap_or_else(|| ws.join("lab/manifests/ubuntu-24.04-x86_64.toml"));
+    let attest_path = args
+        .attest_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/ubuntu-attest/pass.json"));
+    let evidence_path = args
+        .evidence_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/ubuntu-candidate/evidence-pass.json"));
+    let readback_path = args
+        .readback_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/ubuntu-candidate/readback-pass.png"));
+
+    let runner_manifest = match load_manifest(&runner_manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("validate-runner: runner manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let golden_dir = match args.golden_dir {
+        Some(d) => d,
+        None => match mmd_engine::render::golden_family_dir(&runner_manifest.backend) {
+            Ok(family) => ws.join("lab/goldens").join(family),
+            Err(e) => {
+                eprintln!("validate-runner: golden family: {e}");
+                return ExitCode::from(2);
+            }
+        },
+    };
+    let attestation = match load_attestation(&attest_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("validate-runner: attestation fixture: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let evidence_text = match fs::read_to_string(&evidence_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "validate-runner: evidence fixture {}: {e}",
+                evidence_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let evidence = match HostEvidence::from_json(&evidence_text) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("validate-runner: evidence fixture parse: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let readback_png = match fs::read(&readback_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "validate-runner: readback fixture {}: {e}",
+                readback_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    // Exact candidate archive (content-addressed; remote hash re-verified).
+    let blob = match pack_tree(&root) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("validate-runner: archive failed: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let commit = args.commit.or_else(|| git_head(&root).ok());
+    println!("archive_sha256 {}", blob.sha256);
+    println!("commit {}", commit.as_deref().unwrap_or("(unknown)"));
+
+    // Trusted-side workload pins for golden binding (not candidate-reported).
+    let (atlas_pin, shader_pin) = match mmd_engine::render::host_binding_hashes(&ws) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("validate-runner: workspace pins: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
+    // Recovery lane: protocol-level ready state (T16 physical lab deferred-hw).
+    let mut recovery = simulate_successful_drill(
+        &runner_manifest.image.digest_sha256,
+        "ssh-ed25519 AAAAfixture-fresh",
+        None,
+    );
+    println!("recovery_phase ready-for-candidate (protocol simulation; physical lane deferred-hw)");
+
+    let params = UbuntuGateParams {
+        runner_manifest: &runner_manifest,
+        attestation: &attestation,
+        golden_dir: &golden_dir,
+        policy: &BenchPolicy::production(),
+        atlas_manifest_sha256: atlas_pin,
+        shader_canonical_sha256: shader_pin,
+    };
+    let mut agent = FakeAgent::from_evidence(evidence);
+    let outcome = run_ubuntu_gate(
+        &params,
+        &mut recovery,
+        &mut agent,
+        &blob,
+        &readback_png,
+        &mut ProtocolResetController,
+    );
+
+    for step in &outcome.trail {
+        println!("lane {step}");
+    }
+    if let Some(hv) = &outcome.host_verdict {
+        println!(
+            "recomputed_median_p95_ms {:.6}",
+            hv.recomputed_median_p95_ms
+        );
+        println!(
+            "recomputed_median_p99_ms {:.6}",
+            hv.recomputed_median_p99_ms
+        );
+        println!("claimed_stats_match {}", hv.claimed_stats_match);
+    }
+    println!("golden_ok {}", outcome.golden_ok);
+    println!("post_run_reset_started {}", outcome.post_run_reset_started);
+    for reason in &outcome.reasons {
+        println!("reason {reason}");
+    }
+    println!("ubuntu_verdict {:?}", outcome.verdict);
+    println!("mode fixture/fake-transport; native Vulkan run + physical reset deferred-hw");
+
+    if let Ok(exe) = std::env::current_exe()
+        && let Ok(d) = sha256_file(&exe)
+    {
+        println!("coordinator_sha256 {d}");
+    }
+
+    match outcome.verdict {
         mmd_engine::bench::VerdictStatus::Pass => ExitCode::SUCCESS,
         mmd_engine::bench::VerdictStatus::Inconclusive => ExitCode::from(2),
         mmd_engine::bench::VerdictStatus::Fail => ExitCode::from(1),

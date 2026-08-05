@@ -370,6 +370,25 @@ pub fn host_binding_hashes(workspace_root: &Path) -> Result<(String, String), Go
     Ok((sha256_hex(&atlas_bytes), canonical.to_string()))
 }
 
+/// Decode an untrusted candidate readback PNG into a [`Readback`].
+///
+/// `label` names the evidence source in errors (path or fixture id). The
+/// bytes are candidate evidence: dimensions and format are enforced here,
+/// pixel truth is established by [`compare_readback`] against the golden.
+pub fn decode_readback_png(
+    label: &str,
+    bytes: &[u8],
+    width: u32,
+    height: u32,
+) -> Result<Readback, GoldenError> {
+    let rgba = decode_rgba_png(Path::new(label), bytes, width, height)?;
+    Ok(Readback {
+        width,
+        height,
+        rgba,
+    })
+}
+
 /// Encode tightly-packed RGBA8 pixels as PNG bytes (deterministic settings).
 pub fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, GoldenError> {
     let expected = (width as usize) * (height as usize) * 4;
