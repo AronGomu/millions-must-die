@@ -1313,10 +1313,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Deliver/verify archive.
-2. - [ ] Run native smoke + scale curve.
-3. - [ ] Collect raw evidence.
-4. - [ ] Recompute verdict; reset.
+1. - [x] Deliver/verify archive.
+2. - [x] Run native smoke + scale curve.
+3. - [x] Collect raw evidence.
+4. - [x] Recompute verdict; reset.
 
 #### Outputs
 
@@ -1326,11 +1326,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner windows --commit <hash>` (fixture/fake transport mode)
+- [x] `$HOME/.local/bin/mmd-lab validate-runner --runner windows --commit <hash>` (fixture/fake transport mode) — via workspace binary; trusted install predates command, refresh awaits promotion
 - [ ] `[deferred-hw]` real D3D12 lane returns honest verdict
 - [ ] `[deferred-hw]` post-run FFU attested
-- [ ] app functional — exact candidate tested
-- [ ] commit msg draft: `feat(lab): gate candidate on Windows D3D12`
+- [x] app functional — exact candidate tested
+- [x] commit msg draft: `feat(lab): gate candidate on Windows D3D12`
 
 ### T21: macOS runner contract
 

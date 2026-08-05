@@ -13,6 +13,7 @@ mod ubuntu_gate;
 mod ubuntu_recovery;
 mod verify;
 mod windows;
+mod windows_gate;
 mod windows_recovery;
 
 use std::fs;
@@ -51,8 +52,10 @@ use windows::{
     load_attestation as load_windows_attestation, load_manifest as load_windows_manifest,
     validate_windows_attestation, WindowsAttestVerdict,
 };
+use windows_gate::{WindowsGateParams, WindowsProtocolResetController, run_windows_gate};
 use windows_recovery::{
     WindowsLabNetwork, WindowsRecoveryEvent, WindowsRecoveryPhase, WindowsRecoveryState,
+    simulate_successful_windows_drill,
 };
 
 #[derive(Debug, Parser)]
@@ -219,8 +222,8 @@ enum Commands {
     },
     /// Run one runner's candidate gate lane (fixture/fake transport; native deferred-hw)
     ValidateRunner {
-        /// Runner lane id (`ubuntu`; others land in later tickets)
-        #[arg(long, value_parser = ["ubuntu"])]
+        /// Runner lane id (`ubuntu` | `windows`; macOS lands in a later ticket)
+        #[arg(long, value_parser = ["ubuntu", "windows"])]
         runner: String,
         /// Exact candidate commit label bound into the lane output
         #[arg(long)]
@@ -240,7 +243,7 @@ enum Commands {
         /// Candidate readback PNG fixture (raw golden-diff evidence)
         #[arg(long)]
         readback_fixture: Option<PathBuf>,
-        /// Golden family dir (default: lab/goldens/linux-vulkan)
+        /// Golden family dir (default: per-runner reviewed golden/fixture dir)
         #[arg(long)]
         golden_dir: Option<PathBuf>,
         /// Skip install self-check (dev tests only; never for ops)
@@ -1605,14 +1608,9 @@ struct ValidateRunnerArgs {
     manifest: Option<PathBuf>,
 }
 
-/// Ubuntu candidate gate lane (T17). Fixture/fake transport; the native
-/// Vulkan run + physical post-run reset are deferred-hw.
+/// Candidate gate lanes (T17 Ubuntu Vulkan, T20 Windows D3D12). Fixture/fake
+/// transport; the native runs + physical post-run resets are deferred-hw.
 fn cmd_validate_runner(args: ValidateRunnerArgs) -> ExitCode {
-    if args.runner != "ubuntu" {
-        eprintln!("validate-runner: unsupported runner `{}`", args.runner);
-        return ExitCode::from(2);
-    }
-
     // Coordinator self-check first — never dispatch from an unverified binary.
     if !args.skip_self_check {
         let man = match args
@@ -1632,6 +1630,37 @@ fn cmd_validate_runner(args: ValidateRunnerArgs) -> ExitCode {
         }
     }
 
+    match args.runner.as_str() {
+        "ubuntu" => cmd_validate_runner_ubuntu(args),
+        "windows" => cmd_validate_runner_windows(args),
+        other => {
+            eprintln!("validate-runner: unsupported runner `{other}`");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// Exit-code contract shared by all candidate gate lanes.
+fn verdict_exit(verdict: mmd_engine::bench::VerdictStatus) -> ExitCode {
+    match verdict {
+        mmd_engine::bench::VerdictStatus::Pass | mmd_engine::bench::VerdictStatus::Recorded => {
+            ExitCode::SUCCESS
+        }
+        mmd_engine::bench::VerdictStatus::Inconclusive => ExitCode::from(2),
+        mmd_engine::bench::VerdictStatus::Fail => ExitCode::from(1),
+        mmd_engine::bench::VerdictStatus::Error => ExitCode::from(3),
+    }
+}
+
+fn print_coordinator_sha() {
+    if let Ok(exe) = std::env::current_exe()
+        && let Ok(d) = sha256_file(&exe)
+    {
+        println!("coordinator_sha256 {d}");
+    }
+}
+
+fn cmd_validate_runner_ubuntu(args: ValidateRunnerArgs) -> ExitCode {
     let ws = discover_workspace_root();
     let root = args.root.unwrap_or_else(|| ws.clone());
     let runner_manifest_path = args
@@ -1768,19 +1797,150 @@ fn cmd_validate_runner(args: ValidateRunnerArgs) -> ExitCode {
     println!("ubuntu_verdict {:?}", outcome.verdict);
     println!("mode fixture/fake-transport; native Vulkan run + physical reset deferred-hw");
 
-    if let Ok(exe) = std::env::current_exe()
-        && let Ok(d) = sha256_file(&exe)
-    {
-        println!("coordinator_sha256 {d}");
-    }
+    print_coordinator_sha();
+    verdict_exit(outcome.verdict)
+}
 
-    match outcome.verdict {
-        mmd_engine::bench::VerdictStatus::Pass => ExitCode::SUCCESS,
-        mmd_engine::bench::VerdictStatus::Inconclusive => ExitCode::from(2),
-        mmd_engine::bench::VerdictStatus::Fail => ExitCode::from(1),
-        mmd_engine::bench::VerdictStatus::Error => ExitCode::from(3),
-        mmd_engine::bench::VerdictStatus::Recorded => ExitCode::SUCCESS,
+/// Windows candidate gate lane (T20). Fixture/fake transport; the native
+/// D3D12 run + physical WinPE/FFU reset are deferred-hw.
+fn cmd_validate_runner_windows(args: ValidateRunnerArgs) -> ExitCode {
+    let ws = discover_workspace_root();
+    let root = args.root.unwrap_or_else(|| ws.clone());
+    let runner_manifest_path = args
+        .runner_manifest
+        .unwrap_or_else(|| ws.join("lab/manifests/windows-11-25h2-x86_64.toml"));
+    let attest_path = args
+        .attest_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/windows-attest/pass.json"));
+    let evidence_path = args
+        .evidence_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/windows-candidate/evidence-pass.json"));
+    let readback_path = args
+        .readback_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/windows-candidate/readback-pass.png"));
+    // The reviewed golden in lab/goldens/windows-d3d12 is an honest
+    // deferred-hw placeholder (no native capture exists). The fixture lane
+    // binds to the committed synthetic fixture golden instead.
+    let golden_dir = args
+        .golden_dir
+        .unwrap_or_else(|| ws.join("lab/fixtures/windows-candidate/golden"));
+
+    let runner_manifest = match load_windows_manifest(&runner_manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("validate-runner: runner manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let attestation = match load_windows_attestation(&attest_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("validate-runner: attestation fixture: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let evidence_text = match fs::read_to_string(&evidence_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "validate-runner: evidence fixture {}: {e}",
+                evidence_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let evidence = match HostEvidence::from_json(&evidence_text) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("validate-runner: evidence fixture parse: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let readback_png = match fs::read(&readback_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "validate-runner: readback fixture {}: {e}",
+                readback_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    // Exact candidate archive (content-addressed; remote hash re-verified).
+    let blob = match pack_tree(&root) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("validate-runner: archive failed: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let commit = args.commit.or_else(|| git_head(&root).ok());
+    println!("archive_sha256 {}", blob.sha256);
+    println!("commit {}", commit.as_deref().unwrap_or("(unknown)"));
+
+    // Trusted-side workload pins for golden binding (not candidate-reported).
+    let (atlas_pin, shader_pin) = match mmd_engine::render::host_binding_hashes(&ws) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("validate-runner: workspace pins: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
+    // Recovery lane: protocol-level ready state (T19 physical lab deferred-hw).
+    let mut recovery = simulate_successful_windows_drill(
+        &runner_manifest.ffu.digest_sha256,
+        "WIN-MACHINE-FRESH-FIXTURE",
+        None,
+    );
+    println!("recovery_phase ready-for-candidate (protocol simulation; physical lane deferred-hw)");
+    println!("golden_source fixture golden (native windows-d3d12 capture deferred-hw)");
+
+    let params = WindowsGateParams {
+        runner_manifest: &runner_manifest,
+        attestation: &attestation,
+        golden_dir: &golden_dir,
+        policy: &BenchPolicy::production(),
+        atlas_manifest_sha256: atlas_pin,
+        shader_canonical_sha256: shader_pin,
+    };
+    let mut agent = FakeAgent::from_evidence(evidence);
+    let outcome = run_windows_gate(
+        &params,
+        &mut recovery,
+        &mut agent,
+        &blob,
+        &readback_png,
+        &mut WindowsProtocolResetController,
+    );
+
+    for step in &outcome.trail {
+        println!("lane {step}");
     }
+    if let Some(hv) = &outcome.host_verdict {
+        println!(
+            "recomputed_median_p95_ms {:.6}",
+            hv.recomputed_median_p95_ms
+        );
+        println!(
+            "recomputed_median_p99_ms {:.6}",
+            hv.recomputed_median_p99_ms
+        );
+        println!("claimed_stats_match {}", hv.claimed_stats_match);
+    }
+    println!("golden_ok {}", outcome.golden_ok);
+    println!("post_run_reset_started {}", outcome.post_run_reset_started);
+    for reason in &outcome.reasons {
+        println!("reason {reason}");
+    }
+    println!("windows_verdict {:?}", outcome.verdict);
+    println!(
+        "mode fixture/fake-transport; native D3D12 run + physical WinPE/FFU reset deferred-hw"
+    );
+
+    print_coordinator_sha();
+    verdict_exit(outcome.verdict)
 }
 
 fn load_agents(
