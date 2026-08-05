@@ -152,8 +152,7 @@ fn run_scale_point(
 
     // Warmup: allocations allowed (buffer growth, first GPU paths, etc.).
     let warmup_cap = estimate_frame_cap(policy.warmup, policy.min_frames_warmup);
-    queue.reserve_latency_samples(warmup_cap.saturating_mul(2));
-    run_phase(
+    let warmup_frames = run_phase(
         &mut runtime,
         renderer.as_deref_mut(),
         &mut queue,
@@ -169,18 +168,18 @@ fn run_scale_point(
     let mut trial_rows = Vec::with_capacity(policy.trial_count as usize);
     let mut trial_pcts = Vec::with_capacity(policy.trial_count as usize);
     let mut project_rust_alloc_count = 0u64;
-    let trial_cap = estimate_frame_cap(policy.trial_duration, policy.min_frames_trial);
-    // Latency samples across all trials + backpressure completes.
-    queue.reserve_latency_samples(
-        trial_cap
-            .saturating_mul(policy.trial_count as usize)
-            .saturating_mul(2)
-            .saturating_add(64),
-    );
+    // Size measured buffers from the rate this host actually achieved during
+    // warmup. The offscreen loop is uncapped (thousands of fps at low agent
+    // counts), so a fixed fps guess under-reserves and the resulting Vec
+    // growth reallocs land inside the zero-alloc measure window.
+    let mut trial_cap = trial_frame_cap(policy, warmup_frames);
+    let mut samples = SampleBuffer::with_capacity(trial_cap);
     let mut poll_scratch = Vec::with_capacity(policy.frames_in_flight);
 
     for i in 0..policy.trial_count {
-        let mut samples = SampleBuffer::with_capacity(trial_cap);
+        // Outside the guard: reuse capacity, top up for a faster next trial.
+        samples.clear();
+        samples.reserve(trial_cap);
         // Measured trial frames: project Rust allocs must stay 0.
         let guard = MeasureGuard::enter();
         run_phase(
@@ -196,6 +195,7 @@ fn run_scale_point(
             &mut poll_scratch,
         )?;
         project_rust_alloc_count = project_rust_alloc_count.saturating_add(guard.finish());
+        trial_cap = trial_cap.max(frame_cap_from_frames(samples.frame_service_ms.len()));
 
         let tp = samples.trial_frame_service();
         trial_pcts.push(tp);
@@ -227,9 +227,38 @@ fn run_scale_point(
 }
 
 /// Headroom for sample/latency reserves (duration × 120 fps + min + pad).
+///
+/// Warmup only: measured trials size from the observed rate instead.
 fn estimate_frame_cap(duration: Duration, min_frames: u32) -> usize {
     let from_dur = (duration.as_secs_f64() * 120.0).ceil() as usize;
     from_dur.max(min_frames as usize).saturating_add(32).max(16)
+}
+
+/// Measured-trial sample capacity from the warmup-observed frame rate.
+///
+/// Trials usually outrun warmup (hot caches, no first-use GPU paths), hence
+/// the headroom in [`frame_cap_from_frames`].
+fn trial_frame_cap(policy: &BenchPolicy, warmup_frames: u32) -> usize {
+    let warmup_secs = policy.warmup.as_secs_f64();
+    let projected = if warmup_secs > 0.0 {
+        (warmup_frames as f64 / warmup_secs * policy.trial_duration.as_secs_f64()).ceil()
+    } else {
+        0.0
+    };
+    let projected = if projected.is_finite() && projected > 0.0 {
+        projected as usize
+    } else {
+        0
+    };
+    frame_cap_from_frames(projected).max(estimate_frame_cap(
+        policy.trial_duration,
+        policy.min_frames_trial,
+    ))
+}
+
+/// 2× headroom + fixed pad over an observed frame count.
+fn frame_cap_from_frames(frames: usize) -> usize {
+    frames.saturating_mul(2).saturating_add(8192)
 }
 
 enum BenchFence {
@@ -254,7 +283,7 @@ fn run_phase(
     inject_frame_alloc: bool,
     samples: &mut SampleBuffer,
     poll_scratch: &mut Vec<CompletedFrame>,
-) -> Result<(), BenchError> {
+) -> Result<u32, BenchError> {
     let deadline = Instant::now() + duration;
     let mut frames = 0u32;
     // Duration floor + optional min frame count (test policy).
@@ -292,7 +321,7 @@ fn run_phase(
         }
         frames += 1;
     }
-    Ok(())
+    Ok(frames)
 }
 
 fn apply_backpressure(queue: &mut FenceQueue<BenchFence>) -> f64 {

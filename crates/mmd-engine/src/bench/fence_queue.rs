@@ -52,8 +52,6 @@ pub struct FenceQueue<F> {
     submitted: u64,
     completed: u64,
     max_observed_in_flight: usize,
-    /// Latencies recorded on complete (ms).
-    pub completed_latencies_ms: Vec<f64>,
 }
 
 impl<F> FenceQueue<F> {
@@ -65,7 +63,6 @@ impl<F> FenceQueue<F> {
             submitted: 0,
             completed: 0,
             max_observed_in_flight: 0,
-            completed_latencies_ms: Vec::new(),
         }
     }
 
@@ -105,10 +102,12 @@ impl<F> FenceQueue<F> {
     }
 
     /// Record completion after caller waited on a frame from `take_oldest_if_full` or drain.
+    ///
+    /// Latency is returned, never accumulated here: a per-complete Vec inside
+    /// the queue grows (and reallocs) on the measured frame path.
     pub fn complete_waited(&mut self, frame: InflightFrame<F>, done_at: Instant) -> CompletedFrame {
         let latency = duration_ms(frame.submit_at, done_at);
         self.completed += 1;
-        self.completed_latencies_ms.push(latency);
         CompletedFrame {
             frame_index: frame.frame_index,
             gpu_queue_latency_ms: latency,
@@ -177,11 +176,6 @@ impl<F> FenceQueue<F> {
             let done = self.pending.pop_front().expect("front");
             out.push(self.complete_waited(done, now));
         }
-    }
-
-    /// Ensure latency sample buffer can accept `extra` more completes without alloc.
-    pub fn reserve_latency_samples(&mut self, extra: usize) {
-        self.completed_latencies_ms.reserve(extra);
     }
 
     /// Pop all remaining frames for caller drain-wait. After waits, call `finish_drain`.
