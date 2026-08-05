@@ -132,8 +132,7 @@ pub enum MacosRecoveryEvent {
         success: bool,
         detail: String,
     },
-    /// Explicit re-quarantine (manual or automated drift watch).
-    #[allow(dead_code)] // controller / ops path; exercised in unit tests below
+    /// Explicit re-quarantine (manual, drift watch, or failed post-run EACS).
     ForceQuarantine { reason: String },
 }
 
@@ -512,8 +511,8 @@ impl MacosRecoveryState {
     }
 }
 
-/// Canonical happy-path EACS event sequence for unit/simulation drills.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Canonical happy-path EACS event sequence for unit/simulation drills and
+/// the fixture candidate lane (T23).
 pub fn simulate_successful_macos_eacs_drill(
     expected_mdm_profile_id: &str,
     new_host_identity: &str,

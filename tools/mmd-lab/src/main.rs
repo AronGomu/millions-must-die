@@ -4,6 +4,7 @@ mod archive;
 mod calibrate;
 mod install;
 mod macos;
+mod macos_gate;
 mod macos_recovery;
 mod pr_summary;
 mod report;
@@ -36,8 +37,10 @@ use macos::{
     load_attestation as load_macos_attestation, load_manifest as load_macos_manifest,
     validate_macos_attestation, MacosAttestVerdict,
 };
+use macos_gate::{MacosEacsProtocolResetController, MacosGateParams, run_macos_gate};
 use macos_recovery::{
     MacosLabNetwork, MacosRecoveryEvent, MacosRecoveryPhase, MacosRecoveryState,
+    simulate_successful_macos_eacs_drill,
 };
 use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
@@ -222,8 +225,8 @@ enum Commands {
     },
     /// Run one runner's candidate gate lane (fixture/fake transport; native deferred-hw)
     ValidateRunner {
-        /// Runner lane id (`ubuntu` | `windows`; macOS lands in a later ticket)
-        #[arg(long, value_parser = ["ubuntu", "windows"])]
+        /// Runner lane id (`ubuntu` | `windows` | `macos`)
+        #[arg(long, value_parser = ["ubuntu", "windows", "macos"])]
         runner: String,
         /// Exact candidate commit label bound into the lane output
         #[arg(long)]
@@ -1608,8 +1611,9 @@ struct ValidateRunnerArgs {
     manifest: Option<PathBuf>,
 }
 
-/// Candidate gate lanes (T17 Ubuntu Vulkan, T20 Windows D3D12). Fixture/fake
-/// transport; the native runs + physical post-run resets are deferred-hw.
+/// Candidate gate lanes (T17 Ubuntu Vulkan, T20 Windows D3D12, T23 macOS
+/// Metal). Fixture/fake transport; the native runs + physical post-run resets
+/// are deferred-hw.
 fn cmd_validate_runner(args: ValidateRunnerArgs) -> ExitCode {
     // Coordinator self-check first — never dispatch from an unverified binary.
     if !args.skip_self_check {
@@ -1633,6 +1637,7 @@ fn cmd_validate_runner(args: ValidateRunnerArgs) -> ExitCode {
     match args.runner.as_str() {
         "ubuntu" => cmd_validate_runner_ubuntu(args),
         "windows" => cmd_validate_runner_windows(args),
+        "macos" => cmd_validate_runner_macos(args),
         other => {
             eprintln!("validate-runner: unsupported runner `{other}`");
             ExitCode::from(2)
@@ -1938,6 +1943,148 @@ fn cmd_validate_runner_windows(args: ValidateRunnerArgs) -> ExitCode {
     println!(
         "mode fixture/fake-transport; native D3D12 run + physical WinPE/FFU reset deferred-hw"
     );
+
+    print_coordinator_sha();
+    verdict_exit(outcome.verdict)
+}
+
+/// macOS candidate gate lane (T23). Fixture/fake transport; the native Metal
+/// run + real EACS/ADE/MDM reset are deferred-hw.
+fn cmd_validate_runner_macos(args: ValidateRunnerArgs) -> ExitCode {
+    let ws = discover_workspace_root();
+    let root = args.root.unwrap_or_else(|| ws.clone());
+    let runner_manifest_path = args
+        .runner_manifest
+        .unwrap_or_else(|| ws.join("lab/manifests/macos-15-arm64.toml"));
+    let attest_path = args
+        .attest_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/macos-attest/pass.json"));
+    let evidence_path = args
+        .evidence_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/macos-candidate/evidence-pass.json"));
+    let readback_path = args
+        .readback_fixture
+        .unwrap_or_else(|| ws.join("lab/fixtures/macos-candidate/readback-pass.png"));
+    // The reviewed golden in lab/goldens/macos-metal is an honest deferred-hw
+    // placeholder (no native capture exists). The fixture lane binds to the
+    // committed synthetic fixture golden instead.
+    let golden_dir = args
+        .golden_dir
+        .unwrap_or_else(|| ws.join("lab/fixtures/macos-candidate/golden"));
+
+    let runner_manifest = match load_macos_manifest(&runner_manifest_path) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("validate-runner: runner manifest: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let attestation = match load_macos_attestation(&attest_path) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("validate-runner: attestation fixture: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let evidence_text = match fs::read_to_string(&evidence_path) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!(
+                "validate-runner: evidence fixture {}: {e}",
+                evidence_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+    let evidence = match HostEvidence::from_json(&evidence_text) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("validate-runner: evidence fixture parse: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    let readback_png = match fs::read(&readback_path) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!(
+                "validate-runner: readback fixture {}: {e}",
+                readback_path.display()
+            );
+            return ExitCode::from(2);
+        }
+    };
+
+    // Exact candidate archive (content-addressed; remote hash re-verified).
+    let blob = match pack_tree(&root) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("validate-runner: archive failed: {e}");
+            return ExitCode::from(3);
+        }
+    };
+    let commit = args.commit.or_else(|| git_head(&root).ok());
+    println!("archive_sha256 {}", blob.sha256);
+    println!("commit {}", commit.as_deref().unwrap_or("(unknown)"));
+
+    // Trusted-side workload pins for golden binding (not candidate-reported).
+    let (atlas_pin, shader_pin) = match mmd_engine::render::host_binding_hashes(&ws) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("validate-runner: workspace pins: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
+    // Recovery lane: protocol-level ready state (T22 EACS/ADE/MDM deferred-hw).
+    let mut recovery = simulate_successful_macos_eacs_drill(
+        &runner_manifest.enrollment.mdm_profile_id,
+        "MAC-HOST-FRESH-FIXTURE",
+        None,
+    );
+    println!(
+        "recovery_phase ready-for-candidate (protocol simulation; real EACS lane deferred-hw)"
+    );
+    println!("golden_source fixture golden (native macos-metal capture deferred-hw)");
+
+    let params = MacosGateParams {
+        runner_manifest: &runner_manifest,
+        attestation: &attestation,
+        golden_dir: &golden_dir,
+        policy: &BenchPolicy::production(),
+        atlas_manifest_sha256: atlas_pin,
+        shader_canonical_sha256: shader_pin,
+    };
+    let mut agent = FakeAgent::from_evidence(evidence);
+    let outcome = run_macos_gate(
+        &params,
+        &mut recovery,
+        &mut agent,
+        &blob,
+        &readback_png,
+        &mut MacosEacsProtocolResetController,
+    );
+
+    for step in &outcome.trail {
+        println!("lane {step}");
+    }
+    if let Some(hv) = &outcome.host_verdict {
+        println!(
+            "recomputed_median_p95_ms {:.6}",
+            hv.recomputed_median_p95_ms
+        );
+        println!(
+            "recomputed_median_p99_ms {:.6}",
+            hv.recomputed_median_p99_ms
+        );
+        println!("claimed_stats_match {}", hv.claimed_stats_match);
+    }
+    println!("golden_ok {}", outcome.golden_ok);
+    println!("post_run_reset_started {}", outcome.post_run_reset_started);
+    for reason in &outcome.reasons {
+        println!("reason {reason}");
+    }
+    println!("macos_verdict {:?}", outcome.verdict);
+    println!("mode fixture/fake-transport; native Metal run + real EACS/ADE/MDM reset deferred-hw");
 
     print_coordinator_sha();
     verdict_exit(outcome.verdict)

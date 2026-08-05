@@ -1470,10 +1470,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Deliver/verify archive.
-2. - [ ] Run Metal smoke + scale curve.
-3. - [ ] Collect/recompute evidence.
-4. - [ ] Require post-run EACS.
+1. - [x] Deliver/verify archive.
+2. - [x] Run Metal smoke + scale curve. (fixture-driven; native Metal run deferred-hw)
+3. - [x] Collect/recompute evidence.
+4. - [x] Require post-run EACS. (protocol-level; failure quarantines; real EACS deferred-hw)
 
 #### Outputs
 
@@ -1483,11 +1483,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner macos --commit <hash>` (fixture/fake transport mode)
+- [x] `$HOME/.local/bin/mmd-lab validate-runner --runner macos --commit <hash>` (fixture/fake transport mode) — via workspace binary; trusted install predates command, refresh awaits promotion
 - [ ] `[deferred-hw]` real Metal lane returns honest verdict
 - [ ] `[deferred-hw]` post-run EACS attested
-- [ ] app functional — exact candidate tested
-- [ ] commit msg draft: `feat(lab): gate candidate on macOS Metal`
+- [x] app functional — exact candidate tested
+- [x] commit msg draft: `feat(lab): gate candidate on macOS Metal`
 
 ### T24: Exact-hash 3-host merge gate
 
