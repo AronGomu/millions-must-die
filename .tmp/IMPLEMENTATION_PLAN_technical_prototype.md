@@ -2,12 +2,16 @@
 
 ## Goal
 
-Build phase-0 Rust/SDL3 proof: 50k flow-field agents move + render at 1920×1080 on Linux/Vulkan, Windows/D3D12, macOS/Metal. Success: every ref host passes total-frame p95 ≤16.67 ms, p99 ≤25 ms; 100k recorded as nonblocking stretch.
+**Amended 2026-08-05 (#2, user-directed).** Build phase-0 Rust/SDL3 proof that the *game and its systems work*: 50k flow-field agents load, simulate, move and render at 1920×1080 on the development host, validated by functional/behavioural tests. Success = every game system has automated tests proving correct, deterministic behaviour, and the app runs the scene end to end.
+
+Performance measurement is **not** a phase-0 success criterion. Frame-time gates, cross-platform/architecture benchmarking, and the multi-host validation lab move to a later optimization phase on the finished game (see "Performance and platform-matrix deferral policy").
+
+Original goal (superseded, kept for history): 50k agents move + render on Linux/Vulkan, Windows/D3D12, macOS/Metal, every ref host passing total-frame p95 ≤16.67 ms, p99 ≤25 ms; 100k nonblocking stretch.
 
 ## Scope
 
-- In: Rust workspace; SDL3 GPU sprite renderer; fixed flow field; SoA sim; 50k/100k scenes; `run` + `bench`; local 3-host lab; perf/correctness/security gates; public contrib policy.
-- Out: camera pan/zoom; selection; workers; economy; buildings; production; combat; AI; walls; waves; collision; separation; dynamic obstacles; per-agent pathfinding; prod art/audio; installers; signing; Steam; online CI; WebAssembly.
+- In: Rust workspace; SDL3 GPU sprite renderer; fixed flow field; SoA sim; 50k/100k scenes; `run`; **functional tests of every game system** (scenario, atlas, flow field, movement/recycling, renderer output, app lifecycle); deterministic headless test harness; public contrib policy.
+- Out: **all performance benchmarking and perf gating; the cross-platform/architecture matrix (Windows/D3D12, macOS/Metal); the 3-host validation lab, calibration, pilot baselines and release proofs** (deferred to the optimization phase); camera pan/zoom; selection; workers; economy; buildings; production; combat; AI; walls; waves; collision; separation; dynamic obstacles; per-agent pathfinding; prod art/audio; installers; signing; Steam; online CI; WebAssembly.
 
 ## Assumptions
 
@@ -18,7 +22,9 @@ Build phase-0 Rust/SDL3 proof: 50k flow-field agents move + render at 1920×1080
 - `TODO(user)`: select MDM provider/account before T22. Apple Business Manager/ADE access required.
 - 2026-08-05 amendment: hardware-gated tests deferred; see "Hardware deferral policy".
 
-## Hardware deferral policy (2026-08-05, user-directed)
+## Hardware deferral policy (2026-08-05, user-directed) — SUPERSEDED
+
+Superseded by the "Performance and platform-matrix deferral policy (2026-08-05 #2)" below: the whole cross-platform perf program is out of phase-0 scope, so hardware deferral no longer needs its own carve-outs. Kept for history.
 
 User instruction: ignore all tests requiring specific hardware. Effects:
 
@@ -27,6 +33,30 @@ User instruction: ignore all tests requiring specific hardware. Effects:
 - Dependent tickets (T13, T17, T20, T23, T24, T26, T27) proceed using fixture/synthetic equivalents; `[deferred-hw]` items stay unchecked in plan as an honest record.
 - Relative baselines from synthetic data remain **disabled** pending owner review (existing T25 rule); no invented physical values are enabled.
 - T27 phase close may only claim "Linux-verified; native cross-platform matrix deferred" — the full-confidence 3-OS claim stays unavailable until deferred items run on real hardware.
+
+## Performance and platform-matrix deferral policy (2026-08-05 #2, user-directed)
+
+User instruction: remove all benchmarking for the different platforms/architectures — that work belongs to a later phase, when the finished game is optimized. Focus phase 0 on tests that validate the actual game and game systems.
+
+**Removed from phase-0 scope** (no longer gates anything, no longer blocks a phase close):
+
+- Frame-time gates: 50k p95 ≤16.67 ms / p99 ≤25 ms, the nmad ≤0.03 noise bound, and the 1k/10k/50k/100k scale curve as an acceptance artifact.
+- The Windows/D3D12 and macOS/Metal platform lanes and every per-backend perf comparison.
+- The local 3-host validation lab as a merge gate: runner contracts, recovery/attestation, candidate gates, the exact-hash aggregate gate, relative calibration, pilot baselines, release proofs.
+- The phase-0 "results" claim built on measured numbers.
+
+**Kept** (these are correctness, not performance):
+
+- Deterministic simulation/flow-field/scenario contracts and their hash checks.
+- Renderer output correctness (golden images) on the development host only.
+- The zero-allocation-per-frame contract, reframed as a *code-health invariant* under a short deterministic test policy — it catches accidental per-frame allocation, not throughput.
+- Reproducible builds/toolchain checks (`nix flake check`, xtask `--check`).
+
+**Disposition of existing perf/lab code** (`crates/mmd-engine/src/bench/`, `tools/mmd-lab/`, `lab/`, `schemas/*bench*|*baseline*|*pilot*|*release*`): retained in-tree, frozen and non-gating. Nothing is deleted, because the optimization phase will reuse it; nothing runs on the required path. Their own unit tests keep running (they are cheap and prove the tools still compile). `TODO(user)` — confirm at plan validation: **(a) freeze in place (recommended)**, (b) move under `attic/` to make the retirement visually obvious, or (c) delete outright.
+
+**Status of the perf/lab tickets** T9–T27: `retired (perf deferred)`. Work already committed stays in history; no remaining `[deferred-hw]` item blocks phase 0, and the honest record of what was measured stays in `docs/technical-prototype-results.md` marked superseded. The earlier Hardware deferral policy (below) is subsumed by this one.
+
+**Replacement work**: tickets T28–T33 below define the game-system test program that phase 0 now closes on.
 
 ## Validated decision ledger
 
@@ -194,6 +224,20 @@ flowchart TD
     T26 --> T27[T27 Final proof + phase close]
 ```
 
+T9–T27 above are **retired (perf deferred)** — kept for history only. Active phase-0 chain after the 2026-08-05 #2 amendment:
+
+```mermaid
+flowchart TD
+    T8[T8 Moving 50k] --> T28[T28 Retire perf gating]
+    T28 --> T29[T29 Deterministic system test harness]
+    T29 --> T30[T30 Simulation + navigation behaviour]
+    T29 --> T31[T31 Render correctness single host]
+    T29 --> T32[T32 App + CLI behaviour]
+    T30 --> T33[T33 Functional phase close]
+    T31 --> T33
+    T32 --> T33
+```
+
 ## Ticket order
 
 | ID | Title | Depends | Commit outcome |
@@ -226,6 +270,17 @@ flowchart TD
 | T26 | 50-run pilot baselines | T24, T25 | 150 clean runs freeze relative limits + image tolerances. |
 | T27 | Final proof + phase close | T26 | Exact commit passes all gates; results/roadmap updated. |
 
+T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active tickets:
+
+| ID | Title | Depends | Commit outcome |
+| --- | ----- | ------- | -------------- |
+| T28 | Retire perf gating | — | No perf number gates anything; bench/lab frozen non-gating; docs stop claiming measured results. |
+| T29 | Deterministic system test harness | T28 | One seeded headless harness every system test drives; fixed tick counts + state hashes, no wall-clock. |
+| T30 | Simulation + navigation behaviour | T29 | Agents provably reach the destination through obstacles; spawn/recycle, bounds and determinism asserted. |
+| T31 | Render correctness (single host) | T29 | Instance/atlas/view correctness + golden image on the dev backend; drift fails. |
+| T32 | App + CLI behaviour | T29 | `run` lifecycle (frames, pause, overlay, quit, bad scenario) proven by exit codes + stdout contract. |
+| T33 | Functional phase close | T30, T31, T32 | `cargo test --workspace` + repro checks are the whole gate; roadmap/testing/README state functional scope. |
+
 ## Parallel flow
 
 - After T1: T2, T3, T6 parallel.
@@ -234,6 +289,7 @@ flowchart TD
 - After runner contracts: T16, T19, T22 parallel.
 - After recovery + T12/T13: T17, T20, T23 parallel.
 - T24 joins native lanes. T26 joins T24 + T25. T27 final.
+- Amended chain: T28 → T29 → {T30, T31, T32} parallel → T33.
 
 ## Tickets
 
@@ -1705,21 +1761,331 @@ flowchart TD
 - [ ] results doc states "Linux-verified; native cross-platform matrix deferred" per Hardware deferral policy
 - [ ] commit msg draft: `perf(prototype): prove cross-platform fifty-thousand-agent gate`
 
+### T28: Retire perf gating
+
+**Depends:** —
+**Commit outcome:** No performance number gates anything; bench/lab code frozen and non-gating; docs stop presenting measured results as phase-0 acceptance.
+
+#### Requirements
+
+- Remove perf acceptance from the validation contract, docs, and any test that fails on a timing threshold.
+- Bench harness, `mmd-lab`, `lab/` fixtures and perf schemas stay compiling with their unit tests; nothing they emit gates a merge.
+- `bench` stays available as a developer tool, clearly labelled "not a gate; optimization phase".
+- Zero-allocation test keeps running under a short deterministic policy as a code-health invariant.
+- `docs/technical-prototype-results.md` marked **superseded**: measurements retained as history, no claim.
+- No silent deletion: whatever is retired is named in the plan and the commit message.
+
+#### Inputs
+
+- Current tree at `d37bfe6`; `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`; the `TODO(user)` disposition choice (freeze / attic / delete).
+
+#### TDD
+
+1. **Red** — a test asserting no required-path command consumes a perf threshold (grep-style contract test over the documented gate list) fails while the contract still lists bench/lab gates.
+2. **Green** — contract updated; docs rewritten; perf tests demoted to non-gating.
+3. **Refactor** — one "retired, see optimization phase" pointer instead of scattered deferral notes.
+
+#### Test plan
+
+| Test | Input | Expect |
+| ---- | ----- | ------ |
+| `gate_list_has_no_perf_thresholds` | documented required commands | pass only when no frame-time/nmad threshold is required |
+| `bench_binary_still_builds` | `cargo build -p mmd-engine` | bench module compiles (frozen, not deleted) |
+| `alloc_invariant_still_enforced` | injected per-frame alloc | test fails as before (code-health, not perf) |
+
+#### Impl steps
+
+1. - [ ] Rewrite the global validation contract (below) as the single source of truth.
+2. - [ ] Mark results doc superseded; update `docs/05-testing.md`, `docs/02-prototype-roadmap.md`, `README.md`.
+3. - [ ] Label `bench` output/CLI as non-gating developer tooling.
+4. - [ ] Apply the user's disposition choice for bench/lab code.
+5. - [ ] Record T9–T27 as `retired (perf deferred)` in the progress file.
+
+#### Outputs
+
+- `docs/05-testing.md`, `docs/02-prototype-roadmap.md`, `README.md`, `docs/technical-prototype-results.md`, progress file.
+
+#### Validation
+
+- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo test --workspace --locked`
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [ ] no doc claims a perf pass; no required command needs a timing threshold
+- [ ] commit msg draft: `chore(prototype): retire performance gating to the optimization phase`
+
+### T29: Deterministic system test harness
+
+**Depends:** T28
+**Commit outcome:** One seeded headless harness that every game-system test drives; fixed tick counts and state hashes, zero wall-clock dependence.
+
+#### Requirements
+
+- `mmd-engine` test support module: build a runtime from a scenario + agent count + seed, step N ticks, expose state (positions, alive counts, spawn/recycle counters, state hash).
+- Deterministic by construction: no `Instant`, no thread scheduling, no GPU requirement for sim-only tests.
+- Same input → identical state hash across runs and across processes on the same host.
+- Fixture scenarios small enough for fast tests (tens/hundreds of agents), plus the real 50k scenario for slower system-level tests.
+- Harness usable by future phase-1 systems (camera, selection, workers) without redesign.
+
+#### Inputs
+
+- `crates/mmd-engine/src/{runtime.rs,sim,nav,scenario.rs}`; `assets/scenarios/`.
+
+#### TDD
+
+1. **Red** — `same_seed_same_state_hash` and `tick_count_is_exact` fail (no harness).
+2. **Green** — minimal harness + fixture scenarios.
+3. **Refactor** — one entry point; existing `simulation.rs` / `flow_field.rs` tests migrate onto it.
+
+#### Test plan
+
+| Test | Input | Expect |
+| ---- | ----- | ------ |
+| `same_seed_same_state_hash` | seed 42, 500 ticks, twice | identical hash |
+| `different_seed_differs` | seeds 42 vs 43 | different hash |
+| `tick_count_is_exact` | request 500 ticks | exactly 500 applied |
+| `no_wall_clock_dependence` | run under artificial delay | identical hash |
+| `harness_headless_without_gpu` | sim-only build | runs with no device |
+
+#### Impl steps
+
+1. - [ ] Add `mmd-engine` test-support harness (`#[cfg(test)]` or `test-support` feature).
+2. - [ ] Add small fixture scenarios.
+3. - [ ] Migrate existing sim/nav tests onto the harness.
+
+#### Outputs
+
+- `crates/mmd-engine/src/testkit/` (or `test_support.rs`), `assets/scenarios/fixtures/`, migrated tests.
+
+#### Validation
+
+- [ ] `cargo test --workspace --locked`
+- [ ] fmt + clippy clean
+- [ ] commit msg draft: `test(engine): add deterministic game-system test harness`
+
+### T30: Simulation + navigation behaviour
+
+**Depends:** T29
+**Commit outcome:** The horde provably behaves: agents route around obstacles to the destination, recycle correctly, and never leave the world or go non-finite.
+
+#### Requirements
+
+- Behavioural assertions, not timings: progress toward destination monotone in aggregate; no agent stuck against an obstacle for the whole run; all agents inside world bounds; no NaN/inf.
+- Recycling: agents reaching the destination are recycled; alive count stays at the configured total; spawn/recycle counters balance.
+- Flow field: every reachable cell has a valid direction; obstacle cells are never entered; unreachable regions handled explicitly.
+- Group behaviour: the four spawn groups all make progress (no starved group).
+- Determinism over 50k agents for a bounded tick count.
+
+#### Inputs
+
+- T29 harness; `nav/flow_field.rs`; `sim/{agents.rs,tick.rs}`.
+
+#### TDD
+
+1. **Red** — behaviour tests fail against any regression injected into movement/recycle.
+2. **Green** — assertions implemented against current systems.
+3. **Refactor** — shared assertion helpers (bounds, finiteness, progress).
+
+#### Test plan
+
+| Test | Input | Expect |
+| ---- | ----- | ------ |
+| `agents_reach_destination` | fixture scene, N ticks | ≥X% recycled at least once |
+| `obstacles_are_never_entered` | obstacle-dense fixture | zero agent-in-obstacle samples |
+| `alive_count_is_stable` | 50k, 1000 ticks | alive == configured every tick |
+| `positions_finite_and_in_bounds` | any fixture | no NaN/inf, all inside world rect |
+| `no_group_is_starved` | 4 spawn groups | every group's mean progress > 0 |
+| `unreachable_region_is_explicit` | walled-off cell | documented sentinel, no panic |
+
+#### Impl steps
+
+1. - [ ] Add behavioural assertions + helpers.
+2. - [ ] Add obstacle-dense and walled-off fixtures.
+3. - [ ] Fix any real behaviour bug the tests surface (or record it as a ticket).
+
+#### Outputs
+
+- `crates/mmd-engine/tests/simulation.rs`, `tests/flow_field.rs`, new fixtures.
+
+#### Validation
+
+- [ ] `cargo test --workspace --locked`
+- [ ] each test fails when its invariant is deliberately broken
+- [ ] commit msg draft: `test(sim): prove horde movement, routing and recycling behaviour`
+
+### T31: Render correctness (single host)
+
+**Depends:** T29
+**Commit outcome:** Rendering is validated for correctness on the development backend only; no cross-platform comparison.
+
+#### Requirements
+
+- Instance data correctness: one instance per alive agent, correct atlas index/UVs, correct world→clip transform.
+- Atlas manifest ↔ generated PNG consistency (existing hash check kept).
+- Golden image on the dev backend for a fixed deterministic frame; drift fails with a written diff artifact.
+- Tolerance is for `f32`/driver variation only — explicitly *not* a cross-backend claim; goldens are host-scoped and regenerating them is an explicit reviewed step.
+- Renderer smoke: device creation, resize, and a clean shutdown path.
+- Skip cleanly (not fail) when no GPU is present, so the suite stays runnable in a headless shell.
+
+#### Inputs
+
+- `render/{renderer.rs,instance.rs,golden.rs,atlas.rs}`; existing `gpu_golden.rs`, `gpu_smoke.rs`.
+
+#### TDD
+
+1. **Red** — instance-content test fails against a deliberately wrong transform; golden fails on a shifted sprite.
+2. **Green** — assertions + host-scoped golden.
+3. **Refactor** — golden regeneration behind one documented command.
+
+#### Test plan
+
+| Test | Input | Expect |
+| ---- | ----- | ------ |
+| `instance_per_alive_agent` | fixture scene | count + atlas indices match sim state |
+| `world_to_clip_transform` | known corner positions | expected clip coords |
+| `golden_frame_matches` | fixed seed/tick frame | within tolerance of committed golden |
+| `golden_drift_fails` | shifted sprite | fails + writes diff |
+| `no_gpu_skips_cleanly` | no device | skipped, not failed |
+
+#### Impl steps
+
+1. - [ ] Add instance/transform assertions.
+2. - [ ] Rescope goldens to the dev host; document regeneration.
+3. - [ ] Ensure headless skip path.
+
+#### Outputs
+
+- `crates/mmd-engine/tests/{gpu_golden.rs,gpu_smoke.rs}`, `assets/goldens/`, `docs/05-testing.md`.
+
+#### Validation
+
+- [ ] `cargo test --workspace --locked` (GPU present and absent)
+- [ ] commit msg draft: `test(render): validate instance data and dev-host golden frame`
+
+### T32: App + CLI behaviour
+
+**Depends:** T29
+**Commit outcome:** The playable surface is tested: `run` starts, ticks, pauses, overlays, quits cleanly, and fails loudly on bad input.
+
+#### Requirements
+
+- `run --frames N` exits 0 after exactly N frames with the documented stdout contract.
+- Pause stops simulation progress (state hash unchanged); overlay toggle does not alter state.
+- Quit path releases GPU resources and exits 0; no panic on early quit.
+- Bad/missing/drifted scenario → non-zero exit with an actionable message (no panic, no stack trace as UX).
+- Agent-count override respected and validated (0 / absurd values rejected).
+- Existing `tests/cli_contract.rs` extended rather than duplicated.
+
+#### Inputs
+
+- `src/{main.rs,run.rs}`; `tests/cli_contract.rs`.
+
+#### TDD
+
+1. **Red** — pause/quit/bad-scenario cases fail or panic today.
+2. **Green** — behaviour implemented/asserted.
+3. **Refactor** — one CLI-invocation helper in tests.
+
+#### Test plan
+
+| Test | Input | Expect |
+| ---- | ----- | ------ |
+| `run_exits_after_n_frames` | `--frames 30` | exit 0, tick == 30 |
+| `pause_freezes_state` | pause N ticks | state hash unchanged |
+| `overlay_toggle_is_inert` | F1 toggle | state hash unchanged |
+| `bad_scenario_fails_clean` | corrupt RON | exit != 0, message names the file |
+| `absurd_agent_count_rejected` | `--agents 0` | exit != 0, clear reason |
+
+#### Impl steps
+
+1. - [ ] Extend CLI contract tests.
+2. - [ ] Add headless input-injection path for pause/overlay if absent.
+3. - [ ] Improve error messages surfaced by the tests.
+
+#### Outputs
+
+- `tests/cli_contract.rs`, `src/run.rs`.
+
+#### Validation
+
+- [ ] `cargo test --workspace --locked`
+- [ ] manual `cargo run -- run --agents 50000` still interactive
+- [ ] commit msg draft: `test(app): cover run lifecycle, pause and failure paths`
+
+### T33: Functional phase close
+
+**Depends:** T30, T31, T32
+**Commit outcome:** Phase 0 closes on functional evidence: one test command is the whole gate, and the docs say exactly what is and is not proven.
+
+#### Requirements
+
+- Single gate: `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test --workspace --locked` + repro checks. Nothing else required to merge.
+- Every game system named in the scope has at least one behavioural test; the close doc maps system → test.
+- Docs (`README.md`, `docs/02-prototype-roadmap.md`, `docs/05-testing.md`) state functional scope and that performance is unmeasured/deferred.
+- No perf claim anywhere; the retired measurements stay reachable as history.
+- Known gaps listed honestly (e.g. no cross-platform verification, no perf numbers, flaky alloc tests under parallel load).
+
+#### Inputs
+
+- T30–T32 outputs; `docs/technical-prototype-results.md` (superseded).
+
+#### TDD
+
+1. **Red** — a coverage-map test fails while any scope system lacks a named test.
+2. **Green** — map completed; docs rewritten.
+3. **Refactor** — one close doc, links only.
+
+#### Test plan
+
+| Test | Input | Expect |
+| ---- | ----- | ------ |
+| `every_system_has_a_test` | system list | each maps to an existing test name |
+| `no_perf_claim_in_docs` | docs | no pass/fail perf statement |
+
+#### Impl steps
+
+1. - [ ] Write `docs/technical-prototype-functional-close.md` (system → test map, gaps).
+2. - [ ] Update roadmap/testing/README.
+3. - [ ] Update progress file; mark phase 0 closed on functional scope.
+
+#### Outputs
+
+- `docs/technical-prototype-functional-close.md`, `README.md`, `docs/02-prototype-roadmap.md`, `docs/05-testing.md`.
+
+#### Validation
+
+- [ ] full gate green
+- [ ] docs claim functional scope only
+- [ ] commit msg draft: `docs(prototype): close phase 0 on game-system functional tests`
+
 ## Global validation contract
 
+**Amended 2026-08-05 (#2).** The whole merge gate is:
+
 - Fast: `cargo fmt --all -- --check`; `cargo test --workspace --locked`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
-- Repro: `nix flake check`; xtask bootstrap/shader/atlas `--check`; native shader regeneration in T9/T10.
-- Interactive: `cargo run -- run --agents 50000`.
-- Bench: `cargo run -- bench --output <path>`; records 1k/10k/50k/100k.
-- Trusted lab dev tests: `cargo test -p mmd-lab` only.
-- Operational matrix: `$HOME/.local/bin/mmd-lab self-check ...`; then absolute installed binary `validate --commit <exact-hash>`.
-- Hard success: every OS 50k median p95 ≤16.67 ms + median p99 ≤25 ms; relative/golden/alloc/manifests pass.
-- Nonblocking scale evidence: 1k, 10k, 100k.
+- Repro: `nix flake check`; xtask bootstrap/shader/atlas `--check`.
+- Interactive smoke: `cargo run -- run --agents 50000` (starts, ticks, exits cleanly).
+- Hard success: **all tests green** — deterministic sim/nav behaviour, render correctness on the dev host, app/CLI lifecycle, contract hashes, allocation invariant.
+
+Explicitly **not** part of the gate: frame-time thresholds, nmad noise bounds, scale curves, cross-platform lanes, the 3-host lab, calibration/pilot baselines, release proofs. `bench` remains a developer tool whose output gates nothing.
+
+Superseded contract (history): 3-OS 50k p95 ≤16.67 ms / p99 ≤25 ms with lab-verified evidence.
 
 ## Risks / stop rules
 
-- Hardware deferral (2026-08-05): fixture/synthetic evidence ≠ native proof. Deferred items must run on real hardware before any full-confidence phase-0 claim; policy forbids silently enabling synthetic baselines.
-- SDL wrapper gap → isolated `sdl3-sys`; broad raw rewrite requires new decision.
+**Active (post 2026-08-05 #2 amendment):**
+
+- Phase 0 now proves *behaviour, not speed*. No document, README line, or commit message may imply the game hits a frame-rate target — the honest statement is "performance unmeasured; deferred to the optimization phase".
+- A behavioural test that only asserts "no panic" is not proof. Each test must fail when its invariant is deliberately broken (verified per ticket).
+- Deferring perf lets a real regression accumulate silently until the optimization phase. Accepted, owner-directed; the allocation invariant is the one cheap early-warning kept.
+- Golden images are host-scoped: they prove the dev backend renders the expected frame, never that another platform does.
+- Retired bench/lab code rots if left untouched — it still compiles and its unit tests still run, but it must be re-validated before the optimization phase reuses it.
+- `f32` ≠ bit-identical across builds; determinism claims are same-host, same-binary.
+- Flaky allocator-counting tests under full parallel load (`warmup_allocation_passes`, `panic_restores_guard`) — known; must be fixed or isolated before they mask a real regression.
+
+**Retired with the perf program (history):**
+
+- Hardware deferral (2026-08-05 #1): fixture/synthetic evidence ≠ native proof; superseded by the #2 amendment.
+- SDL wrapper gap → isolated `sdl3-sys`; broad raw rewrite requires new decision. *(still live — engineering, not perf)*
 - 50k miss → phase fails. Profile; never weaken gate silently.
 - Mac MDM unavailable → T22/T23 blocked; full-confidence claim unavailable.
 - Reset/identity attestation covers host/source only; candidate behavior is not cryptographically attested.
@@ -1733,7 +2099,8 @@ flowchart TD
 ## Files to update during impl
 
 - `Cargo.toml`, `Cargo.lock`, `.gitignore`, `README.md`, `src/main.rs`.
-- `docs/02-prototype-roadmap.md`, `docs/05-testing.md` at T27.
+- `docs/02-prototype-roadmap.md`, `docs/05-testing.md` at T27 *(superseded)*; re-updated at T28 and T33 for functional scope.
+- `docs/technical-prototype-results.md` marked superseded at T28; `docs/technical-prototype-functional-close.md` added at T33.
 
 ## Planned new impl paths
 
