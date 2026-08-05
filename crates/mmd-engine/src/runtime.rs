@@ -76,9 +76,12 @@ pub enum RuntimeError {
 /// Scenario + flow field + SoA sim + instance builder.
 #[derive(Debug)]
 pub struct Runtime {
-    scenario_version: String,
+    scenario: Scenario,
     cell_size_px: f32,
     sprite_size_px: f32,
+    /// Retained so navigation state stays inspectable for tests and future
+    /// systems (debug overlay, repathing) instead of being dropped after init.
+    field: FlowField,
     sim: Simulation,
     paused: bool,
     overlay_visible: bool,
@@ -137,9 +140,10 @@ impl Runtime {
         });
 
         Ok(Self {
-            scenario_version: scenario.version().to_string(),
             cell_size_px: scenario.cell_size_px() as f32,
             sprite_size_px: scenario.sprite_size_px() as f32,
+            scenario,
+            field,
             sim,
             paused: false,
             overlay_visible: false,
@@ -149,7 +153,48 @@ impl Runtime {
     }
 
     pub fn scenario_version(&self) -> &str {
-        &self.scenario_version
+        self.scenario.version()
+    }
+
+    /// The verified scenario this runtime was built from.
+    pub fn scenario(&self) -> &Scenario {
+        &self.scenario
+    }
+
+    /// The flow field built from this scenario at load.
+    ///
+    /// Note: [`Simulation`] copies the field's vectors into its own SoA arrays
+    /// at construction, so this is a *separate* copy. In particular
+    /// [`Simulation::set_vector_for_test`] mutates the sim's copy only — after
+    /// such an override the two views intentionally disagree, and this one
+    /// still reflects the field as built.
+    pub fn flow_field(&self) -> &FlowField {
+        &self.field
+    }
+
+    /// Read-only SoA agent state (positions, atlas/dir/frame).
+    pub fn agents(&self) -> crate::sim::AgentsView<'_> {
+        self.sim.agents()
+    }
+
+    pub fn sim(&self) -> &Simulation {
+        &self.sim
+    }
+
+    /// Mutable sim access for tests that need to place an agent or override a
+    /// field vector before stepping.
+    ///
+    /// Feature-gated with the harness that consumes it: `set_position` /
+    /// `set_vector_for_test` must not be reachable from a shipping build.
+    #[cfg(feature = "testkit")]
+    pub fn sim_mut(&mut self) -> &mut Simulation {
+        &mut self.sim
+    }
+
+    /// Set the pause state directly (as opposed to toggling it via an input
+    /// action).
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
     }
 
     pub fn agent_count(&self) -> usize {
@@ -190,6 +235,32 @@ impl Runtime {
         }
     }
 
+    /// Advance the simulation one tick without packing instances or reading a
+    /// clock. Returns `false` when paused (no tick applied).
+    ///
+    /// This is the deterministic stepping path: [`Self::tick_and_render`]
+    /// additionally samples [`Instant`] to fill [`FrameStats`], which is fine
+    /// for the interactive loop but means a sim-only test would carry a
+    /// wall-clock read it never uses.
+    pub fn tick_only(&mut self) -> bool {
+        if self.paused {
+            return false;
+        }
+        self.sim.tick();
+        true
+    }
+
+    /// Rebuild draw groups from the current sim state without advancing it.
+    /// Reuses the pack buffers, so no allocation after load.
+    pub fn pack_groups(&mut self) {
+        pack_instance_groups(
+            self.sim.agents(),
+            self.cell_size_px,
+            self.sprite_size_px,
+            &mut self.groups,
+        );
+    }
+
     /// One frame: optional sim tick + rebuild draw groups into reused buffers.
     pub fn tick_and_render(&mut self) -> FrameOutput<'_> {
         let t0 = Instant::now();
@@ -203,12 +274,7 @@ impl Runtime {
         };
 
         let u0 = Instant::now();
-        pack_instance_groups(
-            self.sim.agents(),
-            self.cell_size_px,
-            self.sprite_size_px,
-            &mut self.groups,
-        );
+        self.pack_groups();
         let upload_ms = u0.elapsed().as_secs_f64() * 1000.0;
         let total_ms = t0.elapsed().as_secs_f64() * 1000.0;
 

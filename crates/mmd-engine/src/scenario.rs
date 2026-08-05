@@ -10,6 +10,22 @@ use thiserror::Error;
 /// Locked phase-0 scenario version id.
 pub const TECHNICAL_PROTOTYPE_V1: &str = "technical_prototype_v1";
 
+/// Version-id prefix reserved for small test fixtures (T29 harness).
+///
+/// A fixture is a real, fully validated scenario — it obeys every structural
+/// rule the gate scene obeys (nonzero seed, non-empty spawns, in-bounds unique
+/// obstacles, free destination, free and reachable spawns) and the same
+/// tracked-hash contract via [`Scenario::load_verified`]. What it does *not*
+/// inherit are the values frozen for the phase-0 workload specifically: the
+/// 480×270 grid, the 50k/100k agent counts, and the exact-20% obstacle ratio.
+/// Those stay locked for [`TECHNICAL_PROTOTYPE_V1`] alone.
+pub const FIXTURE_VERSION_PREFIX: &str = "fixture_";
+
+/// Fixture grids must stay small enough that a full system test is cheap.
+pub const FIXTURE_MAX_CELLS: u32 = 65_536;
+/// Fixture agent counts must stay in the tens/hundreds, not the tens of thousands.
+pub const FIXTURE_MAX_AGENTS: u32 = 4_096;
+
 const V1_WIDTH: u32 = 480;
 const V1_HEIGHT: u32 = 270;
 const V1_CELL_PX: u32 = 4;
@@ -49,22 +65,28 @@ pub struct Scenario {
     obstacle_cells: Vec<u32>,
 }
 
-#[derive(Debug, Deserialize)]
-struct ScenarioDoc {
-    version: String,
-    width: u32,
-    height: u32,
-    cell_size_px: u32,
-    sprite_size_px: u32,
-    hard_agent_count: u32,
-    stretch_agent_count: u32,
-    seed: u64,
-    destination: Cell,
-    spawn_cells: Vec<Cell>,
-    atlas_count: u32,
-    direction_count: u32,
-    frame_count: u32,
-    obstacle_cells: Vec<u32>,
+/// Unvalidated scenario description — the wire/in-memory form of a scene.
+///
+/// This is what a `.ron` file deserializes into, and what
+/// [`Scenario::from_spec`] validates. Tests that need a synthetic grid build a
+/// spec directly instead of formatting RON, so in-memory and on-disk scenarios
+/// pass through exactly one validator.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ScenarioSpec {
+    pub version: String,
+    pub width: u32,
+    pub height: u32,
+    pub cell_size_px: u32,
+    pub sprite_size_px: u32,
+    pub hard_agent_count: u32,
+    pub stretch_agent_count: u32,
+    pub seed: u64,
+    pub destination: Cell,
+    pub spawn_cells: Vec<Cell>,
+    pub atlas_count: u32,
+    pub direction_count: u32,
+    pub frame_count: u32,
+    pub obstacle_cells: Vec<u32>,
 }
 
 /// Scenario load / validation failures.
@@ -123,13 +145,19 @@ impl Scenario {
 
     /// Parse + validate without hash (tests / trusted in-memory docs).
     pub fn parse_and_validate(bytes: &[u8]) -> Result<Self, ScenarioError> {
-        let doc: ScenarioDoc =
+        let doc: ScenarioSpec =
             ron::de::from_bytes(bytes).map_err(|e| ScenarioError::Parse(e.to_string()))?;
-        Self::from_doc(doc)
+        Self::from_spec(doc)
     }
 
-    fn from_doc(doc: ScenarioDoc) -> Result<Self, ScenarioError> {
-        validate_version_and_dims(&doc)?;
+    /// Validate an in-memory spec. Same rules as a parsed file, minus the hash.
+    pub fn from_spec(doc: ScenarioSpec) -> Result<Self, ScenarioError> {
+        let cells = doc
+            .width
+            .checked_mul(doc.height)
+            .ok_or_else(|| ScenarioError::InvalidDimension("width*height overflow".into()))?;
+
+        validate_version_and_dims(&doc, cells)?;
         validate_counts(&doc)?;
         if doc.seed == 0 {
             return Err(ScenarioError::InvalidSeed);
@@ -138,18 +166,24 @@ impl Scenario {
             return Err(ScenarioError::EmptySpawns);
         }
 
-        let cells = doc
-            .width
-            .checked_mul(doc.height)
-            .ok_or_else(|| ScenarioError::InvalidDimension("width*height overflow".into()))?;
-
         let obstacles = normalize_obstacles(&doc.obstacle_cells, cells)?;
-        // Exact 20%: obstacles * 5 == cells.
-        if obstacles
-            .len()
-            .checked_mul(5)
-            .is_none_or(|n| n != cells as usize)
-        {
+        if doc.version == TECHNICAL_PROTOTYPE_V1 {
+            // Exact 20%: obstacles * 5 == cells. Locked workload property of the
+            // gate scene only — fixtures choose their own obstacle layout.
+            if obstacles
+                .len()
+                .checked_mul(5)
+                .is_none_or(|n| n != cells as usize)
+            {
+                return Err(ScenarioError::InvalidObstacleRatio {
+                    obstacles: obstacles.len() as u32,
+                    cells,
+                });
+            }
+        } else if obstacles.len() >= cells as usize {
+            // Every scenario needs somewhere to stand. `normalize_obstacles`
+            // already rejected out-of-range and duplicate indices, so this can
+            // only mean "every cell is blocked".
             return Err(ScenarioError::InvalidObstacleRatio {
                 obstacles: obstacles.len() as u32,
                 cells,
@@ -250,7 +284,10 @@ impl Scenario {
     }
 }
 
-fn validate_version_and_dims(doc: &ScenarioDoc) -> Result<(), ScenarioError> {
+fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioError> {
+    if doc.version.starts_with(FIXTURE_VERSION_PREFIX) {
+        return validate_fixture_dims(doc, cells);
+    }
     if doc.version != TECHNICAL_PROTOTYPE_V1 {
         return Err(ScenarioError::UnsupportedVersion(doc.version.clone()));
     }
@@ -272,24 +309,80 @@ fn validate_version_and_dims(doc: &ScenarioDoc) -> Result<(), ScenarioError> {
     Ok(())
 }
 
-fn validate_counts(doc: &ScenarioDoc) -> Result<(), ScenarioError> {
-    let checks = [
+fn validate_counts(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
+    // Sprite-sheet geometry is a renderer contract, not a workload knob: every
+    // scenario family — fixtures included — must address the same 4 atlases of
+    // 8 directions × 4 frames the atlas generator produces.
+    let renderer = [
+        (doc.atlas_count, V1_ATLASES, "atlas_count"),
+        (doc.direction_count, V1_DIRS, "direction_count"),
+        (doc.frame_count, V1_FRAMES, "frame_count"),
+    ];
+    // Agent counts are the frozen phase-0 workload; fixtures pick their own
+    // (bounded by `validate_fixture_dims`).
+    let workload = [
         (doc.hard_agent_count, V1_HARD_AGENTS, "hard_agent_count"),
         (
             doc.stretch_agent_count,
             V1_STRETCH_AGENTS,
             "stretch_agent_count",
         ),
-        (doc.atlas_count, V1_ATLASES, "atlas_count"),
-        (doc.direction_count, V1_DIRS, "direction_count"),
-        (doc.frame_count, V1_FRAMES, "frame_count"),
     ];
-    for (got, want, name) in checks {
+
+    let is_fixture = doc.version.starts_with(FIXTURE_VERSION_PREFIX);
+    let checks = renderer
+        .iter()
+        .chain(workload.iter().filter(|_| !is_fixture));
+    for &(got, want, name) in checks {
         if got != want {
             return Err(ScenarioError::InvalidDimension(format!(
                 "{name}: got {got}, want {want}"
             )));
         }
+    }
+    Ok(())
+}
+
+/// Structural bounds for the `fixture_*` family: real geometry, free shape,
+/// but capped so a fixture cannot quietly become another 50k workload.
+fn validate_fixture_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioError> {
+    let positive = [
+        (doc.width, "width"),
+        (doc.height, "height"),
+        (doc.cell_size_px, "cell_size_px"),
+        (doc.sprite_size_px, "sprite_size_px"),
+        (doc.hard_agent_count, "hard_agent_count"),
+    ];
+    for (got, name) in positive {
+        if got == 0 {
+            return Err(ScenarioError::InvalidDimension(format!(
+                "{name} must be > 0"
+            )));
+        }
+    }
+
+    if cells > FIXTURE_MAX_CELLS {
+        return Err(ScenarioError::InvalidDimension(format!(
+            "fixture grid {cells} cells exceeds cap {FIXTURE_MAX_CELLS}"
+        )));
+    }
+    if doc.hard_agent_count > FIXTURE_MAX_AGENTS {
+        return Err(ScenarioError::InvalidDimension(format!(
+            "fixture hard_agent_count {} exceeds cap {FIXTURE_MAX_AGENTS}",
+            doc.hard_agent_count
+        )));
+    }
+    if doc.stretch_agent_count < doc.hard_agent_count {
+        return Err(ScenarioError::InvalidDimension(format!(
+            "stretch_agent_count {} below hard_agent_count {}",
+            doc.stretch_agent_count, doc.hard_agent_count
+        )));
+    }
+    if doc.stretch_agent_count > FIXTURE_MAX_AGENTS {
+        return Err(ScenarioError::InvalidDimension(format!(
+            "fixture stretch_agent_count {} exceeds cap {FIXTURE_MAX_AGENTS}",
+            doc.stretch_agent_count
+        )));
     }
     Ok(())
 }

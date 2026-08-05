@@ -8,9 +8,14 @@ publish = false
 build = "build.rs"
 
 [features]
-default = ["gpu"]
+default = ["gpu", "testkit"]
 # Full renderer path (links native SDL3).
 gpu = []
+# Deterministic headless test harness (T29). On by default because every
+# integration test in `tests/` consumes it as an external crate, where
+# `#[cfg(test)]` is invisible. Pure Rust, no extra dependencies. Exclude from a
+# shipping build with `--no-default-features --features gpu`.
+testkit = []
 # Compile-only SDL3 GPU API surface check (no native link). T6 leftover.
 gpu-api-spike = []
 

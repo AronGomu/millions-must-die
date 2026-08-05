@@ -1,19 +1,19 @@
 //! Flow field: reverse Dijkstra + normalized descent vectors.
-
-use std::path::PathBuf;
+//!
+//! Scenario-scale assertions run through the T29 harness
+//! (`full_fixture_field_hash_stable`), which owns scenario → field
+//! composition. The geometry cases below stay on `FlowField::build` directly:
+//! `FlowField::build` *is* the unit under test there, and each one pins a hand
+//! computed cost on a grid shaped for that one rule — routing them through a
+//! harness would add a simulation they never observe and test the harness
+//! instead of the field.
 
 use mmd_engine::nav::flow_field::{
     CARDINAL_COST, COST_OBSTACLE, COST_UNREACHABLE, DIAGONAL_COST, FlowField,
 };
-use mmd_engine::scenario::{Cell, Scenario};
+use mmd_engine::scenario::Cell;
+use mmd_engine::testkit::{ALL_FIXTURES, Harness};
 use sha2::{Digest, Sha256};
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root")
-}
 
 fn idx(x: u32, y: u32, w: u32) -> u32 {
     x + y * w
@@ -229,15 +229,43 @@ fn tie_order_is_stable() {
 
 #[test]
 fn full_fixture_field_hash_stable() {
-    let path = workspace_root().join("assets/scenarios/technical_prototype_v1.ron");
-    let scene = Scenario::load_verified(&path).expect("v1 scene");
-    let field = FlowField::from_scenario(&scene);
-    let digest = field_sha256(&field);
+    let h = Harness::gate_scene().build().expect("v1 scene");
+    let digest = field_sha256(h.flow_field());
     // Frozen digest of integration costs + vectors for technical_prototype_v1.
     assert_eq!(
         digest, EXPECTED_V1_FIELD_SHA256,
         "flow field hash drifted — intentional? update constant + justify"
     );
+}
+
+#[test]
+fn harness_fixture_fields_are_deterministic() {
+    // Same guarantee for the small fixtures the fast tests run on: building
+    // the field twice from the tracked asset must be byte-identical, so a
+    // fixture-based state hash is anchored to a stable field.
+    for name in ALL_FIXTURES {
+        let a = Harness::fixture(*name).build().expect("fixture a");
+        let b = Harness::fixture(*name).build().expect("fixture b");
+        assert_eq!(
+            field_sha256(a.flow_field()),
+            field_sha256(b.flow_field()),
+            "{name}: flow field build is not deterministic"
+        );
+
+        // Fixtures must actually pose a navigation problem: at least one
+        // obstacle cell, and every spawn must hold a descent vector.
+        let field = a.flow_field();
+        let scenario = a.scenario();
+        assert!(scenario.obstacle_count() > 0, "{name}: no obstacles");
+        for spawn in scenario.spawn_cells() {
+            assert!(
+                field.has_vector(spawn.x, spawn.y),
+                "{name}: spawn ({}, {}) has no route to the destination",
+                spawn.x,
+                spawn.y
+            );
+        }
+    }
 }
 
 /// SHA-256 over little-endian costs then f32 vector pairs (vx,vy).

@@ -1848,19 +1848,26 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Impl steps
 
-1. - [ ] Add `mmd-engine` test-support harness (`#[cfg(test)]` or `test-support` feature).
-2. - [ ] Add small fixture scenarios.
-3. - [ ] Migrate existing sim/nav tests onto the harness.
+1. - [x] Add `mmd-engine` test-support harness (`crates/mmd-engine/src/testkit/`, default-on `testkit` cargo feature — `#[cfg(test)]` is invisible to the `tests/` integration crates that must drive it).
+2. - [x] Add small fixture scenarios (`assets/scenarios/fixtures/fixture_small_v1`, `fixture_corridor_v1`; tracked `.sha256` sidecars, loaded via `Scenario::load_verified`).
+3. - [x] Migrate existing sim/nav tests onto the harness (all 7 `simulation.rs` tests; `flow_field.rs` `full_fixture_field_hash_stable`; the 6 pure `FlowField::build` geometry tests stay direct — see note).
 
 #### Outputs
 
-- `crates/mmd-engine/src/testkit/` (or `test_support.rs`), `assets/scenarios/fixtures/`, migrated tests.
+- `crates/mmd-engine/src/testkit/{mod,rng,fixtures}.rs`, `assets/scenarios/fixtures/`, `crates/mmd-engine/tests/harness.rs`, migrated tests.
+- Supporting API: `Scenario::from_spec` + public `ScenarioSpec` + `fixture_*` version family; `Runtime::{scenario, flow_field, agents, sim, sim_mut, tick_only, pack_groups}`; `Simulation::{recycle_count, spawn_count}`.
+
+**Migration note (coverage parity).** Every assertion present at T28 (`0b08c7e`) in `simulation.rs` and `flow_field.rs` is still asserted. The 6 pure-geometry tests in `flow_field.rs` (`destination_cost_is_zero`, `obstacles_unreachable`, `diagonal_cost_is_weighted`, `diagonal_cannot_cut_corner`, `vectors_descend`, `tie_order_is_stable`) deliberately keep calling `FlowField::build` directly: `FlowField::build` *is* their unit under test, and each pins a hand-computed cost on a grid shaped for one rule — routing them through the harness would attach a simulation they never observe and test the harness instead of the field. `full_fixture_field_hash_stable` did migrate, and `harness_fixture_fields_are_deterministic` was added alongside it.
 
 #### Validation
 
-- [ ] `cargo test --workspace --locked`
-- [ ] fmt + clippy clean
-- [ ] commit msg draft: `test(engine): add deterministic game-system test harness`
+- [x] `cargo test --workspace --locked` (whole workspace green, 0 failures; harness 11 passed + 1 ignored child fixture, simulation 7, flow_field 8, scenario_contract 4 → 14, engine lib 22; `--locked` clean → `Cargo.lock` untouched)
+- [x] fixture-validation branches carry real negative coverage (10 new tests in `scenario_contract.rs`), mutation-verified: disabling `FIXTURE_MAX_CELLS` fails `fixture_rejects_oversized_grid`; letting fixtures skip the renderer contract fails `fixture_must_honour_the_renderer_contract`
+- [x] fmt + clippy clean (`cargo fmt --all -- --check` clean; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean)
+- [x] cross-process determinism genuinely proven (child process re-executes the test binary; `same_seed_same_state_hash` compares its hash to the parent's)
+- [x] `testkit` provably excluded from the shipping binary (root dep takes `default-features = false, features = ["gpu"]`; `cargo tree -p millions_must_die -e features` shows 0 `testkit` occurrences; `cargo build --release` OK)
+- [x] app + xtask unaffected (`cargo run -- run --agents 50000 --frames 300` clean exit on Vulkan; `bootstrap/shaders/atlases --check` all ok)
+- [x] commit msg draft: `test(engine): add deterministic game-system test harness`
 
 ### T30: Simulation + navigation behaviour
 

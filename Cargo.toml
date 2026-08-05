@@ -10,7 +10,9 @@ license = "MIT-0"
 [workspace.dependencies]
 clap = { version = "4.5.53", features = ["derive"] }
 hex = "0.4.3"
-mmd-engine = { path = "crates/mmd-engine" }
+# `default-features = false` keeps the `testkit` harness out of the shipping
+# binary; mmd-engine's own tests still get it from its own defaults.
+mmd-engine = { path = "crates/mmd-engine", default-features = false, features = ["gpu"] }
 png = "0.18.1"
 ron = "0.10.1"
 # Pinned in T6 (third_party/versions.toml). Exact; no caret floats.

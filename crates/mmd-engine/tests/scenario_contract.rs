@@ -3,7 +3,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use mmd_engine::scenario::{Scenario, ScenarioError};
+use mmd_engine::scenario::{
+    Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, Scenario, ScenarioError, ScenarioSpec,
+};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -196,4 +198,258 @@ fn rejects_unreachable_spawn() {
         matches!(err, ScenarioError::UnreachableSpawn { .. }),
         "expected UnreachableSpawn, got {err:?}"
     );
+}
+
+// --- fixture family (T29) ---------------------------------------------------
+//
+// The `fixture_*` family relaxes the frozen v1 geometry so small harness
+// scenarios are expressible. These tests pin what it does *not* relax: without
+// them the caps below would be unenforced claims, and deleting a check would
+// leave every test green.
+
+/// Minimal valid fixture: 8×8 open grid, destination reachable from one spawn.
+fn fixture_spec() -> ScenarioSpec {
+    ScenarioSpec {
+        version: "fixture_negative_v1".to_string(),
+        width: 8,
+        height: 8,
+        cell_size_px: 4,
+        sprite_size_px: 30,
+        hard_agent_count: 4,
+        stretch_agent_count: 64,
+        seed: 1,
+        destination: Cell { x: 7, y: 7 },
+        spawn_cells: vec![Cell { x: 0, y: 0 }],
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        obstacle_cells: vec![],
+    }
+}
+
+fn expect_invalid_dimension(spec: ScenarioSpec, needle: &str) {
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidDimension(msg)) => assert!(
+            msg.contains(needle),
+            "expected InvalidDimension containing {needle:?}, got {msg:?}"
+        ),
+        other => panic!("expected InvalidDimension containing {needle:?}, got {other:?}"),
+    }
+}
+
+#[test]
+fn fixture_baseline_spec_is_valid() {
+    // Guards the negative tests below: each mutates exactly one field, so the
+    // baseline must pass or they would prove nothing.
+    let scene = Scenario::from_spec(fixture_spec()).expect("baseline fixture must validate");
+    assert_eq!(scene.width(), 8);
+    assert_eq!(scene.hard_agent_count(), 4);
+}
+
+#[test]
+fn fixture_rejects_oversized_grid() {
+    // 257 × 256 = 65_792 > 65_536.
+    let spec = ScenarioSpec {
+        width: 257,
+        height: 256,
+        destination: Cell { x: 0, y: 0 },
+        ..fixture_spec()
+    };
+    const { assert!(257 * 256 > FIXTURE_MAX_CELLS) };
+    expect_invalid_dimension(spec, "exceeds cap");
+}
+
+#[test]
+fn fixture_rejects_oversized_agent_counts() {
+    expect_invalid_dimension(
+        ScenarioSpec {
+            hard_agent_count: FIXTURE_MAX_AGENTS + 1,
+            stretch_agent_count: FIXTURE_MAX_AGENTS + 1,
+            ..fixture_spec()
+        },
+        "hard_agent_count",
+    );
+    expect_invalid_dimension(
+        ScenarioSpec {
+            stretch_agent_count: FIXTURE_MAX_AGENTS + 1,
+            ..fixture_spec()
+        },
+        "stretch_agent_count",
+    );
+}
+
+#[test]
+fn fixture_rejects_stretch_below_hard() {
+    expect_invalid_dimension(
+        ScenarioSpec {
+            hard_agent_count: 100,
+            stretch_agent_count: 50,
+            ..fixture_spec()
+        },
+        "below hard_agent_count",
+    );
+}
+
+#[test]
+fn fixture_rejects_zero_dimensions() {
+    for (spec, needle) in [
+        (
+            ScenarioSpec {
+                width: 0,
+                ..fixture_spec()
+            },
+            "width",
+        ),
+        (
+            ScenarioSpec {
+                height: 0,
+                ..fixture_spec()
+            },
+            "height",
+        ),
+        (
+            ScenarioSpec {
+                cell_size_px: 0,
+                ..fixture_spec()
+            },
+            "cell_size_px",
+        ),
+        (
+            ScenarioSpec {
+                sprite_size_px: 0,
+                ..fixture_spec()
+            },
+            "sprite_size_px",
+        ),
+        (
+            ScenarioSpec {
+                hard_agent_count: 0,
+                ..fixture_spec()
+            },
+            "hard_agent_count",
+        ),
+    ] {
+        expect_invalid_dimension(spec, needle);
+    }
+}
+
+#[test]
+fn fixture_must_honour_the_renderer_contract() {
+    // Fixtures may pick their own grid, never their own sprite-sheet geometry:
+    // `frame_uv_rect` and ATLAS_COUNT address exactly 4 atlases × 8 dirs × 4
+    // frames, so a divergent fixture would index outside the atlas.
+    for (spec, needle) in [
+        (
+            ScenarioSpec {
+                atlas_count: 3,
+                ..fixture_spec()
+            },
+            "atlas_count",
+        ),
+        (
+            ScenarioSpec {
+                direction_count: 7,
+                ..fixture_spec()
+            },
+            "direction_count",
+        ),
+        (
+            ScenarioSpec {
+                frame_count: 5,
+                ..fixture_spec()
+            },
+            "frame_count",
+        ),
+    ] {
+        expect_invalid_dimension(spec, needle);
+    }
+}
+
+#[test]
+fn fixture_rejects_fully_blocked_grid() {
+    let spec = ScenarioSpec {
+        width: 4,
+        height: 3,
+        destination: Cell { x: 3, y: 1 },
+        obstacle_cells: (0..12).collect(),
+        ..fixture_spec()
+    };
+    assert!(matches!(
+        Scenario::from_spec(spec),
+        Err(ScenarioError::InvalidObstacleRatio {
+            obstacles: 12,
+            cells: 12
+        })
+    ));
+}
+
+#[test]
+fn fixture_still_enforces_the_shared_structural_rules() {
+    // The relaxation is scoped to geometry. Seed, spawns and reachability are
+    // enforced for every family.
+    assert!(matches!(
+        Scenario::from_spec(ScenarioSpec {
+            seed: 0,
+            ..fixture_spec()
+        }),
+        Err(ScenarioError::InvalidSeed)
+    ));
+    assert!(matches!(
+        Scenario::from_spec(ScenarioSpec {
+            spawn_cells: vec![],
+            ..fixture_spec()
+        }),
+        Err(ScenarioError::EmptySpawns)
+    ));
+    // Seal the spawn corner (0,0) off from the destination.
+    assert!(matches!(
+        Scenario::from_spec(ScenarioSpec {
+            obstacle_cells: vec![1, 8, 9],
+            ..fixture_spec()
+        }),
+        Err(ScenarioError::UnreachableSpawn { x: 0, y: 0 })
+    ));
+    assert!(matches!(
+        Scenario::from_spec(ScenarioSpec {
+            spawn_cells: vec![Cell { x: 99, y: 0 }],
+            ..fixture_spec()
+        }),
+        Err(ScenarioError::InvalidSpawn { x: 99, y: 0 })
+    ));
+}
+
+#[test]
+fn unknown_version_family_is_still_rejected() {
+    // The prefix branch must not become a bypass for arbitrary version ids.
+    for version in ["evil_v1", "fixture", "technical_prototype_v2", ""] {
+        let spec = ScenarioSpec {
+            version: version.to_string(),
+            ..fixture_spec()
+        };
+        assert!(
+            matches!(
+                Scenario::from_spec(spec),
+                Err(ScenarioError::UnsupportedVersion(_))
+            ),
+            "version {version:?} must be rejected"
+        );
+    }
+}
+
+#[test]
+fn v1_geometry_stays_frozen_against_the_fixture_relaxation() {
+    // Belt-and-braces on the highest-risk edit in T29: a scenario that claims
+    // to be the gate scene must still satisfy every frozen constant, so the
+    // fixture branch cannot be reached by naming.
+    let mut v1 = fixture_spec();
+    v1.version = "technical_prototype_v1".to_string();
+    match Scenario::from_spec(v1) {
+        Err(ScenarioError::InvalidDimension(msg)) => {
+            assert!(
+                msg.contains("width"),
+                "expected frozen width check, got {msg}"
+            )
+        }
+        other => panic!("v1 must reject fixture geometry, got {other:?}"),
+    }
 }

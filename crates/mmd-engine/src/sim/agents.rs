@@ -40,6 +40,9 @@ pub struct Simulation {
     pub(super) blocked: Vec<bool>,
     pub(super) spawn_x: Vec<f32>,
     pub(super) spawn_y: Vec<f32>,
+    /// Population at construction. Kept explicitly so the recycle counters stay
+    /// correct if the population ever becomes variable (deaths, dynamic spawn).
+    pub(super) initial_agent_count: u64,
     pub(super) recycle_cursor: u64,
     pub(super) tick_index: u64,
     #[allow(dead_code)]
@@ -144,6 +147,7 @@ impl Simulation {
             blocked,
             spawn_x,
             spawn_y,
+            initial_agent_count: agent_count as u64,
             recycle_cursor: agent_count as u64,
             tick_index: 0,
             atlas_count,
@@ -163,6 +167,22 @@ impl Simulation {
 
     pub fn tick_index(&self) -> u64 {
         self.tick_index
+    }
+
+    /// Arrivals recycled back to a spawn cell since construction.
+    ///
+    /// The recycle cursor starts at the initial population (that seeding
+    /// consumed one spawn slot per agent) and advances once per arrival, so the
+    /// difference is the recycle count. Measured against the *initial* count,
+    /// not the live one, so it stays correct if the population ever varies.
+    pub fn recycle_count(&self) -> u64 {
+        self.recycle_cursor - self.initial_agent_count
+    }
+
+    /// Total spawn events issued: the initial seeding plus every recycle.
+    /// Balances against [`Self::agent_count`] + [`Self::recycle_count`].
+    pub fn spawn_count(&self) -> u64 {
+        self.recycle_cursor
     }
 
     pub fn agents(&self) -> AgentsView<'_> {

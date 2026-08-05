@@ -8,6 +8,9 @@ pub mod runtime;
 pub mod scenario;
 pub mod sim;
 
+#[cfg(feature = "testkit")]
+pub mod testkit;
+
 #[cfg(feature = "gpu-api-spike")]
 pub mod gpu_api_spike;
 
