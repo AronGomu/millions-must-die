@@ -17,4 +17,13 @@ Phase-0 accepted measurement design:
 - [Native platform/HW ADR](ADR/006_ADR_native_platform_and_reference_hardware.md)
 - [Local validation lab architecture](local-validation-lab-architecture.html)
 
-These docs define planned gates. Measured results remain unavailable until implementation + physical calibration complete.
+Phase-0 measured results (2026-08-05): a real Linux/Vulkan production bench ran
+and is recorded in [technical prototype results](technical-prototype-results.md)
+with raw evidence at `lab/releases/evidence/linux-vulkan-bench-production-v1.json`.
+The blocking 50k measurement came back **inconclusive** (trial noise above the
+locked `nmad <= 0.03` bound on a host running a capture session), so no release
+proof is frozen: `mmd-lab release-freeze` refuses to derive any status —
+pass or failure — from indecisive evidence. Scope is therefore **gate open;
+native cross-platform matrix deferred** — Windows/macOS native lanes and
+physical-pilot relative baselines stay `deferred-hw`; relative gates remain
+disabled until reviewed real-hardware baselines exist.

@@ -4,7 +4,9 @@ Offline-first PC RTS focused on fortress defense against massive enemy hordes.
 
 ## Status
 
-Phase 0 technical prototype workspace. App CLI shells (`run`, `bench`) only; simulation and renderer land in later tickets.
+Phase 0 technical prototype: **gate open — 50k evidence inconclusive; native cross-platform matrix deferred.**
+
+The 50k-agent flow-field scene runs on Linux/Vulkan and a real production-policy bench records medians far inside the frame-time limits with zero allocations in measured frames — but trial noise at 50k exceeded the locked limit, so no pass (and no failure) may be claimed, and no release proof is frozen. Windows/D3D12 and macOS/Metal native verification is `deferred-hw` pending reference hardware. Honest results: [docs/technical-prototype-results.md](docs/technical-prototype-results.md).
 
 ## License
 

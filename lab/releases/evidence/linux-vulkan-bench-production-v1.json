@@ -1,0 +1,351 @@
+{
+  "schema_version": "benchmark-report-v2",
+  "manifests": {
+    "scenario_version": "technical_prototype_v1",
+    "scenario_sha256": "a4a8cede18615672ba71219947204805da4e75195722f464a658a0ab4f634238",
+    "atlas_manifest_sha256": "2133e24ea23bd4929a9e8e39a51b08ad42ad0dd673af82e23cd41f57bd5a6cbe",
+    "backend": "vulkan",
+    "adapter": "NVIDIA GeForce RTX 5060 Ti",
+    "shader_manifest_version": 1,
+    "engine_version": "0.1.0",
+    "policy_id": "production-v1",
+    "frames_in_flight": 2,
+    "gpu_queue_latency_note": "async submit-to-fence completion proxy; not true GPU execution time",
+    "project_alloc_visibility_note": "project Rust global allocator only; SDL/driver C malloc and GPU driver heaps not visible"
+  },
+  "absolute_gate": {
+    "agent_count": 50000,
+    "median_p95_limit_ms": 16.67,
+    "median_p99_limit_ms": 25.0,
+    "nmad_limit": 0.03,
+    "relative_gates_enabled": false
+  },
+  "scale_results": [
+    {
+      "agent_count": 1000,
+      "blocking": false,
+      "stretch": false,
+      "trials": [
+        {
+          "index": 0,
+          "sample_count": 1351647,
+          "p95_frame_service_ms": 0.052468,
+          "p99_frame_service_ms": 0.10163486000000033,
+          "median_sim_ms": 0.021771,
+          "median_upload_ms": 0.002114,
+          "median_gpu_queue_latency_ms": 0.045385
+        },
+        {
+          "index": 1,
+          "sample_count": 1377960,
+          "p95_frame_service_ms": 0.051687000000000004,
+          "p99_frame_service_ms": 0.06953,
+          "median_sim_ms": 0.02178,
+          "median_upload_ms": 0.002114,
+          "median_gpu_queue_latency_ms": 0.045364999999999996
+        },
+        {
+          "index": 2,
+          "sample_count": 1409715,
+          "p95_frame_service_ms": 0.045886,
+          "p99_frame_service_ms": 0.061163999999999996,
+          "median_sim_ms": 0.02174,
+          "median_upload_ms": 0.002114,
+          "median_gpu_queue_latency_ms": 0.045255
+        },
+        {
+          "index": 3,
+          "sample_count": 1382630,
+          "p95_frame_service_ms": 0.051136,
+          "p99_frame_service_ms": 0.0753878099999996,
+          "median_sim_ms": 0.021790999999999998,
+          "median_upload_ms": 0.002124,
+          "median_gpu_queue_latency_ms": 0.045355
+        },
+        {
+          "index": 4,
+          "sample_count": 1287127,
+          "p95_frame_service_ms": 0.060323,
+          "p99_frame_service_ms": 0.12609599999999999,
+          "median_sim_ms": 0.022021000000000002,
+          "median_upload_ms": 0.0021339999999999996,
+          "median_gpu_queue_latency_ms": 0.045926
+        },
+        {
+          "index": 5,
+          "sample_count": 1206811,
+          "p95_frame_service_ms": 0.063779,
+          "p99_frame_service_ms": 0.11097689999999896,
+          "median_sim_ms": 0.022983,
+          "median_upload_ms": 0.002184,
+          "median_gpu_queue_latency_ms": 0.04858
+        },
+        {
+          "index": 6,
+          "sample_count": 1304096,
+          "p95_frame_service_ms": 0.055534,
+          "p99_frame_service_ms": 0.09661145000000042,
+          "median_sim_ms": 0.022082,
+          "median_upload_ms": 0.002124,
+          "median_gpu_queue_latency_ms": 0.046437000000000006
+        }
+      ],
+      "median_p95_frame_service_ms": 0.052468,
+      "median_p99_frame_service_ms": 0.09661145000000042,
+      "nmad_p95": 0.08663664709918424,
+      "nmad_p99": 0.3256981306460164,
+      "final_drain_ms": 0.009127,
+      "submitted_frames": 9550411,
+      "completed_frames": 9550411,
+      "max_in_flight": 2,
+      "project_rust_alloc_count": 0,
+      "verdict": "recorded",
+      "verdict_reason": "non-blocking count 1000; noisy nmad_p95=0.0866 nmad_p99=0.3257"
+    },
+    {
+      "agent_count": 10000,
+      "blocking": false,
+      "stretch": false,
+      "trials": [
+        {
+          "index": 0,
+          "sample_count": 187271,
+          "p95_frame_service_ms": 0.333113,
+          "p99_frame_service_ms": 0.41371329999999995,
+          "median_sim_ms": 0.21632500000000002,
+          "median_upload_ms": 0.020358,
+          "median_gpu_queue_latency_ms": 0.33679000000000003
+        },
+        {
+          "index": 1,
+          "sample_count": 182162,
+          "p95_frame_service_ms": 0.39560744999999914,
+          "p99_frame_service_ms": 0.4981155099999999,
+          "median_sim_ms": 0.217376,
+          "median_upload_ms": 0.020367999999999997,
+          "median_gpu_queue_latency_ms": 0.338263
+        },
+        {
+          "index": 2,
+          "sample_count": 183469,
+          "p95_frame_service_ms": 0.37609000000000004,
+          "p99_frame_service_ms": 0.5068612000000001,
+          "median_sim_ms": 0.21703599999999998,
+          "median_upload_ms": 0.020399,
+          "median_gpu_queue_latency_ms": 0.33747
+        },
+        {
+          "index": 3,
+          "sample_count": 189264,
+          "p95_frame_service_ms": 0.323405,
+          "p99_frame_service_ms": 0.3821850999999999,
+          "median_sim_ms": 0.21474100000000002,
+          "median_upload_ms": 0.020268,
+          "median_gpu_queue_latency_ms": 0.33461599999999997
+        },
+        {
+          "index": 4,
+          "sample_count": 184444,
+          "p95_frame_service_ms": 0.35449135000000004,
+          "p99_frame_service_ms": 0.48028757,
+          "median_sim_ms": 0.217106,
+          "median_upload_ms": 0.020398,
+          "median_gpu_queue_latency_ms": 0.337782
+        },
+        {
+          "index": 5,
+          "sample_count": 186934,
+          "p95_frame_service_ms": 0.3368931500000001,
+          "p99_frame_service_ms": 0.4392687000000001,
+          "median_sim_ms": 0.21592399999999998,
+          "median_upload_ms": 0.020347999999999998,
+          "median_gpu_queue_latency_ms": 0.336188
+        },
+        {
+          "index": 6,
+          "sample_count": 186241,
+          "p95_frame_service_ms": 0.34115799999999996,
+          "p99_frame_service_ms": 0.437949,
+          "median_sim_ms": 0.21674500000000002,
+          "median_upload_ms": 0.020408,
+          "median_gpu_queue_latency_ms": 0.337481
+        }
+      ],
+      "median_p95_frame_service_ms": 0.34115799999999996,
+      "median_p99_frame_service_ms": 0.4392687000000001,
+      "nmad_p95": 0.05794389904384512,
+      "nmad_p99": 0.13844504892335782,
+      "final_drain_ms": 0.003687,
+      "submitted_frames": 1331243,
+      "completed_frames": 1331243,
+      "max_in_flight": 2,
+      "project_rust_alloc_count": 0,
+      "verdict": "recorded",
+      "verdict_reason": "non-blocking count 10000; noisy nmad_p95=0.0579 nmad_p99=0.1384"
+    },
+    {
+      "agent_count": 50000,
+      "blocking": true,
+      "stretch": false,
+      "trials": [
+        {
+          "index": 0,
+          "sample_count": 39018,
+          "p95_frame_service_ms": 1.6702786500000002,
+          "p99_frame_service_ms": 1.9810370000000002,
+          "median_sim_ms": 1.063769,
+          "median_upload_ms": 0.100828,
+          "median_gpu_queue_latency_ms": 1.602967
+        },
+        {
+          "index": 1,
+          "sample_count": 37901,
+          "p95_frame_service_ms": 1.787703,
+          "p99_frame_service_ms": 2.42809,
+          "median_sim_ms": 1.071053,
+          "median_upload_ms": 0.10200100000000001,
+          "median_gpu_queue_latency_ms": 1.634226
+        },
+        {
+          "index": 2,
+          "sample_count": 38562,
+          "p95_frame_service_ms": 1.7438839999999998,
+          "p99_frame_service_ms": 2.1665208899999997,
+          "median_sim_ms": 1.063008,
+          "median_upload_ms": 0.100898,
+          "median_gpu_queue_latency_ms": 1.6023665
+        },
+        {
+          "index": 3,
+          "sample_count": 37479,
+          "p95_frame_service_ms": 1.923320099999999,
+          "p99_frame_service_ms": 2.6348234,
+          "median_sim_ms": 1.0765930000000001,
+          "median_upload_ms": 0.102311,
+          "median_gpu_queue_latency_ms": 1.635498
+        },
+        {
+          "index": 4,
+          "sample_count": 38621,
+          "p95_frame_service_ms": 1.6552850000000001,
+          "p99_frame_service_ms": 1.8667348000000006,
+          "median_sim_ms": 1.0711629999999999,
+          "median_upload_ms": 0.101741,
+          "median_gpu_queue_latency_ms": 1.6256000000000002
+        },
+        {
+          "index": 5,
+          "sample_count": 39137,
+          "p95_frame_service_ms": 1.612631,
+          "p99_frame_service_ms": 1.8202935999999998,
+          "median_sim_ms": 1.063649,
+          "median_upload_ms": 0.10080900000000001,
+          "median_gpu_queue_latency_ms": 1.600924
+        },
+        {
+          "index": 6,
+          "sample_count": 39532,
+          "p95_frame_service_ms": 1.54254445,
+          "p99_frame_service_ms": 1.6327720000000003,
+          "median_sim_ms": 1.0611095,
+          "median_upload_ms": 0.100518,
+          "median_gpu_queue_latency_ms": 1.594141
+        }
+      ],
+      "median_p95_frame_service_ms": 1.6702786500000002,
+      "median_p99_frame_service_ms": 1.9810370000000002,
+      "nmad_p95": 0.06533478225923521,
+      "nmad_p99": 0.13881538573686372,
+      "final_drain_ms": 0.005069,
+      "submitted_frames": 276923,
+      "completed_frames": 276923,
+      "max_in_flight": 2,
+      "project_rust_alloc_count": 0,
+      "verdict": "inconclusive",
+      "verdict_reason": "50k normalized MAD over 3% (nmad_p95=0.0653 nmad_p99=0.1388)"
+    },
+    {
+      "agent_count": 100000,
+      "blocking": false,
+      "stretch": true,
+      "trials": [
+        {
+          "index": 0,
+          "sample_count": 19720,
+          "p95_frame_service_ms": 3.199219,
+          "p99_frame_service_ms": 3.4292214400000027,
+          "median_sim_ms": 2.095148,
+          "median_upload_ms": 0.204808,
+          "median_gpu_queue_latency_ms": 3.2472920000000003
+        },
+        {
+          "index": 1,
+          "sample_count": 19621,
+          "p95_frame_service_ms": 3.152144,
+          "p99_frame_service_ms": 3.2709763999999995,
+          "median_sim_ms": 2.113382,
+          "median_upload_ms": 0.20516299999999998,
+          "median_gpu_queue_latency_ms": 3.260517
+        },
+        {
+          "index": 2,
+          "sample_count": 19626,
+          "p95_frame_service_ms": 3.136164,
+          "p99_frame_service_ms": 3.21133475,
+          "median_sim_ms": 2.11501,
+          "median_upload_ms": 0.204913,
+          "median_gpu_queue_latency_ms": 3.2566949999999997
+        },
+        {
+          "index": 3,
+          "sample_count": 19590,
+          "p95_frame_service_ms": 3.15127545,
+          "p99_frame_service_ms": 3.2722405200000004,
+          "median_sim_ms": 2.115736,
+          "median_upload_ms": 0.204823,
+          "median_gpu_queue_latency_ms": 3.260592
+        },
+        {
+          "index": 4,
+          "sample_count": 19538,
+          "p95_frame_service_ms": 3.181304,
+          "p99_frame_service_ms": 3.4518394000000066,
+          "median_sim_ms": 2.11377,
+          "median_upload_ms": 0.20521499999999998,
+          "median_gpu_queue_latency_ms": 3.2675105
+        },
+        {
+          "index": 5,
+          "sample_count": 19599,
+          "p95_frame_service_ms": 3.1440181,
+          "p99_frame_service_ms": 3.235192,
+          "median_sim_ms": 2.116293,
+          "median_upload_ms": 0.20494400000000002,
+          "median_gpu_queue_latency_ms": 3.260437
+        },
+        {
+          "index": 6,
+          "sample_count": 19571,
+          "p95_frame_service_ms": 3.1496825,
+          "p99_frame_service_ms": 3.2531972999999996,
+          "median_sim_ms": 2.117685,
+          "median_upload_ms": 0.20505400000000001,
+          "median_gpu_queue_latency_ms": 3.2677880000000004
+        }
+      ],
+      "median_p95_frame_service_ms": 3.15127545,
+      "median_p99_frame_service_ms": 3.2709763999999995,
+      "nmad_p95": 0.0034144102223752737,
+      "nmad_p99": 0.016219606916148672,
+      "final_drain_ms": 0.273873,
+      "submitted_frames": 140807,
+      "completed_frames": 140807,
+      "max_in_flight": 2,
+      "project_rust_alloc_count": 0,
+      "verdict": "recorded",
+      "verdict_reason": "non-blocking count 100000; median_p95=3.151 median_p99=3.271"
+    }
+  ],
+  "verdict": "inconclusive",
+  "verdict_reason": "50k normalized MAD over 3% (nmad_p95=0.0653 nmad_p99=0.1388)"
+}
