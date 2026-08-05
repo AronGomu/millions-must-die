@@ -1524,10 +1524,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Add coordinator self-check gate.
-2. - [ ] Aggregate/recompute all lanes.
-3. - [ ] Validate identity/workload equality.
-4. - [ ] Add exact PR summary + merge runbook.
+1. - [x] Add coordinator self-check gate.
+2. - [x] Aggregate/recompute all lanes.
+3. - [x] Validate identity/workload equality.
+4. - [x] Add exact PR summary + merge runbook.
 
 #### Outputs
 
@@ -1536,12 +1536,12 @@ flowchart TD
 
 #### Validation
 
-- [ ] `cargo test -p mmd-lab gate`
-- [ ] `$HOME/.local/bin/mmd-lab validate --commit <hash>` (fake 3-host fixture mode)
+- [x] `cargo test -p mmd-lab gate`
+- [x] `$HOME/.local/bin/mmd-lab validate --commit <hash>` (fake 3-host fixture mode) — via workspace binary; trusted install predates command, refresh awaits promotion
 - [ ] `[deferred-hw]` all 3 reset/run/reset lanes complete
-- [ ] PR summary binds exact hash
-- [ ] app functional — exact tested app commit
-- [ ] commit msg draft: `feat(lab): require exact-hash native merge gate`
+- [x] PR summary binds exact hash
+- [x] app functional — exact tested app commit
+- [x] commit msg draft: `feat(lab): require exact-hash native merge gate`
 
 ### T25: Relative calibration engine
 

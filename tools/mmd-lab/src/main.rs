@@ -2,6 +2,7 @@
 
 mod archive;
 mod calibrate;
+mod gate;
 mod install;
 mod macos;
 mod macos_gate;
@@ -30,6 +31,7 @@ use calibrate::{
     derive_baseline_candidate, enable_reviewed_baseline, Baseline, CalibrationDataset,
     ReviewRecord,
 };
+use gate::{LaneId, LaneRun, aggregate_merge_gate, render_merge_summary};
 use install::{
     default_binary_path, default_manifest_path, install_current_exe, self_check, sha256_file,
 };
@@ -44,7 +46,7 @@ use macos_recovery::{
 };
 use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
-use ssh::{run_fake_matrix, FakeAgent};
+use ssh::{AgentTransport, FakeAgent, run_fake_matrix};
 use ubuntu::{load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict};
 use ubuntu_gate::{ProtocolResetController, UbuntuGateParams, run_ubuntu_gate};
 use ubuntu_recovery::{
@@ -193,10 +195,11 @@ enum Commands {
         #[arg(long)]
         out_dir: Option<PathBuf>,
     },
-    /// Validate candidate via agents; coordinator recomputes verdict
+    /// Aggregate exact-hash merge gate over all 3 native lanes (T24).
+    /// With --fake-fixtures/--config: legacy fake agent matrix (T14).
     Validate {
         /// `pr` rejects dirty worktree; `local-dev` must be explicit
-        #[arg(long, value_parser = ["pr", "local-dev"])]
+        #[arg(long, default_value = "pr", value_parser = ["pr", "local-dev"])]
         mode: String,
         /// Workspace / source root to archive
         #[arg(long)]
@@ -222,6 +225,15 @@ enum Commands {
         /// Write PR summary markdown here
         #[arg(long)]
         summary_out: Option<PathBuf>,
+        /// Override Ubuntu lane evidence fixture (aggregate mode; tests)
+        #[arg(long)]
+        ubuntu_evidence_fixture: Option<PathBuf>,
+        /// Override Windows lane evidence fixture (aggregate mode; tests)
+        #[arg(long)]
+        windows_evidence_fixture: Option<PathBuf>,
+        /// Override macOS lane evidence fixture (aggregate mode; tests)
+        #[arg(long)]
+        macos_evidence_fixture: Option<PathBuf>,
     },
     /// Run one runner's candidate gate lane (fixture/fake transport; native deferred-hw)
     ValidateRunner {
@@ -397,6 +409,9 @@ fn main() -> ExitCode {
             manifest,
             retain_dir,
             summary_out,
+            ubuntu_evidence_fixture,
+            windows_evidence_fixture,
+            macos_evidence_fixture,
         } => cmd_validate(ValidateArgs {
             mode,
             root,
@@ -407,6 +422,9 @@ fn main() -> ExitCode {
             manifest,
             retain_dir,
             summary_out,
+            ubuntu_evidence_fixture,
+            windows_evidence_fixture,
+            macos_evidence_fixture,
         }),
     }
 }
@@ -1490,6 +1508,9 @@ struct ValidateArgs {
     manifest: Option<PathBuf>,
     retain_dir: Option<PathBuf>,
     summary_out: Option<PathBuf>,
+    ubuntu_evidence_fixture: Option<PathBuf>,
+    windows_evidence_fixture: Option<PathBuf>,
+    macos_evidence_fixture: Option<PathBuf>,
 }
 
 fn cmd_validate(args: ValidateArgs) -> ExitCode {
@@ -1539,6 +1560,23 @@ fn cmd_validate(args: ValidateArgs) -> ExitCode {
         }
     };
     println!("archive_sha256 {}", blob.sha256);
+
+    // T24 aggregate path: without fake fixtures / config, `validate` is the
+    // exact-hash 3-host merge gate over all native candidate lanes.
+    if args.fake_fixtures.is_none() && args.config.is_none() {
+        let commit = args.commit.clone().or_else(|| git_head(&root).ok());
+        return cmd_validate_merge_gate(MergeGateCliArgs {
+            mode,
+            dirty,
+            commit,
+            blob,
+            retain_dir: args.retain_dir,
+            summary_out: args.summary_out,
+            ubuntu_evidence_fixture: args.ubuntu_evidence_fixture,
+            windows_evidence_fixture: args.windows_evidence_fixture,
+            macos_evidence_fixture: args.macos_evidence_fixture,
+        });
+    }
 
     let (evidences, required) = match load_agents(
         &blob,
@@ -1596,6 +1634,230 @@ fn cmd_validate(args: ValidateArgs) -> ExitCode {
         mmd_engine::bench::VerdictStatus::Error => ExitCode::from(3),
         mmd_engine::bench::VerdictStatus::Recorded => ExitCode::SUCCESS,
     }
+}
+
+/// Inputs for the T24 aggregate merge gate CLI path.
+struct MergeGateCliArgs {
+    mode: ValidateMode,
+    dirty: bool,
+    commit: Option<String>,
+    blob: ArchiveBlob,
+    retain_dir: Option<PathBuf>,
+    summary_out: Option<PathBuf>,
+    ubuntu_evidence_fixture: Option<PathBuf>,
+    windows_evidence_fixture: Option<PathBuf>,
+    macos_evidence_fixture: Option<PathBuf>,
+}
+
+/// T24: exact-hash 3-host merge gate. Runs all three candidate lanes over one
+/// content-addressed archive, then lets the coordinator aggregate/recompute.
+/// Fail-fast is false: every lane is collected before the verdict.
+fn cmd_validate_merge_gate(args: MergeGateCliArgs) -> ExitCode {
+    let ws = discover_workspace_root();
+    let pins = match mmd_engine::render::host_binding_hashes(&ws) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("validate: workspace pins: {e}");
+            return ExitCode::from(3);
+        }
+    };
+
+    let mut lanes: Vec<LaneRun> = Vec::new();
+    let mut lane_errors: Vec<String> = Vec::new();
+    let overrides = [
+        (LaneId::Ubuntu, args.ubuntu_evidence_fixture.as_deref()),
+        (LaneId::Windows, args.windows_evidence_fixture.as_deref()),
+        (LaneId::Macos, args.macos_evidence_fixture.as_deref()),
+    ];
+    for (lane, evidence_override) in overrides {
+        match run_merge_lane(lane, &ws, &args.blob, &pins, evidence_override) {
+            Ok(run) => lanes.push(run),
+            Err(e) => lane_errors.push(format!("{} lane setup failed: {e}", lane.as_str())),
+        }
+    }
+
+    let mut outcome = aggregate_merge_gate(&args.blob.sha256, &lanes, &BenchPolicy::production());
+    if !lane_errors.is_empty() {
+        outcome.overall = verify::worse(outcome.overall, mmd_engine::bench::VerdictStatus::Error);
+        outcome.decision = gate::MergeDecision::Blocked;
+        outcome.reasons.extend(lane_errors);
+    }
+
+    let summary = render_merge_summary(
+        args.mode.as_str(),
+        args.commit.as_deref(),
+        args.dirty,
+        &outcome,
+    );
+    println!("{summary}");
+    println!();
+    println!("mode fixture/fake-transport; real 3-host reset/run/reset lanes deferred-hw");
+
+    if let Some(out) = args.summary_out {
+        if let Some(parent) = out.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Err(e) = fs::write(&out, &summary) {
+            eprintln!("validate: write summary failed: {e}");
+            return ExitCode::from(3);
+        }
+    }
+    if let Some(retain) = args.retain_dir {
+        let evidences: Vec<HostEvidence> = lanes.iter().map(|l| l.evidence.clone()).collect();
+        if let Err(e) = retain_evidence(&retain, &args.blob, &evidences, &summary) {
+            eprintln!("validate: retain failed: {e}");
+            return ExitCode::from(3);
+        }
+        println!(
+            "retained {}",
+            retain_run_dir(&retain, &args.blob.sha256).display()
+        );
+    }
+
+    print_coordinator_sha();
+    verdict_exit(outcome.overall)
+}
+
+/// Run one candidate lane for the aggregate gate (fixture/fake transport;
+/// native runs deferred-hw). Thin composition over the lane adapters — no
+/// lane logic is duplicated here.
+fn run_merge_lane(
+    lane: LaneId,
+    ws: &std::path::Path,
+    blob: &ArchiveBlob,
+    pins: &(String, String),
+    evidence_override: Option<&std::path::Path>,
+) -> Result<LaneRun, String> {
+    let fixture_dir = ws.join(format!("lab/fixtures/{}-candidate", lane.as_str()));
+    let evidence_path = evidence_override
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| fixture_dir.join("evidence-pass.json"));
+    let template = HostEvidence::from_json(
+        &fs::read_to_string(&evidence_path)
+            .map_err(|e| format!("evidence fixture {}: {e}", evidence_path.display()))?,
+    )
+    .map_err(|e| format!("evidence fixture parse: {e}"))?;
+    let readback_png = fs::read(fixture_dir.join("readback-pass.png"))
+        .map_err(|e| format!("readback fixture: {e}"))?;
+
+    let mut agent = FakeAgent::from_evidence(template.clone());
+    let policy = BenchPolicy::production();
+    let (verdict, golden_ok, post_run_reset_started, reasons) = match lane {
+        LaneId::Ubuntu => {
+            let runner_manifest = load_manifest(&ws.join("lab/manifests/ubuntu-24.04-x86_64.toml"))
+                .map_err(|e| format!("runner manifest: {e}"))?;
+            let attestation = load_attestation(&ws.join("lab/fixtures/ubuntu-attest/pass.json"))
+                .map_err(|e| format!("attestation fixture: {e}"))?;
+            let golden_dir = mmd_engine::render::golden_family_dir(&runner_manifest.backend)
+                .map(|family| ws.join("lab/goldens").join(family))
+                .map_err(|e| format!("golden family: {e}"))?;
+            let mut recovery = simulate_successful_drill(
+                &runner_manifest.image.digest_sha256,
+                "ssh-ed25519 AAAAfixture-fresh",
+                None,
+            );
+            let params = UbuntuGateParams {
+                runner_manifest: &runner_manifest,
+                attestation: &attestation,
+                golden_dir: &golden_dir,
+                policy: &policy,
+                atlas_manifest_sha256: pins.0.clone(),
+                shader_canonical_sha256: pins.1.clone(),
+            };
+            let o = run_ubuntu_gate(
+                &params,
+                &mut recovery,
+                &mut agent,
+                blob,
+                &readback_png,
+                &mut ProtocolResetController,
+            );
+            (o.verdict, o.golden_ok, o.post_run_reset_started, o.reasons)
+        }
+        LaneId::Windows => {
+            let runner_manifest =
+                load_windows_manifest(&ws.join("lab/manifests/windows-11-25h2-x86_64.toml"))
+                    .map_err(|e| format!("runner manifest: {e}"))?;
+            let attestation =
+                load_windows_attestation(&ws.join("lab/fixtures/windows-attest/pass.json"))
+                    .map_err(|e| format!("attestation fixture: {e}"))?;
+            // Fixture golden: native windows-d3d12 capture is deferred-hw.
+            let golden_dir = fixture_dir.join("golden");
+            let mut recovery = simulate_successful_windows_drill(
+                &runner_manifest.ffu.digest_sha256,
+                "WIN-MACHINE-FRESH-FIXTURE",
+                None,
+            );
+            let params = WindowsGateParams {
+                runner_manifest: &runner_manifest,
+                attestation: &attestation,
+                golden_dir: &golden_dir,
+                policy: &policy,
+                atlas_manifest_sha256: pins.0.clone(),
+                shader_canonical_sha256: pins.1.clone(),
+            };
+            let o = run_windows_gate(
+                &params,
+                &mut recovery,
+                &mut agent,
+                blob,
+                &readback_png,
+                &mut WindowsProtocolResetController,
+            );
+            (o.verdict, o.golden_ok, o.post_run_reset_started, o.reasons)
+        }
+        LaneId::Macos => {
+            let runner_manifest =
+                load_macos_manifest(&ws.join("lab/manifests/macos-15-arm64.toml"))
+                    .map_err(|e| format!("runner manifest: {e}"))?;
+            let attestation =
+                load_macos_attestation(&ws.join("lab/fixtures/macos-attest/pass.json"))
+                    .map_err(|e| format!("attestation fixture: {e}"))?;
+            // Fixture golden: native macos-metal capture is deferred-hw.
+            let golden_dir = fixture_dir.join("golden");
+            let mut recovery = simulate_successful_macos_eacs_drill(
+                &runner_manifest.enrollment.mdm_profile_id,
+                "MAC-HOST-FRESH-FIXTURE",
+                None,
+            );
+            let params = MacosGateParams {
+                runner_manifest: &runner_manifest,
+                attestation: &attestation,
+                golden_dir: &golden_dir,
+                policy: &policy,
+                atlas_manifest_sha256: pins.0.clone(),
+                shader_canonical_sha256: pins.1.clone(),
+            };
+            let o = run_macos_gate(
+                &params,
+                &mut recovery,
+                &mut agent,
+                blob,
+                &readback_png,
+                &mut MacosEacsProtocolResetController,
+            );
+            (o.verdict, o.golden_ok, o.post_run_reset_started, o.reasons)
+        }
+    };
+
+    // Coordinator's copy of the collected evidence for aggregate recompute.
+    // FakeAgent delivery is deterministic; a failed delivery keeps the raw
+    // template so the aggregate flags its stale `pending` hash honestly.
+    // Note: with a single shared archive + fake transport every lane sees
+    // the same hash, so the aggregate's mixed-source check only activates
+    // once real per-host dispatch/evidence collation lands (deferred-hw);
+    // unit tests exercise it directly.
+    let mut probe = FakeAgent::from_evidence(template.clone());
+    let evidence = probe.deliver_and_collect(blob).unwrap_or(template);
+
+    Ok(LaneRun {
+        lane,
+        verdict,
+        golden_ok,
+        post_run_reset_started,
+        reasons,
+        evidence,
+    })
 }
 
 struct ValidateRunnerArgs {

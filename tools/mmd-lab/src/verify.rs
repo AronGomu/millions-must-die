@@ -42,10 +42,19 @@ impl MatrixVerdict {
 
 /// Recompute 50k trial percentiles from raw samples only.
 pub fn recompute_gate_aggregate(evidence: &HostEvidence) -> Result<TrialAggregate, String> {
+    recompute_count_aggregate(evidence, GATE_AGENT_COUNT)
+}
+
+/// Recompute trial percentiles for one agent count from raw samples only.
+/// Shared by the blocking 50k gate and the nonblocking scale-evidence rows.
+pub fn recompute_count_aggregate(
+    evidence: &HostEvidence,
+    agent_count: u32,
+) -> Result<TrialAggregate, String> {
     let mut indexed: Vec<(u32, TrialPercentiles)> = evidence
         .raw_trials
         .iter()
-        .filter(|t| t.agent_count == GATE_AGENT_COUNT)
+        .filter(|t| t.agent_count == agent_count)
         .map(|t| {
             (
                 t.trial_index,
@@ -55,7 +64,7 @@ pub fn recompute_gate_aggregate(evidence: &HostEvidence) -> Result<TrialAggregat
         .collect();
     if indexed.is_empty() {
         return Err(format!(
-            "host {} missing raw samples for gate count {GATE_AGENT_COUNT}",
+            "host {} missing raw samples for count {agent_count}",
             evidence.host_manifest.host_id
         ));
     }
