@@ -1905,9 +1905,9 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Impl steps
 
-1. - [ ] Add behavioural assertions + helpers.
-2. - [ ] Add obstacle-dense and walled-off fixtures.
-3. - [ ] Fix any real behaviour bug the tests surface (or record it as a ticket).
+1. - [x] Add behavioural assertions + helpers.
+2. - [x] Add obstacle-dense and walled-off fixtures.
+3. - [x] Fix any real behaviour bug the tests surface (or record it as a ticket). No engine bug surfaced: 12 injected regressions each killed their target test, and the field-driven runs show 0 obstacle entries / 0 stuck agents / 0 bounds or finiteness violations on all four fixtures and the 50k gate scene.
 
 #### Outputs
 
@@ -1915,9 +1915,9 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Validation
 
-- [ ] `cargo test --workspace --locked`
-- [ ] each test fails when its invariant is deliberately broken
-- [ ] commit msg draft: `test(sim): prove horde movement, routing and recycling behaviour`
+- [x] `cargo test --workspace --locked`
+- [x] each test fails when its invariant is deliberately broken (12/12 mutations killed; the first pass exposed a weak `obstacles_are_never_entered`, since strengthened with a hostile-field phase)
+- [x] commit msg draft: `test(sim): prove horde movement, routing and recycling behaviour`
 
 ### T31: Render correctness (single host)
 

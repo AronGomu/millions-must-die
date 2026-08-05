@@ -17,9 +17,24 @@ pub const FIXTURE_SMALL_V1: &str = "fixture_small_v1";
 /// 32×24 serpentine walls. 200 agents, 4 west-edge spawns. Every route to the
 /// destination must go around an obstacle, so navigation is actually exercised.
 pub const FIXTURE_CORRIDOR_V1: &str = "fixture_corridor_v1";
+/// 32×24 pillar field, one third of the grid blocked (T30 obstacle-dense case).
+/// 256 agents, 4 west-edge spawn groups. Corridors are one row / two columns
+/// wide, so every route weaves and the "never enters an obstacle" claim is
+/// tested against constant wall contact rather than open ground.
+pub const FIXTURE_DENSE_V1: &str = "fixture_dense_v1";
+/// 24×16 with two offset walls **and a fully sealed 3×3 chamber** (T30
+/// unreachable case): cells 10..=12 × 6..=8 are free ground with no route to
+/// the destination, so the field must mark them
+/// [`crate::nav::flow_field::COST_UNREACHABLE`] with a zero vector.
+pub const FIXTURE_WALLED_V1: &str = "fixture_walled_v1";
 
 /// Every tracked fixture, for suites that assert across all of them.
-pub const ALL_FIXTURES: &[&str] = &[FIXTURE_SMALL_V1, FIXTURE_CORRIDOR_V1];
+pub const ALL_FIXTURES: &[&str] = &[
+    FIXTURE_SMALL_V1,
+    FIXTURE_CORRIDOR_V1,
+    FIXTURE_DENSE_V1,
+    FIXTURE_WALLED_V1,
+];
 
 /// Absolute path to a tracked fixture scenario.
 pub fn fixture_path(name: &str) -> PathBuf {

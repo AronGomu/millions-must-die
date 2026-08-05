@@ -12,7 +12,9 @@ use std::time::Duration;
 
 use mmd_engine::scenario::ScenarioError;
 use mmd_engine::sim::{SPEED_CELLS_PER_SEC, TICK_DT};
-use mmd_engine::testkit::{FIXTURE_CORRIDOR_V1, FIXTURE_SMALL_V1, Harness, ScenarioSource};
+use mmd_engine::testkit::{
+    ALL_FIXTURES, FIXTURE_CORRIDOR_V1, FIXTURE_SMALL_V1, Harness, ScenarioSource,
+};
 
 /// Canonical reproducibility run: one fixture, one agent count, one seed, one
 /// tick count. Shared by the in-process and cross-process halves of
@@ -414,7 +416,8 @@ fn gate_scene_harness_matches_direct_runtime() {
 fn fixture_scenarios_are_hash_verified() {
     // Fixtures obey the same tracked-hash contract as the gate scene: a
     // tampered fixture must fail to load rather than silently drift.
-    for name in [FIXTURE_SMALL_V1, FIXTURE_CORRIDOR_V1] {
+    for name in ALL_FIXTURES {
+        let name = *name;
         let path = mmd_engine::testkit::fixture_path(name);
         assert!(path.is_file(), "missing tracked fixture {}", path.display());
         let sha = path.with_extension("sha256");
@@ -452,7 +455,8 @@ fn fixture_scenarios_stay_small() {
     // `scenario_contract.rs` (asserting a loaded scenario is under a cap only
     // restates the committed data). This asserts the committed fixtures are
     // genuinely the fast ones the harness promises — far below the hard cap.
-    for name in [FIXTURE_SMALL_V1, FIXTURE_CORRIDOR_V1] {
+    for name in ALL_FIXTURES {
+        let name = *name;
         let h = Harness::builder(ScenarioSource::fixture(name))
             .build()
             .expect("fixture harness");

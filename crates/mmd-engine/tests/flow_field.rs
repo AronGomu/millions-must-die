@@ -8,11 +8,13 @@
 //! harness would add a simulation they never observe and test the harness
 //! instead of the field.
 
+mod common;
+
 use mmd_engine::nav::flow_field::{
     CARDINAL_COST, COST_OBSTACLE, COST_UNREACHABLE, DIAGONAL_COST, FlowField,
 };
 use mmd_engine::scenario::Cell;
-use mmd_engine::testkit::{ALL_FIXTURES, Harness};
+use mmd_engine::testkit::{ALL_FIXTURES, FIXTURE_WALLED_V1, Harness};
 use sha2::{Digest, Sha256};
 
 fn idx(x: u32, y: u32, w: u32) -> u32 {
@@ -266,6 +268,155 @@ fn harness_fixture_fields_are_deterministic() {
             );
         }
     }
+}
+
+// --- T30 field behaviour ----------------------------------------------------
+
+#[test]
+fn every_reachable_cell_has_a_valid_direction() {
+    // The routing claim the simulation depends on: from *any* free cell an
+    // agent can reach the destination from, the field hands it a unit vector
+    // that steps onto a free, in-bounds cell strictly closer to the goal. A
+    // reachable cell with no vector is a dead end the horde would pile into.
+    let mut sources: Vec<Harness> = ALL_FIXTURES
+        .iter()
+        .map(|name| Harness::fixture(*name).build().expect("fixture"))
+        .collect();
+    sources.push(Harness::gate_scene().build().expect("gate scene"));
+
+    for h in &sources {
+        let name = h.scenario().version().to_string();
+        let field = h.flow_field();
+        let (w, ht) = (field.width(), field.height());
+        let mut checked = 0u32;
+        for y in 0..ht {
+            for x in 0..w {
+                let cost = field.cost_at(x, y);
+                if cost == COST_OBSTACLE || cost == COST_UNREACHABLE || cost == 0 {
+                    continue; // walls, sealed ground, and the destination itself
+                }
+                assert!(
+                    field.has_vector(x, y),
+                    "{name}: reachable cell ({x}, {y}) cost {cost} has no descent vector"
+                );
+                let (vx, vy) = field.vector_at(x, y);
+                let len = (vx * vx + vy * vy).sqrt();
+                assert!(
+                    (len - 1.0).abs() < 1e-5,
+                    "{name}: ({x}, {y}) vector is not unit length ({len})"
+                );
+
+                // The vector names a grid neighbour; that neighbour must be a
+                // legal, strictly-descending step.
+                let nx = x as i32 + vx.round() as i32;
+                let ny = y as i32 + vy.round() as i32;
+                assert!(
+                    nx >= 0 && ny >= 0 && nx < w as i32 && ny < ht as i32,
+                    "{name}: ({x}, {y}) points out of the grid to ({nx}, {ny})"
+                );
+                let (nx, ny) = (nx as u32, ny as u32);
+                let next = field.cost_at(nx, ny);
+                assert_ne!(
+                    next, COST_OBSTACLE,
+                    "{name}: ({x}, {y}) points into obstacle ({nx}, {ny})"
+                );
+                assert_ne!(
+                    next, COST_UNREACHABLE,
+                    "{name}: ({x}, {y}) points into unreachable ground ({nx}, {ny})"
+                );
+                assert!(
+                    next < cost,
+                    "{name}: step ({x}, {y}) cost {cost} → ({nx}, {ny}) cost {next} does not descend"
+                );
+                checked += 1;
+            }
+        }
+        // A field where every cell was skipped would pass the loop silently.
+        assert!(
+            checked > 0,
+            "{name}: no reachable non-destination cell was checked"
+        );
+    }
+}
+
+#[test]
+fn unreachable_region_is_explicit() {
+    // `fixture_walled_v1` seals a 3×3 chamber (x 10..=12, y 6..=8) behind a
+    // ring of obstacles. Those cells are *free ground with no route*, which is
+    // a third state the field must name explicitly rather than conflate with
+    // "wall" or "cost 0": the documented sentinel is COST_UNREACHABLE, paired
+    // with a zero vector.
+    let h = Harness::fixture(FIXTURE_WALLED_V1).build().expect("walled");
+    let field = h.flow_field();
+    assert_ne!(
+        COST_UNREACHABLE, COST_OBSTACLE,
+        "the two sentinels must stay distinguishable"
+    );
+
+    let sealed: Vec<(u32, u32)> = (6..=8)
+        .flat_map(|y| (10..=12).map(move |x| (x, y)))
+        .collect();
+    for &(x, y) in &sealed {
+        assert!(
+            !h.scenario().is_obstacle_index(x + y * field.width()),
+            "chamber cell ({x}, {y}) should be free ground, not a wall"
+        );
+        assert_eq!(
+            field.cost_at(x, y),
+            COST_UNREACHABLE,
+            "sealed cell ({x}, {y}) must carry the unreachable sentinel"
+        );
+        assert_eq!(
+            field.vector_at(x, y),
+            (0.0, 0.0),
+            "sealed cell ({x}, {y}) must have no descent vector"
+        );
+        assert!(!field.has_vector(x, y));
+    }
+
+    // Exactly this chamber, and nothing else, is unreachable — otherwise the
+    // fixture could rot into a mostly-sealed map and still pass.
+    let mut found = Vec::new();
+    for y in 0..field.height() {
+        for x in 0..field.width() {
+            if field.cost_at(x, y) == COST_UNREACHABLE {
+                found.push((x, y));
+            }
+        }
+    }
+    assert_eq!(
+        found, sealed,
+        "unreachable set drifted from the sealed room"
+    );
+}
+
+#[test]
+fn agent_in_an_unreachable_region_is_inert_not_panicking() {
+    // The simulation half of the sentinel contract: an agent standing on
+    // unreachable ground has no vector to follow, so it must simply hold
+    // position — no panic, no NaN, no teleport, and no spurious arrival.
+    let mut h = Harness::fixture(FIXTURE_WALLED_V1).build().expect("walled");
+    let recycled_before = h.recycled_count();
+    h.sim_mut().set_position(0, 11.5, 7.5); // centre of the sealed chamber
+
+    // 300 ticks: past this fixture's first observed arrival (tick 217), so the
+    // "everyone else still routes" half of the assertion is exercised.
+    h.step_exact(300);
+
+    let v = h.agents();
+    assert_eq!(
+        (v.x[0], v.y[0]),
+        (11.5, 7.5),
+        "an agent with no route must hold its position"
+    );
+    common::assert_positions_finite_and_in_bounds(&h, "walled fixture");
+    assert!(
+        common::agents_in_obstacles(&h).is_empty(),
+        "sealed ground is not an obstacle cell"
+    );
+    // Every other agent still routes normally, so recycles keep happening; the
+    // stranded agent simply must not be one of them.
+    assert!(h.recycled_count() > recycled_before);
 }
 
 /// SHA-256 over little-endian costs then f32 vector pairs (vx,vy).

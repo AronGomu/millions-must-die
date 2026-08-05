@@ -1,0 +1,16 @@
+(
+  version: "fixture_walled_v1",
+  width: 24,
+  height: 16,
+  cell_size_px: 4,
+  sprite_size_px: 30,
+  hard_agent_count: 64,
+  stretch_agent_count: 512,
+  seed: 20260809,
+  destination: (x: 22, y: 8),
+  spawn_cells: [(x: 1, y: 2), (x: 1, y: 6), (x: 1, y: 10), (x: 1, y: 14)],
+  atlas_count: 4,
+  direction_count: 8,
+  frame_count: 4,
+  obstacle_cells: [5,29,53,77,101,113,125,129,130,131,132,133,137,149,153,157,161,173,177,181,185,197,201,205,209,221,225,226,227,228,229,233,245,257,269,281,305,329,353,377],
+)
