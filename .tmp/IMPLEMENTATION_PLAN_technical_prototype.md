@@ -52,7 +52,7 @@ User instruction: remove all benchmarking for the different platforms/architectu
 - The zero-allocation-per-frame contract, reframed as a *code-health invariant* under a short deterministic test policy — it catches accidental per-frame allocation, not throughput.
 - Reproducible builds/toolchain checks (`nix flake check`, xtask `--check`).
 
-**Disposition of existing perf/lab code** (`crates/mmd-engine/src/bench/`, `tools/mmd-lab/`, `lab/`, `schemas/*bench*|*baseline*|*pilot*|*release*`): retained in-tree, frozen and non-gating. Nothing is deleted, because the optimization phase will reuse it; nothing runs on the required path. Their own unit tests keep running (they are cheap and prove the tools still compile). `TODO(user)` — confirm at plan validation: **(a) freeze in place (recommended)**, (b) move under `attic/` to make the retirement visually obvious, or (c) delete outright.
+**Disposition of existing perf/lab code** (`crates/mmd-engine/src/bench/`, `tools/mmd-lab/`, `lab/`, `schemas/*bench*|*baseline*|*pilot*|*release*`): retained in-tree, frozen and non-gating. Nothing is deleted, because the optimization phase will reuse it; nothing runs on the required path. Their own unit tests keep running (they are cheap and prove the tools still compile). **Resolved 2026-08-05 (T28): (a) freeze in place.** Rationale: it is the plan's own recommended option and the only fully reversible one — nothing is deleted and nothing is moved, so the optimization phase reuses the code at its current paths with no import/path churn, and git history stays readable. Option (b) `attic/` would have made retirement visually obvious at the cost of rewriting every path reference in `docs/lab/`, `schemas/` and the manifests for a purely cosmetic gain; option (c) delete was rejected outright because the measurement design is expensive, unreplaced work that the optimization phase needs. Retirement is instead made obvious in prose: `docs/05-testing.md` names every retired item and where it still lives, and the entry-point docs (`docs/lab/merge-workflow.md`, `docs/lab/local-validation.md`, ADR 001/005/006/007) carry a retired/superseded banner pointing there.
 
 **Status of the perf/lab tickets** T9–T27: `retired (perf deferred)`. Work already committed stays in history; no remaining `[deferred-hw]` item blocks phase 0, and the honest record of what was measured stays in `docs/technical-prototype-results.md` marked superseded. The earlier Hardware deferral policy (below) is subsumed by this one.
 
@@ -929,7 +929,7 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### TDD
 
-1. **Red** — failing `frame_allocation_fails`, `warmup_allocation_passes`, `guard_resets_between_trials`, `panic_restores_guard`.
+1. **Red** — failing `frame_allocation_fails` *(renamed to `alloc_invariant_still_enforced` by T28)*, `warmup_allocation_passes`, `guard_resets_between_trials`, `panic_restores_guard`.
 2. **Green** — min scoped counting allocator + hard verdict integration.
 3. **Refactor** — one guard API; no general allocator framework.
 
@@ -937,7 +937,7 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 | Test | Input | Expect |
 | ---- | ----- | ------ |
-| `frame_allocation_fails` | injected `Vec` growth | hard fail |
+| `frame_allocation_fails` *(now `alloc_invariant_still_enforced`, T28)* | injected `Vec` growth | hard fail |
 | `warmup_allocation_passes` | alloc before guard | pass |
 | `guard_resets_between_trials` | 2 trials | independent counts |
 | `panic_restores_guard` | unwound test fn | later test unaffected |
@@ -1795,11 +1795,11 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Impl steps
 
-1. - [ ] Rewrite the global validation contract (below) as the single source of truth.
-2. - [ ] Mark results doc superseded; update `docs/05-testing.md`, `docs/02-prototype-roadmap.md`, `README.md`.
-3. - [ ] Label `bench` output/CLI as non-gating developer tooling.
-4. - [ ] Apply the user's disposition choice for bench/lab code.
-5. - [ ] Record T9–T27 as `retired (perf deferred)` in the progress file.
+1. - [x] Rewrite the global validation contract (below) as the single source of truth. *(in-repo mirror: `docs/05-testing.md` — enforced by `tests/validation_contract.rs`)*
+2. - [x] Mark results doc superseded; update `docs/05-testing.md`, `docs/02-prototype-roadmap.md`, `README.md`. *(also: ADR 001/005/006/007 `Superseded by`, `docs/ADR/README.md`, `docs/lab/merge-workflow.md`, `docs/lab/local-validation.md`)*
+3. - [x] Label `bench` output/CLI as non-gating developer tooling. *(`src/main.rs` subcommand about, `src/bench.rs` module doc + run banner + verdict line)*
+4. - [x] Apply the user's disposition choice for bench/lab code. *(freeze in place — nothing deleted, nothing moved; see the resolved decision above)*
+5. - [x] Record T9–T27 as `retired (perf deferred)` in the progress file. *(verified consistent in the Status table)*
 
 #### Outputs
 
@@ -1807,11 +1807,11 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] no doc claims a perf pass; no required command needs a timing threshold
-- [ ] commit msg draft: `chore(prototype): retire performance gating to the optimization phase`
+- [x] `cargo fmt --all -- --check` — exit 0, no diff
+- [x] `cargo test --workspace --locked` — 30 suites ok, 331 passed / 0 failed (`panic_restores_guard` flaked once under parallel load, passed 3/3 isolated + on re-run; known pre-existing gap, untouched)
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — exit 0, no warnings
+- [x] no doc claims a perf pass; no required command needs a timing threshold — enforced by `tests/validation_contract.rs`, mutation-verified against 3 bypasses; also `nix flake check` + all xtask `--check` + `run --agents 50000 --frames 300` clean exit
+- [x] commit msg draft: `chore(prototype): retire performance gating to the optimization phase`
 
 ### T29: Deterministic system test harness
 

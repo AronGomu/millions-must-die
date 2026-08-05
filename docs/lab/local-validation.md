@@ -1,6 +1,14 @@
-# Local validation lab (trusted coordinator)
+# Local validation lab (trusted coordinator) — FROZEN, NON-GATING
 
-Normative policy: ADR 002, ADR 005, ADR 007. This doc is operator-facing.
+> **RETIRED as a gate (2026-08-05, T28).** The validation lab and everything
+> under `docs/lab/` are frozen in place for a later optimization phase: the
+> code still builds and its unit tests still run, but nothing it emits gates a
+> merge. Current gate:
+> [testing strategy](../05-testing.md#required-merge-gate). Re-validate before
+> reuse.
+
+Normative policy: ADR 002, ADR 005, ADR 007 (005 and 007 superseded in part by
+T28). This doc is operator-facing.
 
 ## Trust boundary
 

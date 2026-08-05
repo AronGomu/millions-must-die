@@ -1,8 +1,8 @@
 # ADR 001: Technical Prototype Scope + Acceptance
 
-- Status: Accepted
+- Status: Accepted; superseded in part (see below)
 - Date: 2026-08-02
-- Superseded by: —
+- Superseded by: T28 (2026-08-05) for the **performance acceptance criteria only** — frame-time gates and the platform matrix are retired to the optimization phase; see [testing strategy](../05-testing.md#retired-performance-gating). The behavioural/scope decisions stand.
 
 ## Context
 

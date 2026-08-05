@@ -1,8 +1,8 @@
 # ADR 007: Local Validation Lab + Security
 
-- Status: Accepted
+- Status: Accepted; superseded in part (see below)
 - Date: 2026-08-02
-- Superseded by: —
+- Superseded by: T28 (2026-08-05) for its **merge-gate authority only** — the 3-host lab gates no merge; it is frozen for the optimization phase. See [testing strategy](../05-testing.md#retired-performance-gating). Its trust-boundary and security decisions stand for any future reuse.
 
 ## Context
 

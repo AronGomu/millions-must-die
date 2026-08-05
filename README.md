@@ -4,9 +4,9 @@ Offline-first PC RTS focused on fortress defense against massive enemy hordes.
 
 ## Status
 
-Phase 0 technical prototype: **gate open — 50k evidence inconclusive; native cross-platform matrix deferred.**
+Phase 0 technical prototype: **in progress — proving the game systems behave correctly.**
 
-The 50k-agent flow-field scene runs on Linux/Vulkan and a real production-policy bench records medians far inside the frame-time limits with zero allocations in measured frames — but trial noise at 50k exceeded the locked limit, so no pass (and no failure) may be claimed, and no release proof is frozen. Windows/D3D12 and macOS/Metal native verification is `deferred-hw` pending reference hardware. Honest results: [docs/technical-prototype-results.md](docs/technical-prototype-results.md).
+The 50k-agent flow-field scene runs on Linux/Vulkan. Phase 0 closes on automated behavioural tests of every game system, not on speed: **performance is unmeasured and gates nothing**. Frame-time gating, the cross-platform matrix, and the multi-host validation lab are retired to a later optimization phase on the finished game — the code stays in-tree, frozen and non-gating. Contract: [docs/05-testing.md](docs/05-testing.md). Earlier measurements, kept as history and claiming nothing: [docs/technical-prototype-results.md](docs/technical-prototype-results.md) (superseded).
 
 ## License
 
@@ -31,19 +31,35 @@ Name and logo are reserved — see [`TRADEMARKS.md`](TRADEMARKS.md). Third-party
 
 ## Development
 
+### Required merge gate
+
+Everything that must pass before a merge, and nothing else. Defined by
+[docs/05-testing.md](docs/05-testing.md).
+
 ```sh
-cargo run -- run --help
-cargo run -- bench --help
-cargo run -p mmd-lab -- --help
-cargo run -p xtask -- --help
+cargo fmt --all -- --check
+cargo test --workspace --locked
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+nix flake check
 cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
-cargo test --workspace --locked
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-nix flake check
+cargo run -- run --agents 50000 --frames 300
 ```
+
+### Developer tools (not gates)
+
+```sh
+cargo run -- run --help
+cargo run -- bench --help    # benchmark harness — not a gate; optimization phase
+cargo run -p mmd-lab -- --help
+cargo run -p xtask -- --help
+```
+
+`bench`, `mmd-lab` and the `lab/` fixtures are frozen in place for the later
+optimization phase. They still build and their unit tests still run, but
+nothing they emit decides whether a change may merge — see
+[Retired: performance gating](docs/05-testing.md#retired-performance-gating).
 
 Pinned SDL3 source + crate versions: [`third_party/`](third_party/). Offline shader blobs: [`shaders/`](shaders/). Native SDL build caches stay outside Git (`MMD_NATIVE_CACHE` / `~/.cache/mmd/native`).
 
@@ -55,5 +71,5 @@ See [design documentation](docs/README.md).
 
 - Public contributions welcome under inbound=outbound MIT-0 + **DCO 1.1** sign-off.
 - Details: [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md).
-- No online CI (no GitHub Actions). Maintainer runs local multi-host gates before merge.
+- No online CI (no GitHub Actions). Maintainer runs the [required merge gate](docs/05-testing.md#required-merge-gate) locally before merge.
 - Manual GitHub branch rules (default branch): PR required; force-push/delete/auto-merge blocked; owner-only merge.

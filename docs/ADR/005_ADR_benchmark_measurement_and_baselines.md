@@ -1,8 +1,8 @@
 # ADR 005: Benchmark Measurement + Baselines
 
-- Status: Accepted
+- Status: Accepted; superseded in part (see below)
 - Date: 2026-08-02
-- Superseded by: —
+- Superseded by: T28 (2026-08-05) — the measurement policy, gates, noise bound and baselines no longer gate anything; retained frozen for the optimization phase. See [testing strategy](../05-testing.md#retired-performance-gating).
 
 ## Context
 

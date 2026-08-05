@@ -1,8 +1,8 @@
 # ADR 006: Native Platforms + Reference Hardware
 
-- Status: Accepted
+- Status: Accepted; superseded in part (see below)
 - Date: 2026-08-02
-- Superseded by: —
+- Superseded by: T28 (2026-08-05) — the cross-platform/architecture matrix and reference-hardware gates are retired to the optimization phase. See [testing strategy](../05-testing.md#retired-performance-gating).
 
 ## Context
 

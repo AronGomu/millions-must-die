@@ -1,15 +1,24 @@
-# Technical Prototype Results (Phase 0)
+# Technical Prototype Results (Phase 0) — SUPERSEDED
 
-**Scope claim (2026-08-05): 50k gate NOT verified — evidence inconclusive on a
-noisy host; native cross-platform matrix deferred.**
+> **SUPERSEDED (2026-08-05, T28).** Performance gating is retired from phase 0
+> to a later optimization phase on the finished game. This document is kept as
+> **history only**: it records measurements that were taken, and it **claims
+> nothing** — not a pass, not a failure, not a pending obligation. No number
+> here gates anything, and nothing here is outstanding work.
+>
+> What actually gates a merge: [testing strategy](05-testing.md#required-merge-gate).
+> Why these numbers no longer count:
+> [retired: performance gating](05-testing.md#retired-performance-gating).
+>
+> Phase-0 acceptance is now behavioural — see the
+> [prototype roadmap](02-prototype-roadmap.md). The measurement tooling
+> (`crates/mmd-engine/src/bench/`, `tools/mmd-lab/`, `lab/`) is frozen in
+> place, not deleted; it must be re-validated before the optimization phase
+> reuses it.
 
-This document records what phase 0 actually proved, what it did not, and where
-every piece of raw evidence lives. Under the Hardware deferral policy
-(2026-08-05, user-directed) the full-confidence 3-OS claim is **unavailable**:
-no statement here implies native Windows or macOS proof. Under the T27
-release-proof rule, noisy 50k evidence may freeze **neither** a pass nor a
-failure — so **no release proof is frozen** and
-`lab/releases/technical-prototype-v1.json` does not exist.
+Historical record follows, unchanged in substance from the 2026-08-05 close.
+Read every "gate", "verdict", "deferred" and "open" below as a description of
+the retired program, not as a live commitment.
 
 ## What was proven (Linux)
 
@@ -47,11 +56,11 @@ locked RX 6400 reference target**; see caveats). Candidate commit
 | 50 000 | **yes** | 1.670 | 1.981 | 0.0653 | 0.1388 | 0 | **inconclusive** |
 | 100 000 | no | 3.151 | 3.271 | 0.0034 | 0.0162 | 0 | recorded |
 
-### 50k absolute gate verdict (the phase gate)
+### 50k absolute gate verdict (the then-phase gate)
 
-**Inconclusive — rerun required on a quiet host.** Report verdict:
-`inconclusive`, reason `50k normalized MAD over 3% (nmad_p95=0.0653
-nmad_p99=0.1388)`.
+**Inconclusive.** Report verdict: `inconclusive`, reason `50k normalized MAD
+over 3% (nmad_p95=0.0653 nmad_p99=0.1388)`. No rerun is owed: the gate this
+verdict belonged to has since been retired, not left pending.
 
 The recorded 50k medians (p95 1.670 ms, p99 1.981 ms) are far under the limits,
 and per-trial medians were stable (sim 1.061-1.077 ms, gpu queue latency
@@ -60,10 +69,11 @@ the seven trials). 100k in the same run was quiet (nmad_p95 0.0034), which
 points at host interference rather than an engine property — a screen
 capture/encode session (OBS) plus a Wayland compositor and browser were live
 on the GPU during the run. Reruns to obtain quiet-host evidence were stopped by
-owner decision (2026-08-05); the gate stays open.
+owner decision (2026-08-05), and the gate was retired the same day.
 
-Limits (locked, unchanged): median p95 <= 16.67 ms, median p99 <= 25 ms,
-nmad <= 0.03. No threshold or tolerance was changed in this phase close.
+Limits as they stood when retired: median p95 <= 16.67 ms, median p99 <= 25 ms,
+nmad <= 0.03. No threshold or tolerance was ever weakened — the whole gate was
+moved to the optimization phase instead.
 
 ### Relative gates
 
@@ -81,7 +91,8 @@ synthetic data only; synthetic provenance can never enable a baseline
 | Proof schema | `schemas/release-proof-v1.schema.json` |
 | GPU profiler runbook | `docs/lab/gpu-profiling.md` |
 
-To close the gate once quiet-host evidence exists:
+How the retired gate was closed, kept for the optimization phase to reuse (it
+is not a required command — running it gates nothing):
 
 ```sh
 # 1. rerun the production bench with no capture/compositor load on the GPU
@@ -99,9 +110,13 @@ cargo run -p mmd-lab -- release-check \
 
 ## Deferred-hw ledger (honest record of what did NOT run)
 
+Every row below is **retired, not pending** — the perf program that required it
+no longer exists in phase 0. Kept so the optimization phase inherits an honest
+list of what was never measured.
+
 | Item | State |
 | --- | --- |
-| Quiet-host 50k gate evidence | **open** — owner stopped reruns 2026-08-05; gate unverified |
+| Quiet-host 50k gate evidence | never captured — owner stopped reruns 2026-08-05; gate then retired |
 | Windows/D3D12 native lane (build, golden, bench, gate) | `deferred-hw` — no physical Windows ref PC (T9/T16/T17 fixture-only) |
 | macOS/Metal native lane (build, golden, bench, gate) | `deferred-hw` — no M4 Mac / MDM lab (T10/T19/T22/T23 fixture-only) |
 | Real 3-host reset/run/reset merge gate | `deferred-hw` — T24 gate proven in fixture/fake-transport mode only |
@@ -140,13 +155,18 @@ cargo run -p mmd-lab -- release-check \
   benched candidate commit `82f162c`; the bench binary was built from the clean
   tree at that commit.
 
-## Phase outcome
+## Outcome of the retired perf program
 
-**Phase 0 is not closed as passed.** The engine slice, bench harness,
-zero-allocation contract, validation lab and gate machinery are built and
-locally green, and the 50k scene runs with medians roughly an order of
-magnitude inside the frame-time limits — but the one blocking measurement
-(50k absolute gate) has no decisive evidence, and the Windows/macOS lanes were
-never run on hardware. The honest status is **open**: no pass claim, no
-failure claim, and no frozen release proof. What remains is one quiet-host
-bench rerun (Linux scope) plus the deferred-hw backlog (full 3-OS scope).
+**No performance verdict was ever reached, and none will be reached in phase
+0.** The engine slice, bench harness, zero-allocation contract, validation lab
+and gate machinery were built and were locally green; the 50k scene ran with
+medians roughly an order of magnitude inside the then-current frame-time
+limits — but the one blocking measurement (50k absolute gate) never got
+decisive evidence, and the Windows/macOS lanes never ran on hardware. On
+2026-08-05 the owner retired the whole program to a later optimization phase.
+No pass claim, no failure claim, no frozen release proof, and nothing here is
+owed.
+
+Phase 0 now closes on game-system behaviour instead — see
+[testing strategy](05-testing.md) and the
+[prototype roadmap](02-prototype-roadmap.md).

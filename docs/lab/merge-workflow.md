@@ -1,8 +1,14 @@
-# Merge workflow — exact-hash 3-host gate (T24)
+# Merge workflow — exact-hash 3-host gate (T24) — RETIRED
 
-One trusted command decides whether a candidate may merge: the aggregate gate
-over all three native lanes (Ubuntu/Vulkan, Windows/D3D12, macOS/Metal).
-There are no path filters and no exceptions — every merge, every path.
+> **RETIRED (2026-08-05, T28): this is no longer the merge gate.** The 3-host
+> lab is frozen in place for a later optimization phase and decides nothing
+> about whether a change may merge. The real gate is
+> [testing strategy → required merge gate](../05-testing.md#required-merge-gate).
+> Everything below describes the retired design, kept for reuse.
+
+Under the retired design, one trusted command decided whether a candidate may
+merge: the aggregate gate over all three native lanes (Ubuntu/Vulkan,
+Windows/D3D12, macOS/Metal), with no path filters and no exceptions.
 
 ## Trust model
 

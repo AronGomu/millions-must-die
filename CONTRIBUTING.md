@@ -68,8 +68,13 @@ By making a contribution to this project, I certify that:
    cargo clippy --workspace --all-targets --all-features -- -D warnings
    ```
 
-3. Maintainer reviews, fetches the **exact** commit, runs the full local multi-host gate, posts a concise pass summary, and merges **only** that tested hash.
+3. Maintainer reviews, fetches the **exact** commit, runs the full [required merge gate](docs/05-testing.md#required-merge-gate) locally, posts a concise pass summary, and merges **only** that tested hash.
 4. No online CI. No auto-merge.
+
+The gate is behavioural. Performance measurement (`bench`, the 3-host validation
+lab, the platform matrix) is retired to a later optimization phase: that code is
+frozen in place and still builds, but nothing it emits decides whether your
+change may merge. See [retired: performance gating](docs/05-testing.md#retired-performance-gating).
 
 ## Branch protection (manual GitHub settings)
 
@@ -86,5 +91,5 @@ GitHub Actions must remain absent or disabled for this repository.
 ## Trust boundary
 
 - App/engine code from a PR is **untrusted candidate** input.
-- `mmd-lab` is the trusted coordinator and must be installed from trusted `main`, never from a candidate archive.
+- `mmd-lab` is the trusted coordinator and must be installed from trusted `main`, never from a candidate archive. It is currently frozen and non-gating (see above); the trust rule stands for whenever the optimization phase reuses it.
 - Do not add GitHub Actions workflow files.

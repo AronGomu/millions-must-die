@@ -1,5 +1,11 @@
 # Architecture Decision Records
 
+ADRs 001, 005, 006 and 007 are **superseded in part** by T28 (2026-08-05): the
+performance acceptance criteria, benchmark gates, platform matrix and the
+lab's merge-gate authority are retired to a later optimization phase. Their
+non-performance decisions still stand. See
+[testing strategy](../05-testing.md#retired-performance-gating).
+
 Accepted phase-0 decisions:
 
 1. [Technical prototype scope + acceptance](001_ADR_technical_prototype_scope_and_acceptance.md)

@@ -40,7 +40,11 @@ enum Commands {
         #[arg(long)]
         frames: Option<u64>,
     },
-    /// Run benchmark harness and emit JSON report
+    /// Developer benchmark harness — not a gate; optimization phase.
+    ///
+    /// Runs the scale curve and emits a JSON report. Its output gates nothing:
+    /// performance measurement is retired from phase 0 to a later optimization
+    /// phase (see docs/05-testing.md). Frozen tooling, kept for reuse.
     Bench {
         /// Write versioned JSON report to this path
         #[arg(long)]

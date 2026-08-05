@@ -1,4 +1,9 @@
-//! T12 zero-allocation contract: counting allocator + measure guard.
+//! Zero-allocation-per-frame contract: counting allocator + measure guard.
+//!
+//! **Code-health invariant, not a performance gate** (T12, reframed by T28).
+//! It catches accidental per-frame heap allocation; it says nothing about
+//! throughput and consumes no timing threshold. Runs on every merge under a
+//! short deterministic policy — see `docs/05-testing.md`.
 
 use std::sync::{Mutex, OnceLock};
 
@@ -17,8 +22,9 @@ fn lock_alloc_tests() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+/// Injected per-frame allocation must still hard-fail the invariant.
 #[test]
-fn frame_allocation_fails() {
+fn alloc_invariant_still_enforced() {
     let _lock = lock_alloc_tests();
     reset_count();
     let guard = MeasureGuard::enter();

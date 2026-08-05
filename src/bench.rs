@@ -1,4 +1,9 @@
 //! `bench` CLI: scale curve + versioned JSON report + exit codes.
+//!
+//! **Not a gate; optimization phase.** Performance measurement is retired from
+//! phase 0 (see `docs/05-testing.md`). This harness is frozen developer
+//! tooling: it still builds and its unit tests still run, but no verdict or
+//! exit code it produces decides whether a change may merge.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -21,8 +26,12 @@ pub struct BenchCliOptions {
 /// Run bench harness; write JSON; map verdict → process exit code.
 pub fn bench(opts: BenchCliOptions) -> ExitCode {
     let policy = BenchPolicy::resolve(opts.test_policy);
+    eprintln!(
+        "bench: developer tool — not a gate; performance is retired to the optimization phase \
+         (docs/05-testing.md). This report gates nothing."
+    );
     if policy.policy_id == "test-short-v1" {
-        eprintln!("bench: using injectable short policy (not production gate; full prod is hours)");
+        eprintln!("bench: using injectable short policy (full prod policy is hours)");
     } else {
         eprintln!("bench: production policy — 4 counts × (10s warmup + 7×60s trials); long run");
     }
@@ -62,7 +71,7 @@ pub fn bench(opts: BenchCliOptions) -> ExitCode {
                 }
             }
             eprintln!(
-                "bench: verdict={:?} reason={}",
+                "bench: verdict={:?} reason={} (informational — gates no merge)",
                 report.verdict, report.verdict_reason
             );
             for s in &report.scale_results {
