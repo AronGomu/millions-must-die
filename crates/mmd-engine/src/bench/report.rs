@@ -8,7 +8,7 @@ use super::policy::BenchPolicy;
 use super::stats::{TrialAggregate, TrialPercentiles};
 
 /// Schema id written into every report.
-pub const REPORT_SCHEMA_VERSION: &str = "benchmark-report-v1";
+pub const REPORT_SCHEMA_VERSION: &str = "benchmark-report-v2";
 
 /// Process exit codes (CLI contract).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,11 +49,34 @@ impl VerdictStatus {
     }
 }
 
+/// Scenario + atlas identity for one benchmark workload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkloadIdentity {
+    pub scenario_version: String,
+    pub scenario_sha256: String,
+    pub atlas_manifest_sha256: String,
+}
+
+impl WorkloadIdentity {
+    pub fn new(
+        scenario_version: impl Into<String>,
+        scenario_sha256: impl Into<String>,
+        atlas_manifest_sha256: impl Into<String>,
+    ) -> Self {
+        Self {
+            scenario_version: scenario_version.into(),
+            scenario_sha256: scenario_sha256.into(),
+            atlas_manifest_sha256: atlas_manifest_sha256.into(),
+        }
+    }
+}
+
 /// Source / scenario / shader / backend pins embedded in report.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReportManifests {
     pub scenario_version: String,
     pub scenario_sha256: String,
+    pub atlas_manifest_sha256: String,
     pub backend: String,
     pub adapter: String,
     pub shader_manifest_version: u32,
@@ -68,8 +91,7 @@ pub struct ReportManifests {
 
 impl ReportManifests {
     pub fn new(
-        scenario_version: impl Into<String>,
-        scenario_sha256: impl Into<String>,
+        workload: WorkloadIdentity,
         backend: impl Into<String>,
         adapter: impl Into<String>,
         shader_manifest_version: u32,
@@ -77,16 +99,17 @@ impl ReportManifests {
         policy: &BenchPolicy,
     ) -> Self {
         Self {
-            scenario_version: scenario_version.into(),
-            scenario_sha256: scenario_sha256.into(),
+            scenario_version: workload.scenario_version,
+            scenario_sha256: workload.scenario_sha256,
+            atlas_manifest_sha256: workload.atlas_manifest_sha256,
             backend: backend.into(),
             adapter: adapter.into(),
             shader_manifest_version,
             engine_version: engine_version.into(),
             policy_id: policy.policy_id.to_string(),
             frames_in_flight: policy.frames_in_flight,
-            gpu_queue_latency_note: "async submit-to-fence completion proxy; not true GPU execution time"
-                .into(),
+            gpu_queue_latency_note:
+                "async submit-to-fence completion proxy; not true GPU execution time".into(),
             project_alloc_visibility_note: ALLOC_VISIBILITY_NOTE.into(),
         }
     }

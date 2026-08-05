@@ -1,0 +1,16 @@
+{
+  "schema_version": "golden-manifest-v1",
+  "backend": "vulkan",
+  "os": "linux",
+  "status": "captured",
+  "scene": "static-demo-v1",
+  "width": 1920,
+  "height": 1080,
+  "image_file": "golden.png",
+  "image_sha256": "ad843c490b952b17dafb9622091b1626a270fbd74047cc5adf3d7b641b1a429c",
+  "adapter": "NVIDIA GeForce RTX 5060 Ti",
+  "driver_info": "captured via SDL3 GPU on linux",
+  "atlas_manifest_sha256": "2133e24ea23bd4929a9e8e39a51b08ad42ad0dd673af82e23cd41f57bd5a6cbe",
+  "shader_canonical_sha256": "110151a8189fed47464614716eba75c7236747cd69a97e259e56c69bcbdcb7b8",
+  "max_channel_delta": 0
+}

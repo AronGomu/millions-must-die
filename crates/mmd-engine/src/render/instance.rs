@@ -11,7 +11,7 @@ use std::mem::size_of;
 pub struct SpriteInstance {
     /// Top-left pixel position.
     pub pos: [f32; 2],
-    /// Pixel size (phase-0 sprites are 3×3).
+    /// Display-quad size in pixels (independent from atlas frame resolution).
     pub size: [f32; 2],
     /// Atlas UV rectangle `(u0, v0, u1, v1)`.
     pub uv_rect: [f32; 4],

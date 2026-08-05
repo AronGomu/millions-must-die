@@ -16,6 +16,17 @@ Build phase-0 Rust/SDL3 proof: 50k flow-field agents move + render at 1920×1080
 - Current `sdl3`/`sdl3-sys`/SDL versions reverified in T6 before lock. Research candidates: `sdl3 0.18.4`, `sdl3-sys 0.6.7`, SDL `3.4.12`.
 - Relative perf limits + image tolerance derive from physical pilot data. No invented values.
 - `TODO(user)`: select MDM provider/account before T22. Apple Business Manager/ADE access required.
+- 2026-08-05 amendment: hardware-gated tests deferred; see "Hardware deferral policy".
+
+## Hardware deferral policy (2026-08-05, user-directed)
+
+User instruction: ignore all tests requiring specific hardware. Effects:
+
+- Any validation needing a physical Windows ref PC, M4 Mac, PXE/raw/WinPE/FFU/MDM lab infra, or real 3-host lane runs is tagged `[deferred-hw]` and does **not** block ticket completion.
+- Hardware-only tickets **T9, T10, T16, T19, T22** → state `skipped (deferred-hw)`. Dependants treat these as satisfied for fixture/synthetic-scope work only.
+- Dependent tickets (T13, T17, T20, T23, T24, T26, T27) proceed using fixture/synthetic equivalents; `[deferred-hw]` items stay unchecked in plan as an honest record.
+- Relative baselines from synthetic data remain **disabled** pending owner review (existing T25 rule); no invented physical values are enabled.
+- T27 phase close may only claim "Linux-verified; native cross-platform matrix deferred" — the full-confidence 3-OS claim stays unavailable until deferred items run on real hardware.
 
 ## Validated decision ledger
 
@@ -672,6 +683,8 @@ flowchart TD
 
 ### T9: Windows/D3D12 port
 
+**State: skipped (deferred-hw)** — whole ticket requires Windows ref PC; see Hardware deferral policy.
+
 **Depends:** T8  
 **Commit outcome:** Same app builds/runs on Windows 11 25H2; D3D12 renders + readbacks same scene contract.
 
@@ -723,6 +736,8 @@ flowchart TD
 - [ ] commit msg draft: `feat(platform): validate D3D12 prototype path`
 
 ### T10: macOS/Metal port
+
+**State: skipped (deferred-hw)** — whole ticket requires M4 Mac; see Hardware deferral policy.
 
 **Depends:** T8  
 **Commit outcome:** Same app builds/runs on macOS 15 arm64; Metal renders + readbacks same scene contract.
@@ -893,6 +908,8 @@ flowchart TD
 
 ### T13: Backend golden correctness
 
+**Scope note (deferral):** T9/T10 skipped → capture Linux/Vulkan golden + comparator + runbook only; Windows/macOS golden capture `[deferred-hw]`.
+
 **Depends:** T9, T10, T11  
 **Commit outcome:** Vulkan/D3D12/Metal offscreen output compares against backend-bound goldens; manual true-GPU profiler runbook exists.
 
@@ -924,10 +941,10 @@ flowchart TD
 
 #### Impl steps
 
-1. - [ ] Add golden manifest schema + comparator.
-2. - [ ] Capture reviewed baseline image/backend.
-3. - [ ] Bind reports to golden manifest.
-4. - [ ] Add profiler capture runbook.
+1. - [x] Add golden manifest schema + comparator.
+2. - [x] Capture reviewed baseline image/backend. (Linux/Vulkan captured on RTX 5060 Ti; Windows/macOS placeholders deferred-hw)
+3. - [x] Bind reports to golden manifest.
+4. - [x] Add profiler capture runbook.
 
 #### Outputs
 
@@ -938,11 +955,11 @@ flowchart TD
 
 #### Validation
 
-- [ ] native ignored golden tests pass on all 3 OSes
-- [ ] wrong-backend fixture fails
-- [ ] RenderDoc/Xcode capture procedure manually works
-- [ ] app functional — same render output
-- [ ] commit msg draft: `test(render): bind output goldens to native backends`
+- [x] native ignored golden tests pass on Linux/Vulkan (Windows/macOS `[deferred-hw]`)
+- [x] wrong-backend fixture fails
+- [ ] `[deferred-hw]` RenderDoc Windows / Xcode Metal capture procedure manually works (RenderDoc Linux OK locally)
+- [x] app functional — same render output
+- [x] commit msg draft: `test(render): bind output goldens to native backends`
 
 ### T14: Trusted local lab CLI
 
@@ -1053,6 +1070,8 @@ flowchart TD
 
 ### T16: Ubuntu recovery + attestation
 
+**State: skipped (deferred-hw)** — requires physical PXE/controller/VLAN lab; see Hardware deferral policy.
+
 **Depends:** T15  
 **Commit outcome:** Physical Ubuntu ref PC performs external PXE/raw restore + trusted attestation without candidate code; drift quarantines.
 
@@ -1152,9 +1171,9 @@ flowchart TD
 
 #### Validation
 
-- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner ubuntu --commit <hash>`
-- [ ] real native Vulkan lane passes or yields honest fail
-- [ ] post-run restore attested
+- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner ubuntu --commit <hash>` (fixture/fake transport mode)
+- [ ] `[deferred-hw]` real native Vulkan lane passes or yields honest fail
+- [ ] `[deferred-hw]` post-run restore attested
 - [ ] app functional — exact candidate path tested
 - [ ] commit msg draft: `feat(lab): gate candidate on Ubuntu Vulkan`
 
@@ -1209,6 +1228,8 @@ flowchart TD
 - [ ] commit msg draft: `feat(lab): define Windows runner contract`
 
 ### T19: Windows recovery + attestation
+
+**State: skipped (deferred-hw)** — requires physical WinPE/FFU lab; see Hardware deferral policy.
 
 **Depends:** T18  
 **Commit outcome:** Physical Windows ref PC performs WinPE/FFU restore + trusted attestation without candidate code; drift quarantines.
@@ -1305,9 +1326,9 @@ flowchart TD
 
 #### Validation
 
-- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner windows --commit <hash>`
-- [ ] real D3D12 lane returns honest verdict
-- [ ] post-run FFU attested
+- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner windows --commit <hash>` (fixture/fake transport mode)
+- [ ] `[deferred-hw]` real D3D12 lane returns honest verdict
+- [ ] `[deferred-hw]` post-run FFU attested
 - [ ] app functional — exact candidate tested
 - [ ] commit msg draft: `feat(lab): gate candidate on Windows D3D12`
 
@@ -1362,6 +1383,8 @@ flowchart TD
 - [ ] commit msg draft: `feat(lab): define macOS runner contract`
 
 ### T22: macOS recovery + attestation
+
+**State: skipped (deferred-hw)** — requires MDM/ABM + Mac lab (`TODO(user)`); see Hardware deferral policy.
 
 **Depends:** T21  
 **Commit outcome:** M4 performs EACS/ADE/MDM reset + attestation without candidate; failed reset quarantines; manual DFU fallback succeeds.
@@ -1460,9 +1483,9 @@ flowchart TD
 
 #### Validation
 
-- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner macos --commit <hash>`
-- [ ] real Metal lane returns honest verdict
-- [ ] post-run EACS attested
+- [ ] `$HOME/.local/bin/mmd-lab validate-runner --runner macos --commit <hash>` (fixture/fake transport mode)
+- [ ] `[deferred-hw]` real Metal lane returns honest verdict
+- [ ] `[deferred-hw]` post-run EACS attested
 - [ ] app functional — exact candidate tested
 - [ ] commit msg draft: `feat(lab): gate candidate on macOS Metal`
 
@@ -1514,8 +1537,8 @@ flowchart TD
 #### Validation
 
 - [ ] `cargo test -p mmd-lab gate`
-- [ ] `$HOME/.local/bin/mmd-lab validate --commit <hash>`
-- [ ] all 3 reset/run/reset lanes complete
+- [ ] `$HOME/.local/bin/mmd-lab validate --commit <hash>` (fake 3-host fixture mode)
+- [ ] `[deferred-hw]` all 3 reset/run/reset lanes complete
 - [ ] PR summary binds exact hash
 - [ ] app functional — exact tested app commit
 - [ ] commit msg draft: `feat(lab): require exact-hash native merge gate`
@@ -1617,9 +1640,9 @@ flowchart TD
 
 #### Validation
 
-- [ ] 150 clean report references validate
-- [ ] `$HOME/.local/bin/mmd-lab calibrate --enable-reviewed ...`
-- [ ] relative gates pass against pilot holdout runs
+- [ ] 150 clean report references validate (synthetic dataset; real pilot `[deferred-hw]`)
+- [ ] `[deferred-hw]` `$HOME/.local/bin/mmd-lab calibrate --enable-reviewed ...` — baselines stay disabled; no synthetic values enabled
+- [ ] `[deferred-hw]` relative gates pass against pilot holdout runs
 - [ ] app functional — unchanged exact workload
 - [ ] commit msg draft: `perf(lab): freeze native noise-calibrated baselines`
 
@@ -1676,9 +1699,10 @@ flowchart TD
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `nix flake check`; all xtask `--check` cmds
 - [ ] `$HOME/.local/bin/mmd-lab self-check ...`
-- [ ] `$HOME/.local/bin/mmd-lab validate --commit <exact-hash>`
-- [ ] 1k/10k/50k/100k + profiler refs present on every OS
+- [ ] `$HOME/.local/bin/mmd-lab validate --commit <exact-hash>` (fixture mode; real 3-host `[deferred-hw]`)
+- [ ] 1k/10k/50k/100k + profiler refs present on Linux (Windows/macOS `[deferred-hw]`)
 - [ ] app functional — `run`, `bench`, local matrix work
+- [ ] results doc states "Linux-verified; native cross-platform matrix deferred" per Hardware deferral policy
 - [ ] commit msg draft: `perf(prototype): prove cross-platform fifty-thousand-agent gate`
 
 ## Global validation contract
@@ -1694,6 +1718,7 @@ flowchart TD
 
 ## Risks / stop rules
 
+- Hardware deferral (2026-08-05): fixture/synthetic evidence ≠ native proof. Deferred items must run on real hardware before any full-confidence phase-0 claim; policy forbids silently enabling synthetic baselines.
 - SDL wrapper gap → isolated `sdl3-sys`; broad raw rewrite requires new decision.
 - 50k miss → phase fails. Profile; never weaken gate silently.
 - Mac MDM unavailable → T22/T23 blocked; full-confidence claim unavailable.

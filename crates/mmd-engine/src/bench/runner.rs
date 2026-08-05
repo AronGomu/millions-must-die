@@ -16,7 +16,8 @@ use crate::workspace_root;
 use super::fence_queue::{CompletedFrame, FenceQueue, InflightFrame};
 use super::policy::BenchPolicy;
 use super::report::{
-    BenchmarkReport, ReportManifests, ScaleResult, build_report, build_scale_result, trial_report,
+    BenchmarkReport, ReportManifests, ScaleResult, WorkloadIdentity, build_report,
+    build_scale_result, trial_report,
 };
 use super::stats::{SampleBuffer, TrialAggregate, TrialPercentiles, median};
 
@@ -72,12 +73,13 @@ pub fn run_bench(opts: BenchOptions) -> Result<BenchmarkReport, BenchError> {
         let rt = Runtime::load(&scenario_path, Some(1_000))?;
         rt.scenario_version().to_string()
     };
+    let root = workspace_root_or_cwd();
+    let atlas_manifest_sha = sha256_file(&root.join("assets/sprites/generated/manifest.json"))?;
 
     let mut gpu: Option<SpriteRenderer> = None;
     let (backend, adapter) = if opts.dry_cpu_only {
         ("dry".into(), "none".into())
     } else {
-        let root = workspace_root_or_cwd();
         let renderer = SpriteRenderer::new(&root, false)?;
         let backend = renderer.backend().to_string();
         let adapter = renderer.ctx.adapter.clone();
@@ -86,8 +88,7 @@ pub fn run_bench(opts: BenchOptions) -> Result<BenchmarkReport, BenchError> {
     };
 
     let manifests = ReportManifests::new(
-        scenario_version,
-        scenario_sha,
+        WorkloadIdentity::new(scenario_version, scenario_sha, atlas_manifest_sha),
         backend,
         adapter,
         1,
@@ -228,10 +229,7 @@ fn run_scale_point(
 /// Headroom for sample/latency reserves (duration × 120 fps + min + pad).
 fn estimate_frame_cap(duration: Duration, min_frames: u32) -> usize {
     let from_dur = (duration.as_secs_f64() * 120.0).ceil() as usize;
-    from_dur
-        .max(min_frames as usize)
-        .saturating_add(32)
-        .max(16)
+    from_dur.max(min_frames as usize).saturating_add(32).max(16)
 }
 
 enum BenchFence {
@@ -309,9 +307,7 @@ fn apply_backpressure(
     let done_at = Instant::now();
     let _ = queue.complete_waited(
         InflightFrame {
-            fence: BenchFence::Dry {
-                ready_at: done_at,
-            },
+            fence: BenchFence::Dry { ready_at: done_at },
             submit_at,
             frame_index,
         },
@@ -372,9 +368,7 @@ fn drain_queue(
         let done_at = Instant::now();
         let _ = queue.complete_waited(
             InflightFrame {
-                fence: BenchFence::Dry {
-                    ready_at: done_at,
-                },
+                fence: BenchFence::Dry { ready_at: done_at },
                 submit_at,
                 frame_index,
             },
@@ -411,7 +405,11 @@ fn read_sidecar_sha256(scenario_path: &Path) -> Result<String, BenchError> {
         let s = fs::read_to_string(&side).map_err(|e| BenchError::Io(e.to_string()))?;
         return Ok(s.trim().split_whitespace().next().unwrap_or("").to_string());
     }
-    let bytes = fs::read(scenario_path).map_err(|e| BenchError::Io(e.to_string()))?;
+    sha256_file(scenario_path)
+}
+
+fn sha256_file(path: &Path) -> Result<String, BenchError> {
+    let bytes = fs::read(path).map_err(|e| BenchError::Io(e.to_string()))?;
     let mut h = Sha256::new();
     h.update(&bytes);
     Ok(hex::encode(h.finalize()))

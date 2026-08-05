@@ -19,7 +19,7 @@ struct VSInput
     float2 corner : TEXCOORD0;        // unit quad in [-0.5, 0.5]
     float2 uv : TEXCOORD1;            // unit quad UV in [0, 1]
     float2 instance_pos : TEXCOORD2;  // top-left pixel position
-    float2 instance_size : TEXCOORD3; // pixel size (3x3 sprites)
+    float2 instance_size : TEXCOORD3; // display-quad size in pixels
     float4 uv_rect : TEXCOORD4;       // atlas rect (u0,v0,u1,v1)
     float4 tint : TEXCOORD5;          // premultiplied RGBA tint
 };

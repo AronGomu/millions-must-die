@@ -1,18 +1,19 @@
-//! Deterministic placeholder sprite atlas generator.
+//! Deterministic zombie sprite atlas generator.
 //!
 //! Layout (fixed): 8 direction rows × 4 animation frame columns.
-//! Each frame is a 3×3 premultiplied-alpha sprite.
+//! Each frame is a 32×32 premultiplied-alpha sprite derived from pinned CC0 source art.
 
 use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::digest::sha256_hex;
+
 /// Manifest schema version.
-pub const MANIFEST_VERSION: u32 = 1;
+pub const MANIFEST_VERSION: u32 = 2;
 
 /// Atlas count locked by phase-0 contract.
 pub const ATLAS_COUNT: u32 = 4;
@@ -20,8 +21,8 @@ pub const ATLAS_COUNT: u32 = 4;
 pub const DIRECTION_COUNT: u32 = 8;
 /// Animation frames per direction.
 pub const FRAME_COUNT: u32 = 4;
-/// Sprite edge length in pixels.
-pub const SPRITE_SIZE_PX: u32 = 3;
+/// Source-resolution edge length for each generated atlas frame.
+pub const FRAME_SIZE_PX: u32 = 32;
 
 /// Frames across atlas X axis (frame index).
 pub const FRAMES_X: u32 = FRAME_COUNT;
@@ -32,11 +33,20 @@ pub const FRAMES_Y: u32 = DIRECTION_COUNT;
 pub const FRAMES_PER_ATLAS: u32 = DIRECTION_COUNT * FRAME_COUNT;
 
 /// Atlas pixel width.
-pub const ATLAS_WIDTH_PX: u32 = FRAMES_X * SPRITE_SIZE_PX;
+pub const ATLAS_WIDTH_PX: u32 = FRAMES_X * FRAME_SIZE_PX;
 /// Atlas pixel height.
-pub const ATLAS_HEIGHT_PX: u32 = FRAMES_Y * SPRITE_SIZE_PX;
+pub const ATLAS_HEIGHT_PX: u32 = FRAMES_Y * FRAME_SIZE_PX;
 
-const GENERATOR_ID: &str = "mmd-placeholder-v1";
+const GENERATOR_ID: &str = "mmd-zombie-cc0-v1";
+const SOURCE_FILE: &str = "assets/sprites/source/stoner-games-zombie-strip12.png";
+const SOURCE_SHA256: &str = "5207803a33b04bf45cfcb80308f340262128731b6cd51a5e569833ecdc7379f3";
+const SOURCE_LICENSE: &str = "CC0-1.0";
+const SOURCE_FRAME_SIZE_PX: u32 = 128;
+const SOURCE_FRAME_COUNT: u32 = 12;
+const SOURCE_CROP_X_PX: u32 = 24;
+const SOURCE_CROP_WIDTH_PX: u32 = 80;
+const SOURCE_WIDTH_PX: u32 = SOURCE_FRAME_SIZE_PX * SOURCE_FRAME_COUNT;
+const SOURCE_HEIGHT_PX: u32 = SOURCE_FRAME_SIZE_PX;
 
 /// Atlas generation / check failures.
 #[derive(Debug, Error)]
@@ -84,7 +94,7 @@ pub struct AtlasEntry {
 pub struct AtlasLayout {
     pub frames_x: u32,
     pub frames_y: u32,
-    pub sprite_size_px: u32,
+    pub frame_size_px: u32,
     pub order: String,
 }
 
@@ -93,6 +103,9 @@ pub struct AtlasLayout {
 pub struct AtlasManifest {
     pub version: u32,
     pub generator: String,
+    pub source_file: String,
+    pub source_sha256: String,
+    pub source_license: String,
     pub atlas_count: u32,
     pub direction_count: u32,
     pub frame_count: u32,
@@ -135,6 +148,9 @@ pub fn generate_atlases(out_dir: &Path) -> Result<AtlasManifest, AtlasError> {
     let manifest = AtlasManifest {
         version: MANIFEST_VERSION,
         generator: GENERATOR_ID.to_string(),
+        source_file: SOURCE_FILE.to_string(),
+        source_sha256: SOURCE_SHA256.to_string(),
+        source_license: SOURCE_LICENSE.to_string(),
         atlas_count: ATLAS_COUNT,
         direction_count: DIRECTION_COUNT,
         frame_count: FRAME_COUNT,
@@ -142,7 +158,7 @@ pub fn generate_atlases(out_dir: &Path) -> Result<AtlasManifest, AtlasError> {
         layout: AtlasLayout {
             frames_x: FRAMES_X,
             frames_y: FRAMES_Y,
-            sprite_size_px: SPRITE_SIZE_PX,
+            frame_size_px: FRAME_SIZE_PX,
             order: "dir_rows_frame_cols".to_string(),
         },
         atlases: entries,
@@ -257,9 +273,18 @@ pub fn validate_manifest_layout(manifest: &AtlasManifest) -> Result<(), AtlasErr
             manifest.atlases.len()
         )));
     }
+    if manifest.generator != GENERATOR_ID
+        || manifest.source_file != SOURCE_FILE
+        || manifest.source_sha256 != SOURCE_SHA256
+        || manifest.source_license != SOURCE_LICENSE
+    {
+        return Err(AtlasError::Layout(
+            "generator source metadata drifted".into(),
+        ));
+    }
     if manifest.layout.frames_x != FRAMES_X
         || manifest.layout.frames_y != FRAMES_Y
-        || manifest.layout.sprite_size_px != SPRITE_SIZE_PX
+        || manifest.layout.frame_size_px != FRAME_SIZE_PX
     {
         return Err(AtlasError::Layout("frame grid constants drifted".into()));
     }
@@ -272,9 +297,58 @@ pub fn validate_manifest_layout(manifest: &AtlasManifest) -> Result<(), AtlasErr
     Ok(())
 }
 
+#[derive(Debug)]
+struct SourceSheet {
+    rgba: Vec<u8>,
+}
+
+fn source_path() -> PathBuf {
+    workspace_root_from_xtask_manifest().join(SOURCE_FILE)
+}
+
+fn load_source_sheet() -> Result<SourceSheet, AtlasError> {
+    let path = source_path();
+    let png_bytes = fs::read(&path).map_err(|e| AtlasError::Io(e.to_string()))?;
+    let actual = sha256_hex(&png_bytes);
+    if actual != SOURCE_SHA256 {
+        return Err(AtlasError::HashMismatch {
+            file: SOURCE_FILE.to_string(),
+            expected: SOURCE_SHA256.to_string(),
+            actual,
+        });
+    }
+
+    let decoder = png::Decoder::new(Cursor::new(png_bytes));
+    let mut reader = decoder
+        .read_info()
+        .map_err(|e| AtlasError::Decode(e.to_string()))?;
+    let mut rgba = vec![0; reader.output_buffer_size().unwrap_or(0)];
+    let info = reader
+        .next_frame(&mut rgba)
+        .map_err(|e| AtlasError::Decode(e.to_string()))?;
+    if info.width != SOURCE_WIDTH_PX
+        || info.height != SOURCE_HEIGHT_PX
+        || info.color_type != png::ColorType::Rgba
+        || info.bit_depth != png::BitDepth::Eight
+    {
+        return Err(AtlasError::Decode(format!(
+            "{SOURCE_FILE}: expected {SOURCE_WIDTH_PX}x{SOURCE_HEIGHT_PX} RGBA8, got {}x{} {:?} {:?}",
+            info.width, info.height, info.color_type, info.bit_depth
+        )));
+    }
+    rgba.truncate(info.buffer_size());
+    Ok(SourceSheet { rgba })
+}
+
 /// Encode one atlas PNG (deterministic bytes).
 pub fn encode_atlas_png(atlas_id: u32) -> Result<Vec<u8>, AtlasError> {
-    let pixels = render_atlas_rgba(atlas_id);
+    if atlas_id >= ATLAS_COUNT {
+        return Err(AtlasError::Layout(format!(
+            "atlas id {atlas_id} >= {ATLAS_COUNT}"
+        )));
+    }
+    let source = load_source_sheet()?;
+    let pixels = render_atlas_rgba(atlas_id, &source);
     let mut out = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut out, ATLAS_WIDTH_PX, ATLAS_HEIGHT_PX);
@@ -292,23 +366,34 @@ pub fn encode_atlas_png(atlas_id: u32) -> Result<Vec<u8>, AtlasError> {
     Ok(out)
 }
 
-/// Fill RGBA buffer for one atlas.
-pub fn render_atlas_rgba(atlas_id: u32) -> Vec<u8> {
+/// Fill RGBA buffer for one atlas from pinned source art.
+fn render_atlas_rgba(atlas_id: u32, source: &SourceSheet) -> Vec<u8> {
     let mut pixels = vec![0u8; (ATLAS_WIDTH_PX * ATLAS_HEIGHT_PX * 4) as usize];
     for dir in 0..DIRECTION_COUNT {
         for frame in 0..FRAME_COUNT {
-            let origin_x = frame * SPRITE_SIZE_PX;
-            let origin_y = dir * SPRITE_SIZE_PX;
-            for ly in 0..SPRITE_SIZE_PX {
-                for lx in 0..SPRITE_SIZE_PX {
-                    let [r, g, b, a] = sprite_pixel(atlas_id, dir, frame, lx, ly);
+            let origin_x = frame * FRAME_SIZE_PX;
+            let origin_y = dir * FRAME_SIZE_PX;
+            let source_frame = (frame * 3 + atlas_id * 3) % SOURCE_FRAME_COUNT;
+            let flip_x = matches!(dir, 3..=5);
+            for ly in 0..FRAME_SIZE_PX {
+                for lx in 0..FRAME_SIZE_PX {
+                    let sampled_x = if flip_x { FRAME_SIZE_PX - 1 - lx } else { lx };
+                    let source_x = source_frame * SOURCE_FRAME_SIZE_PX
+                        + SOURCE_CROP_X_PX
+                        + sampled_x * SOURCE_CROP_WIDTH_PX / FRAME_SIZE_PX;
+                    let source_y = ly * SOURCE_FRAME_SIZE_PX / FRAME_SIZE_PX;
+                    let source_idx = ((source_y * SOURCE_WIDTH_PX + source_x) * 4) as usize;
+                    let a = source.rgba[source_idx + 3];
+                    let rgba = [
+                        premultiply(source.rgba[source_idx], a),
+                        premultiply(source.rgba[source_idx + 1], a),
+                        premultiply(source.rgba[source_idx + 2], a),
+                        a,
+                    ];
                     let x = origin_x + lx;
                     let y = origin_y + ly;
                     let idx = ((y * ATLAS_WIDTH_PX + x) * 4) as usize;
-                    pixels[idx] = r;
-                    pixels[idx + 1] = g;
-                    pixels[idx + 2] = b;
-                    pixels[idx + 3] = a;
+                    pixels[idx..idx + 4].copy_from_slice(&rgba);
                 }
             }
         }
@@ -316,29 +401,8 @@ pub fn render_atlas_rgba(atlas_id: u32) -> Vec<u8> {
     pixels
 }
 
-/// Deterministic premultiplied placeholder pixel.
-///
-/// RGB always ≤ A. Pattern encodes atlas/dir/frame/local coords so frames differ.
-pub fn sprite_pixel(atlas_id: u32, dir: u32, frame: u32, lx: u32, ly: u32) -> [u8; 4] {
-    // Edge fade keeps some translucent coverage for blend tests.
-    let edge =
-        u32::from(lx == 0 || ly == 0 || lx == SPRITE_SIZE_PX - 1 || ly == SPRITE_SIZE_PX - 1);
-    let a = 180u32 + frame * 12 + (1 - edge) * 30;
-    let a = a.min(255) as u8;
-
-    let base_r = 40 + atlas_id * 40;
-    let base_g = 30 + dir * 18;
-    let base_b = 50 + frame * 28 + lx * 10 + ly * 7;
-
-    let r = scale_premul(base_r, a);
-    let g = scale_premul(base_g, a);
-    let b = scale_premul(base_b, a);
-    [r, g, b, a]
-}
-
-fn scale_premul(channel: u32, a: u8) -> u8 {
-    let c = channel.min(255);
-    ((c * u32::from(a)) / 255).min(u32::from(a)) as u8
+fn premultiply(channel: u8, alpha: u8) -> u8 {
+    ((u16::from(channel) * u16::from(alpha) + 127) / 255) as u8
 }
 
 /// Decode PNG and assert every pixel is premultiplied (RGB ≤ A).
@@ -379,13 +443,6 @@ pub fn assert_premultiplied(file: &str, png_bytes: &[u8]) -> Result<(), AtlasErr
         }
     }
     Ok(())
-}
-
-/// SHA-256 hex digest of bytes.
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
 }
 
 /// CLI entry: write or check generated atlases.
@@ -440,8 +497,9 @@ mod tests {
         assert_eq!(manifest.frames_per_atlas, 32);
         assert_eq!(manifest.layout.frames_x, 4);
         assert_eq!(manifest.layout.frames_y, 8);
-        assert_eq!(ATLAS_WIDTH_PX, 12);
-        assert_eq!(ATLAS_HEIGHT_PX, 24);
+        assert_eq!(manifest.layout.frame_size_px, 32);
+        assert_eq!(ATLAS_WIDTH_PX, 128);
+        assert_eq!(ATLAS_HEIGHT_PX, 256);
 
         for entry in &manifest.atlases {
             let png = fs::read(out.join(&entry.file)).expect("png");
@@ -454,25 +512,128 @@ mod tests {
     }
 
     #[test]
+    fn source_is_pinned_rgba_strip() {
+        let source = load_source_sheet().expect("source");
+        assert_eq!(
+            source.rgba.len(),
+            (SOURCE_WIDTH_PX * SOURCE_HEIGHT_PX * 4) as usize
+        );
+        let bytes = fs::read(source_path()).expect("source png");
+        assert_eq!(sha256_hex(&bytes), SOURCE_SHA256);
+    }
+
+    fn rgba_at(pixels: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * width + x) * 4) as usize;
+        [pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]]
+    }
+
+    fn premultiplied_source_at(source: &SourceSheet, x: u32, y: u32) -> [u8; 4] {
+        let i = ((y * SOURCE_WIDTH_PX + x) * 4) as usize;
+        let a = source.rgba[i + 3];
+        [
+            premultiply(source.rgba[i], a),
+            premultiply(source.rgba[i + 1], a),
+            premultiply(source.rgba[i + 2], a),
+            a,
+        ]
+    }
+
+    #[test]
+    fn source_crop_phase_and_direction_mapping_are_locked() {
+        let source = load_source_sheet().expect("source");
+        let atlas_0 = render_atlas_rgba(0, &source);
+        let atlas_1 = render_atlas_rgba(1, &source);
+        let atlas_3 = render_atlas_rgba(3, &source);
+
+        // Atlas 0, frame 0, local (16,16) maps to source frame 0 at (64,64).
+        assert_eq!(
+            rgba_at(&atlas_0, ATLAS_WIDTH_PX, 16, 16),
+            premultiplied_source_at(&source, 64, 64)
+        );
+        // Atlas phase 1 starts at source frame 3.
+        assert_eq!(
+            rgba_at(&atlas_1, ATLAS_WIDTH_PX, 16, 16),
+            premultiplied_source_at(&source, 3 * SOURCE_FRAME_SIZE_PX + 64, 64)
+        );
+        // Every west-facing row mirrors every frame; all other rows preserve orientation.
+        for frame in 0..FRAME_COUNT {
+            let frame_x = frame * FRAME_SIZE_PX;
+            let east_is_asymmetric = (0..FRAME_SIZE_PX).any(|ly| {
+                (0..FRAME_SIZE_PX).any(|lx| {
+                    rgba_at(&atlas_0, ATLAS_WIDTH_PX, frame_x + lx, ly)
+                        != rgba_at(
+                            &atlas_0,
+                            ATLAS_WIDTH_PX,
+                            frame_x + FRAME_SIZE_PX - 1 - lx,
+                            ly,
+                        )
+                })
+            });
+            assert!(
+                east_is_asymmetric,
+                "frame {frame} must detect orientation drift"
+            );
+            for dir in [3, 4, 5] {
+                for ly in 0..FRAME_SIZE_PX {
+                    for lx in 0..FRAME_SIZE_PX {
+                        assert_eq!(
+                            rgba_at(
+                                &atlas_0,
+                                ATLAS_WIDTH_PX,
+                                frame_x + lx,
+                                dir * FRAME_SIZE_PX + ly
+                            ),
+                            rgba_at(
+                                &atlas_0,
+                                ATLAS_WIDTH_PX,
+                                frame_x + FRAME_SIZE_PX - 1 - lx,
+                                ly
+                            ),
+                            "west dir={dir} frame={frame} local=({lx},{ly})"
+                        );
+                    }
+                }
+            }
+            for dir in [1, 2, 6, 7] {
+                for ly in 0..FRAME_SIZE_PX {
+                    for lx in 0..FRAME_SIZE_PX {
+                        assert_eq!(
+                            rgba_at(
+                                &atlas_0,
+                                ATLAS_WIDTH_PX,
+                                frame_x + lx,
+                                dir * FRAME_SIZE_PX + ly
+                            ),
+                            rgba_at(&atlas_0, ATLAS_WIDTH_PX, frame_x + lx, ly),
+                            "non-west dir={dir} frame={frame} local=({lx},{ly})"
+                        );
+                    }
+                }
+            }
+        }
+        // Last generated texel stays inside cropped source frame 6 for atlas 3/frame 3.
+        assert_eq!(
+            rgba_at(
+                &atlas_3,
+                ATLAS_WIDTH_PX,
+                3 * FRAME_SIZE_PX + 31,
+                7 * FRAME_SIZE_PX + 31
+            ),
+            premultiplied_source_at(
+                &source,
+                6 * SOURCE_FRAME_SIZE_PX + SOURCE_CROP_X_PX + 77,
+                124
+            )
+        );
+    }
+
+    #[test]
     fn alpha_is_premultiplied() {
         let out = temp_out();
         let manifest = generate_atlases(&out).expect("generate");
         for entry in &manifest.atlases {
             let bytes = fs::read(out.join(&entry.file)).expect("png");
             assert_premultiplied(&entry.file, &bytes).expect("premultiplied");
-        }
-        // Direct pixel contract on generator output.
-        for atlas in 0..ATLAS_COUNT {
-            for dir in 0..DIRECTION_COUNT {
-                for frame in 0..FRAME_COUNT {
-                    for ly in 0..SPRITE_SIZE_PX {
-                        for lx in 0..SPRITE_SIZE_PX {
-                            let [r, g, b, a] = sprite_pixel(atlas, dir, frame, lx, ly);
-                            assert!(r <= a && g <= a && b <= a, "rgba=({r},{g},{b},{a})");
-                        }
-                    }
-                }
-            }
         }
     }
 

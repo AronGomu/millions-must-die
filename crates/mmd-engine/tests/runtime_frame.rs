@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use mmd_engine::render::ATLAS_COUNT;
+use mmd_engine::render::{ATLAS_COUNT, SPRITE_SIZE_PX};
 use mmd_engine::runtime::{BoundKey, InputAction, Runtime, action_for_key};
 
 fn workspace_root() -> PathBuf {
@@ -46,6 +46,9 @@ fn builds_50000_instances() {
     assert_eq!(rt.agent_count(), 50_000);
     let total: usize = {
         let out = rt.tick_and_render();
+        for inst in out.groups.iter().flat_map(|group| &group.instances) {
+            assert_eq!(inst.size, [SPRITE_SIZE_PX as f32, SPRITE_SIZE_PX as f32]);
+        }
         out.groups.iter().map(|g| g.instances.len()).sum()
     };
     assert_eq!(total, 50_000);

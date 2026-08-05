@@ -52,6 +52,18 @@ Linux shared-lib build commands live under `[sdl3.build.linux]` in `versions.tom
 
 SDL3 retains zlib license terms from upstream. Project-authored files stay MIT-0.
 
+## Zombie sprite art
+
+Pinned source: [`assets/sprites/source/stoner-games-zombie-strip12.png`](../assets/sprites/source/stoner-games-zombie-strip12.png).
+
+- Author: Stoner Games
+- Source: <https://opengameart.org/content/zombie-sprite>
+- License: CC0-1.0
+- SHA-256: `5207803a33b04bf45cfcb80308f340262128731b6cd51a5e569833ecdc7379f3`
+- Provenance + conversion details: [`assets/sprites/source/README.md`](../assets/sprites/source/README.md)
+
+Derived atlases remain CC0-1.0. Attribution is optional; provenance stays tracked.
+
 ## T7 runtime (Linux)
 
 Link against pinned prefix:

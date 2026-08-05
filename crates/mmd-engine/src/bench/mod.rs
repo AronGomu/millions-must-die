@@ -15,8 +15,8 @@ pub use policy::{
 };
 pub use report::{
     AbsoluteGate, BenchExitCode, BenchmarkReport, REPORT_SCHEMA_VERSION, ReportManifests,
-    ScaleResult, TrialReport, VerdictStatus, build_report, build_scale_result, scale_verdict,
-    trial_report,
+    ScaleResult, TrialReport, VerdictStatus, WorkloadIdentity, build_report, build_scale_result,
+    scale_verdict, trial_report,
 };
 pub use runner::{BenchError, BenchOptions, default_scenario_path, run_bench, synthetic_scale_from_trial_p99s};
 pub use stats::{

@@ -103,4 +103,5 @@ Full JSON evidence under retain dir keyed by `sha256-<archive>`. Ordinary merge 
 - `schemas/lab-host-manifest-v1.schema.json`
 - `schemas/lab-raw-sample-v1.schema.json`
 - `schemas/lab-host-evidence-v1.schema.json`
-- `schemas/benchmark-report-v1.schema.json` (app bench; candidate claim surface)
+- `schemas/benchmark-report-v2.schema.json` (current app bench; candidate claim surface)
+- `schemas/benchmark-report-v1.schema.json` (historical reports)

@@ -3,7 +3,7 @@
   width: 480,
   height: 270,
   cell_size_px: 4,
-  sprite_size_px: 3,
+  sprite_size_px: 30,
   hard_agent_count: 50000,
   stretch_agent_count: 100000,
   seed: 5570183490285100849,

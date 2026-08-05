@@ -3,11 +3,13 @@
 use std::time::{Duration, Instant};
 
 use mmd_engine::bench::{
-    BenchPolicy, FenceQueue, FenceQueueError, GATE_AGENT_COUNT, GATE_P95_MS, GATE_P99_MS,
-    MAX_FRAMES_IN_FLIGHT, MockFence, REPORT_SCHEMA_VERSION, ReportManifests, SCALE_COUNTS,
-    STRETCH_AGENT_COUNT, TrialAggregate, TrialPercentiles, VerdictStatus, build_report, is_noisy,
-    median, normalized_mad, percentile_type7, synthetic_scale_from_trial_p99s,
+    BenchOptions, BenchPolicy, FenceQueue, FenceQueueError, GATE_AGENT_COUNT, GATE_P95_MS,
+    GATE_P99_MS, MAX_FRAMES_IN_FLIGHT, MockFence, REPORT_SCHEMA_VERSION, ReportManifests,
+    SCALE_COUNTS, STRETCH_AGENT_COUNT, TrialAggregate, TrialPercentiles, VerdictStatus,
+    WorkloadIdentity, build_report, is_noisy, median, normalized_mad, percentile_type7, run_bench,
+    synthetic_scale_from_trial_p99s,
 };
+use sha2::{Digest, Sha256};
 
 #[test]
 fn type7_percentiles_match_fixture() {
@@ -86,7 +88,9 @@ fn never_exceeds_two_in_flight() {
     assert_eq!(q.max_observed_in_flight(), 2);
 
     // Frame 2: must take oldest before admit.
-    let oldest = q.take_oldest_if_full().expect("must wait oldest before frame 3");
+    let oldest = q
+        .take_oldest_if_full()
+        .expect("must wait oldest before frame 3");
     oldest.fence.wait();
     q.complete_waited(oldest, Instant::now());
     assert_eq!(q.in_flight(), 1);
@@ -191,8 +195,7 @@ fn other_counts_never_block() {
     }
 
     let manifests = ReportManifests::new(
-        "technical_prototype_v1",
-        "abc",
+        WorkloadIdentity::new("technical_prototype_v1", "a".repeat(64), "b".repeat(64)),
         "vulkan",
         "test",
         1,
@@ -204,7 +207,8 @@ fn other_counts_never_block() {
     assert_eq!(report.verdict, VerdictStatus::Pass);
     assert!(!report.absolute_gate.relative_gates_enabled);
     let json = report.to_json_pretty().unwrap();
-    assert!(json.contains("benchmark-report-v1"));
+    assert!(json.contains("benchmark-report-v2"));
+    assert!(json.contains("atlas_manifest_sha256"));
     assert!(json.contains("gpu_queue_latency"));
     assert!(json.contains("not true GPU"));
     assert!(json.contains("project_rust_alloc_count"));
@@ -213,6 +217,51 @@ fn other_counts_never_block() {
     let back: mmd_engine::bench::BenchmarkReport = serde_json::from_str(&json).unwrap();
     assert_eq!(back.verdict, VerdictStatus::Pass);
     assert_eq!(back.scale_results[2].project_rust_alloc_count, 0);
+}
+
+#[test]
+fn dry_bench_pins_exact_atlas_manifest_bytes() {
+    let report = run_bench(BenchOptions {
+        policy: BenchPolicy::test_short(),
+        dry_cpu_only: true,
+        ..BenchOptions::default()
+    })
+    .expect("dry short bench");
+    let manifest =
+        std::fs::read(mmd_engine::workspace_root().join("assets/sprites/generated/manifest.json"))
+            .expect("atlas manifest");
+    let expected = hex::encode(Sha256::digest(&manifest));
+    assert_eq!(report.manifests.atlas_manifest_sha256, expected);
+    assert_eq!(report.manifests.atlas_manifest_sha256.len(), 64);
+}
+
+#[test]
+fn benchmark_report_v2_schema_tracks_workload_identity() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../schemas/benchmark-report-v2.schema.json"
+    ))
+    .expect("schema json");
+    assert_eq!(
+        schema["properties"]["schema_version"]["const"],
+        REPORT_SCHEMA_VERSION
+    );
+    let required = schema["properties"]["manifests"]["required"]
+        .as_array()
+        .expect("manifest required");
+    assert!(required.iter().any(|v| v == "atlas_manifest_sha256"));
+    assert!(
+        required
+            .iter()
+            .any(|v| v == "project_alloc_visibility_note")
+    );
+    let scale_required = schema["properties"]["scale_results"]["items"]["required"]
+        .as_array()
+        .expect("scale required");
+    assert!(
+        scale_required
+            .iter()
+            .any(|v| v == "project_rust_alloc_count")
+    );
 }
 
 #[test]

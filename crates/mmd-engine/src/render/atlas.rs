@@ -1,22 +1,42 @@
-//! Load tracked placeholder atlases (4 × 12×24 premul RGBA).
+//! Load tracked zombie atlases (4 × 128×256 premul RGBA).
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+use sha2::{Digest, Sha256};
+
 use super::RenderError;
 
+/// Generated atlas manifest schema version.
+const ATLAS_MANIFEST_VERSION: u32 = 2;
 /// Phase-0 atlas count.
 pub const ATLAS_COUNT: usize = 4;
-/// Sprite edge px.
-pub const SPRITE_SIZE_PX: u32 = 3;
-/// Atlas width px (4 frames × 3).
-pub const ATLAS_WIDTH_PX: u32 = 12;
-/// Atlas height px (8 dirs × 3).
-pub const ATLAS_HEIGHT_PX: u32 = 24;
+/// Default display-quad edge px.
+pub const SPRITE_SIZE_PX: u32 = 30;
+/// Source-resolution edge px for one atlas frame.
+pub const FRAME_SIZE_PX: u32 = 32;
 /// Frames across X.
 pub const FRAMES_X: u32 = 4;
 /// Dirs down Y.
 pub const FRAMES_Y: u32 = 8;
+/// Atlas width px (4 frames × 32).
+pub const ATLAS_WIDTH_PX: u32 = FRAMES_X * FRAME_SIZE_PX;
+/// Atlas height px (8 dirs × 32).
+pub const ATLAS_HEIGHT_PX: u32 = FRAMES_Y * FRAME_SIZE_PX;
+
+#[derive(Debug, Deserialize)]
+struct AtlasManifest {
+    version: u32,
+    atlases: Vec<AtlasManifestEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AtlasManifestEntry {
+    id: u32,
+    file: String,
+    sha256: String,
+}
 
 /// Decoded atlas RGBA8 bytes + size.
 #[derive(Clone, Debug)]
@@ -56,11 +76,42 @@ pub fn default_atlas_dir(workspace_root: &Path) -> PathBuf {
 
 /// Load all four tracked atlases from `dir`.
 pub fn load_atlases(dir: &Path) -> Result<[AtlasRgba; ATLAS_COUNT], RenderError> {
+    let manifest_path = dir.join("manifest.json");
+    let manifest_bytes = fs::read(&manifest_path)
+        .map_err(|e| RenderError::Io(format!("read {}: {e}", manifest_path.display())))?;
+    let manifest: AtlasManifest = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| RenderError::Atlas(format!("manifest parse: {e}")))?;
+    if manifest.version != ATLAS_MANIFEST_VERSION || manifest.atlases.len() != ATLAS_COUNT {
+        return Err(RenderError::Atlas(format!(
+            "manifest layout: version={} atlas_count={}",
+            manifest.version,
+            manifest.atlases.len()
+        )));
+    }
+
     let mut out: Vec<AtlasRgba> = Vec::with_capacity(ATLAS_COUNT);
     for id in 0..ATLAS_COUNT as u32 {
-        let path = dir.join(format!("atlas_{id}.png"));
+        let expected_file = format!("atlas_{id}.png");
+        let entry = manifest
+            .atlases
+            .get(id as usize)
+            .ok_or_else(|| RenderError::Atlas(format!("manifest missing atlas {id}")))?;
+        if entry.id != id || entry.file != expected_file {
+            return Err(RenderError::Atlas(format!(
+                "manifest atlas {id}: id={} file={}",
+                entry.id, entry.file
+            )));
+        }
+        let path = dir.join(&entry.file);
         let bytes = fs::read(&path)
             .map_err(|e| RenderError::Io(format!("read {}: {e}", path.display())))?;
+        let actual_sha256 = sha256_hex(&bytes);
+        if actual_sha256 != entry.sha256 {
+            return Err(RenderError::Atlas(format!(
+                "{} hash mismatch: expected {}, got {actual_sha256}",
+                entry.file, entry.sha256
+            )));
+        }
         let (width, height, rgba) = decode_rgba8_png(&bytes)?;
         if width != ATLAS_WIDTH_PX || height != ATLAS_HEIGHT_PX {
             return Err(RenderError::Atlas(format!(
@@ -84,29 +135,10 @@ pub fn load_atlases(dir: &Path) -> Result<[AtlasRgba; ATLAS_COUNT], RenderError>
         .map_err(|_| RenderError::Atlas("atlas count".into()))
 }
 
-/// CPU reference pixel matching xtask generator (`dir=0,frame=0` center = lx=1,ly=1).
-pub fn expected_sprite_center_pixel(atlas_id: u32) -> [u8; 4] {
-    sprite_pixel(atlas_id, 0, 0, 1, 1)
-}
-
-/// Mirror of xtask `sprite_pixel` for probe expectations.
-pub fn sprite_pixel(atlas_id: u32, dir: u32, frame: u32, lx: u32, ly: u32) -> [u8; 4] {
-    let edge =
-        u32::from(lx == 0 || ly == 0 || lx == SPRITE_SIZE_PX - 1 || ly == SPRITE_SIZE_PX - 1);
-    let a = 180u32 + frame * 12 + (1 - edge) * 30;
-    let a = a.min(255) as u8;
-    let base_r = 40 + atlas_id * 40;
-    let base_g = 30 + dir * 18;
-    let base_b = 50 + frame * 28 + lx * 10 + ly * 7;
-    let r = scale_premul(base_r, a);
-    let g = scale_premul(base_g, a);
-    let b = scale_premul(base_b, a);
-    [r, g, b, a]
-}
-
-fn scale_premul(channel: u32, a: u8) -> u8 {
-    let c = channel.min(255);
-    ((c * u32::from(a)) / 255).min(u32::from(a)) as u8
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
 }
 
 fn decode_rgba8_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), RenderError> {

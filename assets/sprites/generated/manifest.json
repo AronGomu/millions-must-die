@@ -1,6 +1,9 @@
 {
-  "version": 1,
-  "generator": "mmd-placeholder-v1",
+  "version": 2,
+  "generator": "mmd-zombie-cc0-v1",
+  "source_file": "assets/sprites/source/stoner-games-zombie-strip12.png",
+  "source_sha256": "5207803a33b04bf45cfcb80308f340262128731b6cd51a5e569833ecdc7379f3",
+  "source_license": "CC0-1.0",
   "atlas_count": 4,
   "direction_count": 8,
   "frame_count": 4,
@@ -8,29 +11,29 @@
   "layout": {
     "frames_x": 4,
     "frames_y": 8,
-    "sprite_size_px": 3,
+    "frame_size_px": 32,
     "order": "dir_rows_frame_cols"
   },
   "atlases": [
     {
       "id": 0,
       "file": "atlas_0.png",
-      "sha256": "31208609444f50382ed89c3d2780fbe0191b31536fb5e9c58f72722773627d13"
+      "sha256": "668fabe8ff971e81069ea3c167f16b5d3f694fb3172a084d414d4b4878844cbd"
     },
     {
       "id": 1,
       "file": "atlas_1.png",
-      "sha256": "40312db043b344590e5fd0b4950b66da8670067ded588cc83078daf57e56c5de"
+      "sha256": "21b6d0f8c1da09e2f7333465411befc205ce6ad88566e9ba645d7cb13a88189d"
     },
     {
       "id": 2,
       "file": "atlas_2.png",
-      "sha256": "9dfa8285355854ce2156064e33e574275a93bccac4a4134a59341a096585fc60"
+      "sha256": "48999c8da6c130dfe1641709e582b4a73846bdc5a543421cc6b5b5eb675a5436"
     },
     {
       "id": 3,
       "file": "atlas_3.png",
-      "sha256": "75edbc0ecab82a7514d70bfbd7a7fd6d1404658cbf7a6c4e5d2980fd5934569e"
+      "sha256": "97d5377004e046cf2ef808b24ddb2b5b1c606e2360c3faf635404410ce2a94cb"
     }
   ]
 }

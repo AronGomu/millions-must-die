@@ -43,7 +43,7 @@ fn loads_v1_scene() {
     assert_eq!(scene.width(), 480);
     assert_eq!(scene.height(), 270);
     assert_eq!(scene.cell_size_px(), 4);
-    assert_eq!(scene.sprite_size_px(), 3);
+    assert_eq!(scene.sprite_size_px(), 30);
     assert_eq!(scene.hard_agent_count(), 50_000);
     assert_eq!(scene.stretch_agent_count(), 100_000);
     assert_eq!(scene.atlas_count(), 4);
@@ -105,7 +105,7 @@ fn rejects_bad_obstacle_ratio() {
   width: 480,
   height: 270,
   cell_size_px: 4,
-  sprite_size_px: 3,
+  sprite_size_px: 30,
   hard_agent_count: 50000,
   stretch_agent_count: 100000,
   seed: 1,
@@ -177,7 +177,7 @@ fn rejects_unreachable_spawn() {
   width: 480,
   height: 270,
   cell_size_px: 4,
-  sprite_size_px: 3,
+  sprite_size_px: 30,
   hard_agent_count: 50000,
   stretch_agent_count: 100000,
   seed: 99,

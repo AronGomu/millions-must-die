@@ -1,7 +1,7 @@
 {
   "version": 1,
   "canonical": "shaders/sprite.hlsl",
-  "canonical_sha256": "642bc3f247f9b9fe00fde7d928200c96967c95bf70003a96624ebb07fe4b1855",
+  "canonical_sha256": "110151a8189fed47464614716eba75c7236747cd69a97e259e56c69bcbdcb7b8",
   "generator": "mmd-shader-pin-v1",
   "entry_points": {
     "vertex": "VSMain",
