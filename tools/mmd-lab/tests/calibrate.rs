@@ -43,6 +43,7 @@ fn stable_dataset_json(n: usize, drift_at: Option<usize>) -> String {
         "schema_version": "calibration-dataset-v1",
         "platform": "linux-x86_64",
         "backend": "vulkan",
+        "provenance": "native",
         "manifest": {
             "scenario_version": "scenario-v1",
             "scenario_sha256": "abc123",
@@ -79,7 +80,10 @@ fn cli_requires_50_clean_reports() {
     assert!(!output.status.success());
     let err = String::from_utf8_lossy(&output.stderr);
     assert!(
-        err.contains("need ≥50") || err.contains("need >=50") || err.contains("Underfilled") || err.contains("50"),
+        err.contains("need ≥50")
+            || err.contains("need >=50")
+            || err.contains("Underfilled")
+            || err.contains("50"),
         "{err}"
     );
     assert!(!out.exists());
@@ -105,7 +109,10 @@ fn cli_mixed_manifest_rejects() {
         .unwrap();
     assert!(!output.status.success());
     let err = String::from_utf8_lossy(&output.stderr);
-    assert!(err.contains("mixed manifests") || err.contains("Mixed"), "{err}");
+    assert!(
+        err.contains("mixed manifests") || err.contains("Mixed"),
+        "{err}"
+    );
 }
 
 #[test]
@@ -158,8 +165,7 @@ fn cli_output_requires_review_flag() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("enabled false"), "{stdout}");
     assert!(stdout.contains("review_required true"), "{stdout}");
-    let body: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
     assert_eq!(body["schema_version"], "baseline-v1");
     assert_eq!(body["enabled"], false);
     assert_eq!(body["review_required"], true);
@@ -174,19 +180,21 @@ fn cli_enable_reviewed_requires_owner() {
     let cand = dir.path().join("cand.json");
     let out = dir.path().join("enabled.json");
     fs::write(&ds, stable_dataset_json(50, None)).unwrap();
-    assert!(lab_bin()
-        .args([
-            "calibrate",
-            "--dataset",
-            ds.to_str().unwrap(),
-            "--margin",
-            "0.05",
-            "--out",
-            cand.to_str().unwrap(),
-        ])
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        lab_bin()
+            .args([
+                "calibrate",
+                "--dataset",
+                ds.to_str().unwrap(),
+                "--margin",
+                "0.05",
+                "--out",
+                cand.to_str().unwrap(),
+            ])
+            .status()
+            .unwrap()
+            .success()
+    );
 
     // Missing reviewer → fail; still disabled.
     let bad = lab_bin()
@@ -226,8 +234,7 @@ fn cli_enable_reviewed_requires_owner() {
         "stderr={}",
         String::from_utf8_lossy(&good.stderr)
     );
-    let body: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let body: serde_json::Value = serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
     assert_eq!(body["enabled"], true);
     assert_eq!(body["review_required"], false);
     assert_eq!(body["review"]["reviewer"], "owner");

@@ -1,0 +1,34 @@
+{
+  "schema_version": "golden-tolerance-review-v1",
+  "provenance": "synthetic",
+  "reviewed": false,
+  "entries": [
+    {
+      "family": "linux-vulkan",
+      "backend": "vulkan",
+      "observed_max_channel_delta": 0,
+      "tolerance": 0,
+      "reviewed": false,
+      "provenance": "synthetic",
+      "note": "synthetic pipeline proof; zero/synthetic delta recorded; native capture deferred-hw; not reviewed"
+    },
+    {
+      "family": "windows-d3d12",
+      "backend": "direct3d12",
+      "observed_max_channel_delta": 0,
+      "tolerance": 0,
+      "reviewed": false,
+      "provenance": "synthetic",
+      "note": "synthetic pipeline proof; zero/synthetic delta recorded; native capture deferred-hw; not reviewed"
+    },
+    {
+      "family": "macos-metal",
+      "backend": "metal",
+      "observed_max_channel_delta": 0,
+      "tolerance": 0,
+      "reviewed": false,
+      "provenance": "synthetic",
+      "note": "synthetic pipeline proof; zero/synthetic delta recorded; native capture deferred-hw; not reviewed"
+    }
+  ]
+}

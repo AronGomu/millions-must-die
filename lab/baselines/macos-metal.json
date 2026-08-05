@@ -1,0 +1,58 @@
+{
+  "schema_version": "baseline-v1",
+  "enabled": false,
+  "review_required": true,
+  "platform": "macos-arm64",
+  "backend": "metal",
+  "manifest": {
+    "scenario_version": "technical-prototype-v1",
+    "scenario_sha256": "synthetic-pilot-macos",
+    "shader_manifest_version": 1,
+    "os_build": "macos (synthetic pilot)",
+    "driver": "synthetic-driver",
+    "cpu": "synthetic-cpu",
+    "gpu": "synthetic-gpu",
+    "policy_id": "phase0-absolute-v1"
+  },
+  "provenance": "synthetic",
+  "sample_count": 50,
+  "nmad_limit": 0.03,
+  "metrics": {
+    "median_p95_frame_service_ms": {
+      "baseline_ms": 10.997527999999999,
+      "noise_nmad": 0.0015234442958455049,
+      "noise_envelope_ms": 0.016754121300001222,
+      "margin": 0.05,
+      "relative_limit_ms": 11.5474044
+    },
+    "median_p99_frame_service_ms": {
+      "baseline_ms": 12.9994825,
+      "noise_nmad": 0.0014192468354028087,
+      "noise_envelope_ms": 0.01844947439999919,
+      "margin": 0.05,
+      "relative_limit_ms": 13.649456625
+    },
+    "median_sim_ms": {
+      "baseline_ms": 1.800188,
+      "noise_nmad": 0.001349848682470989,
+      "noise_envelope_ms": 0.0024299814000000846,
+      "margin": 0.05,
+      "relative_limit_ms": 1.8901974
+    },
+    "median_upload_ms": {
+      "baseline_ms": 0.900212,
+      "noise_nmad": 0.0012179161130933668,
+      "noise_envelope_ms": 0.001096382700000006,
+      "margin": 0.05,
+      "relative_limit_ms": 0.9452226
+    },
+    "median_gpu_queue_latency_ms": {
+      "baseline_ms": 2.7997935,
+      "noise_nmad": 0.0011400975821968425,
+      "noise_envelope_ms": 0.003192037800000435,
+      "margin": 0.05,
+      "relative_limit_ms": 2.939783175
+    }
+  },
+  "review": null
+}

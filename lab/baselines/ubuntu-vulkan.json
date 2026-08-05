@@ -1,0 +1,58 @@
+{
+  "schema_version": "baseline-v1",
+  "enabled": false,
+  "review_required": true,
+  "platform": "linux-x86_64",
+  "backend": "vulkan",
+  "manifest": {
+    "scenario_version": "technical-prototype-v1",
+    "scenario_sha256": "synthetic-pilot-ubuntu",
+    "shader_manifest_version": 1,
+    "os_build": "ubuntu (synthetic pilot)",
+    "driver": "synthetic-driver",
+    "cpu": "synthetic-cpu",
+    "gpu": "synthetic-gpu",
+    "policy_id": "phase0-absolute-v1"
+  },
+  "provenance": "synthetic",
+  "sample_count": 50,
+  "nmad_limit": 0.03,
+  "metrics": {
+    "median_p95_frame_service_ms": {
+      "baseline_ms": 12.0025895,
+      "noise_nmad": 0.0013674034257356617,
+      "noise_envelope_ms": 0.016412381999998883,
+      "margin": 0.05,
+      "relative_limit_ms": 12.602718975
+    },
+    "median_p99_frame_service_ms": {
+      "baseline_ms": 14.001225,
+      "noise_nmad": 0.001659307810566583,
+      "noise_envelope_ms": 0.023232342000000107,
+      "margin": 0.05,
+      "relative_limit_ms": 14.70128625
+    },
+    "median_sim_ms": {
+      "baseline_ms": 1.9993155,
+      "noise_nmad": 0.0014923770160337171,
+      "noise_envelope_ms": 0.002983732499999959,
+      "margin": 0.05,
+      "relative_limit_ms": 2.099281275
+    },
+    "median_upload_ms": {
+      "baseline_ms": 0.9997235,
+      "noise_nmad": 0.0015875622609651185,
+      "noise_envelope_ms": 0.0015871232999999617,
+      "margin": 0.05,
+      "relative_limit_ms": 1.0497096750000001
+    },
+    "median_gpu_queue_latency_ms": {
+      "baseline_ms": 3.000672,
+      "noise_nmad": 0.0015410646015293038,
+      "noise_envelope_ms": 0.004624229400000139,
+      "margin": 0.05,
+      "relative_limit_ms": 3.1507055999999998
+    }
+  },
+  "review": null
+}

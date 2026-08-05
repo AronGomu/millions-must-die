@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/pilot-report-v1.schema.json",
+  "title": "pilot-report-v1",
+  "description": "One lane report feeding the 150-report (50/lane) T26 pilot dataset. Bulk report data stays external/untracked; the deterministic generator is tracked instead.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lane",
+    "platform",
+    "backend",
+    "provenance",
+    "manifest",
+    "sample"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "pilot-report-v1"
+    },
+    "lane": {
+      "type": "string",
+      "enum": ["ubuntu", "windows", "macos"]
+    },
+    "platform": {
+      "type": "string",
+      "enum": ["linux-x86_64", "windows-x86_64", "macos-arm64"]
+    },
+    "backend": {
+      "type": "string",
+      "enum": ["vulkan", "d3d12", "metal"]
+    },
+    "provenance": {
+      "type": "string",
+      "enum": ["native", "synthetic", "unspecified"],
+      "description": "Data origin. Synthetic reports prove the pipeline only; baselines derived from them can never be enabled."
+    },
+    "manifest": { "$ref": "#/$defs/calibrationManifest" },
+    "sample": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "median_p95_frame_service_ms",
+        "median_p99_frame_service_ms",
+        "median_sim_ms",
+        "median_upload_ms",
+        "median_gpu_queue_latency_ms"
+      ],
+      "properties": {
+        "run_id": { "type": "string", "minLength": 1 },
+        "median_p95_frame_service_ms": { "type": "number" },
+        "median_p99_frame_service_ms": { "type": "number" },
+        "median_sim_ms": { "type": "number" },
+        "median_upload_ms": { "type": "number" },
+        "median_gpu_queue_latency_ms": { "type": "number" },
+        "manifest_override": {
+          "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/calibrationManifest" }],
+          "description": "Optional per-sample manifest; must match the report manifest when present"
+        }
+      }
+    }
+  },
+  "$defs": {
+    "calibrationManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_version",
+        "scenario_sha256",
+        "shader_manifest_version",
+        "os_build",
+        "driver",
+        "cpu",
+        "gpu",
+        "policy_id"
+      ],
+      "properties": {
+        "scenario_version": { "type": "string", "minLength": 1 },
+        "scenario_sha256": { "type": "string", "minLength": 1 },
+        "shader_manifest_version": { "type": "integer", "minimum": 1 },
+        "os_build": { "type": "string", "minLength": 1 },
+        "driver": { "type": "string" },
+        "cpu": { "type": "string" },
+        "gpu": { "type": "string" },
+        "policy_id": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

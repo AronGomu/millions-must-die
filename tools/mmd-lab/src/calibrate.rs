@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::Path;
 
-use mmd_engine::bench::{median, normalized_mad, NMAD_LIMIT};
+use mmd_engine::bench::{NMAD_LIMIT, median, normalized_mad};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -42,9 +42,7 @@ pub enum CalibrateError {
         nmad: f64,
         limit: f64,
     },
-    #[error(
-        "margin must exceed noise: metric={metric} margin={margin} noise_nmad={noise_nmad}"
-    )]
+    #[error("margin must exceed noise: metric={metric} margin={margin} noise_nmad={noise_nmad}")]
     MarginBelowNoise {
         metric: String,
         margin: f64,
@@ -54,6 +52,8 @@ pub enum CalibrateError {
     BadMargin(f64),
     #[error("candidate already enabled; refuse silent re-enable")]
     AlreadyEnabled,
+    #[error("provenance '{0}' cannot enable baseline; only native reviewed pilot data may enable")]
+    NonNativeProvenance(String),
     #[error("enabled baseline requires review record (reviewer + evidence_ref)")]
     MissingReview,
     #[error("enabled baseline must set review_required=false")]
@@ -64,6 +64,34 @@ pub enum CalibrateError {
     Io(String),
     #[error("json: {0}")]
     Json(String),
+}
+
+/// Data provenance for calibration datasets and baselines.
+///
+/// Hardware deferral policy (2026-08-05): only `native` data collected on
+/// attested lab hardware may ever enable a baseline. `synthetic` proves the
+/// pipeline shape only; `unspecified` covers pre-provenance files. Both are
+/// permanently refused by `enable_reviewed_baseline`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Provenance {
+    /// Real lane runs on attested reference hardware.
+    Native,
+    /// Generated data; pipeline proof only. Can never enable.
+    Synthetic,
+    /// Legacy/unmarked data; treated as not enableable.
+    #[default]
+    Unspecified,
+}
+
+impl Provenance {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Provenance::Native => "native",
+            Provenance::Synthetic => "synthetic",
+            Provenance::Unspecified => "unspecified",
+        }
+    }
 }
 
 /// Frozen host/workload pins bound to a baseline.
@@ -133,6 +161,9 @@ pub struct CalibrationDataset {
     pub platform: String,
     pub backend: String,
     pub manifest: CalibrationManifest,
+    /// Data origin; only `native` datasets may ever be enabled downstream.
+    #[serde(default)]
+    pub provenance: Provenance,
     pub samples: Vec<CalibrationSample>,
 }
 
@@ -183,6 +214,9 @@ pub struct Baseline {
     pub platform: String,
     pub backend: String,
     pub manifest: CalibrationManifest,
+    /// Inherited from the source dataset; non-`native` can never enable.
+    #[serde(default)]
+    pub provenance: Provenance,
     pub sample_count: usize,
     pub nmad_limit: f64,
     pub metrics: BaselineMetrics,
@@ -345,6 +379,7 @@ pub fn derive_baseline_candidate(
         platform: dataset.platform.clone(),
         backend: dataset.backend.clone(),
         manifest: dataset.manifest.clone(),
+        provenance: dataset.provenance,
         sample_count: n,
         nmad_limit: NMAD_LIMIT,
         metrics,
@@ -370,15 +405,17 @@ pub fn enable_reviewed_baseline(
     if candidate.enabled {
         return Err(CalibrateError::AlreadyEnabled);
     }
+    if candidate.provenance != Provenance::Native {
+        return Err(CalibrateError::NonNativeProvenance(
+            candidate.provenance.as_str().into(),
+        ));
+    }
     if review.reviewer.trim().is_empty() || review.evidence_ref.trim().is_empty() {
         return Err(CalibrateError::MissingReview);
     }
     // Re-check margin > noise on every metric (candidate may be hand-edited).
     for key in METRIC_KEYS {
-        let m = candidate
-            .metrics
-            .get(key)
-            .expect("known metric");
+        let m = candidate.metrics.get(key).expect("known metric");
         if m.margin <= m.noise_nmad {
             return Err(CalibrateError::MarginBelowNoise {
                 metric: key.into(),
@@ -440,6 +477,7 @@ mod tests {
             platform: "linux-x86_64".into(),
             backend: "vulkan".into(),
             manifest: base_manifest(),
+            provenance: Provenance::Native,
             samples: (0..n).map(|i| stable_sample(i, 1.0)).collect(),
         }
     }
@@ -519,8 +557,10 @@ mod tests {
         assert_eq!(cand.schema_version, BASELINE_SCHEMA);
         // Margin stored explicitly on every metric.
         assert!((cand.metrics.median_p95_frame_service_ms.margin - 0.05).abs() < 1e-15);
-        assert!(cand.metrics.median_p95_frame_service_ms.relative_limit_ms
-            > cand.metrics.median_p95_frame_service_ms.baseline_ms);
+        assert!(
+            cand.metrics.median_p95_frame_service_ms.relative_limit_ms
+                > cand.metrics.median_p95_frame_service_ms.baseline_ms
+        );
     }
 
     #[test]
@@ -536,7 +576,11 @@ mod tests {
         let ds = noisy_dataset(50);
         let err = derive_baseline_candidate(&ds, 0.5).unwrap_err();
         match err {
-            CalibrateError::Noisy { metric, nmad, limit } => {
+            CalibrateError::Noisy {
+                metric,
+                nmad,
+                limit,
+            } => {
                 assert_eq!(metric, "median_p95_frame_service_ms");
                 assert!(nmad > limit);
             }
@@ -590,6 +634,46 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, CalibrateError::MissingReview);
+    }
+
+    #[test]
+    fn synthetic_provenance_cannot_enable() {
+        let mut ds = stable_dataset(50);
+        ds.provenance = Provenance::Synthetic;
+        let cand = derive_baseline_candidate(&ds, 0.05).unwrap();
+        assert_eq!(cand.provenance, Provenance::Synthetic);
+        let err = enable_reviewed_baseline(
+            &cand,
+            ReviewRecord {
+                reviewer: "owner".into(),
+                reviewed_at: "2026-08-05T00:00:00Z".into(),
+                evidence_ref: "lab/calibration/synthetic-set".into(),
+                notes: "must refuse".into(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(err, CalibrateError::NonNativeProvenance("synthetic".into()));
+    }
+
+    #[test]
+    fn unspecified_provenance_cannot_enable() {
+        let mut ds = stable_dataset(50);
+        ds.provenance = Provenance::Unspecified;
+        let cand = derive_baseline_candidate(&ds, 0.05).unwrap();
+        let err = enable_reviewed_baseline(
+            &cand,
+            ReviewRecord {
+                reviewer: "owner".into(),
+                reviewed_at: "2026-08-05T00:00:00Z".into(),
+                evidence_ref: "ev".into(),
+                notes: String::new(),
+            },
+        )
+        .unwrap_err();
+        assert_eq!(
+            err,
+            CalibrateError::NonNativeProvenance("unspecified".into())
+        );
     }
 
     #[test]

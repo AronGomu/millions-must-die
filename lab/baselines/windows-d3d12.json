@@ -1,0 +1,58 @@
+{
+  "schema_version": "baseline-v1",
+  "enabled": false,
+  "review_required": true,
+  "platform": "windows-x86_64",
+  "backend": "d3d12",
+  "manifest": {
+    "scenario_version": "technical-prototype-v1",
+    "scenario_sha256": "synthetic-pilot-windows",
+    "shader_manifest_version": 1,
+    "os_build": "windows (synthetic pilot)",
+    "driver": "synthetic-driver",
+    "cpu": "synthetic-cpu",
+    "gpu": "synthetic-gpu",
+    "policy_id": "phase0-absolute-v1"
+  },
+  "provenance": "synthetic",
+  "sample_count": 50,
+  "nmad_limit": 0.03,
+  "metrics": {
+    "median_p95_frame_service_ms": {
+      "baseline_ms": 13.002312,
+      "noise_nmad": 0.0013672842645215807,
+      "noise_envelope_ms": 0.017777856600000124,
+      "margin": 0.05,
+      "relative_limit_ms": 13.652427600000001
+    },
+    "median_p99_frame_service_ms": {
+      "baseline_ms": 15.497813,
+      "noise_nmad": 0.0016694518510449936,
+      "noise_envelope_ms": 0.025872852599999167,
+      "margin": 0.05,
+      "relative_limit_ms": 16.27270365
+    },
+    "median_sim_ms": {
+      "baseline_ms": 2.1988905,
+      "noise_nmad": 0.0015632466009561808,
+      "noise_envelope_ms": 0.003437408099999837,
+      "margin": 0.05,
+      "relative_limit_ms": 2.308835025
+    },
+    "median_upload_ms": {
+      "baseline_ms": 1.1998795,
+      "noise_nmad": 0.0014944873214351626,
+      "noise_envelope_ms": 0.0017932046999999621,
+      "margin": 0.05,
+      "relative_limit_ms": 1.259873475
+    },
+    "median_gpu_queue_latency_ms": {
+      "baseline_ms": 3.3996069999999996,
+      "noise_nmad": 0.001435671593804845,
+      "noise_envelope_ms": 0.004880719200000107,
+      "margin": 0.05,
+      "relative_limit_ms": 3.56958735
+    }
+  },
+  "review": null
+}

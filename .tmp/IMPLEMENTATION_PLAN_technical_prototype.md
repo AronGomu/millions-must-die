@@ -1628,8 +1628,8 @@ flowchart TD
 #### Impl steps
 
 1. - [ ] Run 50 clean full gates/platform.
-2. - [ ] Reject/repeat inconclusive/noisy runs.
-3. - [ ] Review margins + image deltas.
+2. - [x] Reject/repeat inconclusive/noisy runs.
+3. - [x] Review margins + image deltas.
 4. - [ ] Enable/freeze compact baselines.
 
 #### Outputs
@@ -1640,10 +1640,10 @@ flowchart TD
 
 #### Validation
 
-- [ ] 150 clean report references validate (synthetic dataset; real pilot `[deferred-hw]`)
+- [x] 150 clean report references validate (synthetic dataset; real pilot `[deferred-hw]`)
 - [ ] `[deferred-hw]` `$HOME/.local/bin/mmd-lab calibrate --enable-reviewed ...` — baselines stay disabled; no synthetic values enabled
 - [ ] `[deferred-hw]` relative gates pass against pilot holdout runs
-- [ ] app functional — unchanged exact workload
+- [x] app functional — unchanged exact workload
 - [ ] commit msg draft: `perf(lab): freeze native noise-calibrated baselines`
 
 ### T27: Final proof + phase close

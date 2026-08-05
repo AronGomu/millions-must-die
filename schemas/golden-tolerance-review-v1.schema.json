@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://millions-must-die.local/schemas/golden-tolerance-review-v1.schema.json",
+  "title": "golden-tolerance-review-v1",
+  "description": "Tracked golden tolerance derivation index (lab/goldens/manifest.json). Tolerances are bounded by observed image deltas only and stay not-reviewed until an owner reviews real native captures.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provenance", "reviewed", "entries"],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "golden-tolerance-review-v1"
+    },
+    "provenance": {
+      "type": "string",
+      "enum": ["native", "synthetic", "unspecified"]
+    },
+    "reviewed": {
+      "type": "boolean",
+      "description": "False until an owner reviews real native image deltas. Synthetic derivations must stay false."
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "family",
+          "backend",
+          "observed_max_channel_delta",
+          "tolerance",
+          "reviewed",
+          "provenance",
+          "note"
+        ],
+        "properties": {
+          "family": {
+            "type": "string",
+            "enum": ["linux-vulkan", "windows-d3d12", "macos-metal"]
+          },
+          "backend": {
+            "type": "string",
+            "enum": ["vulkan", "direct3d12", "metal"]
+          },
+          "observed_max_channel_delta": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "tolerance": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255,
+            "description": "Never exceeds observed_max_channel_delta; policy-capped at 0 for gate use."
+          },
+          "reviewed": { "type": "boolean" },
+          "provenance": {
+            "type": "string",
+            "enum": ["native", "synthetic", "unspecified"]
+          },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}

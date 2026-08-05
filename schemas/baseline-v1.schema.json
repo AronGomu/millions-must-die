@@ -36,6 +36,12 @@
       "type": "string",
       "minLength": 1
     },
+    "provenance": {
+      "type": "string",
+      "enum": ["native", "synthetic", "unspecified"],
+      "default": "unspecified",
+      "description": "Data origin. Only 'native' baselines may ever be enabled; synthetic/unspecified are structurally refused by enable."
+    },
     "manifest": {
       "type": "object",
       "additionalProperties": false,
@@ -159,8 +165,10 @@
       "then": {
         "properties": {
           "review_required": { "const": false },
-          "review": { "$ref": "#/$defs/reviewRecord" }
-        }
+          "review": { "$ref": "#/$defs/reviewRecord" },
+          "provenance": { "const": "native" }
+        },
+        "required": ["provenance"]
       }
     },
     {

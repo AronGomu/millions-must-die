@@ -24,6 +24,12 @@
       "type": "string",
       "minLength": 1
     },
+    "provenance": {
+      "type": "string",
+      "enum": ["native", "synthetic", "unspecified"],
+      "default": "unspecified",
+      "description": "Data origin. Baselines derived from non-'native' datasets can never be enabled."
+    },
     "manifest": {
       "type": "object",
       "additionalProperties": false,

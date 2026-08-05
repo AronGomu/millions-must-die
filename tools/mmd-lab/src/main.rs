@@ -7,6 +7,7 @@ mod install;
 mod macos;
 mod macos_gate;
 mod macos_recovery;
+mod pilot;
 mod pr_summary;
 mod report;
 mod ssh;
@@ -26,36 +27,39 @@ use clap::{Parser, Subcommand};
 use mmd_engine::bench::BenchPolicy;
 use toml::Value as TomlValue;
 
-use archive::{pack_tree, write_archive_file, ArchiveBlob};
+use archive::{ArchiveBlob, pack_tree, write_archive_file};
 use calibrate::{
-    derive_baseline_candidate, enable_reviewed_baseline, Baseline, CalibrationDataset,
-    ReviewRecord,
+    Baseline, CalibrationDataset, ReviewRecord, derive_baseline_candidate, enable_reviewed_baseline,
 };
 use gate::{LaneId, LaneRun, aggregate_merge_gate, render_merge_summary};
 use install::{
     default_binary_path, default_manifest_path, install_current_exe, self_check, sha256_file,
 };
 use macos::{
-    load_attestation as load_macos_attestation, load_manifest as load_macos_manifest,
-    validate_macos_attestation, MacosAttestVerdict,
+    MacosAttestVerdict, load_attestation as load_macos_attestation,
+    load_manifest as load_macos_manifest, validate_macos_attestation,
 };
 use macos_gate::{MacosEacsProtocolResetController, MacosGateParams, run_macos_gate};
 use macos_recovery::{
     MacosLabNetwork, MacosRecoveryEvent, MacosRecoveryPhase, MacosRecoveryState,
     simulate_successful_macos_eacs_drill,
 };
-use pr_summary::{render_pr_summary, retain_run_dir, ValidateMode};
+use pilot::{
+    derive_pilot_candidates, load_pilot_reports, synth_pilot_reports,
+    write_golden_tolerance_review, write_pilot_reports,
+};
+use pr_summary::{ValidateMode, render_pr_summary, retain_run_dir};
 use report::{ClaimedStats, HostEvidence, HostManifest, LabConfig, RawTrialSamples};
 use ssh::{AgentTransport, FakeAgent, run_fake_matrix};
-use ubuntu::{load_attestation, load_manifest, validate_ubuntu_attestation, AttestVerdict};
+use ubuntu::{AttestVerdict, load_attestation, load_manifest, validate_ubuntu_attestation};
 use ubuntu_gate::{ProtocolResetController, UbuntuGateParams, run_ubuntu_gate};
 use ubuntu_recovery::{
     LabNetwork, RecoveryEvent, RecoveryPhase, RecoveryState, simulate_successful_drill,
 };
 use verify::verify_matrix;
 use windows::{
-    load_attestation as load_windows_attestation, load_manifest as load_windows_manifest,
-    validate_windows_attestation, WindowsAttestVerdict,
+    WindowsAttestVerdict, load_attestation as load_windows_attestation,
+    load_manifest as load_windows_manifest, validate_windows_attestation,
 };
 use windows_gate::{WindowsGateParams, WindowsProtocolResetController, run_windows_gate};
 use windows_recovery::{
@@ -298,6 +302,32 @@ enum Commands {
         #[arg(long)]
         reviewed_at: Option<String>,
     },
+    /// Generate deterministic synthetic pilot lane reports (pipeline proof
+    /// only; synthetic provenance can never enable a baseline)
+    PilotSynth {
+        /// Deterministic generator seed
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+        /// Output directory for per-lane report JSONs (bulk data stays untracked)
+        #[arg(long)]
+        out_dir: PathBuf,
+    },
+    /// Assemble the 150-report pilot dataset from lane reports and emit
+    /// DISABLED baseline candidates + not-reviewed golden tolerance record
+    PilotAssemble {
+        /// Directory of pilot-report-v1 lane reports
+        #[arg(long)]
+        reports_dir: PathBuf,
+        /// Explicit relative margin fraction; must exceed per-metric noise
+        #[arg(long)]
+        margin: f64,
+        /// Output directory for disabled baseline candidates (e.g. lab/baselines)
+        #[arg(long)]
+        out_dir: PathBuf,
+        /// Optional golden tolerance review index output (e.g. lab/goldens/manifest.json)
+        #[arg(long)]
+        golden_review_out: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -376,6 +406,13 @@ fn main() -> ExitCode {
             notes,
             reviewed_at,
         }),
+        Commands::PilotSynth { seed, out_dir } => cmd_pilot_synth(seed, out_dir),
+        Commands::PilotAssemble {
+            reports_dir,
+            margin,
+            out_dir,
+            golden_review_out,
+        } => cmd_pilot_assemble(reports_dir, margin, out_dir, golden_review_out),
         Commands::ValidateRunner {
             runner,
             commit,
@@ -1045,8 +1082,7 @@ fn print_macos_recovery_state(state: &MacosRecoveryState, code: ExitCode) -> Exi
 
 fn load_macos_mdm_profile_id(path: &std::path::Path) -> Result<String, String> {
     let text = fs::read_to_string(path).map_err(|e| e.to_string())?;
-    let v: serde_json::Value =
-        serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
     let schema = v
         .get("schema_version")
         .and_then(|x| x.as_str())
@@ -1072,7 +1108,9 @@ fn load_macos_mdm_profile_id(path: &std::path::Path) -> Result<String, String> {
         .and_then(|x| x.as_str())
         .unwrap_or("");
     if egress != "deny" {
-        return Err(format!("candidate_egress_policy must be deny, got {egress}"));
+        return Err(format!(
+            "candidate_egress_policy must be deny, got {egress}"
+        ));
     }
     let profile_id = v
         .get("profile_id")
@@ -1083,10 +1121,7 @@ fn load_macos_mdm_profile_id(path: &std::path::Path) -> Result<String, String> {
         return Err("profile_id empty".into());
     }
     // Example file must keep TODO(user) until real MDM is selected.
-    let provider = v
-        .get("provider")
-        .and_then(|x| x.as_str())
-        .unwrap_or("");
+    let provider = v.get("provider").and_then(|x| x.as_str()).unwrap_or("");
     if !provider.contains("TODO(user)") {
         // Allow non-TODO only when explicitly provisioned later; still require id.
         // For T22 skeleton, TODO(user) is expected; non-TODO is accepted if present.
@@ -1110,7 +1145,9 @@ fn load_image_digest(path: &std::path::Path) -> Result<String, String> {
         .and_then(|x| x.as_str())
         .unwrap_or("");
     if initiator != "external-controller" {
-        return Err(format!("initiator must be external-controller, got {initiator}"));
+        return Err(format!(
+            "initiator must be external-controller, got {initiator}"
+        ));
     }
     let read_only = v
         .get("image")
@@ -1148,7 +1185,9 @@ fn load_windows_image_digest(path: &std::path::Path) -> Result<String, String> {
         .and_then(|x| x.as_str())
         .unwrap_or("");
     if initiator != "external-controller" {
-        return Err(format!("initiator must be external-controller, got {initiator}"));
+        return Err(format!(
+            "initiator must be external-controller, got {initiator}"
+        ));
     }
     let boot_env = v
         .get("restore")
@@ -1180,7 +1219,9 @@ fn load_windows_image_digest(path: &std::path::Path) -> Result<String, String> {
         .and_then(|x| x.as_str())
         .unwrap_or("");
     if egress != "deny" {
-        return Err(format!("candidate_egress_policy must be deny, got {egress}"));
+        return Err(format!(
+            "candidate_egress_policy must be deny, got {egress}"
+        ));
     }
     let digest = v
         .get("ffu")
@@ -1482,7 +1523,11 @@ fn cmd_calibrate_enable(args: CalibrateArgs) -> ExitCode {
                 println!("review_required false");
                 println!(
                     "reviewer {}",
-                    enabled.review.as_ref().map(|r| r.reviewer.as_str()).unwrap_or("")
+                    enabled
+                        .review
+                        .as_ref()
+                        .map(|r| r.reviewer.as_str())
+                        .unwrap_or("")
                 );
                 ExitCode::SUCCESS
             }
@@ -1496,6 +1541,71 @@ fn cmd_calibrate_enable(args: CalibrateArgs) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn cmd_pilot_synth(seed: u64, out_dir: PathBuf) -> ExitCode {
+    let reports = synth_pilot_reports(seed);
+    if let Err(e) = write_pilot_reports(&out_dir, &reports) {
+        eprintln!("pilot-synth failed: {e}");
+        return ExitCode::from(1);
+    }
+    println!("pilot_reports_dir {}", out_dir.display());
+    println!("pilot_report_count {}", reports.len());
+    println!("seed {seed}");
+    println!("provenance synthetic");
+    println!("note pipeline proof only; synthetic data can never enable a baseline");
+    ExitCode::SUCCESS
+}
+
+fn cmd_pilot_assemble(
+    reports_dir: PathBuf,
+    margin: f64,
+    out_dir: PathBuf,
+    golden_review_out: Option<PathBuf>,
+) -> ExitCode {
+    let reports = match load_pilot_reports(&reports_dir) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("pilot-assemble failed: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let candidates = match derive_pilot_candidates(&reports, margin) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("pilot-assemble failed: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    println!("pilot_report_count {}", reports.len());
+    for candidate in &candidates {
+        let path = out_dir.join(candidate.baseline_file);
+        if let Err(e) = candidate.baseline.write(&path) {
+            eprintln!("pilot-assemble write failed: {e}");
+            return ExitCode::from(1);
+        }
+        println!(
+            "candidate {} enabled false review_required true provenance {}",
+            path.display(),
+            candidate.baseline.provenance.as_str()
+        );
+    }
+    if let Some(review_path) = golden_review_out {
+        // Synthetic scope: zero/synthetic image delta recorded; not reviewed.
+        match write_golden_tolerance_review(&review_path, &candidates, &[0]) {
+            Ok(review) => println!(
+                "golden_tolerance_review {} reviewed {}",
+                review_path.display(),
+                review.reviewed
+            ),
+            Err(e) => {
+                eprintln!("pilot-assemble golden review failed: {e}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+    println!("baselines remain disabled pending real-hardware pilot + owner review");
+    ExitCode::SUCCESS
 }
 
 struct ValidateArgs {
@@ -1523,7 +1633,11 @@ fn cmd_validate(args: ValidateArgs) -> ExitCode {
     };
 
     if !args.skip_self_check {
-        let man = match args.manifest.clone().or_else(|| default_manifest_path().ok()) {
+        let man = match args
+            .manifest
+            .clone()
+            .or_else(|| default_manifest_path().ok())
+        {
             Some(p) => p,
             None => {
                 eprintln!("validate: manifest path unresolved");
@@ -1578,18 +1692,14 @@ fn cmd_validate(args: ValidateArgs) -> ExitCode {
         });
     }
 
-    let (evidences, required) = match load_agents(
-        &blob,
-        args.fake_fixtures.as_deref(),
-        args.config.as_deref(),
-    )
-    {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("validate: agent matrix failed: {e}");
-            return ExitCode::from(1);
-        }
-    };
+    let (evidences, required) =
+        match load_agents(&blob, args.fake_fixtures.as_deref(), args.config.as_deref()) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("validate: agent matrix failed: {e}");
+                return ExitCode::from(1);
+            }
+        };
 
     let required_refs: Vec<&str> = required.iter().map(String::as_str).collect();
     let policy = BenchPolicy::production();
@@ -2454,7 +2564,10 @@ fn synthetic_pass_evidence(
     os_build: &str,
     base_ms: f64,
 ) -> HostEvidence {
-    let mut e = HostEvidence::new(HostManifest::new(id, platform, backend, os_build), "pending");
+    let mut e = HostEvidence::new(
+        HostManifest::new(id, platform, backend, os_build),
+        "pending",
+    );
     e.submitted_frames = 420;
     e.completed_frames = 420;
     e.max_in_flight = 2;
