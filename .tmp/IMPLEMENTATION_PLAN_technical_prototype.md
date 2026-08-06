@@ -1,5 +1,168 @@
 # Plan: Technical Prototype
 
+## Autonomous execution contract (2026-08-06)
+
+**Purpose of this section:** every decision this plan can still hit is written down *here*, up front, and already applied to the rest of the document. **The user validated all twenty (D1–D20) on 2026-08-06 with no amendments**, so an implementer runs the plan end to end **without asking a single question**.
+
+Rules that make that true:
+
+1. **No open user gates remain.** Every former `TODO(user)`, `blocked_user`, and "pending owner review" in this plan is resolved in the decision block. Nothing in the plan may be marked as awaiting an answer; if new ambiguity appears, resolve it by the fallback rule (7) and log it — do not ping.
+2. **D1–D20 are binding.** The user validated all twenty on 2026-08-06 ("agree with all"), so each recommended default is now a decision of record. Changing one is a user-directed plan amendment, logged like the 2026-08-05 amendments — not something the implementer revisits.
+3. **Silence = proceed.** No confirmation is required to start, to continue between tickets, or to close the phase.
+4. **The implementer may amend this plan and the progress file** (state, SHAs, notes, resolved decisions) without asking. It may not amend the Goal or Scope, or retire a ticket, on its own — those are user-directed changes only.
+5. **Escalate instead of deciding only for:** actions outside the repo working tree that cost money, need physical hardware, need credentials/secrets, publish to third parties, or are irreversible (merging to `main`, force-push, tags/releases, deleting remote state). Escalation means *stop and write a handoff*, not a mid-run question.
+6. **Environment failure is a report, not a question.** If a required command cannot run (dead shell, no GPU, no network), the implementer records exactly what could not be verified, leaves the ticket unchecked, and writes a handoff. It never lowers a gate or fabricates evidence to finish.
+7. **Fallback rule for anything not covered:** take the option that is (a) reversible, (b) smallest in diff, (c) consistent with an existing pattern in the tree, (d) honest about what is proven. Record the choice and its rationale in the progress-file log under the active ticket.
+
+## Frontloaded decision block
+
+> **VALIDATED 2026-08-06 — user reviewed D1–D20 and accepted every recommended default verbatim ("agree with all"). No amendments. This block is now closed: the answers below are binding decisions, not proposals, and the plan requires no further user input to run to completion.**
+
+| ID | Decision | Answer (validated 2026-08-06) |
+| --- | --- | --- |
+| D1 | Phase-0 success definition | Functional/behavioural evidence only; performance unmeasured |
+| D2 | Perf/lab code disposition | Freeze in place — nothing deleted, nothing moved |
+| D3 | Synthetic relative baselines | Stay permanently disabled in phase 0; no owner-review command needed |
+| D4 | Deferred-hardware backlog (incl. MDM/ABM) | Stays open and out of phase-0 scope; no provisioning, no purchase |
+| D5 | Git workflow for the implementer | Commit per ticket + push the feature branch; never merge/tag/force-push |
+| D6 | PR creation at phase close | Open a PR from `plan/technical-prototype` → `main`, leave it unmerged |
+| D7 | Flaky allocator tests (`warmup_allocation_passes`, `panic_restores_guard`) | Fix by serializing the allocator-counting tests on a process-global mutex; keep them in the gate at full strength |
+| D8 | Golden image location | Keep `lab/goldens/<family>/`; amend the plan text, not the tree |
+| D9 | Software-rasterizer-only host (lavapipe) | Keep "fail", not "skip" |
+| D10 | GPU evidence required to close | One full `MMD_REQUIRE_GPU=1` run required; no GPU → stop + handoff |
+| D11 | Coverage-map source of truth | `const` system list in test code, resolved against a source scan of `#[test]` fns |
+| D12 | Close doc path | `docs/technical-prototype-functional-close.md` |
+| D13 | Known gaps at close | Documented in the close doc; they do **not** block the close |
+| D14 | Diagonal corner case (T30 note) | Record only; guard test stays; no engine change in phase 0 |
+| D15 | CLI accepting `fixture_*` scenarios | Leave as-is; documented cosmetic gap (fix sits in frozen `bench::runner`) |
+| D16 | `Runtime` ~1.6 MiB nav duplication | Leave; revisit with `Arc<FlowField>` when a second holder exists |
+| D17 | `sdl3-sys` raw escape policy | Allowed in an isolated, commented, tested module when the safe wrapper lacks the API; a broad raw rewrite is out of scope → stop + handoff |
+| D18 | Test-suite wall-clock budget | Keep `cargo test --workspace` under ~120 s; bound long behaviour tests by tick count |
+| D19 | Scope creep during implementation | Reject silently-widened scope; log the temptation, deliver the ticket |
+| D20 | Stop condition | Stop after T33 closes phase 0; do not start phase 1 |
+
+The statements below keep the options and the rationale on record — they document *why* each validated answer won, and what was rejected. "Default" in them now reads as "validated answer".
+
+### D1 — What "phase 0 succeeds" means · binds: Goal, Global validation contract, T33
+
+Options: (a) functional/behavioural evidence only, performance explicitly unmeasured; (b) functional + a soft perf observation recorded but non-gating; (c) restore frame-time gates.
+
+**Default: (a).** User-directed by the 2026-08-05 #2 amendment. (b) reintroduces numbers that readers will treat as a claim; (c) is the retired program.
+
+### D2 — Disposition of retired perf/lab code · binds: T28, `crates/mmd-engine/src/bench/`, `tools/mmd-lab/`, `lab/`, `schemas/`
+
+Options: (a) freeze in place; (b) move to `attic/`; (c) delete.
+
+**Default: (a) freeze in place** — already implemented at T28 (`94a075b`). Fully reversible, zero path churn, and the optimization phase reuses the code where it already lives. Retirement is made visible in prose (`docs/05-testing.md` + banners), not by moving files.
+
+### D3 — Relative baselines derived from synthetic data · binds: T25, T26
+
+Options: (a) permanently disabled for phase 0, no enable path; (b) enabled behind an owner-review command; (c) enabled.
+
+**Default: (a).** The perf program is retired, so an enable command would gate nothing and only invite fabricated limits. The provenance enum already blocks enabling structurally — that stays. T25 impl step "add explicit owner review/enable command" is therefore **retired, not pending**.
+
+### D4 — Deferred-hardware backlog · binds: Assumptions, T9/T10/T16/T19/T22, Deferred hardware backlog
+
+Options: (a) stays open, out of phase-0 scope, nothing provisioned; (b) implementer researches/selects an MDM provider; (c) delete the backlog.
+
+**Default: (a).** Selecting an MDM/ABM account spends money and needs credentials — rule (5) territory, and none of it is needed to close phase 0. The former `TODO(user)` is closed as *out of scope for phase 0*, not as an unanswered question. The backlog stays as an honest record for the optimization phase.
+
+### D5 — What the implementer may do with git · binds: every ticket
+
+Options: (a) commit per ticket + push the feature branch, never merge/tag/force-push; (b) commit locally only, never push; (c) full autonomy including merge to `main`.
+
+**Default: (a).** Matches the governance rules already validated (R3.2/R5.2: owner-only merge, no force-push, no auto-merge). Pushing the feature branch is reversible and keeps work safe off the local disk; merging is not the implementer's call.
+
+### D6 — Pull request at phase close · binds: T33
+
+Options: (a) open a PR from `plan/technical-prototype` → `main` and leave it unmerged; (b) no PR, just push; (c) PR + request review from others.
+
+**Default: (a).** A PR is the reviewable artifact the governance model expects and is trivially closable. (c) involves third parties.
+
+### D7 — Flaky allocator-counting tests · binds: T12, T33 gate
+
+Options: (a) serialize the allocator-counting tests on a process-global mutex so they cannot interleave, keeping every assertion; (b) run the whole suite single-threaded; (c) `#[ignore]` them; (d) accept the flake.
+
+**Default: (a).** The flake is cross-talk between tests sharing one global counting allocator — a test-harness defect, not a product defect, and a mutex fixes exactly that without weakening an assertion or slowing the rest of the suite. (b) costs the whole suite's parallelism, (c)/(d) let a real regression hide. **A green gate is required for the phase close, so this must be fixed in T33 rather than carried as a known gap.**
+
+### D8 — Golden image location · binds: T13, T31
+
+Options: (a) keep `lab/goldens/<family>/`; (b) move to `assets/goldens/` as the plan originally said.
+
+**Default: (a) keep.** The deferred-platform placeholder families and the T28-frozen `lab/` layout already bind to that path; moving them churns frozen code for cosmetics. The plan text is amended to match the tree.
+
+### D9 — Host with only a software rasterizer · binds: T31 GPU tests
+
+Options: (a) fail; (b) skip as "no GPU".
+
+**Default: (a) fail.** A lavapipe-only host is indistinguishable from the macOS "never MoltenVK" policy rejection; reclassifying one silently excuses the other, turning a real failure into a green skip.
+
+### D10 — GPU evidence required for the close · binds: T33
+
+Options: (a) require at least one full `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` run; (b) accept the GPU-absent run (GPU cases skip) as sufficient; (c) close with neither.
+
+**Default: (a).** Render correctness is one of the systems phase 0 claims to prove; closing on a run where those tests skipped would be a dishonest close. If the host has no GPU, the implementer stops and hands off per rule (6) — it does not ask, and it does not close.
+
+### D11 — How the coverage map is verified · binds: T33 `every_system_has_a_test`
+
+Options: (a) `const` system list in test code, each mapped test name resolved against a source scan of `#[test]` fns (and the file it claims); (b) parse the close doc as the list source; (c) doc-only, no test.
+
+**Default: (a).** (b) lets the doc restate itself — the test would pass while the mapped test no longer exists. Under (a), renaming or deleting a mapped test fails the gate. The close doc is checked *against* the const list, so doc and code cannot drift apart.
+
+### D12 — Close document path · binds: T33
+
+Options: (a) `docs/technical-prototype-functional-close.md`; (b) fold into `docs/02-prototype-roadmap.md`.
+
+**Default: (a).** Matches the existing `docs/technical-prototype-results.md` naming and keeps the superseded perf results and the functional close as separate, individually linkable artifacts.
+
+### D13 — Do known gaps block the phase close? · binds: T33
+
+Options: (a) no — enumerated honestly in the close doc, phase closes; (b) yes — fix every gap first.
+
+**Default: (a)**, with one carve-out: **D7 (flaky tests) must be fixed**, because the gate is "all tests green" and a flake makes that claim unverifiable. Everything else in the gap list (no cross-platform proof, no perf numbers, diagonal corner case, fixture-scenario CLI acceptance, nav duplication, three by-construction mutants, bench/lab rot risk, `f32` non-bit-identity) is a documented limit, not a defect. (b) would reopen the retired perf/platform program.
+
+### D14 — Diagonal corner case recorded by T30 · binds: `Simulation` movement step
+
+Options: (a) record only; (b) fix now by sampling the swept path.
+
+**Default: (a).** Zero occurrences across four fixtures and the 50k gate scene, and `no_agent_is_stuck_against_an_obstacle` is the standing guard that would catch it. A movement-sampling change touches the frozen numeric contract and its hashes — disproportionate to a hypothetical. Carried to the phase-1 backlog in the close doc.
+
+### D15 — Shipping CLI accepts `fixture_*` scenarios · binds: `--scenario`, `bench::runner`
+
+Options: (a) leave, document; (b) restrict `--scenario` to the gate scene family.
+
+**Default: (a).** The clean fix sits inside the T28-frozen `bench::runner`, and the behaviour is cosmetic (a small world drawn into the fixed 1080p view). Touching frozen code for a cosmetic gain contradicts D2.
+
+### D16 — `Runtime` nav-data duplication (~1.6 MiB) · binds: `Runtime`, `Simulation`
+
+Options: (a) leave; (b) `Arc<FlowField>` now.
+
+**Default: (a).** No consumer holds more than one `Runtime`, so the sharing has no beneficiary yet; introducing `Arc` now adds indirection to the hot path for zero present gain. Revisit when a second holder exists.
+
+### D17 — Raw `sdl3-sys` escapes · binds: `GpuContext` and any future wrapper gap
+
+Options: (a) allowed in an isolated, safety-commented, test-covered module when the safe wrapper genuinely lacks the API; (b) forbidden; (c) broad raw rewrite.
+
+**Default: (a).** Already the shape that fixed the T31 use-after-free (`GpuContext::release_window`). (b) would have left a SIGSEGV in the shutdown path. (c) is a large, irreversible architecture change — out of phase-0 scope, and hitting a case that seems to need it is a **stop + handoff**, not a question. This replaces the old "requires new decision" risk line.
+
+### D18 — Test-suite wall-clock budget · binds: T30, T33
+
+Options: (a) keep `cargo test --workspace` around or under ~120 s, bounding long behaviour tests by tick count; (b) no budget.
+
+**Default: (a).** The gate is run on every change; a suite that takes minutes stops being run. Bounding by *ticks* (as T30 does at 300 ticks for 50k determinism) keeps the bound deterministic rather than clock-dependent.
+
+### D19 — Scope creep during implementation · binds: every ticket
+
+Options: (a) deliver the ticket as specified, log any adjacent improvement as a note; (b) fix adjacent problems opportunistically.
+
+**Default: (a).** Exception: a *defect discovered by a ticket's own tests* is in scope and gets fixed there (this is how T31 and T32 each found and fixed real bugs) — that is the ticket working as designed, not creep.
+
+### D20 — Where the implementer stops · binds: T33
+
+Options: (a) stop when T33 closes phase 0; (b) continue into phase-1 work; (c) stop after each ticket for review.
+
+**Default: (a).** Phase 1 has no plan yet, and (c) contradicts the point of this block.
+
 ## Goal
 
 **Amended 2026-08-05 (#2, user-directed).** Build phase-0 Rust/SDL3 proof that the *game and its systems work*: 50k flow-field agents load, simulate, move and render at 1920×1080 on the development host, validated by functional/behavioural tests. Success = every game system has automated tests proving correct, deterministic behaviour, and the app runs the scene end to end.
@@ -19,8 +182,9 @@ Original goal (superseded, kept for history): 50k agents move + render on Linux/
 - Rust pin starts at installed stable `1.95.0`; update only through reviewed maintenance.
 - Current `sdl3`/`sdl3-sys`/SDL versions reverified in T6 before lock. Research candidates: `sdl3 0.18.4`, `sdl3-sys 0.6.7`, SDL `3.4.12`.
 - Relative perf limits + image tolerance derive from physical pilot data. No invented values.
-- `TODO(user)`: select MDM provider/account before T22. Apple Business Manager/ADE access required.
+- MDM provider/account selection for T22 is **closed as out of phase-0 scope (D4)** — not an open question. It returns only if the optimization phase revives the macOS lane.
 - 2026-08-05 amendment: hardware-gated tests deferred; see "Hardware deferral policy".
+- 2026-08-06: no ticket in this plan requires user input. Every former user gate resolves through the frontloaded decision block (D1–D20).
 
 ## Hardware deferral policy (2026-08-05, user-directed) — SUPERSEDED
 
@@ -31,7 +195,7 @@ User instruction: ignore all tests requiring specific hardware. Effects:
 - Any validation needing a physical Windows ref PC, M4 Mac, PXE/raw/WinPE/FFU/MDM lab infra, or real 3-host lane runs is tagged `[deferred-hw]` and does **not** block ticket completion.
 - Hardware-only tickets **T9, T10, T16, T19, T22** → state `skipped (deferred-hw)`. Dependants treat these as satisfied for fixture/synthetic-scope work only.
 - Dependent tickets (T13, T17, T20, T23, T24, T26, T27) proceed using fixture/synthetic equivalents; `[deferred-hw]` items stay unchecked in plan as an honest record.
-- Relative baselines from synthetic data remain **disabled** pending owner review (existing T25 rule); no invented physical values are enabled.
+- Relative baselines from synthetic data remain **disabled permanently for phase 0 (D3)** — no owner-review step, no enable command; no invented physical values are enabled.
 - T27 phase close may only claim "Linux-verified; native cross-platform matrix deferred" — the full-confidence 3-OS claim stays unavailable until deferred items run on real hardware.
 
 ## Performance and platform-matrix deferral policy (2026-08-05 #2, user-directed)
@@ -156,6 +320,33 @@ User approved each selected answer after rounds 1–6; final instruction: “I v
 | R6.11 | Release/calibration reports forever; ordinary merge reports 90 days. |
 | R6.12 | MIT-0 authored code/docs/shaders/generated assets; reserve name/logo; third-party terms retained. |
 
+### Round 7 — autonomy block (2026-08-06)
+
+Every decision that could stop an implementer is frontloaded in the decision block at the top of this plan. **User validated all twenty on 2026-08-06 — "agree with all", every recommended answer accepted verbatim, no amendments.** Same disposition as the round 1–6 final instruction; these are now decisions of record.
+
+| Q | Validated answer | Where it binds |
+| --- | --- | --- |
+| D1 | Functional evidence only; performance unmeasured | Goal, gate, T33 |
+| D2 | Freeze retired perf/lab code in place | T28 |
+| D3 | Synthetic baselines permanently disabled; no enable command | T25, T26 |
+| D4 | Deferred-hardware backlog stays open, nothing provisioned | Assumptions, T9/T10/T16/T19/T22 |
+| D5 | Commit + push feature branch; never merge/tag/force-push | all tickets |
+| D6 | Open an unmerged PR at phase close | T33 |
+| D7 | Fix allocator-test flake with a process-global mutex; keep full strength | T12, T33 |
+| D8 | Goldens stay at `lab/goldens/<family>/` | T13, T31 |
+| D9 | Software-rasterizer-only host fails, does not skip | T31 |
+| D10 | One `MMD_REQUIRE_GPU=1` full run required to close | T33 |
+| D11 | Coverage map = const list in test code + source scan | T33 |
+| D12 | `docs/technical-prototype-functional-close.md` | T33 |
+| D13 | Known gaps documented, non-blocking (except D7) | T33 |
+| D14 | Diagonal corner case recorded, not fixed | T30 note |
+| D15 | `fixture_*` via `--scenario` left as-is, documented | T29 note |
+| D16 | Nav duplication left as-is | T29 note |
+| D17 | Isolated `sdl3-sys` escapes allowed; broad rewrite = stop + handoff | engineering rule |
+| D18 | Suite stays ≈≤120 s; bound by ticks, not clock | T30, T33 |
+| D19 | No scope creep; ticket-discovered defects are in scope | all tickets |
+| D20 | Stop after T33 | T33 |
+
 ### Remaining recommended constants validated by final instruction
 
 - Dijkstra cardinal cost `1000`; diagonal cost `1414`; no diagonal corner-cutting.
@@ -170,6 +361,8 @@ User approved each selected answer after rounds 1–6; final instruction: “I v
 - Architecture HTML = nonnormative visualization. ADRs + MD plan = normative.
 
 ## External prereqs
+
+**Phase-0 status (D4):** only the first two bullets apply and both are already satisfied. Every hardware/lab/MDM item below is **retired with the perf program** — nothing is purchased, provisioned, or selected to close phase 0, and none of it is a user gate. Kept as the shopping list for the optimization phase.
 
 - Public GitHub repo; Actions absent/disabled.
 - Branch rules: PR required; force-push/delete/auto-merge blocked; owner-only merge.
@@ -1440,14 +1633,14 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 ### T22: macOS recovery + attestation
 
-**State: skipped (deferred-hw)** — requires MDM/ABM + Mac lab (`TODO(user)`); see Hardware deferral policy.
+**State: retired (perf deferred); previously skipped (deferred-hw)** — requires MDM/ABM + Mac lab, both closed as out of phase-0 scope by **D4**. No user action is pending on this ticket.
 
 **Depends:** T21  
 **Commit outcome:** M4 performs EACS/ADE/MDM reset + attestation without candidate; failed reset quarantines; manual DFU fallback succeeds.
 
 #### Requirements
 
-- `TODO(user)`: select/provision MDM account before start.
+- MDM account selection/provisioning: **out of phase-0 scope (D4)**; revisit only if the optimization phase revives this lane.
 - EACS preflight/wipe; ADE/MDM reenroll.
 - Recovery-only Apple/APNs/MDM allowlist. Candidate VLAN blocked.
 - Full Security/SSV verify.
@@ -1635,7 +1828,7 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 1. - [ ] Add calibration dataset schema.
 2. - [ ] Add count/manifest/noise checks.
 3. - [ ] Generate disabled baseline candidate.
-4. - [ ] Add explicit owner review/enable command.
+4. - [ ] ~~Add explicit owner review/enable command.~~ **Retired by D3** — baselines stay permanently disabled in phase 0, so no enable path is built. Not a pending user gate.
 
 #### Outputs
 
@@ -1777,7 +1970,7 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Inputs
 
-- Current tree at `d37bfe6`; `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`; the `TODO(user)` disposition choice (freeze / attic / delete).
+- Current tree at `d37bfe6`; `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`; the perf/lab disposition choice (freeze / attic / delete) — **resolved to freeze in place by D2**.
 
 #### TDD
 
@@ -2026,21 +2219,25 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 **Depends:** T30, T31, T32
 **Commit outcome:** Phase 0 closes on functional evidence: one test command is the whole gate, and the docs say exactly what is and is not proven.
 
+**Decisions applied (all user-validated 2026-08-06; no user input required):** D7 (fix the allocator flake here), D10 (a real GPU run is required), D11 (coverage map = const list + source scan), D12 (close doc path), D13 (gaps documented, non-blocking), D5/D6 (commit, push, open an unmerged PR), D18 (suite stays ≈≤120 s), D20 (stop after this ticket).
+
 #### Requirements
 
 - Single gate: `cargo fmt --check` + `cargo clippy -D warnings` + `cargo test --workspace --locked` + repro checks. Nothing else required to merge.
 - Every game system named in the scope has at least one behavioural test; the close doc maps system → test.
+- **Allocator-counting flake fixed (D7):** `warmup_allocation_passes` and `panic_restores_guard` serialize on a process-global mutex so the shared counting allocator cannot be observed mid-flight by a parallel test. No assertion is weakened, nothing is `#[ignore]`d, the suite stays parallel. Verified by running the full suite under load several times.
 - Docs (`README.md`, `docs/02-prototype-roadmap.md`, `docs/05-testing.md`) state functional scope and that performance is unmeasured/deferred.
 - No perf claim anywhere; the retired measurements stay reachable as history.
-- Known gaps listed honestly (e.g. no cross-platform verification, no perf numbers, flaky alloc tests under parallel load).
+- Known gaps listed honestly and marked non-blocking (D13): no cross-platform verification, no perf numbers, diagonal corner case (D14), `fixture_*` accepted by `--scenario` (D15), `Runtime` nav duplication (D16), the three by-construction T32 mutants, bench/lab rot risk, `f32` non-bit-identity, deferred-hardware backlog (D4).
+- Both new tests are mutation-verified in both directions, like T30–T32 — a "no panic" assertion is not proof.
 
 #### Inputs
 
-- T30–T32 outputs; `docs/technical-prototype-results.md` (superseded).
+- T30–T32 outputs; `docs/technical-prototype-results.md` (superseded); `docs/05-testing.md` (single gate source of truth); `tests/validation_contract.rs`.
 
 #### TDD
 
-1. **Red** — a coverage-map test fails while any scope system lacks a named test.
+1. **Red** — a coverage-map test fails while any scope system lacks a named test; a docs test fails on an unqualified perf token.
 2. **Green** — map completed; docs rewritten.
 3. **Refactor** — one close doc, links only.
 
@@ -2048,22 +2245,33 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 | Test | Input | Expect |
 | ---- | ----- | ------ |
-| `every_system_has_a_test` | system list | each maps to an existing test name |
-| `no_perf_claim_in_docs` | docs | no pass/fail perf statement |
+| `every_system_has_a_test` | const system list (D11) resolved against a source scan of `#[test]` fns | each system maps to a test that exists, in the file it claims |
+| `no_perf_claim_in_docs` | `LIVE_DOCS` = README, roadmap, `05-testing`, close doc | every line with a perf-metric token also carries a retirement/negation marker |
+
+Both must complement, not duplicate, T28's `gate_list_has_no_perf_thresholds`. `docs/technical-prototype-results.md` and the ADRs stay **out** of `LIVE_DOCS` as designated history, matching `validation_contract.rs::results_doc_is_superseded_history_not_a_claim`.
 
 #### Impl steps
 
-1. - [ ] Write `docs/technical-prototype-functional-close.md` (system → test map, gaps).
-2. - [ ] Update roadmap/testing/README.
-3. - [ ] Update progress file; mark phase 0 closed on functional scope.
+1. - [ ] Fix the allocator-test flake per D7 (process-global mutex); prove it by repeated full-suite runs under load.
+2. - [ ] Add `every_system_has_a_test` + `no_perf_claim_in_docs`; mutation-verify both.
+3. - [ ] Write `docs/technical-prototype-functional-close.md` (system → test map, gaps, phase-1 backlog).
+4. - [ ] Update roadmap/testing/README.
+5. - [ ] Update progress file; mark phase 0 closed on functional scope. *(orchestrator's step, not the worker's)*
+6. - [ ] Commit, push the feature branch, open an **unmerged** PR to `main` (D5/D6). Do not merge, tag, or force-push.
 
 #### Outputs
 
 - `docs/technical-prototype-functional-close.md`, `README.md`, `docs/02-prototype-roadmap.md`, `docs/05-testing.md`.
+- Test additions; allocator-test serialization fix.
 
 #### Validation
 
-- [ ] full gate green
+- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` green (D10 — required; if the host has no GPU, stop and hand off, do not close)
+- [ ] GPU-absent run green with GPU cases skipping (`VK_DRIVER_FILES=/nonexistent`, no `DISPLAY`)
+- [ ] `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `nix flake check`; xtask `bootstrap/shaders/atlases --check`
+- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0
+- [ ] `cargo tree -e features | grep -c testkit` → 0
+- [ ] full suite runs clean 3× under parallel load (flake fix proven)
 - [ ] docs claim functional scope only
 - [ ] commit msg draft: `docs(prototype): close phase 0 on game-system functional tests`
 
@@ -2075,6 +2283,7 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 - Repro: `nix flake check`; xtask bootstrap/shader/atlas `--check`.
 - Interactive smoke: `cargo run -- run --agents 50000` (starts, ticks, exits cleanly).
 - Hard success: **all tests green** — deterministic sim/nav behaviour, render correctness on the dev host, app/CLI lifecycle, contract hashes, allocation invariant.
+- Phase close additionally requires one run with a real GPU (`MMD_REQUIRE_GPU=1`, D10); "all green with the GPU cases skipped" is not a close.
 
 Explicitly **not** part of the gate: frame-time thresholds, nmad noise bounds, scale curves, cross-platform lanes, the 3-host lab, calibration/pilot baselines, release proofs. `bench` remains a developer tool whose output gates nothing.
 
@@ -2090,12 +2299,13 @@ Superseded contract (history): 3-OS 50k p95 ≤16.67 ms / p99 ≤25 ms with lab-
 - Golden images are host-scoped: they prove the dev backend renders the expected frame, never that another platform does.
 - Retired bench/lab code rots if left untouched — it still compiles and its unit tests still run, but it must be re-validated before the optimization phase reuses it.
 - `f32` ≠ bit-identical across builds; determinism claims are same-host, same-binary.
-- Flaky allocator-counting tests under full parallel load (`warmup_allocation_passes`, `panic_restores_guard`) — known; must be fixed or isolated before they mask a real regression.
+- Flaky allocator-counting tests under full parallel load (`warmup_allocation_passes`, `panic_restores_guard`) — **resolved to "fix in T33 with a process-global mutex" (D7)**; not a carried gap, because a flake makes the "all tests green" claim unverifiable.
+- Autonomy risk: an implementer running D1–D20 without check-ins can drift from intent. Bounded by D19 (no scope creep), D5 (no merge/tag/force-push), rule (6) (environment failure → handoff, never a lowered gate), and the progress-file log that records every fallback-rule choice.
 
 **Retired with the perf program (history):**
 
 - Hardware deferral (2026-08-05 #1): fixture/synthetic evidence ≠ native proof; superseded by the #2 amendment.
-- SDL wrapper gap → isolated `sdl3-sys`; broad raw rewrite requires new decision. *(still live — engineering, not perf)*
+- SDL wrapper gap → isolated `sdl3-sys`. *(still live — engineering, not perf. **Pre-decided by D17**: isolated, commented, test-covered escapes are allowed; a case that appears to need a broad raw rewrite is a stop + handoff, not a question.)*
 - 50k miss → phase fails. Profile; never weaken gate silently.
 - Mac MDM unavailable → T22/T23 blocked; full-confidence claim unavailable.
 - Reset/identity attestation covers host/source only; candidate behavior is not cryptographically attested.
