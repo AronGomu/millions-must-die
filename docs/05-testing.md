@@ -5,9 +5,18 @@ continuing.
 
 Phase 0 proves the game and its systems *work* — every system covered by
 automated behavioural tests, and the scene runs end to end. It does not prove
-how fast they run. This document is the single source of truth for what gates a
+how fast they run, and it proves nothing about any host other than the
+development one. This document is the single source of truth for what gates a
 merge; anything not listed under [Required merge gate](#required-merge-gate)
 gates nothing.
+
+Phase 0 is **closed on that functional scope**. The system → test map, and
+every known gap in it, are recorded in the
+[functional close](technical-prototype-functional-close.md). Two tests in
+`tests/validation_contract.rs` keep this document and its siblings honest:
+`every_system_has_a_test` fails when a system named in scope loses the test
+that proves it, and `no_perf_claim_in_docs` fails when a live doc states a
+speed measurement without marking it retired or unmeasured.
 
 ## Required merge gate
 
@@ -175,7 +184,11 @@ cargo run -- bench --test-policy --dry-cpu   # short policy, no GPU
 - The zero-allocation-per-frame contract, reframed as a **code-health
   invariant** under a short deterministic policy
   (`crates/mmd-engine/tests/frame_allocations.rs`). It catches accidental
-  per-frame allocation; it says nothing about throughput.
+  per-frame allocation; it says nothing about throughput. A measure scope is
+  armed per-thread, so allocations made by a thread that never entered it are
+  invisible to it — nothing in this project hands frame work to another thread,
+  and `foreign_thread_allocations_do_not_leak_into_a_measure_scope` pins that
+  boundary.
 - Reproducible builds and toolchain checks (`nix flake check`, xtask
   `--check`).
 

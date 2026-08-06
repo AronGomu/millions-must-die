@@ -2252,12 +2252,12 @@ Both must complement, not duplicate, T28's `gate_list_has_no_perf_thresholds`. `
 
 #### Impl steps
 
-1. - [ ] Fix the allocator-test flake per D7 (process-global mutex); prove it by repeated full-suite runs under load.
-2. - [ ] Add `every_system_has_a_test` + `no_perf_claim_in_docs`; mutation-verify both.
-3. - [ ] Write `docs/technical-prototype-functional-close.md` (system → test map, gaps, phase-1 backlog).
-4. - [ ] Update roadmap/testing/README.
+1. - [x] Fix the allocator-test flake per D7. The process-global mutex was **already present** (since T12) and is insufficient on its own: it orders the four tests but cannot stop libtest's harness thread or a sibling test thread from allocating while a guard is open, because `ALLOC_COUNT`/`COUNTING` were process-global. Fix: `MeasureGuard` now arms counting per-thread (`const`-init `thread_local! { Cell<bool> }`, read via `try_with` so allocator-internal access neither allocates nor recurses nor panics during TLS teardown); the mutex stays. Every assertion kept at full strength, nothing `#[ignore]`d, suite stays parallel. Narrowing documented in `alloc_guard.rs` module docs, `docs/05-testing.md` and the close doc. Proof: reproduced the flake at 3 failures / 105 runs before, then **300/300 clean** with `--test-threads=8` under 8-way CPU load after. New RED-first test `foreign_thread_allocations_do_not_leak_into_a_measure_scope` failed with 25653 leaked allocations before the fix, passes after.
+2. - [x] Add `every_system_has_a_test` + `no_perf_claim_in_docs` in `tests/validation_contract.rs` (plus `perf_claim_scanner_catches_what_it_is_meant_to`, which pins the perf scanner against fixtures so it cannot go quietly permissive). Mutation-verified: **28 mutants, 28 killed, 0 survivors**, each dying on its intended assertion rather than a compile error, and each reverting to green. A fresh-context code review found six HIGH issues in the first draft, all fixed and re-verified — most importantly that two mapped GPU tests (`readback_is_1920x1080`, `four_groups_drawn`) are `#[ignore]`d and never run on the plain gate, which the map now has to declare and the close doc has to label.
+3. - [x] Write `docs/technical-prototype-functional-close.md` (system → test map over 11 systems, 9 known gaps marked non-blocking, phase-1 backlog).
+4. - [x] Update roadmap/testing/README. `no_perf_claim_in_docs` caught a real defect while red: `docs/02-prototype-roadmap.md` wrapped "frame-time" onto a line whose negation sat on the previous line, so the sentence read as a live claim line-by-line.
 5. - [ ] Update progress file; mark phase 0 closed on functional scope. *(orchestrator's step, not the worker's)*
-6. - [ ] Commit, push the feature branch, open an **unmerged** PR to `main` (D5/D6). Do not merge, tag, or force-push.
+6. - [x] Commit, push the feature branch, open an **unmerged** PR to `main` (D5/D6). Do not merge, tag, or force-push.
 
 #### Outputs
 
@@ -2266,14 +2266,16 @@ Both must complement, not duplicate, T28's `gate_list_has_no_perf_thresholds`. `
 
 #### Validation
 
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` green (D10 — required; if the host has no GPU, stop and hand off, do not close)
-- [ ] GPU-absent run green with GPU cases skipping (`VK_DRIVER_FILES=/nonexistent`, no `DISPLAY`)
-- [ ] `cargo fmt --all -- --check`; `cargo clippy --workspace --all-targets --all-features -- -D warnings`; `nix flake check`; xtask `bootstrap/shaders/atlases --check`
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0
-- [ ] `cargo tree -e features | grep -c testkit` → 0
-- [ ] full suite runs clean 3× under parallel load (flake fix proven)
-- [ ] docs claim functional scope only
-- [ ] commit msg draft: `docs(prototype): close phase 0 on game-system functional tests`
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` green (D10 satisfied — host has an NVIDIA RTX 5060 Ti on Vulkan; **34 test binaries, 0 failures, no skips**)
+- [x] GPU-absent run green with GPU cases skipping (`env -u DISPLAY -u WAYLAND_DISPLAY VK_DRIVER_FILES=/nonexistent` — exit 0, 34 binaries, 0 failures)
+- [x] `cargo fmt --all -- --check` ok; `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean; `nix flake check` → `all checks passed!`; xtask `bootstrap --check` / `shaders --check` / `atlases --check` all ok
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0 (`mode=window backend=vulkan tick=300 frames=300`)
+- [x] `cargo tree -e features | grep -c testkit` → `0`
+- [x] full suite runs clean 3× under parallel load — with 12 busy-loops saturating the box: **86 s / 86 s / 86 s, 34 binaries, 0 failures each** (also 300/300 clean runs of the `frame_allocations` binary at `--test-threads=8`, against 3 failures in 105 before the fix). Suite wall clock stays well inside the D18 ~120 s budget.
+- [x] docs claim functional scope only — enforced, not merely asserted, by `no_perf_claim_in_docs` over README / roadmap / `05-testing` / close doc / `CONTRIBUTING.md`, with `docs/technical-prototype-results.md` and the ADRs deliberately excluded as designated history.
+- [x] commit msg draft: `docs(prototype): close phase 0 on game-system functional tests`
+
+**Environment note (not a code change):** the host's `~/.cache/mmd/native` SDL3 prefix and much of the nix store had been garbage-collected since T32, so nothing built at session start. The prefix was rebuilt from the pinned tarball with its `sha256` verified against `third_party/versions.toml` (`f07b958a…49db7`), using the pinned cmake command set; `nix flake check` rebuilt the 1.95.0 toolchain derivation. No pin, lockfile or build script was changed.
 
 ## Global validation contract
 

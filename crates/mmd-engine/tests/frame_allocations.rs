@@ -5,7 +5,8 @@
 //! throughput and consumes no timing threshold. Runs on every merge under a
 //! short deterministic policy — see `docs/05-testing.md`.
 
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
@@ -14,7 +15,15 @@ use mmd_engine::alloc_guard::{
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-/// Global counting flag is process-wide — serialize these tests.
+/// The allocation counter is process-wide — serialize these tests so two of
+/// them never share one measure scope.
+///
+/// The mutex is necessary but **not sufficient**: it orders the tests in this
+/// binary, and it cannot stop libtest's own harness thread (or a sibling test
+/// thread starting up / tearing down) from allocating while a guard is open.
+/// That residual cross-talk is what
+/// `foreign_thread_allocations_do_not_leak_into_a_measure_scope` pins down, and
+/// why `MeasureGuard` counts the entering thread only.
 fn lock_alloc_tests() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
@@ -116,4 +125,68 @@ fn panic_restores_guard() {
     }
     assert!(!is_counting());
     assert_eq!(alloc_count(), before);
+}
+
+/// A thread the measured code did not start must not be able to add to the
+/// count. This is the deterministic form of the flake that used to fail
+/// `warmup_allocation_passes` and `panic_restores_guard` under parallel load:
+/// libtest's harness thread and the sibling test threads allocate on their own
+/// schedule, and while the counter was process-wide those allocations landed
+/// inside whichever measure scope happened to be open.
+///
+/// The mutex above cannot fix that — foreign threads never take it. Only
+/// scoping the count to the thread that entered the guard can, so this test
+/// fails outright against a process-wide counter rather than 3 runs in 100.
+#[test]
+fn foreign_thread_allocations_do_not_leak_into_a_measure_scope() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let stop = Arc::new(AtomicBool::new(false));
+    let started = Arc::new(AtomicBool::new(false));
+    let noisy = {
+        let stop = Arc::clone(&stop);
+        let started = Arc::clone(&started);
+        std::thread::spawn(move || {
+            // Allocate continuously on a thread that never enters a guard.
+            while !stop.load(Ordering::Relaxed) {
+                let churn: Vec<u8> = Vec::with_capacity(4096);
+                std::hint::black_box(&churn);
+                started.store(true, Ordering::Relaxed);
+            }
+        })
+    };
+    // Do not measure until the foreign thread is demonstrably running, or the
+    // test would pass by racing past a thread that had not allocated yet.
+    // Bounded by iterations rather than wall clock: this suite asserts on no
+    // timing, and an unbounded spin would hang the gate instead of failing it.
+    let mut spins = 0u64;
+    while !started.load(Ordering::Relaxed) {
+        std::hint::spin_loop();
+        spins += 1;
+        assert!(
+            spins < 5_000_000_000,
+            "the noisy thread never allocated; this test cannot prove anything \
+             about a scope it never contended with"
+        );
+    }
+
+    let observed = {
+        let guard = MeasureGuard::enter();
+        // Hold the scope open long enough for the foreign thread to allocate
+        // many times over. No allocation happens on *this* thread.
+        for _ in 0..200_000 {
+            std::hint::black_box(guard.allocations());
+        }
+        guard.finish()
+    };
+
+    stop.store(true, Ordering::Relaxed);
+    noisy.join().expect("noisy thread joins");
+
+    assert_eq!(
+        observed, 0,
+        "a measure scope counted {observed} allocation(s) made by a thread it \
+         never entered; the counter must be scoped to the measuring thread"
+    );
 }
