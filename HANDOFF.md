@@ -1,5 +1,8 @@
 # Handoff — Technical Prototype (`plan/technical-prototype`)
 
+> **SUPERSEDED 2026-08-06 — this handoff is history, not a live instruction.** T33 completed at `9bffc10`; **phase 0 is closed on functional scope**. The shell failure described below is gone (verified). The only outstanding item is opening the unmerged PR (D6), which needs `gh auth login` — see the T33 entries in `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`, which is the authoritative record. Do **not** resume at T33; per D20, phase 1 does not start.
+
+
 - Written: 2026-08-06 (session 2, resumed from `.tmp/HANDOFF_technical-prototype.md`)
 - Branch: `plan/technical-prototype`
 - HEAD at stop: `3450f86` — `docs(progress): record T32 commit sha`, pushed to `origin`
