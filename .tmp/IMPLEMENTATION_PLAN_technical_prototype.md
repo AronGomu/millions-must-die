@@ -2257,7 +2257,12 @@ Both must complement, not duplicate, T28's `gate_list_has_no_perf_thresholds`. `
 3. - [x] Write `docs/technical-prototype-functional-close.md` (system → test map over 11 systems, 9 known gaps marked non-blocking, phase-1 backlog).
 4. - [x] Update roadmap/testing/README. `no_perf_claim_in_docs` caught a real defect while red: `docs/02-prototype-roadmap.md` wrapped "frame-time" onto a line whose negation sat on the previous line, so the sentence read as a live claim line-by-line.
 5. - [ ] Update progress file; mark phase 0 closed on functional scope. *(orchestrator's step, not the worker's)*
-6. - [x] Commit, push the feature branch, open an **unmerged** PR to `main` (D5/D6). Do not merge, tag, or force-push.
+6. - [~] Commit, push the feature branch, open an **unmerged** PR to `main` (D5/D6). Do not merge, tag, or force-push.
+   - Committed as `9bffc10` and **pushed** to `origin/plan/technical-prototype` (the remote is SSH, so the push had a key to use).
+   - **PR not created — blocked on credentials, not on code.** `gh pr create` needs a GitHub API token; there is no `GH_TOKEN`/`GITHUB_TOKEN` in the environment and no `~/.config/gh/hosts.yml`, so `gh` is logged into no host. The implementer does not have, and must not acquire, the owner's credentials. Nothing was merged, tagged or force-pushed.
+   - To finish, the owner runs `gh auth login` once, then:
+     `gh pr create --base main --head plan/technical-prototype --title "Phase 0: close the technical prototype on game-system functional tests" --body-file <body>`
+     or opens https://github.com/AronGomu/millions-must-die/compare/main...plan/technical-prototype in a browser.
 
 #### Outputs
 
