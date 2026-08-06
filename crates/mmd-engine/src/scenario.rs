@@ -124,10 +124,14 @@ impl Scenario {
     /// Load scenario from path; verify sidecar `.sha256` then validate.
     pub fn load_verified(path: impl AsRef<Path>) -> Result<Self, ScenarioError> {
         let path = path.as_ref();
-        let bytes = fs::read(path).map_err(|e| ScenarioError::Io(e.to_string()))?;
+        // Both reads name their own path: a load touches two files, and
+        // "No such file or directory" without one is not actionable — the
+        // caller cannot tell a missing scenario from a missing sidecar.
+        let bytes =
+            fs::read(path).map_err(|e| ScenarioError::Io(format!("{}: {e}", path.display())))?;
         let sha_path = path.with_extension("sha256");
-        let expected =
-            fs::read_to_string(&sha_path).map_err(|e| ScenarioError::Io(e.to_string()))?;
+        let expected = fs::read_to_string(&sha_path)
+            .map_err(|e| ScenarioError::Io(format!("{}: {e}", sha_path.display())))?;
         Self::from_verified_bytes(&bytes, expected.trim())
     }
 

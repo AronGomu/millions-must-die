@@ -101,6 +101,39 @@ rejected by the adapter gate, so it fails instead of skipping. Reclassifying it
 would also excuse the macOS "never MoltenVK" rejection, which must stay a hard
 failure — and the two cannot be told apart on a host that has neither.
 
+## App and CLI lifecycle
+
+`tests/cli_contract.rs` drives the built binary as a subprocess. The engine
+tests prove the systems behave; these prove the *app* wires them — that
+`--frames N` is honoured, Space pauses, F1 is inert, Esc releases the GPU
+window and returns 0, and every rejection is a message rather than a panic.
+
+The `run` command prints a `key=value` contract on stdout, opening with a
+`run: frame0 …` line and closing with `run: clean exit …` (state hash, tick,
+frames rendered, and the quit/paused/overlay flags). A run that cannot defend
+those claims prints no exit line and fails instead. The full shape is
+documented at the top of `src/run.rs`.
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | ran to the frame budget, or quit, and shut down cleanly |
+| 1 | actionable failure — bad flag value, bad scenario, render failure |
+| 2 | clap usage error |
+| 3 | this host has no usable GPU device |
+
+Code 3 is what lets a headless shell tell "no device here" apart from a defect
+without scraping the message: cases that need a device skip on 3 and stay loud
+on everything else, the same policy — and the same `MMD_REQUIRE_GPU=1`
+override — as the render tests above.
+
+Runs with no keyboard drive the bindings through `--inject-input FRAME:KEY`
+(1-based frames; `esc`, `f1`, `space`). Scripted presses resolve through the
+same key→action mapping the live SDL path uses, and a press that never fires
+turns the run into a failure — otherwise a test asserting "nothing changed"
+would pass because nothing was ever pressed.
+
 ## Retired: performance gating
 
 Performance measurement moved out of phase 0 to a later **optimization phase**

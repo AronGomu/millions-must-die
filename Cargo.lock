@@ -297,9 +297,11 @@ name = "millions_must_die"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "hex",
  "mmd-engine",
  "sdl3",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

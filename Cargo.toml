@@ -39,6 +39,13 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+hex.workspace = true
 mmd-engine.workspace = true
 serde_json.workspace = true
 sdl3 = { workspace = true }
+
+[dev-dependencies]
+# `tests/cli_contract.rs` writes throwaway scenarios with honest sidecar
+# hashes, so the loader's parse/validate path is reachable rather than only its
+# hash-mismatch path. Dev-only: never linked into the shipping binary.
+sha2.workspace = true

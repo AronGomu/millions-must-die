@@ -39,6 +39,10 @@ enum Commands {
         /// Auto-exit after N frames (CI/smoke). Omit for interactive.
         #[arg(long)]
         frames: Option<u64>,
+        /// Scripted key presses for runs with no keyboard: `FRAME:KEY[,...]`,
+        /// 1-based frames, keys `esc`/`f1`/`space` (e.g. `4:space,20:esc`).
+        #[arg(long, value_name = "FRAME:KEY,...")]
+        inject_input: Option<String>,
     },
     /// Developer benchmark harness — not a gate; optimization phase.
     ///
@@ -72,15 +76,19 @@ fn main() -> ExitCode {
             agents,
             scenario,
             frames,
+            inject_input,
         } => {
             let opts = run::RunOptions {
                 agents,
                 scenario,
                 frames,
+                inject_input,
             };
             if let Err(e) = run::run(opts) {
+                // The message is the UX: it names the file or the flag at
+                // fault. The code distinguishes "no GPU here" from a defect.
                 eprintln!("run failed: {e}");
-                return ExitCode::from(1);
+                return ExitCode::from(e.exit_code());
             }
             ExitCode::SUCCESS
         }

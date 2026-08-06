@@ -2007,9 +2007,9 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Impl steps
 
-1. - [ ] Extend CLI contract tests.
-2. - [ ] Add headless input-injection path for pause/overlay if absent.
-3. - [ ] Improve error messages surfaced by the tests.
+1. - [x] Extend CLI contract tests.
+2. - [x] Add headless input-injection path for pause/overlay if absent. Implemented as `--inject-input FRAME:KEY[,...]` (1-based frames; `esc`/`f1`/`space`), resolved through the same binding table the live SDL keycode path uses, so a scripted press cannot exercise a binding the keyboard lacks.
+3. - [x] Improve error messages surfaced by the tests.
 
 #### Outputs
 
@@ -2017,9 +2017,9 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Validation
 
-- [ ] `cargo test --workspace --locked`
-- [ ] manual `cargo run -- run --agents 50000` still interactive
-- [ ] commit msg draft: `test(app): cover run lifecycle, pause and failure paths`
+- [x] `cargo test --workspace --locked` (GPU present via `MMD_REQUIRE_GPU=1`, and GPU absent: 34 binaries ok, 0 failures in both)
+- [x] manual `cargo run -- run --agents 50000 --frames 300` still interactive — exit 0, `mode=window tick=300 frames=300`
+- [x] commit msg draft: `test(app): cover run lifecycle, pause and failure paths`
 
 ### T33: Functional phase close
 
