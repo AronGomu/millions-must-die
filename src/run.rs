@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use mmd_engine::render::{SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH};
+use mmd_engine::render::{RenderError, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH};
 use mmd_engine::runtime::{InputAction, Runtime};
 use mmd_engine::workspace_root;
 use sdl3::event::Event;
@@ -78,6 +78,11 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         .map(|v| v == "offscreen")
         .unwrap_or(false);
 
+    // Acquired before the window is claimed: every `?` between a claim and the
+    // matching `release_window` would drop a still-claimed window, leaving the
+    // device with a dangling swapchain.
+    let mut pump = renderer.ctx.sdl.event_pump()?;
+
     let window = if offscreen_driver {
         None
     } else {
@@ -111,7 +116,6 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         WINDOW_W, WINDOW_H
     );
 
-    let mut pump = renderer.ctx.sdl.event_pump()?;
     let mut frame_i = 1u64; // already did frame0
     let mut quit = false;
     let start = Instant::now();
@@ -119,8 +123,14 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
     // Present last packed groups (still frame0 contents — no further tick yet).
     if let Err(e) = renderer.draw_to_swapchain(&window, runtime.draw_groups()) {
         eprintln!("run: present failed ({e}); offscreen-only");
+        // Release before `window` drops: a still-claimed window leaves the
+        // device holding a dangling swapchain.
+        renderer.ctx.release_window(&window);
+        drop(window);
         return finish_offscreen(&mut runtime, &mut renderer, hash0, auto_frames);
     }
+
+    let mut present_error: Option<RenderError> = None;
 
     'running: loop {
         for event in pump.poll_iter() {
@@ -153,7 +163,12 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
         let tick_index = out.tick_index;
         let paused = out.paused;
         let mut stats = out.stats;
-        renderer.draw_to_swapchain(&window, out.groups)?;
+        // Errors leave the loop rather than returning through `?`, so the
+        // window is always released from the device before it is dropped.
+        if let Err(e) = renderer.draw_to_swapchain(&window, out.groups) {
+            present_error = Some(e);
+            break 'running;
+        }
         let gpu_ms = frame_start.elapsed().as_secs_f64() * 1000.0;
 
         if overlay_visible {
@@ -179,6 +194,16 @@ pub fn run(opts: RunOptions) -> Result<(), Box<dyn std::error::Error>> {
                 std::thread::sleep(Duration::from_millis(16) - elapsed);
             }
         }
+    }
+
+    // Shutdown order: release the window from the device, drop the window, then
+    // let `renderer` drop. Destroying a claimed window first would leave the
+    // device with a dangling swapchain.
+    renderer.ctx.release_window(&window);
+    drop(window);
+
+    if let Some(e) = present_error {
+        return Err(Box::new(e));
     }
 
     println!(

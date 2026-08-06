@@ -31,8 +31,9 @@ use sdl3_sys::gpu::{
     SDL_GPU_STOREOP_STORE, SDL_GPUBlitInfo, SDL_GPUBlitRegion, SDL_GPUColorTargetInfo,
     SDL_GPUDevice, SDL_GPUFence, SDL_GPUTextureRegion, SDL_GPUTextureTransferInfo,
     SDL_GetGPUDeviceDriver, SDL_GetGPUDeviceProperties, SDL_QueryGPUFence, SDL_ReleaseGPUFence,
-    SDL_SubmitGPUCommandBuffer, SDL_SubmitGPUCommandBufferAndAcquireFence,
-    SDL_WaitAndAcquireGPUSwapchainTexture, SDL_WaitForGPUFences,
+    SDL_ReleaseWindowFromGPUDevice, SDL_SubmitGPUCommandBuffer,
+    SDL_SubmitGPUCommandBufferAndAcquireFence, SDL_WaitAndAcquireGPUSwapchainTexture,
+    SDL_WaitForGPUFences, SDL_WaitForGPUIdle,
 };
 use sdl3_sys::pixels::SDL_FColor;
 use sdl3_sys::surface::SDL_FLIP_NONE;
@@ -131,6 +132,32 @@ pub fn device_adapter_name(device: &Device) -> String {
         props
             .get_string("SDL.gpu.device.name", "")
             .unwrap_or_default()
+    }
+}
+
+/// Release `window` from `device`, tearing down its swapchain.
+///
+/// The safe sdl3 0.18.4 wrapper has no counterpart to `with_window`: claiming
+/// registers the window inside the device and *destroying the window while it
+/// is still claimed leaves the device holding a dangling swapchain*, which
+/// faults on the next device call. Every claim must be paired with this before
+/// the window is dropped.
+///
+/// Idempotent per SDL: releasing an unclaimed window is a no-op.
+///
+/// Drains the device first (`SDL_WaitForGPUIdle`). The present path submits
+/// without acquiring a fence, so at the call site there is generally still work
+/// referencing the swapchain; SDL does not document a wait inside
+/// `SDL_ReleaseWindowFromGPUDevice`, so this function owns that ordering
+/// rather than leaving it as a precondition no caller could satisfy.
+///
+/// # Safety invariants
+/// - `device` and `window` are live and from this process.
+/// - Called from the thread that created `window` (SDL requirement).
+pub fn release_window(device: &Device, window: &Window) {
+    unsafe {
+        SDL_WaitForGPUIdle(device.raw());
+        SDL_ReleaseWindowFromGPUDevice(device.raw(), window.raw());
     }
 }
 

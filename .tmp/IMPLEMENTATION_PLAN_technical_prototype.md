@@ -1955,18 +1955,21 @@ T9–T27 are **retired (perf deferred)** by the 2026-08-05 #2 amendment. Active 
 
 #### Impl steps
 
-1. - [ ] Add instance/transform assertions.
-2. - [ ] Rescope goldens to the dev host; document regeneration.
-3. - [ ] Ensure headless skip path.
+1. - [x] Add instance/transform assertions.
+2. - [x] Rescope goldens to the dev host; document regeneration. Goldens stay at `lab/goldens/<family>/` (not moved to `assets/goldens/`): the tracked placeholder families and the frozen `lab/` layout bind to that path, and relocating them would touch T28-frozen tooling for no correctness gain.
+3. - [x] Ensure headless skip path.
 
 #### Outputs
 
-- `crates/mmd-engine/tests/{gpu_golden.rs,gpu_smoke.rs}`, `assets/goldens/`, `docs/05-testing.md`.
+- `crates/mmd-engine/tests/render_correctness.rs` (new; the three correctness layers + the headless skip policy), with `tests/{gpu_golden.rs,gpu_smoke.rs}` kept and cross-referenced (comparator contract and atlas-tamper case stay there).
+- Goldens stay at `lab/goldens/<family>/` — *not* moved to `assets/goldens/`; see impl step 2.
+- Diff artifacts are written untracked to `target/golden-diffs/<test>/`.
+- `docs/05-testing.md`.
 
 #### Validation
 
-- [ ] `cargo test --workspace --locked` (GPU present and absent)
-- [ ] commit msg draft: `test(render): validate instance data and dev-host golden frame`
+- [x] `cargo test --workspace --locked` (GPU present and absent)
+- [x] commit msg draft: `test(render): validate instance data and dev-host golden frame`
 
 ### T32: App + CLI behaviour
 

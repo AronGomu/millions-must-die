@@ -2,6 +2,13 @@
 //! device tests are `#[ignore]` and need a real GPU + SDL3.
 //!
 //! GPU cases share process-global SDL; run serially (`--test-threads=1`).
+//!
+//! Renderer lifecycle (device creation, swapchain sizes, clean shutdown) and
+//! instance/transform/golden correctness live in `render_correctness.rs` (T31),
+//! whose GPU cases run by default and skip cleanly on a host without a device.
+//! `tracked_atlas_hashes_are_enforced` below is the negative half of the atlas
+//! manifest contract; its positive half is
+//! `render_correctness.rs::atlas_manifest_matches_generated_pngs`.
 
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use mmd_engine::render::validate_device_props;

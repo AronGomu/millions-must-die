@@ -22,12 +22,18 @@ pub use backend::{
 pub use device::GpuContext;
 pub use error::RenderError;
 pub use golden::{
+    GOLDEN_DIFF_ACTUAL_PNG, GOLDEN_DIFF_MASK_PNG, GOLDEN_DIFF_SUMMARY_JSON,
     GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_SCENE_STATIC_DEMO, GOLDEN_SCHEMA_VERSION,
-    GOLDEN_STATUS_CAPTURED, GOLDEN_STATUS_PLACEHOLDER, GoldenError, GoldenManifest, HostBinding,
-    compare_readback, decode_readback_png, encode_rgba_png, golden_family_dir, host_binding_hashes,
+    GOLDEN_STATUS_CAPTURED, GOLDEN_STATUS_PLACEHOLDER, GoldenDiffSummary, GoldenError,
+    GoldenManifest, HostBinding, compare_readback, compare_readback_writing_diff,
+    decode_readback_png, diff_readback, encode_rgba_png, golden_family_dir, host_binding_hashes,
     load_golden_image, load_golden_manifest, verify_report_binding, write_golden,
+    write_golden_diff,
 };
-pub use instance::{FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, SpriteInstance};
+pub use instance::{
+    FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, SpriteInstance, clip_to_pixel,
+    world_to_clip,
+};
 pub use renderer::{
     DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
 };

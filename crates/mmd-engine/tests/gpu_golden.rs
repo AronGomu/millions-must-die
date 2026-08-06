@@ -1,9 +1,17 @@
-//! Backend-bound golden correctness (T13).
+//! Backend-bound golden correctness (T13): the *comparator's* own contract —
+//! which goldens may validate which host, and how a foreign or placeholder
+//! golden is refused.
+//!
+//! The host frame is actually compared in `render_correctness.rs` (T31), which
+//! runs its GPU cases by default and skips cleanly without a device. This file
+//! keeps the comparator unit tests plus the `#[ignore]` capture/regeneration
+//! entry point below.
 //!
 //! Pure comparator tests always run. `#[ignore]` cases need a real GPU + SDL3
 //! and share process-global SDL; run serially (`--test-threads=1`).
 //!
-//! Regenerate the host golden (review the diff before committing):
+//! Regenerate the host golden — the one documented command, reviewed before
+//! commit (see `docs/05-testing.md`):
 //! `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine --test gpu_golden -- --ignored update_host_golden`
 
 use std::path::PathBuf;

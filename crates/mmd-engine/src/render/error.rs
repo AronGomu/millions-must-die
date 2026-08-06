@@ -21,6 +21,9 @@ pub enum RenderError {
     #[error("SDL error: {0}")]
     Sdl(String),
 
+    #[error("GPU device unavailable on this host: {0}")]
+    DeviceUnavailable(String),
+
     #[error("IO error: {0}")]
     Io(String),
 
@@ -48,6 +51,29 @@ pub enum RenderError {
 
     #[error("group count mismatch: got {got}, expected {expected}")]
     GroupCount { got: usize, expected: usize },
+}
+
+impl RenderError {
+    /// True only when this host has **no usable GPU device at all** — SDL
+    /// could not initialise, or the required backend refused to create a
+    /// device.
+    ///
+    /// GPU-bound tests skip on `true` and *fail* on `false`. That asymmetry is
+    /// the point: a drifted atlas, a rejected software adapter, or a broken
+    /// group contract are real defects and must never be mistaken for "we are
+    /// running in a headless shell". Widening this predicate turns the skip
+    /// path into a hole in the merge gate.
+    ///
+    /// Known narrowness, deliberate: a host whose *only* Vulkan ICD is a
+    /// software rasterizer (lavapipe) does create a device and then trips
+    /// [`super::validate_adapter_name`], yielding [`Self::RejectedAdapter`] —
+    /// so it fails rather than skips. Reclassifying that would also excuse the
+    /// macOS "never MoltenVK" policy rejection, which must stay a hard
+    /// failure, and the two cannot be told apart on a host that has neither.
+    /// Left loud on purpose; `MMD_REQUIRE_GPU=1` covers the opposite risk.
+    pub fn is_device_unavailable(&self) -> bool {
+        matches!(self, Self::DeviceUnavailable(_))
+    }
 }
 
 impl From<sdl3::Error> for RenderError {

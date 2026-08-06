@@ -33,6 +33,17 @@ pub const GOLDEN_MAX_CHANNEL_DELTA_POLICY: u8 = 0;
 /// Scene identity every T13 golden binds to (`SpriteRenderer::static_demo_groups`).
 pub const GOLDEN_SCENE_STATIC_DEMO: &str = "static-demo-v1";
 
+/// Candidate frame written into a diff directory by [`write_golden_diff`].
+pub const GOLDEN_DIFF_ACTUAL_PNG: &str = "actual.png";
+/// Per-pixel drift mask written into a diff directory by [`write_golden_diff`].
+pub const GOLDEN_DIFF_MASK_PNG: &str = "diff.png";
+/// Machine-readable drift summary written by [`write_golden_diff`].
+pub const GOLDEN_DIFF_SUMMARY_JSON: &str = "diff.json";
+/// Mask colour marking a pixel that exceeded tolerance (opaque magenta).
+const DIFF_MARK: [u8; 4] = [255, 0, 255, 255];
+/// Mask colour marking a pixel within tolerance (opaque black).
+const DIFF_KEEP: [u8; 4] = [0, 0, 0, 255];
+
 /// Golden comparison errors (renderer-specific; deliberately not `RenderError`).
 #[derive(Debug, thiserror::Error)]
 pub enum GoldenError {
@@ -105,6 +116,17 @@ pub enum GoldenError {
         candidate: u8,
         delta: u8,
         max: u8,
+    },
+    #[error(
+        "golden drift: {differing_pixels} of {total_pixels} pixels exceed tolerance {tolerance} \
+         (max channel delta {max_channel_delta}); diff artifact written to {artifact_dir}"
+    )]
+    GoldenDrift {
+        differing_pixels: u64,
+        total_pixels: u64,
+        max_channel_delta: u8,
+        tolerance: u8,
+        artifact_dir: String,
     },
     #[error(
         "benchmark report not bound to golden manifest on {field}: \
@@ -314,6 +336,181 @@ pub fn compare_readback(
         }
     }
     Ok(())
+}
+
+/// Machine-readable summary of one golden-vs-candidate comparison.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoldenDiffSummary {
+    pub width: u32,
+    pub height: u32,
+    /// Tolerance the comparison ran at (the manifest's `max_channel_delta`).
+    pub tolerance: u8,
+    /// Pixels with at least one channel above tolerance.
+    pub differing_pixels: u64,
+    /// Largest single-channel delta anywhere in the frame.
+    pub max_channel_delta: u8,
+    /// `[x, y]` of the first differing pixel in raster order, if any.
+    pub first_difference: Option<[u32; 2]>,
+}
+
+impl GoldenDiffSummary {
+    pub fn is_drift(&self) -> bool {
+        self.differing_pixels > 0
+    }
+}
+
+/// Diff a candidate readback against golden pixels.
+///
+/// Returns the summary plus a human-reviewable RGBA mask: magenta where a
+/// pixel exceeded `tolerance`, black where it did not. Dimensions are checked
+/// first — a size mismatch has no per-pixel diff.
+pub fn diff_readback(
+    golden_rgba: &[u8],
+    candidate: &Readback,
+    tolerance: u8,
+) -> Result<(GoldenDiffSummary, Vec<u8>), GoldenError> {
+    let expected = (candidate.width as usize) * (candidate.height as usize) * 4;
+    if golden_rgba.len() != expected {
+        return Err(GoldenError::ImageSizeMismatch {
+            expected,
+            got: golden_rgba.len(),
+        });
+    }
+    if candidate.rgba.len() != expected {
+        return Err(GoldenError::ImageSizeMismatch {
+            expected,
+            got: candidate.rgba.len(),
+        });
+    }
+
+    let pixels = (candidate.width as usize) * (candidate.height as usize);
+    let mut mask = vec![0u8; pixels * 4];
+    let mut differing_pixels = 0u64;
+    let mut max_channel_delta = 0u8;
+    let mut first_difference = None;
+
+    for p in 0..pixels {
+        let base = p * 4;
+        let mut worst = 0u8;
+        for c in 0..4 {
+            worst = worst.max(golden_rgba[base + c].abs_diff(candidate.rgba[base + c]));
+        }
+        max_channel_delta = max_channel_delta.max(worst);
+        let marked = worst > tolerance;
+        if marked {
+            differing_pixels += 1;
+            if first_difference.is_none() {
+                let index = p as u32;
+                first_difference = Some([index % candidate.width, index / candidate.width]);
+            }
+        }
+        mask[base..base + 4].copy_from_slice(if marked { &DIFF_MARK } else { &DIFF_KEEP });
+    }
+
+    Ok((
+        GoldenDiffSummary {
+            width: candidate.width,
+            height: candidate.height,
+            tolerance,
+            differing_pixels,
+            max_channel_delta,
+            first_difference,
+        },
+        mask,
+    ))
+}
+
+/// Write a reviewable drift artifact into `dir`: the candidate frame, the
+/// per-pixel mask, and a JSON summary.
+///
+/// The artifact is *evidence*, never a tracked asset — callers point this at a
+/// build directory. Writing it is what makes a golden failure actionable
+/// instead of "some pixel somewhere moved".
+///
+/// A frame within tolerance writes **nothing** (not even `dir`) and returns its
+/// summary: the artifact's presence is itself the signal that something drifted.
+pub fn write_golden_diff(
+    dir: &Path,
+    golden_rgba: &[u8],
+    candidate: &Readback,
+    tolerance: u8,
+) -> Result<GoldenDiffSummary, GoldenError> {
+    let (summary, mask) = diff_readback(golden_rgba, candidate, tolerance)?;
+    if !summary.is_drift() {
+        return Ok(summary);
+    }
+    std::fs::create_dir_all(dir).map_err(|source| GoldenError::Io {
+        path: dir.display().to_string(),
+        source,
+    })?;
+
+    let actual_png = encode_rgba_png(candidate.width, candidate.height, &candidate.rgba)?;
+    write_file(&dir.join(GOLDEN_DIFF_ACTUAL_PNG), &actual_png)?;
+    let mask_png = encode_rgba_png(candidate.width, candidate.height, &mask)?;
+    write_file(&dir.join(GOLDEN_DIFF_MASK_PNG), &mask_png)?;
+    let summary_path = dir.join(GOLDEN_DIFF_SUMMARY_JSON);
+    let json =
+        serde_json::to_string_pretty(&summary).map_err(|source| GoldenError::ManifestJson {
+            path: summary_path.display().to_string(),
+            source,
+        })?;
+    write_file(&summary_path, (json + "\n").as_bytes())?;
+    Ok(summary)
+}
+
+/// [`compare_readback`], but pixel drift also writes a diff artifact into
+/// `diff_dir` and reports [`GoldenError::GoldenDrift`] naming it.
+///
+/// Only pixel-level drift produces an artifact. Backend mismatch, placeholder
+/// status, environment drift and dimension mismatch propagate untouched —
+/// there is no meaningful image diff for "this golden does not apply here",
+/// and writing one would suggest the frame was compared when it was not.
+pub fn compare_readback_writing_diff(
+    manifest: &GoldenManifest,
+    host: &HostBinding,
+    golden_rgba: &[u8],
+    candidate: &Readback,
+    diff_dir: &Path,
+) -> Result<(), GoldenError> {
+    match compare_readback(manifest, host, golden_rgba, candidate) {
+        Ok(()) => Ok(()),
+        Err(GoldenError::DeltaAboveTolerance { .. }) => {
+            // The drift verdict is the finding; a failed artifact write must not
+            // replace it with an IO error that reads like an infrastructure
+            // problem rather than a render regression.
+            let (summary, artifact_dir) = match write_golden_diff(
+                diff_dir,
+                golden_rgba,
+                candidate,
+                manifest.max_channel_delta,
+            ) {
+                Ok(summary) => (summary, diff_dir.display().to_string()),
+                Err(write_err) => {
+                    let (summary, _) =
+                        diff_readback(golden_rgba, candidate, manifest.max_channel_delta)?;
+                    (
+                        summary,
+                        format!("<not written: {write_err}> ({})", diff_dir.display()),
+                    )
+                }
+            };
+            Err(GoldenError::GoldenDrift {
+                differing_pixels: summary.differing_pixels,
+                total_pixels: u64::from(summary.width) * u64::from(summary.height),
+                max_channel_delta: summary.max_channel_delta,
+                tolerance: summary.tolerance,
+                artifact_dir,
+            })
+        }
+        Err(other) => Err(other),
+    }
+}
+
+fn write_file(path: &Path, bytes: &[u8]) -> Result<(), GoldenError> {
+    std::fs::write(path, bytes).map_err(|source| GoldenError::Io {
+        path: path.display().to_string(),
+        source,
+    })
 }
 
 /// Verify a benchmark report is bound to this golden's backend + atlas identity.

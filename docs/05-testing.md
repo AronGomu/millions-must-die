@@ -30,6 +30,77 @@ behaviour, render correctness on the development host, app and CLI lifecycle,
 contract hashes, and the allocation invariant. The last command is the
 interactive smoke — the 50k scene must start, tick, and exit cleanly.
 
+## Render correctness — development host only
+
+`cargo test --workspace --locked` covers rendering in three layers
+(`crates/mmd-engine/tests/render_correctness.rs`):
+
+| Layer | Needs a GPU? | What it proves |
+| --- | --- | --- |
+| Instance data | no | one instance per alive agent, in the atlas bucket the sim names, centred on the agent's world position, carrying that agent's `(dir, frame)` UV rect |
+| Projection | mirror: no / oracle: yes | `render::world_to_clip` states where a world corner lands in clip space; a GPU raster probe requires the real `shaders/sprite.hlsl` to agree |
+| Whole frame | yes | the committed host golden, compared exactly |
+
+Atlas manifest ↔ generated PNG consistency is checked in both directions: the
+positive load in `render_correctness.rs`, and the tamper case in
+`gpu_smoke.rs::tracked_atlas_hashes_are_enforced`.
+
+### Scope of the golden claim
+
+Goldens are **host-scoped**. `lab/goldens/linux-vulkan/` proves that *this*
+development backend, on the adapter recorded in its manifest, renders the
+expected frame. It is not a cross-backend or cross-platform claim: the
+comparator refuses a foreign golden outright instead of diffing it, and the
+`windows-d3d12` / `macos-metal` families stay `placeholder-deferred-hw` — they
+document intent and can never pass a comparison.
+
+The comparison is exact (`max_channel_delta == 0`). Should a bounded tolerance
+ever be introduced after reviewed native evidence, it would cover `f32` and
+driver variation **on that one host** — never a second backend.
+
+### Regenerating the golden
+
+Regeneration is an explicit, reviewed step — one command:
+
+```sh
+MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine --test gpu_golden -- --ignored update_host_golden
+```
+
+It rewrites `lab/goldens/<family>/{golden.png,manifest.json}`. Review the image
+diff before committing: a regenerated golden re-baselines the gate, so it must
+be a deliberate decision, never a way to make a red test go green.
+
+When a frame drifts, the failure writes a reviewable artifact to
+`target/golden-diffs/<test>/` — `actual.png`, a magenta-on-black `diff.png`
+mask, and `diff.json` (differing pixel count, worst channel delta, first
+differing pixel). A passing comparison writes nothing.
+
+### Hosts without a GPU
+
+Every GPU-bound case obtains its renderer through a helper that **skips** —
+prints and returns, counted as a pass — when the host has no GPU device at all,
+so the suite stays runnable in a headless shell. The skip is deliberately
+narrow: only `RenderError::DeviceUnavailable` (SDL init or device creation
+failed) skips. A drifted atlas, a rejected software adapter, or a broken group
+contract fails, because treating those as "headless" would hole the gate.
+
+`cargo test` hides a passing test's output, so a skipped run and a verified run
+print the same `ok`. **On a host that is supposed to have a GPU — which is what
+the development host is — run the gate with the skip disabled:**
+
+```sh
+MMD_REQUIRE_GPU=1 cargo test --workspace --locked
+```
+
+With that set, any skip becomes a failure naming the capability that was
+missing. Leave it unset only where the absence of a GPU is expected.
+
+Known narrowness, recorded rather than papered over: a host whose only Vulkan
+ICD is a software rasterizer (lavapipe) *does* create a device and is then
+rejected by the adapter gate, so it fails instead of skipping. Reclassifying it
+would also excuse the macOS "never MoltenVK" rejection, which must stay a hard
+failure — and the two cannot be told apart on a host that has neither.
+
 ## Retired: performance gating
 
 Performance measurement moved out of phase 0 to a later **optimization phase**

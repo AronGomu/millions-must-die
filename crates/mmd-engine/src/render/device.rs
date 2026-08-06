@@ -53,7 +53,7 @@ impl GpuContext {
             Err(first) => {
                 let _ = sdl3::hint::set("SDL_VIDEODRIVER", "offscreen");
                 try_init_sdl().map_err(|second| {
-                    RenderError::Sdl(format!(
+                    RenderError::DeviceUnavailable(format!(
                         "SDL init failed ({first}); offscreen retry ({second})"
                     ))
                 })?
@@ -82,11 +82,25 @@ impl GpuContext {
     }
 
     /// Claim `window` for swapchain present on this device.
+    ///
+    /// Must be paired with [`Self::release_window`] before the window is
+    /// dropped — see that method for why.
     pub fn claim_window(&self, window: &Window) -> Result<(), RenderError> {
         // `with_window` consumes a Device clone (Arc); claim sticks on shared device.
         let claimed = self.device.clone().with_window(window)?;
         drop(claimed);
         Ok(())
+    }
+
+    /// Release `window` from this device, tearing down its swapchain.
+    ///
+    /// Dropping a still-claimed window leaves the device holding a dangling
+    /// swapchain and the next device call faults, so this is the shutdown half
+    /// of [`Self::claim_window`]. Safe to call on a window that was never
+    /// claimed, and safe to call twice. Drains the device before releasing, so
+    /// an in-flight present is not a caller precondition.
+    pub fn release_window(&self, window: &Window) {
+        unsafe_sys::release_window(&self.device, window);
     }
 }
 
@@ -130,7 +144,7 @@ fn create_device_linux_vulkan(debug_mode: bool) -> Result<Device, RenderError> {
             props.set("SDL.gpu.device.create.name", REQUIRED_BACKEND)?;
             props.set("SDL.gpu.device.create.shaders.spirv", true)?;
             Device::new_with_properties(props).map_err(|e| {
-                RenderError::Sdl(format!(
+                RenderError::DeviceUnavailable(format!(
                     "vulkan device failed (hw={hard_err}; soft={e}). Check LD_LIBRARY_PATH has libvulkan.so + ICD"
                 ))
             })
@@ -148,7 +162,7 @@ fn create_device_windows_d3d12(debug_mode: bool) -> Result<Device, RenderError> 
     // Prefer discrete / high-performance adapter when driver offers the choice.
     props.set("SDL.gpu.device.create.preferlowpower", false)?;
     Device::new_with_properties(props).map_err(|e| {
-        RenderError::Sdl(format!(
+        RenderError::DeviceUnavailable(format!(
             "direct3d12 device failed ({e}). Need Windows 11 + D3D12 GPU (not Basic Render Driver); SDL3.dll on PATH"
         ))
     })
@@ -166,7 +180,7 @@ fn create_device_macos_metal(debug_mode: bool) -> Result<Device, RenderError> {
     props.set("SDL.gpu.device.create.shaders.spirv", false)?;
     props.set("SDL.gpu.device.create.preferlowpower", false)?;
     Device::new_with_properties(props).map_err(|e| {
-        RenderError::Sdl(format!(
+        RenderError::DeviceUnavailable(format!(
             "metal device failed ({e}). Need macOS 15 arm64 + Metal + native metallib; no MoltenVK. See docs/platform/macos-bootstrap.md"
         ))
     })
