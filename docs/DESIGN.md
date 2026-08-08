@@ -10,7 +10,7 @@ Consolidated from former `01-technical-architecture.md`, `04-design-decisions.md
 - Rendering: Batched GPU sprite renderer
 - Simulation: Data-oriented
 - Navigation: Flow fields
-- Spatial partition: Uniform grid (post-phase-0; deferred until a gameplay system consumes it)
+- Spatial partition: Uniform grid — preallocated, rebuilt every tick as the agent-separation neighbour index (see [Agent collision](#agent-collision))
 - Native first, browser/WebAssembly later.
 
 Rules:
@@ -34,9 +34,13 @@ neighbour index is a preallocated uniform grid, rebuilt every tick with no
 allocation. The coincidence tie-break — two agents landing on the exact same
 position — is a 16-entry table keyed on the index pair, so the outcome is
 deterministic rather than order-dependent. Each agent accumulates at most
-eight neighbours per tick. When the blended step would leave the walkable
-area, the agent falls back to the pure descent step rather than being wedged
-in place.
+eight neighbours per tick. A blended step must be admissible on exactly the
+terms a flow-field step is: its target cell walkable, and — when it carries the
+centre diagonally between cells — both shared cardinal neighbours clear, the
+flow field's own no-corner-cut rule. An inadmissible blended step falls back to
+the pure descent step rather than wedging the agent in place, so separation can
+neither pin an agent against a wall nor steer one into a walkable-but-
+unreachable corner pocket.
 
 See [ADR 009](ADR/009_ADR_agent_separation_and_collision.md) and the
 [agent collision architecture](agent-collision-architecture.html) page.

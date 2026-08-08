@@ -103,12 +103,12 @@ pub fn step(sim: &mut Simulation) {
         // Separation must never wedge an agent the field alone could have
         // moved: fall back to the pure descent step before giving up. Without
         // this, a crowd could pin an agent against a wall forever.
-        if !position_walkable(nx, ny, width, height, &sim.blocked) {
+        if !step_admissible(cx, cy, nx, ny, width, height, &sim.blocked) {
             mx = vx;
             my = vy;
             nx = px + mx * step_len;
             ny = py + my * step_len;
-            if !position_walkable(nx, ny, width, height, &sim.blocked) {
+            if !step_admissible(cx, cy, nx, ny, width, height, &sim.blocked) {
                 sim.dir[i] = dir_from_vector(mx, my);
                 advance_frame(&mut sim.frame[i], frame_count);
                 continue;
@@ -137,15 +137,50 @@ fn nearest_cell(p: f32) -> i32 {
     p.floor() as i32
 }
 
+/// Is a step from cell `(cx, cy)` to the continuous position `(nx, ny)` one the
+/// walk is allowed to take?
+///
+/// Two conditions, and the second is why this is not a plain walkability test.
+/// The destination cell must be in bounds and free — and if the step carries the
+/// centre across *both* cell boundaries at once, it is a diagonal move and must
+/// satisfy the flow field's own no-corner-cut rule: both shared cardinal
+/// neighbours clear. The pure descent step satisfies that by construction,
+/// because [`crate::nav::flow_field`] only ever emits a diagonal vector through
+/// the same check; a *blended* step is an arbitrary unit vector and does not.
+///
+/// Without the diagonal arm, separation can steer an agent across a blocked
+/// corner into a cell that is walkable but unreachable. Such a cell has a zero
+/// descent vector forever, so the agent parked there never moves, never arrives
+/// and never recycles — and the wall fallback above cannot rescue it, because
+/// the blended step *was* walkable.
 #[inline]
-fn position_walkable(x: f32, y: f32, width: u32, height: u32, blocked: &[bool]) -> bool {
-    let cx = nearest_cell(x);
-    let cy = nearest_cell(y);
-    if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
+fn step_admissible(
+    cx: i32,
+    cy: i32,
+    nx: f32,
+    ny: f32,
+    width: u32,
+    height: u32,
+    blocked: &[bool],
+) -> bool {
+    let tx = nearest_cell(nx);
+    let ty = nearest_cell(ny);
+    if tx < 0 || ty < 0 || tx >= width as i32 || ty >= height as i32 {
         return false;
     }
-    let idx = (cx as u32 + cy as u32 * width) as usize;
-    !blocked[idx]
+    let idx = (tx as u32 + ty as u32 * width) as usize;
+    if blocked[idx] {
+        return false;
+    }
+    // `signum`, not the raw delta: a step is shorter than a cell so the delta is
+    // already in -1..=1, but the rule is about the corner being crossed and must
+    // not silently index a cell two away if that ever stops holding.
+    let dx = (tx - cx).signum();
+    let dy = (ty - cy).signum();
+    if dx != 0 && dy != 0 {
+        return crate::nav::flow_field::diagonal_clear(cx, cy, dx, dy, width, height, blocked);
+    }
+    true
 }
 
 #[inline]

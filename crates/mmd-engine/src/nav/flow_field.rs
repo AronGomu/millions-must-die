@@ -211,7 +211,11 @@ fn cell_index(cell: Cell, width: u32, height: u32) -> Option<usize> {
 }
 
 /// Diagonal from (ux,uy) along (dx,dy): both adjacent cardinals must be free + in-bounds.
-fn diagonal_clear(
+///
+/// Visible to the crate because the tick applies the *same* rule to a blended
+/// step (see [`crate::sim::tick`]): there must be exactly one no-corner-cut
+/// rule, or a steered agent can reach a cell the field considers unreachable.
+pub(crate) fn diagonal_clear(
     ux: i32,
     uy: i32,
     dx: i32,

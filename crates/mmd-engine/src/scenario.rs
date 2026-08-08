@@ -532,6 +532,17 @@ fn validate_collision_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError
             "a collision scene must declare a nonzero collision_radius_q8".into(),
         ));
     }
+    // A body with a zero weight is worse than a bodyless scene: it validates,
+    // it looks tuned, and `CollisionParams::enabled()` still returns false, so
+    // the separation pass never runs and the scene demonstrates nothing.
+    if doc.separation_strength_q8 == 0 {
+        return Err(ScenarioError::InvalidCollision(
+            "a collision scene declaring a body must also declare a nonzero \
+             separation_strength_q8; a body with no weight leaves the \
+             separation pass switched off"
+                .into(),
+        ));
+    }
     Ok(())
 }
 

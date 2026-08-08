@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
     COLLISION_SCENE_MAX_AGENTS, COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS,
-    MAX_COLLISION_RADIUS_Q8, Scenario, ScenarioError, ScenarioSpec,
+    MAX_COLLISION_RADIUS_Q8, MAX_SEPARATION_STRENGTH_Q8, Scenario, ScenarioError, ScenarioSpec,
 };
 use mmd_engine::testkit::{COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, scene_path};
 
@@ -116,6 +116,40 @@ fn collision_radius_above_the_cap_is_refused() {
         ),
         other => panic!("expected InvalidCollision, got {other:?}"),
     }
+}
+
+#[test]
+fn separation_strength_above_the_cap_is_refused() {
+    // The radius cap had a test; the strength cap did not, so replacing its
+    // whole check with `if false` left this file green.
+    let spec = ScenarioSpec {
+        separation_strength_q8: MAX_SEPARATION_STRENGTH_Q8 + 1,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(msg)) => assert!(
+            msg.contains("separation_strength_q8"),
+            "expected msg to mention separation_strength_q8, got {msg:?}"
+        ),
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_collision_caps_are_inclusive_bounds() {
+    // Both caps are the largest *accepted* value, not the first rejected one.
+    // Without this, flipping either `>` to `>=` passed every other test here.
+    let spec = ScenarioSpec {
+        collision_radius_q8: MAX_COLLISION_RADIUS_Q8,
+        separation_strength_q8: MAX_SEPARATION_STRENGTH_Q8,
+        ..fixture_spec()
+    };
+    let scenario = Scenario::from_spec(spec).expect("both caps must be accepted at the boundary");
+    assert_eq!(scenario.collision_radius_q8(), MAX_COLLISION_RADIUS_Q8);
+    assert_eq!(
+        scenario.separation_strength_q8(),
+        MAX_SEPARATION_STRENGTH_Q8
+    );
 }
 
 #[test]
@@ -580,6 +614,25 @@ fn collision_scene_refuses_a_bodyless_scene() {
         Err(ScenarioError::InvalidCollision(msg)) => assert!(
             msg.contains("nonzero collision_radius_q8"),
             "expected msg to mention nonzero collision_radius_q8, got {msg:?}"
+        ),
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn collision_scene_refuses_a_body_with_no_separation_weight() {
+    // A collision scene exists to demonstrate separation. Declaring a body and
+    // then setting the weight to 0 passes every other check while
+    // `CollisionParams::enabled()` returns false and the separation pass never
+    // runs at all — a scene that silently demonstrates nothing.
+    let spec = ScenarioSpec {
+        separation_strength_q8: 0,
+        ..collision_scene_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(msg)) => assert!(
+            msg.contains("nonzero separation_strength_q8"),
+            "expected msg to mention nonzero separation_strength_q8, got {msg:?}"
         ),
         other => panic!("expected InvalidCollision, got {other:?}"),
     }

@@ -3,6 +3,7 @@
 - Status: Accepted; superseded in part (see below)
 - Date: 2026-08-02
 - Superseded by: T28 (2026-08-05) for the **performance acceptance criteria only** — frame-time gates and the platform matrix are retired to the optimization phase; see [testing strategy](../05-testing.md#retired-performance-gating). The behavioural/scope decisions stand.
+- Superseded by: [ADR 009](009_ADR_agent_separation_and_collision.md), in part — the "Collision, separation" half of the exclusion below only. Soft agent separation ships in phase 0 as steering with no overlap guarantee; dynamic obstacles and per-agent paths remain excluded.
 
 ## Context
 

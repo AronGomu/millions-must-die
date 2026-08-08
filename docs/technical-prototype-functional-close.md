@@ -20,7 +20,7 @@ proves; it does not add to it.
 | Claim | Status |
 | --- | --- |
 | Every game system in scope has at least one behavioural test | proven — see the map below |
-| The 50k-agent scene starts, ticks and exits cleanly | proven — `cargo run -- run --agents 50000 --frames 300` is on the required gate |
+| The 50k-agent scene and both collision demo scenes start, tick and exit cleanly | proven — all three interactive smokes are on the required gate: `cargo run -- run --agents 50000 --frames 300`, and `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` / `…/collision_sprite_v1.ron --frames 300` |
 | The simulation is deterministic on one host and one binary | proven — hash-equality tests, with the narrowing recorded under Known gaps |
 | The development host renders the expected frame | proven — committed golden, compared exactly, on Linux/Vulkan only, on the `MMD_REQUIRE_GPU=1` run recorded below |
 | The app and CLI honour their documented contract | proven — the built binary is driven as a subprocess |
@@ -204,16 +204,19 @@ neighbours overlapping its body, that sum is added to the flow-field descent
 vector, and the agent walks the blended heading at its unchanged speed. Nothing
 in the tick forbids an overlap, and no test claims one is impossible — the
 proven claims are that a coincident pair splits, that a released stack spreads,
-and that deep overlap on the sprite-scale scene collapses by an order of
-magnitude within 300 ticks. Under crowd pressure, and especially in the jam that
-forms at the destination cell, bodies do interpenetrate. That is the accepted
+and that deep overlap on the sprite-scale scene at least halves within 300 ticks
+without ever climbing back above its tick-1 baseline — the test asserts the
+halving; the tracked scene currently comes in at 16 229 deeply overlapping pairs
+at tick 1 against 5 919 at tick 300. Under crowd pressure, and especially in the
+jam that forms at the destination cell, bodies do interpenetrate. That is the accepted
 behaviour of the chosen model, recorded in
 [ADR 009](ADR/009_ADR_agent_separation_and_collision.md).
 
 Two further narrowings live here rather than in the code. Each agent
 accumulates at most eight neighbours per tick, so a very deep stack is pushed
-apart over several ticks instead of one. And when the blended step would leave
-the walkable area, the agent falls back to the pure descent step — separation
+apart over several ticks instead of one. And a blended step must be admissible
+on the same terms as a flow-field step — target cell walkable, and no cut across
+a blocked corner — or the agent falls back to the pure descent step. Separation
 may never wedge an agent the field alone could have moved, which means a wall
 can win against a crowd and let bodies compress against it.
 

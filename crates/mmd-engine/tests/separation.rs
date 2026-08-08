@@ -9,6 +9,7 @@
 mod common;
 
 use common::Tracker;
+use mmd_engine::nav::flow_field::COST_UNREACHABLE;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::{
     CollisionParams, MAX_SEPARATION_NEIGHBORS, SEPARATION_DIR16, SPEED_CELLS_PER_SEC, SpatialGrid,
@@ -186,18 +187,37 @@ fn separation_is_capped_at_eight_neighbours() {
 
 #[test]
 fn separation_ignores_agents_beyond_contact() {
-    // Contact is two radii = 1.0 cell. Agent 0 stands alone; agents 1 and 2 are
-    // 0.4 apart and therefore touching. One call covers both branches, so the
-    // test can tell "correctly ignores the distant one" apart from "never
-    // pushes at all".
+    // Contact is two radii = 1.0 cell, and the bins are one cell wide, so the
+    // 3x3 scan window around agent 0's bin spans x in [0, 3).
+    //
+    // Agent 1 is deliberately placed at 1.1 from agent 0 — *inside* that window,
+    // in the adjacent bin, and just past contact. That is the only placement
+    // that tests the cutoff rather than the bin geometry: park the far agent
+    // four bins away and it is never a candidate, so the cutoff could be deleted
+    // and nothing would notice. It cannot be deleted quietly, either — without
+    // it `w = (contact - d) * inv_contact` goes negative past contact and the
+    // pair *attracts* at medium range.
+    //
+    // Agents 1 and 2 are 0.4 apart and therefore touching, so one call covers
+    // both branches and the test can tell "correctly ignores the distant one"
+    // apart from "never pushes at all". Agent 2 sits 1.5 from agent 0, in bin 3
+    // — outside agent 0's window and past contact either way.
     //
     // The buffers are pre-seeded with 1.0: the accumulator must *write* zero
     // rather than leave the caller's slot alone, or a push from a previous tick
     // would survive into this one.
-    let xs = [1.5f32, 5.5, 5.9];
+    let xs = [1.5f32, 2.6, 3.0];
     let ys = [1.5f32, 1.5, 1.5];
     let mut grid = SpatialGrid::new(8, 8, 1.0, 3);
     grid.rebuild(&xs, &ys);
+
+    // The placement claims above, checked rather than asserted in prose.
+    assert_eq!(grid.bin_of(xs[0], ys[0]), (1, 1));
+    assert_eq!(
+        grid.bin_of(xs[1], ys[1]),
+        (2, 1),
+        "the out-of-contact agent must sit inside agent 0's 3x3 scan window"
+    );
 
     let mut sep_x = [1.0f32; 3];
     let mut sep_y = [1.0f32; 3];
@@ -206,7 +226,8 @@ fn separation_ignores_agents_beyond_contact() {
     assert_eq!(
         (sep_x[0], sep_y[0]),
         (0.0, 0.0),
-        "an agent 4 cells from anyone must be pushed by nobody"
+        "a scanned neighbour 1.1 cells away is past the 1.0-cell contact \
+         distance and must contribute nothing"
     );
     assert!(
         sep_x[1] != 0.0,
@@ -458,6 +479,41 @@ fn a_bodyless_scenario_walks_the_flow_only_path() {
     );
 }
 
+/// State hash of the bodied stack below after 200 ticks, measured on this tree.
+///
+/// The mirror of [`BODYLESS_GRID_PRE_SEPARATION_HASH`], for the path that
+/// actually runs the separation pass. Every other test here compares the engine
+/// to *itself*: `separation_is_reproducible` runs the same build twice in one
+/// process, so any change that moves both runs together is invisible to it —
+/// rotating `SEPARATION_DIR16` by one position, or raising
+/// `MAX_SEPARATION_NEIGHBORS` from 8 to 16, left the whole file green.
+///
+/// Unlike the bodyless digest this one is not a compatibility claim against an
+/// older engine; it is a change detector. If a deliberate change to the
+/// separation model moves it, re-measure and update it in the same commit — but
+/// do not update it to make an unexplained move go away.
+const BODIED_STACK_HASH: &str = "81f958301624ff2033e797032d7cff8fd59344036263fdc5c6e13f00b5c80e8b";
+
+#[test]
+fn a_bodied_scenario_is_pinned_to_a_golden_digest() {
+    // A single spawn cell, so every agent starts coincident and the tie-break
+    // table is exercised from tick 0; 32 agents, so the 8-neighbour cap actually
+    // truncates. Both of the constants above therefore reach the digest.
+    let mut h = Harness::grid(stacked_collision_grid(32))
+        .build()
+        .expect("bodied stack");
+    assert!(h.sim().collision().enabled());
+
+    h.step_exact(200);
+
+    assert_eq!(
+        h.state_hash_hex(),
+        BODIED_STACK_HASH,
+        "the bodied separation path drifted; if the change was deliberate, \
+         re-measure this digest in the same commit that caused it"
+    );
+}
+
 #[test]
 fn separation_never_wedges_an_agent_against_a_wall() {
     // The requirement the flow-only fallback in `tick::step` exists for. Every
@@ -481,25 +537,117 @@ fn separation_never_wedges_an_agent_against_a_wall() {
     let mut h = Harness::grid(spec).build().expect("walled collision grid");
     assert!(h.sim().collision().enabled());
 
-    let start: Vec<(f32, f32)> = {
+    // Every free cell here is reachable through the gap, so every agent always
+    // has an admissible descent step. The fallback therefore owes a *per tick*
+    // guarantee, not an eventual one: no agent may ever sit out a tick.
+    //
+    // Measuring "did it move at all over 200 ticks" instead would be no test:
+    // the crowd's own churn carries a wedged agent tens of cells, so deleting
+    // the fallback outright leaves such an assertion green. Counting the ticks
+    // an agent stood still is what the fallback actually controls.
+    const TICKS: u64 = 200;
+    let mut prev: Vec<(f32, f32)> = {
         let v = h.agents();
         (0..v.x.len()).map(|i| (v.x[i], v.y[i])).collect()
     };
+    let mut stalled: Vec<(usize, u64)> = Vec::new();
 
-    h.step_exact(200);
-
-    let v = h.agents();
-    for (i, &(sx, sy)) in start.iter().enumerate() {
-        assert!(
-            v.x[i].is_finite() && v.y[i].is_finite(),
-            "agent {i} left the numeric domain"
-        );
-        assert!(
-            (v.x[i] - sx).abs() + (v.y[i] - sy).abs() > 1e-4,
-            "agent {i} never left its spawn point ({sx}, {sy}) — the crowd \
-             wedged it against the wall"
-        );
+    for tick in 1..=TICKS {
+        h.step_exact(1);
+        let v = h.agents();
+        for (i, was) in prev.iter_mut().enumerate() {
+            assert!(
+                v.x[i].is_finite() && v.y[i].is_finite(),
+                "agent {i} left the numeric domain at tick {tick}"
+            );
+            let now = (v.x[i], v.y[i]);
+            if now == *was {
+                stalled.push((i, tick));
+            }
+            *was = now;
+        }
     }
+
+    assert!(
+        stalled.is_empty(),
+        "{} agent-ticks spent motionless against the wall (first few: {:?}) — \
+         the blended step was refused and no descent step was taken in its place",
+        stalled.len(),
+        &stalled[..stalled.len().min(8)]
+    );
+
+    // A stall count of zero is only meaningful if the wall was in play at all.
+    // Agents must have crossed it, i.e. got past x = 3 through the single gap.
+    let v = h.agents();
+    assert!(
+        (0..v.x.len()).any(|i| v.x[i] > 4.0),
+        "no agent ever reached the far side of the wall, so the wedging \
+         configuration was never exercised"
+    );
+}
+
+#[test]
+fn separation_never_steers_an_agent_into_a_corner_pocket() {
+    // The blend turns the step into an arbitrary unit vector, so it can aim the
+    // centre diagonally between two cells the flow field would never cut across.
+    // Land in a walkable-but-unreachable pocket that way and the agent is stuck
+    // forever: its descent vector is `(0, 0)`, so it never moves, never arrives
+    // and never recycles — and the wall fallback cannot save it, because the
+    // blended step *was* walkable.
+    //
+    // `(0,1)` and `(1,0)` blocked leaves `(0,0)` walkable but corner-locked.
+    const W: u32 = 8;
+    const OBSTACLE_1_0: u32 = 1; // (1,0)
+    const OBSTACLE_0_1: u32 = W; // (0,1)
+
+    let spec = GridSpec::new(W, 8, Cell { x: 7, y: 7 })
+        .with_obstacles(vec![OBSTACLE_1_0, OBSTACLE_0_1])
+        .with_spawns(vec![Cell { x: 1, y: 1 }])
+        .with_collision(256, 2560)
+        .with_agents(2);
+    let mut h = Harness::grid(spec).build().expect("corner-pocket grid");
+    assert!(h.sim().collision().enabled());
+
+    // The pocket, stated as the field sees it: walkable, unreachable, no descent.
+    assert_eq!(
+        h.flow_field().vector_at(0, 0),
+        (0.0, 0.0),
+        "the pocket must have no descent vector, or it is not a pocket"
+    );
+    assert_eq!(
+        h.flow_field().cost_at(0, 0),
+        COST_UNREACHABLE,
+        "the pocket must be unreachable under the no-corner-cut rule"
+    );
+
+    // Agent 0 sits just inside cell (1,1) with agent 1 up-field of it, so the
+    // repulsion overwhelms the descent vector and points at the pocket corner.
+    h.sim_mut().set_position(0, 1.02, 1.02);
+    h.sim_mut().set_position(1, 1.60, 1.60);
+
+    h.step_exact(1);
+
+    let after_one = {
+        let v = h.agents();
+        (v.x[0], v.y[0])
+    };
+    let cell = (after_one.0.floor() as i32, after_one.1.floor() as i32);
+    assert_ne!(
+        cell,
+        (0, 0),
+        "the blend cut the corner into the pocket: agent 0 at {after_one:?}"
+    );
+
+    h.step_exact(500);
+
+    let after_many = {
+        let v = h.agents();
+        (v.x[0], v.y[0])
+    };
+    assert_ne!(
+        after_many, after_one,
+        "agent 0 has not moved in 500 ticks — it is wedged at {after_one:?}"
+    );
 }
 
 #[test]

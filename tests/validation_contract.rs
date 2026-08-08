@@ -513,7 +513,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
 /// that silently stopped finding tests would otherwise satisfy every
 /// membership check vacuously — every lookup would fail loudly, but a *broken
 /// regex* that matched everything would not. This pins the scanner itself.
-const MIN_SCANNED_TESTS: usize = 163;
+const MIN_SCANNED_TESTS: usize = 168;
 
 /// Number of systems phase 0 claims. Pinned so that deleting a `SystemCoverage`
 /// entry — which shrinks the claim without breaking any lookup — fails loudly.

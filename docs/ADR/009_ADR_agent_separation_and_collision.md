@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-08
 - Supersedes in part: [ADR 003](003_ADR_simulation_and_flow_field.md) — the "overlap allowed, no agent collision/separation/spatial neighbor grid" decision only
+- Supersedes in part: [ADR 001](001_ADR_technical_prototype_scope_and_acceptance.md) — the "Collision, separation" half of its explicit exclusions only; dynamic obstacles and per-agent paths stay excluded
 
 ## Context
 
@@ -54,7 +55,7 @@ conversion `q as f32 / 256.0` is exact — the divisor is a power of two. Both
 fields are required in the RON: a stale scenario must fail loudly, never run
 silently bodyless.
 
-**Three shipped tunings**, because one radius cannot serve both scale and
+**One model, four radii**, because one radius cannot serve both scale and
 legibility:
 
 | Scenario | Agents | Radius | Reads as |
@@ -106,12 +107,25 @@ collision-free zone near the goal.
 
 ## Consequences
 
-- The strict "mean routing cost falls every tick" contract is false and was
-  re-derived: a spawn stack pushing itself apart legitimately moves members
-  backwards for a few ticks. The surviving claim is that the horde never stalls
-  — never goes a full second of simulated time closing no distance at all.
-- Every state hash changes. Nothing in the tree pins one as a literal, so this
-  is observable at the CLI rather than a test edit.
+- The strict "mean routing cost falls every tick" contract was **kept**, not
+  re-derived. At the tracked fixtures' body radius (1/8 cell) a spawn stack
+  opens without moving anyone into a costlier cell, so
+  `aggregate_progress_is_monotone` still passes
+  (`crates/mmd-engine/tests/simulation.rs`). What changed is that the strict
+  claim is now tuning-dependent — a body large enough to push members backwards
+  for a few ticks would break it — so a weaker sibling,
+  `aggregate_progress_never_stalls`, was added *alongside* it: the horde never
+  goes a full second of simulated time closing no distance at all. If a future
+  tuning breaks the strict claim, the strict test is meant to fail loudly and
+  the stall floor is what still holds.
+- Every bodied state hash changes. Two digests *are* pinned as literals in
+  `crates/mmd-engine/tests/separation.rs`, and they say opposite things:
+  `BODYLESS_GRID_PRE_SEPARATION_HASH` was measured on the commit before
+  separation existed and must **not** move, since it is the only real proof that
+  a zero-radius scenario still walks the old flow-only path;
+  `BODIED_STACK_HASH` is a change detector on the separation model itself and is
+  re-measured whenever a deliberate change moves it. Everything else is
+  observable at the CLI rather than a test edit.
 - Render goldens are unaffected: the golden scene is
   `SpriteRenderer::static_demo_groups`, independent of simulation state.
 - Every scenario `.ron` outside this repo is invalid until it declares both
@@ -135,8 +149,10 @@ unless noted:
 - a blended step keeps the step length — heading bends, speed does not;
 - a released stack of sixteen spreads apart;
 - a bodyless scenario is hash-identical to the flow-only walk;
-- deep overlap on `collision_sprite_v1` collapses by an order of magnitude
-  within 300 ticks;
+- deep overlap on `collision_sprite_v1` at least halves within 300 ticks and no
+  later sample rises back above the tick-1 baseline (the asserted bar is the
+  halving; the tracked scene measures 16 229 deeply overlapping pairs at tick 1
+  against 5 919 at tick 300);
 - agents on a collision scene never enter an obstacle and never leave the world
   rect;
 - a collision tick allocates nothing

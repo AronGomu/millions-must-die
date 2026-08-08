@@ -87,7 +87,7 @@
 </table></figure>
 
 <section class="grid" style="margin-top:14px">
-<div class="card mid"><h3>Re-derived contract</h3><p>"Mean routing cost falls every tick" is false once bodies exist — a spawn stack pushing itself apart moves members backwards for a few ticks. The surviving claim is stronger where it counts: the horde must never stall, never go a full second of simulated time closing no distance at all.</p></div>
+<div class="card mid"><h3>Contract kept, floor added</h3><p>"Mean routing cost falls every tick" was <em>kept</em>. At the tracked fixtures' 1/8-cell body a spawn stack opens without moving anyone into a costlier cell, so <code>aggregate_progress_is_monotone</code> still passes. It is now tuning-dependent, though, so <code>aggregate_progress_never_stalls</code> was added alongside it: the horde must never go a full second of simulated time closing no distance at all. Break the strict claim with a future tuning and that test fails loudly; the stall floor is what still holds.</p></div>
 <div class="card"><h3>Unchanged</h3><p>Render goldens compare <code>SpriteRenderer::static_demo_groups</code>, which never reads simulation state. Arrival radius, recycle order, atlas/direction/frame assignment, flow-field construction and the obstacle clamp are all untouched.</p></div>
 </section>
 

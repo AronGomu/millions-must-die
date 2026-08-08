@@ -259,9 +259,9 @@ sentences and match the file's existing formatting.
 - [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green (35 `test result: ok` blocks, 0 `test result: FAILED`, 0 `error[`/`error:` lines)
 - [x] `nix flake check` → exit 0
 - [x] `cargo run -p xtask -- bootstrap --check` / `shaders --check` / `atlases --check` → exit 0
-- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0, hash `130e3047228c4813156d68641567971cda4ab8ef3f4e5e8c71d7088c7f1e8ba7`
-- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` → exit 0, hash `9b0691550b2a0b3af0a4d58c15662d2631cadf8ad5c8a65e402422facd633e91`
-- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` → exit 0, hash `1909d6c085f74b3490a5cb0548b7b5744b68df605e7357a55a57aa6986b8223d`
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0, hash `130e3047228c4813156d68641567971cda4ab8ef3f4e5e8c71d7088c7f1e8ba7` — superseded by T7 (corner-pocket fix): `f647e7f590ed5814e4e61388e23836dfacb980217fb1762542ec3abfe85549b3`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` → exit 0, hash `9b0691550b2a0b3af0a4d58c15662d2631cadf8ad5c8a65e402422facd633e91` — superseded by T7 (corner-pocket fix): `861ccf228a673c8a3c74718ed3891c0462aabbed426d9f434d87ea81182d1988`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` → exit 0, hash `1909d6c085f74b3490a5cb0548b7b5744b68df605e7357a55a57aa6986b8223d` — superseded by T7 (corner-pocket fix): `0d13037832c37a90ec628f8ac9b94d23100ce1365405d11d7d4fb5546fec90d3`
 - [x] manual check: `grep -c 'agent-collision-architecture.html' docs/README.md` → `1`
 - [x] manual check: `grep -c 'Collision/separation' docs/simulation-navigation-architecture.html` → `0`
 - [x] manual check: the negative rehearsal in impl step 9 actually failed before being reverted — panic named the misspelled test, reverted, re-ran green

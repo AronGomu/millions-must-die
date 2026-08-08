@@ -58,7 +58,12 @@ cargo run -- run --help
 cargo run -- bench --help    # benchmark harness — not a gate; optimization phase
 cargo run -p mmd-lab -- --help
 cargo run -p xtask -- --help
+python3 tools/scenegen/gen_collision_scenes.py    # regenerates the tracked collision demo scenes + their .sha256 sidecars
 ```
+
+`gen_collision_scenes.py` is deterministic and idempotent — rerunning it must
+leave `git status` clean. It exists for provenance, not as a build step: the
+demo scenes are tracked assets like the gate scene and the fixtures.
 
 `bench`, `mmd-lab` and the `lab/` fixtures are frozen in place for the later
 optimization phase. They still build and their unit tests still run, but
