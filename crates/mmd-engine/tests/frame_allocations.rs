@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
+use mmd_engine::sim::SpatialGrid;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -189,4 +190,24 @@ fn foreign_thread_allocations_do_not_leak_into_a_measure_scope() {
         "a measure scope counted {observed} allocation(s) made by a thread it \
          never entered; the counter must be scoped to the measuring thread"
     );
+}
+
+#[test]
+fn spatial_rebuild_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let n = 512;
+    let mut grid = SpatialGrid::new(64, 64, 1.0, n);
+    let xs: Vec<f32> = (0..n).map(|i| (i % 64) as f32 + 0.5).collect();
+    let ys: Vec<f32> = (0..n).map(|i| (i / 64) as f32 + 0.5).collect();
+    grid.rebuild(&xs, &ys); // warm-up: any lazy growth happens here
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..8 {
+        grid.rebuild(&xs, &ys);
+        std::hint::black_box(grid.len());
+    }
+    assert_eq!(guard.allocations(), 0);
+    guard.assert_zero();
 }

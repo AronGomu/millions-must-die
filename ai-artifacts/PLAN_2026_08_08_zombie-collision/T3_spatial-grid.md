@@ -252,14 +252,14 @@ fn spatial_rebuild_allocates_nothing() {
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/tests/separation.rs` with the six tests from the table above; run `cargo test -p mmd-engine --test separation` and confirm it fails to compile (red).
-- [ ] 2. Add `use mmd_engine::sim::SpatialGrid;` to the imports of `crates/mmd-engine/tests/frame_allocations.rs` and append `spatial_rebuild_allocates_nothing` verbatim from above.
-- [ ] 3. Create `crates/mmd-engine/src/sim/spatial.rs` with the module contents given above, verbatim.
-- [ ] 4. Replace `crates/mmd-engine/src/sim/mod.rs` with the seven-line version given above.
-- [ ] 5. Run `cargo test -p mmd-engine --test separation` → six tests pass.
-- [ ] 6. Run `cargo test -p mmd-engine --test frame_allocations` → six tests pass, including the new one.
-- [ ] 7. Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` and fix any lint in the new file only (expect `len_without_is_empty` to be satisfied already — `is_empty` is provided).
-- [ ] 8. Run the full validation list below.
+- [x] 1. Create `crates/mmd-engine/tests/separation.rs` with the six tests from the table above; run `cargo test -p mmd-engine --test separation` and confirm it fails to compile (red).
+- [x] 2. Add `use mmd_engine::sim::SpatialGrid;` to the imports of `crates/mmd-engine/tests/frame_allocations.rs` and append `spatial_rebuild_allocates_nothing` verbatim from above.
+- [x] 3. Create `crates/mmd-engine/src/sim/spatial.rs` with the module contents given above, verbatim.
+- [x] 4. Replace `crates/mmd-engine/src/sim/mod.rs` with the seven-line version given above.
+- [x] 5. Run `cargo test -p mmd-engine --test separation` → six tests pass.
+- [x] 6. Run `cargo test -p mmd-engine --test frame_allocations` → six tests pass, including the new one.
+- [x] 7. Run `cargo clippy --workspace --all-targets --all-features -- -D warnings` and fix any lint in the new file only (expect `len_without_is_empty` to be satisfied already — `is_empty` is provided).
+- [x] 8. Run the full validation list below.
 
 ## Outputs
 
@@ -276,12 +276,12 @@ fn spatial_rebuild_allocates_nothing() {
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --test separation` → 6 passed
-- [ ] `cargo test -p mmd-engine --test frame_allocations` → 6 passed
-- [ ] `cargo fmt --all -- --check` → exit 0
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0; the `hash=` on the `clean exit` line is unchanged from T2 (nothing consumes the grid yet)
-- [ ] `cargo tree -e features -p millions_must_die | grep -c testkit` → prints `0` (the shipping binary must not pull the harness in; `grep -c` exits 1 on a zero count, which is the passing case here)
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(sim): add a zero-alloc uniform-grid neighbour index`
+- [x] `cargo test -p mmd-engine --test separation` → 6 passed
+- [x] `cargo test -p mmd-engine --test frame_allocations` → 6 passed
+- [x] `cargo fmt --all -- --check` → exit 0
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0; the `hash=` on the `clean exit` line is unchanged from T2 (nothing consumes the grid yet)
+- [x] `cargo tree -e features -p millions_must_die | grep -c testkit` → prints `0` (the shipping binary must not pull the harness in; `grep -c` exits 1 on a zero count, which is the passing case here)
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(sim): add a zero-alloc uniform-grid neighbour index`
