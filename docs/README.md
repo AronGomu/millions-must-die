@@ -1,11 +1,9 @@
 # Design Documentation
 
-1. [Vision](00-vision.md)
-2. [Technical architecture](01-technical-architecture.md)
-3. [Prototype roadmap](02-prototype-roadmap.md)
-4. [MVP](03-mvp.md)
-5. [Design decisions](04-design-decisions.md)
-6. [Testing strategy](05-testing.md)
+1. [Context](CONTEXT.md) — vision, roadmap, MVP scope
+2. [Design](DESIGN.md) — technical architecture, design decisions
+3. [Glossary](GLOSSARY.md) — shared vocabulary
+4. [Testing strategy](05-testing.md)
 
 ## Phase 0 architecture
 

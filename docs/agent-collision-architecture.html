@@ -1,0 +1,96 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Collision Architecture</title><style>:root{color-scheme:dark;--bg:#0b0e13;--panel:#121923;--panel2:#192331;--text:#f5f7fb;--muted:#a3afc0;--line:#2c394b;--accent:#68d391;--amber:#f6b73c;--red:#fc8181}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}main{width:min(1060px,calc(100% - 32px));margin:auto;padding:44px 0 80px}h1,h2,h3,p{margin:0}h1{font-size:clamp(2rem,5vw,4rem);line-height:1.05;letter-spacing:-.04em}h2{margin:30px 0 14px}.eyebrow{color:var(--accent);text-transform:uppercase;font-weight:800;letter-spacing:.1em;font-size:.75rem}.lede{color:var(--muted);max-width:74ch;margin-top:12px}.nav{margin:18px 0}.nav a{color:var(--accent)}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.card,figure,table{border:1px solid var(--line);border-radius:14px;background:var(--panel)}.card,figure{padding:18px}.card p,.card li{color:var(--muted)}ul{margin:8px 0 0;padding-left:19px}li{margin:5px 0}figure{margin:0;overflow:auto}figcaption{color:var(--muted);margin-bottom:12px}figcaption b{display:block;color:var(--text)}svg{display:block;width:100%;min-width:760px;height:auto}.node{fill:var(--panel2);stroke:var(--line);stroke-width:2}.active{stroke:var(--accent)}.warn{stroke:var(--amber)}.edge{fill:none;stroke:var(--line);stroke-width:2}.label{fill:var(--text);font:12px system-ui}.note{fill:var(--muted);font:10px system-ui}.arrow{fill:var(--line)}.dot{fill:var(--muted)}.dot-a{fill:var(--accent)}.ring{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:4 4}.bin{fill:none;stroke:var(--line);stroke-width:1.5}.binhit{fill:rgba(104,211,145,.07);stroke:var(--accent);stroke-width:1.5}table{width:100%;border-collapse:collapse;overflow:hidden}th,td{padding:10px 12px;text-align:left;border-bottom:1px solid var(--line)}th{color:var(--muted);font-size:.75rem;text-transform:uppercase}tr:last-child td{border:0}code{background:#0b1119;padding:.1em .35em;border-radius:5px}.good{border-left:3px solid var(--accent)}.no{border-left:3px solid var(--red)}.mid{border-left:3px solid var(--amber)}.foot{color:var(--muted);margin-top:34px;font-size:.85rem}</style></head><body><main>
+
+<span class="eyebrow">Architecture · Collision</span>
+<h1>Soft Separation Steering</h1>
+<p class="lede"><strong>Nonnormative visualization.</strong> <a href="ADR/009_ADR_agent_separation_and_collision.md">ADR 009</a> owns the collision decision and its constraints; <a href="ADR/003_ADR_simulation_and_flow_field.md">ADR 003</a> still owns movement and navigation. This page shows data flow and the shape of the claim only.</p>
+<p class="nav"><a href="technical-prototype-architecture.html">← System architecture</a> · <a href="simulation-navigation-architecture.html">Simulation + navigation</a></p>
+
+<section class="grid">
+<div class="card good"><h3>What holds</h3><ul>
+<li>A coincident pair splits, deterministically</li>
+<li>A released stack spreads apart</li>
+<li>Deep overlap collapses on the sprite-scale scene</li>
+<li>Heading bends; speed never changes</li>
+<li>Obstacles still win — no agent enters one</li>
+<li>Zero heap allocation per tick</li>
+</ul></div>
+<div class="card no"><h3>What does <em>not</em> hold</h3><ul>
+<li>No hard non-overlap guarantee, ever</li>
+<li>Bodies interpenetrate under crowd pressure</li>
+<li>The destination funnel jams — by design</li>
+<li>A wall beats a crowd: bodies compress against it</li>
+<li>A deep stack unpacks over ticks, not in one</li>
+<li>Cost is unmeasured and claims nothing</li>
+</ul></div>
+</section>
+
+<h2>The geometry that forced the design</h2>
+<p class="lede">The view is 1920×1080 = 2 073 600 px. One sprite is 30×30 = 900 px. The gate scene carries 50 000 of them — 45 000 000 px of sprite, 22× the screen. Hex-packed 30 px discs on the free 80% of that screen top out near 1 700. "50 000 agents" and "sprites never overlap" are not simultaneously satisfiable, so body radius became scenario data and three tunings ship.</p>
+
+<figure><figcaption><b>Shipped tunings</b>One model, four radii. Radius is data; the code is identical in every row.</figcaption>
+<table>
+<tr><th>Scenario</th><th>Agents</th><th>radius_q8</th><th>Radius</th><th>Reads as</th></tr>
+<tr><td><code>technical_prototype_v1</code></td><td>50 000</td><td>102</td><td>0.398 cell ≈ 1.6 px</td><td>dense fluid; sprites still overlap</td></tr>
+<tr><td><code>collision_mid_v1</code></td><td>10 000</td><td>320</td><td>1.25 cells = 5 px</td><td>body boxes touch, shoulders overlap</td></tr>
+<tr><td><code>collision_sprite_v1</code></td><td>1 200</td><td>960</td><td>3.75 cells = 15 px</td><td>sprites keep clear of each other</td></tr>
+<tr><td><code>fixture_*</code></td><td>64–256</td><td>32</td><td>0.125 cell</td><td>exercised without choking corridors</td></tr>
+</table></figure>
+
+<h2>One tick</h2>
+<figure><figcaption><b>Hot path</b>Two extra stages before the existing move. Both are skipped entirely when the scenario declares no body, so a bodyless run is bit-identical to the old flow-only walk.</figcaption>
+<svg viewBox="0 0 940 210" role="img" aria-label="Per-tick pipeline: positions, rebuild bins, accumulate separation, blend, walkable check, commit">
+<defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10 z" class="arrow"/></marker></defs>
+<rect x="16" y="66" width="132" height="58" rx="10" class="node"/><text x="82" y="90" text-anchor="middle" class="label">SoA positions</text><text x="82" y="108" text-anchor="middle" class="note">x[] · y[]</text>
+<rect x="176" y="66" width="132" height="58" rx="10" class="node active"/><text x="242" y="90" text-anchor="middle" class="label">rebuild bins</text><text x="242" y="108" text-anchor="middle" class="note">counting sort · 0 alloc</text>
+<rect x="336" y="66" width="132" height="58" rx="10" class="node active"/><text x="402" y="90" text-anchor="middle" class="label">accumulate</text><text x="402" y="108" text-anchor="middle" class="note">≤ 8 neighbours</text>
+<rect x="496" y="66" width="132" height="58" rx="10" class="node active"/><text x="562" y="90" text-anchor="middle" class="label">blend + normalize</text><text x="562" y="108" text-anchor="middle" class="note">flow + k·Σ</text>
+<rect x="656" y="66" width="132" height="58" rx="10" class="node warn"/><text x="722" y="90" text-anchor="middle" class="label">walkable?</text><text x="722" y="108" text-anchor="middle" class="note">else fall back to flow</text>
+<rect x="816" y="66" width="108" height="58" rx="10" class="node"/><text x="870" y="90" text-anchor="middle" class="label">commit</text><text x="870" y="108" text-anchor="middle" class="note">x · y · dir · frame</text>
+<path d="M148 95 H170" class="edge" marker-end="url(#a)"/><path d="M308 95 H330" class="edge" marker-end="url(#a)"/><path d="M468 95 H490" class="edge" marker-end="url(#a)"/><path d="M628 95 H650" class="edge" marker-end="url(#a)"/><path d="M788 95 H810" class="edge" marker-end="url(#a)"/>
+<text x="16" y="32" class="label">v = flow(cell) + strength · Σ repulsion</text>
+<text x="16" y="50" class="note">pos += normalize(v) · step_len — the step length never changes, only its direction</text>
+<text x="16" y="158" class="note">Stages 2 and 3 are the new ones. Arrival, recycle, the obstacle clamp and the animation channels are untouched.</text>
+<text x="16" y="176" class="note">Fallback rule: separation may never wedge an agent the field alone could have moved.</text>
+</svg></figure>
+
+<h2>Neighbour lookup</h2>
+<figure><figcaption><b>Uniform grid, 3×3 scan</b>Bin edge is <code>max(1.0, 2 × radius)</code>, so contact can never reach past the ring of eight neighbouring bins. Buckets are counting-sorted into buffers reserved at load, and come out in ascending agent index — that ordering is what makes the scan reproducible, not merely correct.</figcaption>
+<svg viewBox="0 0 940 320" role="img" aria-label="Three by three bin scan around the query agent, with the contact circle inscribed">
+<rect x="60" y="30" width="80" height="80" class="bin"/><rect x="140" y="30" width="80" height="80" class="bin"/><rect x="220" y="30" width="80" height="80" class="bin"/>
+<rect x="60" y="110" width="80" height="80" class="binhit"/><rect x="140" y="110" width="80" height="80" class="binhit"/><rect x="220" y="110" width="80" height="80" class="binhit"/>
+<rect x="60" y="190" width="80" height="80" class="binhit"/><rect x="140" y="190" width="80" height="80" class="binhit"/><rect x="220" y="190" width="80" height="80" class="binhit"/>
+<rect x="60" y="110" width="80" height="80" class="bin"/>
+<circle cx="180" cy="190" r="58" class="ring"/>
+<circle cx="180" cy="190" r="5" class="dot-a"/>
+<circle cx="150" cy="172" r="4" class="dot-a"/><circle cx="205" cy="215" r="4" class="dot-a"/><circle cx="196" cy="151" r="4" class="dot-a"/><circle cx="139" cy="222" r="4" class="dot-a"/>
+<circle cx="96" cy="140" r="4" class="dot"/><circle cx="262" cy="243" r="4" class="dot"/><circle cx="255" cy="128" r="4" class="dot"/><circle cx="104" cy="252" r="4" class="dot"/><circle cx="171" cy="70" r="4" class="dot"/><circle cx="248" cy="62" r="4" class="dot"/>
+<text x="180" y="296" text-anchor="middle" class="note">3×3 bins scanned · dashed ring = contact distance (2 × radius)</text>
+<text x="360" y="52" class="label">Scan order is fixed</text>
+<text x="360" y="74" class="note">rows top→bottom, columns left→right, agents ascending within a bin.</text>
+<text x="360" y="92" class="note">Same input → same pairs, in the same order, in every process.</text>
+<text x="360" y="126" class="label">Accepted contributions are capped at 8</text>
+<text x="360" y="148" class="note">Correctness, not speed: 50 000 agents seed onto 127 spawn cells, so ~394</text>
+<text x="360" y="166" class="note">share one exact coordinate at tick 0. An uncapped scan is quadratic in that</text>
+<text x="360" y="184" class="note">stack. Capped, the stack unpacks over several ticks instead of one.</text>
+<text x="360" y="218" class="label">Coincident pairs</text>
+<text x="360" y="240" class="note">No direction exists between two identical points, so a 16-entry unit-vector</text>
+<text x="360" y="258" class="note">table indexed by (i ^ j) &amp; 15 supplies one, signed by i &lt; j so the pair pushes</text>
+<text x="360" y="276" class="note">equally and oppositely. No RNG, no clock, no runtime trigonometry.</text>
+</svg></figure>
+
+<h2>Contract surface</h2>
+<figure><figcaption><b>Scenario fields</b>Q8 fixed point: 256 units = one cell, or the scalar 1.0. Integer because <code>Scenario</code> derives <code>Eq</code>; exact in <code>f32</code> because the divisor is a power of two. Both fields are required — a stale scenario fails loudly rather than running silently bodyless.</figcaption>
+<table>
+<tr><th>Field</th><th>Type</th><th>Meaning</th><th>Bound</th></tr>
+<tr><td><code>collision_radius_q8</code></td><td><code>u32</code></td><td>body radius; contact is twice it</td><td>≤ 2048 (8 cells); 0 = no body</td></tr>
+<tr><td><code>separation_strength_q8</code></td><td><code>u32</code></td><td>weight of Σ repulsion against the unit flow vector</td><td>≤ 2560 (10.0); must be 0 when radius is 0</td></tr>
+</table></figure>
+
+<section class="grid" style="margin-top:14px">
+<div class="card mid"><h3>Re-derived contract</h3><p>"Mean routing cost falls every tick" is false once bodies exist — a spawn stack pushing itself apart moves members backwards for a few ticks. The surviving claim is stronger where it counts: the horde must never stall, never go a full second of simulated time closing no distance at all.</p></div>
+<div class="card"><h3>Unchanged</h3><p>Render goldens compare <code>SpriteRenderer::static_demo_groups</code>, which never reads simulation state. Arrival radius, recycle order, atlas/direction/frame assignment, flow-field construction and the obstacle clamp are all untouched.</p></div>
+</section>
+
+<p class="foot">Performance is unmeasured and retired to a later optimization phase — see <a href="05-testing.md">testing strategy</a>. Nothing on this page is a speed claim.</p>
+
+</main></body></html>
