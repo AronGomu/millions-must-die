@@ -21,6 +21,18 @@ pub const TECHNICAL_PROTOTYPE_V1: &str = "technical_prototype_v1";
 /// Those stay locked for [`TECHNICAL_PROTOTYPE_V1`] alone.
 pub const FIXTURE_VERSION_PREFIX: &str = "fixture_";
 
+/// Version id for the collision demo family: the gate scene's screen geometry
+/// and destination, with a free population and a free body radius.
+///
+/// It exists because [`TECHNICAL_PROTOTYPE_V1`] freezes the 50k/100k workload
+/// and the exact-20% obstacle ratio, and the `fixture_` caps (65 536 cells)
+/// cannot express a full-screen scene.
+pub const COLLISION_SCENE_V1: &str = "collision_scene_v1";
+
+/// A collision scene stays legible: it demonstrates bodies, it is not a second
+/// horde workload.
+pub const COLLISION_SCENE_MAX_AGENTS: u32 = 20_000;
+
 /// Fixture grids must stay small enough that a full system test is cheap.
 pub const FIXTURE_MAX_CELLS: u32 = 65_536;
 /// Fixture agent counts must stay in the tens/hundreds, not the tens of thousands.
@@ -335,6 +347,9 @@ fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), Scena
     if doc.version.starts_with(FIXTURE_VERSION_PREFIX) {
         return validate_fixture_dims(doc, cells);
     }
+    if doc.version == COLLISION_SCENE_V1 {
+        return validate_collision_scene_dims(doc);
+    }
     if doc.version != TECHNICAL_PROTOTYPE_V1 {
         return Err(ScenarioError::UnsupportedVersion(doc.version.clone()));
     }
@@ -386,10 +401,13 @@ fn validate_counts(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
         ),
     ];
 
-    let is_fixture = doc.version.starts_with(FIXTURE_VERSION_PREFIX);
+    // Families that pick their own population: the small fixtures, and the
+    // collision demo scenes whose whole purpose is a different agent count.
+    let free_workload =
+        doc.version.starts_with(FIXTURE_VERSION_PREFIX) || doc.version == COLLISION_SCENE_V1;
     let checks = renderer
         .iter()
-        .chain(workload.iter().filter(|_| !is_fixture));
+        .chain(workload.iter().filter(|_| !free_workload));
     for &(got, want, name) in checks {
         if got != want {
             return Err(ScenarioError::InvalidDimension(format!(
@@ -465,6 +483,54 @@ fn validate_fixture_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioE
             "fixture stretch_agent_count {} exceeds cap {FIXTURE_MAX_AGENTS}",
             doc.stretch_agent_count
         )));
+    }
+    Ok(())
+}
+
+/// Screen geometry is locked so the demo scenes stay comparable with the gate
+/// scene; population and body radius are the point of the family and stay free
+/// within caps.
+fn validate_collision_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
+    let locked = [
+        (doc.width, V1_WIDTH, "width"),
+        (doc.height, V1_HEIGHT, "height"),
+        (doc.cell_size_px, V1_CELL_PX, "cell_size_px"),
+        (doc.sprite_size_px, V1_SPRITE_PX, "sprite_size_px"),
+        (doc.destination.x, V1_DEST_X, "destination.x"),
+        (doc.destination.y, V1_DEST_Y, "destination.y"),
+    ];
+    for (got, want, name) in locked {
+        if got != want {
+            return Err(ScenarioError::InvalidDimension(format!(
+                "{name}: got {got}, want {want}"
+            )));
+        }
+    }
+    if doc.hard_agent_count == 0 {
+        return Err(ScenarioError::InvalidDimension(
+            "hard_agent_count must be > 0".into(),
+        ));
+    }
+    if doc.stretch_agent_count < doc.hard_agent_count {
+        return Err(ScenarioError::InvalidDimension(format!(
+            "stretch_agent_count {} below hard_agent_count {}",
+            doc.stretch_agent_count, doc.hard_agent_count
+        )));
+    }
+    for (got, name) in [
+        (doc.hard_agent_count, "hard_agent_count"),
+        (doc.stretch_agent_count, "stretch_agent_count"),
+    ] {
+        if got > COLLISION_SCENE_MAX_AGENTS {
+            return Err(ScenarioError::InvalidDimension(format!(
+                "collision scene {name} {got} exceeds cap {COLLISION_SCENE_MAX_AGENTS}"
+            )));
+        }
+    }
+    if doc.collision_radius_q8 == 0 {
+        return Err(ScenarioError::InvalidCollision(
+            "a collision scene must declare a nonzero collision_radius_q8".into(),
+        ));
     }
     Ok(())
 }

@@ -6,12 +6,18 @@
 //! stop overlapping — only that they push, that the push is reproducible, and
 //! that bending a heading never changes how far an agent walks.
 
+mod common;
+
+use common::Tracker;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::{
     CollisionParams, MAX_SEPARATION_NEIGHBORS, SEPARATION_DIR16, SPEED_CELLS_PER_SEC, SpatialGrid,
     TICK_DT, accumulate_separation,
 };
-use mmd_engine::testkit::{FIXTURE_DENSE_V1, GridSpec, Harness};
+use mmd_engine::testkit::{
+    COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness,
+    ScenarioSource, scene_path,
+};
 
 #[test]
 fn spatial_bins_hold_every_agent_exactly_once() {
@@ -506,4 +512,114 @@ fn a_fixture_scenario_reports_its_body() {
         "expected a 1/8-cell body radius, got {}",
         c.radius_cells
     );
+}
+
+// --- collision_scene_v1 demo scenes (T5) ------------------------------------
+
+/// Count unordered agent pairs whose centre distance is under `radius_cells`
+/// (deep overlap — half contact or closer). Statistical, not a zero-overlap
+/// claim: separation bounds overlap, it does not forbid it.
+fn count_deep_pairs(h: &Harness, radius_cells: f32) -> usize {
+    let v = h.agents();
+    let n = v.x.len();
+    let mut count = 0;
+    for i in 0..n {
+        for j in (i + 1)..n {
+            let d = (v.x[i] - v.x[j]).hypot(v.y[i] - v.y[j]);
+            if d < radius_cells {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Every agent position must stay in the numeric domain at every sample.
+fn assert_positions_finite(h: &Harness, tick: u64) {
+    let v = h.agents();
+    for i in 0..v.x.len() {
+        assert!(
+            v.x[i].is_finite() && v.y[i].is_finite(),
+            "agent {i} left the numeric domain at tick {tick}"
+        );
+    }
+}
+
+/// Ticks at which deep overlap is sampled. The first is the stacked baseline
+/// taken one tick after spawn; the rest track the decay across the 300-tick
+/// window this scene is specified for.
+const DEEP_SAMPLE_TICKS: [u64; 4] = [1, 100, 200, 300];
+
+#[test]
+fn sprite_scene_pulls_agents_out_of_deep_overlap() {
+    let mut h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE)))
+        .build()
+        .expect("sprite collision scene");
+    let radius_cells = h.scenario().collision_radius_cells();
+
+    let mut samples: Vec<(u64, usize)> = Vec::new();
+    let mut tick = 0;
+    for want in DEEP_SAMPLE_TICKS {
+        h.step_exact(want - tick);
+        tick = want;
+        assert_positions_finite(&h, tick);
+        samples.push((tick, count_deep_pairs(&h, radius_cells)));
+    }
+    eprintln!("deep pairs by tick: {samples:?}");
+
+    let deep_before = samples[0].1;
+    assert!(
+        deep_before > 0,
+        "agents start stacked ~9 per spawn cell; expected deep overlap at tick 1"
+    );
+
+    // Separation must not merely fail to make things worse: no later sample may
+    // climb back above the stacked baseline. This is what catches agents
+    // recycling to the spawn cells and restacking inside the window.
+    for &(t, deep) in &samples[1..] {
+        assert!(
+            deep <= deep_before,
+            "deep overlap rose above its tick-1 baseline at tick {t}: \
+             {deep} > {deep_before}; samples={samples:?}"
+        );
+    }
+
+    // The material claim: deep overlap at least halves over the window.
+    let deep_at_300 = samples[samples.len() - 1].1;
+    assert!(
+        deep_at_300 * 2 <= deep_before,
+        "deep overlap did not at least halve: before={deep_before}, \
+         at_300={deep_at_300}; samples={samples:?}"
+    );
+}
+
+#[test]
+fn mid_scene_reports_its_tuning() {
+    let h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_MID_SCENE)))
+        .build()
+        .expect("mid collision scene");
+    assert_eq!(h.alive_count(), 10_000);
+    let c = h.sim().collision();
+    assert!(c.enabled());
+    assert!(
+        (c.radius_cells - 1.25).abs() < 1e-6,
+        "expected 1.25-cell radius, got {}",
+        c.radius_cells
+    );
+    assert!(
+        (c.strength - 1.0).abs() < 1e-6,
+        "expected strength 1.0, got {}",
+        c.strength
+    );
+}
+
+#[test]
+fn collision_scene_agents_never_enter_an_obstacle() {
+    let mut h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_MID_SCENE)))
+        .build()
+        .expect("mid collision scene");
+    let mut t = Tracker::new(&h);
+    t.run(&mut h, 200);
+    assert_eq!(t.obstacle_samples(), 0);
+    assert_eq!(t.bounds_violations(), 0);
 }

@@ -4,9 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, MAX_COLLISION_RADIUS_Q8, Scenario, ScenarioError,
-    ScenarioSpec,
+    COLLISION_SCENE_MAX_AGENTS, COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS,
+    MAX_COLLISION_RADIUS_Q8, Scenario, ScenarioError, ScenarioSpec,
 };
+use mmd_engine::testkit::{COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, scene_path};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -509,6 +510,94 @@ fn unknown_version_family_is_still_rejected() {
             ),
             "version {version:?} must be rejected"
         );
+    }
+}
+
+// --- collision_scene_v1 family (T5) -----------------------------------------
+//
+// Synthetic minimal spec for the negative tests: same locked geometry as the
+// tracked scenes, but a trivial single-spawn/no-obstacle body so the
+// dimension/collision checks (which run before obstacle validation) are what
+// gets exercised.
+fn collision_scene_spec() -> ScenarioSpec {
+    ScenarioSpec {
+        version: COLLISION_SCENE_V1.to_string(),
+        width: 480,
+        height: 270,
+        cell_size_px: 4,
+        sprite_size_px: 30,
+        hard_agent_count: 10_000,
+        stretch_agent_count: 20_000,
+        seed: 7_355_608_251_463_129_073,
+        destination: Cell { x: 240, y: 135 },
+        spawn_cells: vec![Cell { x: 2, y: 8 }],
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        collision_radius_q8: 320,
+        separation_strength_q8: 256,
+        obstacle_cells: vec![],
+    }
+}
+
+#[test]
+fn collision_scenes_load_and_verify() {
+    let mid = Scenario::load_verified(scene_path(COLLISION_MID_SCENE)).expect("mid must load");
+    let sprite =
+        Scenario::load_verified(scene_path(COLLISION_SPRITE_SCENE)).expect("sprite must load");
+
+    assert_eq!(mid.hard_agent_count(), 10_000);
+    assert_eq!(mid.collision_radius_q8(), 320);
+    assert_eq!(mid.version(), COLLISION_SCENE_V1);
+
+    assert_eq!(sprite.hard_agent_count(), 1_200);
+    assert_eq!(sprite.collision_radius_q8(), 960);
+    assert_eq!(sprite.version(), COLLISION_SCENE_V1);
+}
+
+#[test]
+fn collision_scene_locks_the_screen_geometry() {
+    let spec = ScenarioSpec {
+        width: 481,
+        ..collision_scene_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidDimension(msg)) => {
+            assert!(msg.contains("width"), "expected width in msg, got {msg:?}")
+        }
+        other => panic!("expected InvalidDimension, got {other:?}"),
+    }
+}
+
+#[test]
+fn collision_scene_refuses_a_bodyless_scene() {
+    let spec = ScenarioSpec {
+        collision_radius_q8: 0,
+        separation_strength_q8: 0,
+        ..collision_scene_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(msg)) => assert!(
+            msg.contains("nonzero collision_radius_q8"),
+            "expected msg to mention nonzero collision_radius_q8, got {msg:?}"
+        ),
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn collision_scene_caps_its_population() {
+    let spec = ScenarioSpec {
+        hard_agent_count: COLLISION_SCENE_MAX_AGENTS + 1,
+        stretch_agent_count: COLLISION_SCENE_MAX_AGENTS + 1,
+        ..collision_scene_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidDimension(msg)) => assert!(
+            msg.contains("exceeds cap"),
+            "expected msg to mention exceeds cap, got {msg:?}"
+        ),
+        other => panic!("expected InvalidDimension, got {other:?}"),
     }
 }
 

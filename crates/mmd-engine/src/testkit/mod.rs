@@ -36,8 +36,9 @@ mod fixtures;
 mod rng;
 
 pub use fixtures::{
-    ALL_FIXTURES, FIXTURE_CORRIDOR_V1, FIXTURE_DENSE_V1, FIXTURE_DIR, FIXTURE_SMALL_V1,
-    FIXTURE_WALLED_V1, GATE_SCENARIO, fixture_path, gate_scenario_path,
+    ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE,
+    FIXTURE_CORRIDOR_V1, FIXTURE_DENSE_V1, FIXTURE_DIR, FIXTURE_SMALL_V1, FIXTURE_WALLED_V1,
+    GATE_SCENARIO, fixture_path, gate_scenario_path, scene_path,
 };
 pub use rng::SplitMix64;
 

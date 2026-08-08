@@ -308,13 +308,50 @@ In `crates/mmd-engine/tests/separation.rs`:
 
 | Test | Input | Expect |
 | ---- | ----- | ------ |
-| `sprite_scene_pulls_agents_out_of_deep_overlap` | `Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE))).build()`; count "deep" pairs (centre distance `< radius_cells`, i.e. half contact) after 1 tick and again after 300 | `deep_before > 0` (they start stacked ~9 per spawn cell); `deep_after * 10 <= deep_before`; every position finite |
+| `sprite_scene_pulls_agents_out_of_deep_overlap` | `Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE))).build()`; count "deep" pairs (centre distance `< radius_cells`, i.e. half contact) at ticks 1, 100, 200 and 300 | `deep_before > 0` (they start stacked ~9 per spawn cell); `deep_at_300 * 2 <= deep_before`; no sample taken after tick 1 exceeds `deep_before`; every position finite |
 | `mid_scene_reports_its_tuning` | `Harness` on the mid scene | `alive_count() == 10_000`; `h.sim().collision().enabled()`; `(radius_cells - 1.25).abs() < 1e-6`; `(strength - 1.0).abs() < 1e-6` |
 | `collision_scene_agents_never_enter_an_obstacle` | mid scene, 200 ticks, sampling every tick via `common::Tracker` | `t.obstacle_samples() == 0` and `t.bounds_violations() == 0` |
 
 `sprite_scene_pulls_agents_out_of_deep_overlap` is O(n²) at n = 1 200 (719 400
-pairs, twice) — that is fine and deliberate: the claim is about pairs, so count
+pairs per sample) — that is fine and deliberate: the claim is about pairs, so count
 pairs rather than approximate.
+
+### CORRECTION (parent, after the first T5 attempt) — read this before writing the test
+
+The original row asserted `deep_after * 10 <= deep_before` (a 90 % reduction).
+**That constant was authored, not measured, and it is not achievable against this
+ticket's own locked scene spec.** Measured decay on the real
+`collision_sprite_v1.ron`, unmodified engine, same harness:
+
+```text
+tick    1 -> 16229      tick  200 ->  7030      tick  600 ->  4960
+tick   50 -> 14386      tick  250 ->  6511      tick  900 ->  5315
+tick  100 -> 10920      tick  300 ->  6104      tick 1200 ->  6248
+```
+
+The count falls to ~38 % of its tick-1 value, plateaus, and then **rises** past
+tick ~600 as agents recycle to the spawn cells and restack — which is the
+destination-funnel jam this plan already accepts as real behaviour (plan A6).
+No tick horizon reaches 10 %.
+
+The bar is therefore `deep_at_300 * 2 <= deep_before` — deep overlap must at
+least **halve** — plus the new "no later sample exceeds `deep_before`" clause,
+which is what actually catches the rise-again pathology inside the 300-tick
+window the scene is specified for.
+
+Two rules on this correction, both binding:
+
+- **Do not tune the scene, the radius, the strength, the spawn layout, or the
+  tick count to make a number pass.** The scene spec above is locked. If the
+  2× bar is not met, that is a real finding — report `failed` with the measured
+  numbers. Do not loosen the constant again.
+- **Do not add a radius-0 control arm to this test.** `validate_collision_scene_dims`
+  correctly rejects `collision_radius_q8 == 0` for the `collision_scene_v1`
+  family, and that rule must not be loosened. The causal claim — that separation,
+  not flow-field dispersion, is what unstacks agents — is already proven at unit
+  scale by T4's `a_released_stack_spreads_apart` and
+  `coincident_agents_separate_on_the_first_tick`, both green. This test's job is
+  only to show the effect is material at sprite scale.
 
 `collision_scene_agents_never_enter_an_obstacle` uses the shared `Tracker`, so
 `crates/mmd-engine/tests/separation.rs` must gain `mod common;` at the top of
@@ -326,20 +363,20 @@ adds are `use mmd_engine::testkit::{COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE,
 
 ## Impl steps
 
-- [ ] 1. Add the five new tests above to `crates/mmd-engine/tests/scenario_contract.rs` and `crates/mmd-engine/tests/separation.rs`; run `cargo test -p mmd-engine --test scenario_contract` and confirm red.
-- [ ] 2. Add `COLLISION_SCENE_V1` and `COLLISION_SCENE_MAX_AGENTS` to `crates/mmd-engine/src/scenario.rs`, verbatim.
-- [ ] 3. Add `fn validate_collision_scene_dims` verbatim, directly after `fn validate_fixture_dims`.
-- [ ] 4. Insert the `COLLISION_SCENE_V1` branch into `validate_version_and_dims`, after the fixture branch.
-- [ ] 5. Replace the `is_fixture` binding in `validate_counts` with the `free_workload` version given above.
-- [ ] 6. Append `COLLISION_MID_SCENE`, `COLLISION_SPRITE_SCENE`, `ALL_COLLISION_SCENES` and `fn scene_path` to `crates/mmd-engine/src/testkit/fixtures.rs`.
-- [ ] 7. Replace the `pub use fixtures::{...}` list in `crates/mmd-engine/src/testkit/mod.rs` with the extended version given above.
-- [ ] 8. Create `tools/scenegen/gen_collision_scenes.py` with the script above, verbatim, and `chmod +x` it.
-- [ ] 9. Run `python3 tools/scenegen/gen_collision_scenes.py` from the workspace root; expect two lines of output, each with a 64-hex digest.
-- [ ] 10. Run it a second time and confirm `git status --short assets/scenarios` shows the same two `.ron` and two `.sha256` files as before and no further churn — the generator must be idempotent.
-- [ ] 11. Run `cargo test -p mmd-engine --test scenario_contract --test separation` → green.
-- [ ] 12. Run `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` and confirm exit 0 with a `run: clean exit ...` line.
-- [ ] 13. Run `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` and confirm the same.
-- [ ] 14. Run the full validation list below.
+- [x] 1. Add the five new tests above to `crates/mmd-engine/tests/scenario_contract.rs` and `crates/mmd-engine/tests/separation.rs`; run `cargo test -p mmd-engine --test scenario_contract` and confirm red.
+- [x] 2. Add `COLLISION_SCENE_V1` and `COLLISION_SCENE_MAX_AGENTS` to `crates/mmd-engine/src/scenario.rs`, verbatim.
+- [x] 3. Add `fn validate_collision_scene_dims` verbatim, directly after `fn validate_fixture_dims`.
+- [x] 4. Insert the `COLLISION_SCENE_V1` branch into `validate_version_and_dims`, after the fixture branch.
+- [x] 5. Replace the `is_fixture` binding in `validate_counts` with the `free_workload` version given above.
+- [x] 6. Append `COLLISION_MID_SCENE`, `COLLISION_SPRITE_SCENE`, `ALL_COLLISION_SCENES` and `fn scene_path` to `crates/mmd-engine/src/testkit/fixtures.rs`.
+- [x] 7. Replace the `pub use fixtures::{...}` list in `crates/mmd-engine/src/testkit/mod.rs` with the extended version given above.
+- [x] 8. Create `tools/scenegen/gen_collision_scenes.py` with the script above, verbatim, and `chmod +x` it.
+- [x] 9. Run `python3 tools/scenegen/gen_collision_scenes.py` from the workspace root; expect two lines of output, each with a 64-hex digest.
+- [x] 10. Run it a second time and confirm `git status --short assets/scenarios` shows the same two `.ron` and two `.sha256` files as before and no further churn — the generator must be idempotent.
+- [x] 11. Run `cargo test -p mmd-engine --test scenario_contract --test separation` → green, with `sprite_scene_pulls_agents_out_of_deep_overlap` written against the **CORRECTION** section above (2× bar + no-later-sample-exceeds clause), not the original 10× bar. Evidence: `scenario_contract` 22 passed / 0 failed; `separation` 19 passed / 0 failed. Measured deep pairs `[(1, 16229), (100, 10920), (200, 7030), (300, 6104)]` — `6104 * 2 = 12208 <= 16229`, and no sample after tick 1 exceeds 16229.
+- [x] 12. Run `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` and confirm exit 0 with a `run: clean exit ...` line.
+- [x] 13. Run `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` and confirm the same.
+- [x] 14. Run the full validation list below. Every line is checked except the interactive window check, which a headless worker cannot perform.
 
 ## Outputs
 
@@ -353,15 +390,15 @@ adds are `use mmd_engine::testkit::{COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE,
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --test scenario_contract` → green, four new tests visible
-- [ ] `cargo test -p mmd-engine --test separation` → 18 passed
-- [ ] `cargo fmt --all -- --check` → exit 0
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0 (the gate scene is untouched)
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` → exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` → exit 0
-- [ ] manual check: `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` in a window — the 1 200 sprites must be visibly separated rather than merged into blobs, except where they pile at the centre destination. Esc to quit.
-- [ ] manual check: rerunning the generator leaves the working tree clean
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(assets): add two collision demo scenes at mid and sprite body scale`
+- [x] `cargo test -p mmd-engine --test scenario_contract` → green, four new tests visible (22 total, 22 passed)
+- [x] `cargo test -p mmd-engine --test separation` → all pass (19 incl. the corrected deep-overlap test): `test result: ok. 19 passed; 0 failed; 0 ignored`
+- [x] `cargo fmt --all -- --check` → exit 0
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green, exit 0; every `test result:` line reports `0 failed`. Ignored tests are the pre-existing host-GPU/SDL3 golden set, the `print_state_hash_for_child_process` entry point and the `alloc_guard` doctest — this slice adds no ignored test.
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0 (the gate scene is untouched); hash `130e3047228c4813156d68641567971cda4ab8ef3f4e5e8c71d7088c7f1e8ba7` reproduced
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` → exit 0, `run: clean exit ... tick=300 frames=300 hash=1909d6c085f74b3490a5cb0548b7b5744b68df605e7357a55a57aa6986b8223d`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` → exit 0, `run: clean exit ... tick=300 frames=300 hash=9b0691550b2a0b3af0a4d58c15662d2631cadf8ad5c8a65e402422facd633e91`
+- [ ] manual check: `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` in a window — the 1 200 sprites must be visibly separated rather than merged into blobs, except where they pile at the centre destination. Esc to quit. **Not run — headless worker, no interactive window check performed.**
+- [x] manual check: rerunning the generator leaves the working tree clean (confirmed twice, same 4 files, same digests, no churn)
+- [x] app functional — no broken path from this slice: all three `cargo run -- run` invocations reach `run: clean exit` with exit 0, the gate-scene hash is unmoved, and the full workspace suite is green.
+- [x] committed on `plan/zombie-collision` as `feat(scenario): add collision_mid_v1 and collision_sprite_v1 demo scenes` (the parent's wording supersedes the `feat(assets)` draft above), 11 files, pre-commit hooks honoured, no `--no-verify`.
