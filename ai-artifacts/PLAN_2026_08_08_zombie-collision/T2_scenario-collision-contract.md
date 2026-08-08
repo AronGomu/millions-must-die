@@ -237,24 +237,24 @@ where it is allowed to change.
 
 ## Impl steps
 
-- [ ] 1. In `crates/mmd-engine/tests/scenario_contract.rs`, add the four new tests listed above; run `cargo test -p mmd-engine --test scenario_contract` and confirm it fails to compile (red).
-- [ ] 2. In `crates/mmd-engine/src/scenario.rs`, add the three public consts `COLLISION_Q8`, `MAX_COLLISION_RADIUS_Q8`, `MAX_SEPARATION_STRENGTH_Q8` verbatim from above.
-- [ ] 3. Add the private consts `V1_COLLISION_RADIUS_Q8 = 102` and `V1_SEPARATION_STRENGTH_Q8 = 256` beside `V1_FRAMES`.
-- [ ] 4. Add `collision_radius_q8: u32` and `separation_strength_q8: u32` to `ScenarioSpec`, between `frame_count` and `obstacle_cells`, each with a one-line doc comment naming its unit.
-- [ ] 5. Add the same two fields to `Scenario` in the same position.
-- [ ] 6. Add the `InvalidCollision(String)` variant to `ScenarioError` verbatim from above.
-- [ ] 7. Add `fn validate_collision(doc: &ScenarioSpec) -> Result<(), ScenarioError>` verbatim from above, placed directly after `fn validate_counts`.
-- [ ] 8. In `Scenario::from_spec`, insert `validate_collision(&doc)?;` on the line immediately after `validate_counts(&doc)?;`.
-- [ ] 9. In `Scenario::from_spec`'s `Ok(Self { ... })` construction, forward both new fields from `doc`.
-- [ ] 10. Add the four accessors verbatim from above to `impl Scenario`, immediately after `pub fn frame_count`.
-- [ ] 11. Extend the `checks` array in `validate_version_and_dims` with the two tuples given above.
-- [ ] 12. In `crates/mmd-engine/src/testkit/mod.rs`, add the two `GridSpec` fields, initialise both to `0` in `GridSpec::new`, add `with_collision`, and forward both in `impl From<GridSpec> for ScenarioSpec`.
-- [ ] 13. In `crates/mmd-engine/tests/scenario_contract.rs`, add `collision_radius_q8: 64,` and `separation_strength_q8: 256,` to the `fixture_spec()` literal.
-- [ ] 14. Run the `python3` patch script above from the workspace root; confirm five lines of output, each with a 64-hex digest.
-- [ ] 15. Run `git diff --stat assets/scenarios` and confirm exactly ten files changed (five `.ron`, five `.sha256`).
-- [ ] 16. Before committing, capture the non-drift evidence. With the working tree dirty, run `cargo run -- run --agents 2000 --frames 120 | grep 'clean exit'` and save the `hash=` value as **after**. Then `git stash push --include-untracked`, run the same command, save it as **before**, and `git stash pop`. The two hashes must be identical.
-- [ ] 17. Run `cargo test -p mmd-engine --test scenario_contract --test harness --test simulation` and confirm green.
-- [ ] 18. Run the full validation list below.
+- [x] 1. In `crates/mmd-engine/tests/scenario_contract.rs`, add the four new tests listed above; run `cargo test -p mmd-engine --test scenario_contract` and confirm it fails to compile (red). — confirmed: 14 compile errors (missing fields/variant), see report.
+- [x] 2. In `crates/mmd-engine/src/scenario.rs`, add the three public consts `COLLISION_Q8`, `MAX_COLLISION_RADIUS_Q8`, `MAX_SEPARATION_STRENGTH_Q8` verbatim from above.
+- [x] 3. Add the private consts `V1_COLLISION_RADIUS_Q8 = 102` and `V1_SEPARATION_STRENGTH_Q8 = 256` beside `V1_FRAMES`.
+- [x] 4. Add `collision_radius_q8: u32` and `separation_strength_q8: u32` to `ScenarioSpec`, between `frame_count` and `obstacle_cells`, each with a one-line doc comment naming its unit.
+- [x] 5. Add the same two fields to `Scenario` in the same position.
+- [x] 6. Add the `InvalidCollision(String)` variant to `ScenarioError` verbatim from above.
+- [x] 7. Add `fn validate_collision(doc: &ScenarioSpec) -> Result<(), ScenarioError>` verbatim from above, placed directly after `fn validate_counts`.
+- [x] 8. In `Scenario::from_spec`, insert `validate_collision(&doc)?;` on the line immediately after `validate_counts(&doc)?;`.
+- [x] 9. In `Scenario::from_spec`'s `Ok(Self { ... })` construction, forward both new fields from `doc`.
+- [x] 10. Add the four accessors verbatim from above to `impl Scenario`, immediately after `pub fn frame_count`.
+- [x] 11. Extend the `checks` array in `validate_version_and_dims` with the two tuples given above.
+- [x] 12. In `crates/mmd-engine/src/testkit/mod.rs`, add the two `GridSpec` fields, initialise both to `0` in `GridSpec::new`, add `with_collision`, and forward both in `impl From<GridSpec> for ScenarioSpec`.
+- [x] 13. In `crates/mmd-engine/tests/scenario_contract.rs`, add `collision_radius_q8: 64,` and `separation_strength_q8: 256,` to the `fixture_spec()` literal.
+- [x] 14. Run the `python3` patch script above from the workspace root; confirm five lines of output, each with a 64-hex digest. — confirmed: 5 lines printed, each sha256 65 bytes (64 hex + \n).
+- [x] 15. Run `git diff --stat assets/scenarios` and confirm exactly ten files changed (five `.ron`, five `.sha256`). — confirmed: "10 files changed, 15 insertions(+), 5 deletions(-)".
+- [x] 16. Before committing, capture the non-drift evidence. With the working tree dirty, run `cargo run -- run --agents 2000 --frames 120 | grep 'clean exit'` and save the `hash=` value as **after**. Then `git stash push --include-untracked`, run the same command, save it as **before**, and `git stash pop`. The two hashes must be identical. — confirmed identical: `hash=1eae534eab58abf31e139cbe399cf17b73ffe00cf02408e1df236ded7519e52b` both before and after.
+- [x] 17. Run `cargo test -p mmd-engine --test scenario_contract --test harness --test simulation` and confirm green. — 18+11+15 passed after one repair (see Assumptions in worker report).
+- [x] 18. Run the full validation list below.
 
 ## Outputs
 
@@ -275,13 +275,13 @@ where it is allowed to change.
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --test scenario_contract` → green, four new tests visible in the output
-- [ ] `cargo test -p mmd-engine --test harness` → green (`fixture_scenarios_are_hash_verified` proves the sidecars)
-- [ ] `cargo fmt --all -- --check` → exit 0
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0, `run: clean exit ...` printed
-- [ ] manual check: `grep -A2 'frame_count' assets/scenarios/technical_prototype_v1.ron` shows `collision_radius_q8: 102,` and `separation_strength_q8: 256,`
-- [ ] manual check: the before/after `hash=` values from impl step 16 are **identical** — this ticket adds data, it must not move an agent
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(scenario): declare agent body radius and separation strength as scenario data`
+- [x] `cargo test -p mmd-engine --test scenario_contract` → green, four new tests visible in the output — 18 passed incl. gate_scene_locks_its_collision_tuning, v1_rejects_a_retuned_collision_radius, collision_radius_above_the_cap_is_refused, separation_strength_without_a_body_is_refused.
+- [x] `cargo test -p mmd-engine --test harness` → green (`fixture_scenarios_are_hash_verified` proves the sidecars) — 11 passed, 1 ignored (unrelated child-process test).
+- [x] `cargo fmt --all -- --check` → exit 0 — confirmed (after one `cargo fmt --all` pass).
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0 — confirmed, "Finished `dev` profile".
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green — confirmed, no FAILED/error across full workspace output, exit 0.
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0, `run: clean exit ...` printed — confirmed: `hash=2517e839224048345fe891312d97ae000fd76523b43954d1042348eea75b8783`, exit 0.
+- [x] manual check: `grep -A2 'frame_count' assets/scenarios/technical_prototype_v1.ron` shows `collision_radius_q8: 102,` and `separation_strength_q8: 256,` — confirmed.
+- [x] manual check: the before/after `hash=` values from impl step 16 are **identical** — this ticket adds data, it must not move an agent — confirmed identical: `1eae534eab58abf31e139cbe399cf17b73ffe00cf02408e1df236ded7519e52b`.
+- [x] app functional — no broken path from this slice — `cargo run -- run --agents 50000 --frames 300` completed clean exit as shown above.
+- [x] commit msg draft: `feat(scenario): declare agent body radius and separation strength as scenario data`

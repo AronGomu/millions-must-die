@@ -26,6 +26,15 @@ pub const FIXTURE_MAX_CELLS: u32 = 65_536;
 /// Fixture agent counts must stay in the tens/hundreds, not the tens of thousands.
 pub const FIXTURE_MAX_AGENTS: u32 = 4_096;
 
+/// Q8 fixed-point scale for collision data: 256 units = one cell, or the
+/// scalar value 1.0. Integer because [`Scenario`] derives `Eq`; exact in `f32`
+/// because the divisor is a power of two.
+pub const COLLISION_Q8: u32 = 256;
+/// Largest body radius a scenario may declare: 8 cells (32 px at 4 px/cell).
+pub const MAX_COLLISION_RADIUS_Q8: u32 = 2_048;
+/// Largest separation weight a scenario may declare: 10.0.
+pub const MAX_SEPARATION_STRENGTH_Q8: u32 = 2_560;
+
 const V1_WIDTH: u32 = 480;
 const V1_HEIGHT: u32 = 270;
 const V1_CELL_PX: u32 = 4;
@@ -35,6 +44,8 @@ const V1_STRETCH_AGENTS: u32 = 100_000;
 const V1_ATLASES: u32 = 4;
 const V1_DIRS: u32 = 8;
 const V1_FRAMES: u32 = 4;
+const V1_COLLISION_RADIUS_Q8: u32 = 102;
+const V1_SEPARATION_STRENGTH_Q8: u32 = 256;
 const V1_DEST_X: u32 = 240;
 const V1_DEST_Y: u32 = 135;
 
@@ -61,6 +72,10 @@ pub struct Scenario {
     atlas_count: u32,
     direction_count: u32,
     frame_count: u32,
+    /// Body radius, in 1/256 cell.
+    collision_radius_q8: u32,
+    /// Separation weight, in 1/256 (256 = 1.0).
+    separation_strength_q8: u32,
     /// Sorted unique obstacle cell indices (`x + y * width`).
     obstacle_cells: Vec<u32>,
 }
@@ -86,6 +101,10 @@ pub struct ScenarioSpec {
     pub atlas_count: u32,
     pub direction_count: u32,
     pub frame_count: u32,
+    /// Body radius, in 1/256 cell.
+    pub collision_radius_q8: u32,
+    /// Separation weight, in 1/256 (256 = 1.0).
+    pub separation_strength_q8: u32,
     pub obstacle_cells: Vec<u32>,
 }
 
@@ -118,6 +137,8 @@ pub enum ScenarioError {
     EmptySpawns,
     #[error("seed must be nonzero")]
     InvalidSeed,
+    #[error("invalid collision config: {0}")]
+    InvalidCollision(String),
 }
 
 impl Scenario {
@@ -163,6 +184,7 @@ impl Scenario {
 
         validate_version_and_dims(&doc, cells)?;
         validate_counts(&doc)?;
+        validate_collision(&doc)?;
         if doc.seed == 0 {
             return Err(ScenarioError::InvalidSeed);
         }
@@ -232,6 +254,8 @@ impl Scenario {
             atlas_count: doc.atlas_count,
             direction_count: doc.direction_count,
             frame_count: doc.frame_count,
+            collision_radius_q8: doc.collision_radius_q8,
+            separation_strength_q8: doc.separation_strength_q8,
             obstacle_cells: obstacles,
         })
     }
@@ -275,6 +299,25 @@ impl Scenario {
     pub fn frame_count(&self) -> u32 {
         self.frame_count
     }
+
+    pub fn collision_radius_q8(&self) -> u32 {
+        self.collision_radius_q8
+    }
+
+    /// Body radius in cells. Exact: the Q8 divisor is a power of two.
+    pub fn collision_radius_cells(&self) -> f32 {
+        self.collision_radius_q8 as f32 / COLLISION_Q8 as f32
+    }
+
+    pub fn separation_strength_q8(&self) -> u32 {
+        self.separation_strength_q8
+    }
+
+    /// Separation weight relative to the unit flow vector. Exact, as above.
+    pub fn separation_strength(&self) -> f32 {
+        self.separation_strength_q8 as f32 / COLLISION_Q8 as f32
+    }
+
     pub fn obstacle_count(&self) -> u32 {
         self.obstacle_cells.len() as u32
     }
@@ -302,6 +345,16 @@ fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), Scena
         (doc.sprite_size_px, V1_SPRITE_PX, "sprite_size_px"),
         (doc.destination.x, V1_DEST_X, "destination.x"),
         (doc.destination.y, V1_DEST_Y, "destination.y"),
+        (
+            doc.collision_radius_q8,
+            V1_COLLISION_RADIUS_Q8,
+            "collision_radius_q8",
+        ),
+        (
+            doc.separation_strength_q8,
+            V1_SEPARATION_STRENGTH_Q8,
+            "separation_strength_q8",
+        ),
     ];
     for (got, want, name) in checks {
         if got != want {
@@ -343,6 +396,31 @@ fn validate_counts(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
                 "{name}: got {got}, want {want}"
             )));
         }
+    }
+    Ok(())
+}
+
+/// Body radius and separation weight are bounded, and a weight without a body
+/// is an authoring mistake rather than a silent no-op.
+fn validate_collision(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
+    if doc.collision_radius_q8 > MAX_COLLISION_RADIUS_Q8 {
+        return Err(ScenarioError::InvalidCollision(format!(
+            "collision_radius_q8: got {}, max {MAX_COLLISION_RADIUS_Q8}",
+            doc.collision_radius_q8
+        )));
+    }
+    if doc.separation_strength_q8 > MAX_SEPARATION_STRENGTH_Q8 {
+        return Err(ScenarioError::InvalidCollision(format!(
+            "separation_strength_q8: got {}, max {MAX_SEPARATION_STRENGTH_Q8}",
+            doc.separation_strength_q8
+        )));
+    }
+    if doc.collision_radius_q8 == 0 && doc.separation_strength_q8 != 0 {
+        return Err(ScenarioError::InvalidCollision(
+            "separation_strength_q8 is set but collision_radius_q8 is 0; a \
+             weight without a body pushes nothing"
+                .into(),
+        ));
     }
     Ok(())
 }

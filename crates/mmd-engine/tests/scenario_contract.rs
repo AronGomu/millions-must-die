@@ -4,7 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, Scenario, ScenarioError, ScenarioSpec,
+    Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, MAX_COLLISION_RADIUS_Q8, Scenario, ScenarioError,
+    ScenarioSpec,
 };
 
 fn workspace_root() -> PathBuf {
@@ -64,6 +65,75 @@ fn loads_v1_scene() {
 }
 
 #[test]
+fn gate_scene_locks_its_collision_tuning() {
+    let (ron_path, _) = v1_paths();
+    let scene = Scenario::load_verified(&ron_path).expect("v1 scene must load");
+    assert_eq!(scene.collision_radius_q8(), 102);
+    assert_eq!(scene.separation_strength_q8(), 256);
+    assert!(
+        (scene.collision_radius_cells() - 0.398_437_5).abs() < f32::EPSILON,
+        "collision_radius_cells: {}",
+        scene.collision_radius_cells()
+    );
+    assert!(
+        (scene.separation_strength() - 1.0).abs() < f32::EPSILON,
+        "separation_strength: {}",
+        scene.separation_strength()
+    );
+}
+
+#[test]
+fn v1_rejects_a_retuned_collision_radius() {
+    let (ron_path, _) = v1_paths();
+    let text = fs::read_to_string(&ron_path).expect("read v1 ron");
+    let mutated = text.replace("collision_radius_q8: 102,", "collision_radius_q8: 103,");
+    assert_ne!(
+        text, mutated,
+        "collision_radius_q8 anchor not found in v1 ron"
+    );
+    let err =
+        Scenario::parse_and_validate(mutated.as_bytes()).expect_err("retuned radius must fail");
+    match err {
+        ScenarioError::InvalidDimension(msg) => assert!(
+            msg.contains("collision_radius_q8"),
+            "expected msg to mention collision_radius_q8, got {msg:?}"
+        ),
+        other => panic!("expected InvalidDimension, got {other:?}"),
+    }
+}
+
+#[test]
+fn collision_radius_above_the_cap_is_refused() {
+    let spec = ScenarioSpec {
+        collision_radius_q8: MAX_COLLISION_RADIUS_Q8 + 1,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(msg)) => assert!(
+            msg.contains("collision_radius_q8"),
+            "expected msg to mention collision_radius_q8, got {msg:?}"
+        ),
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn separation_strength_without_a_body_is_refused() {
+    let spec = ScenarioSpec {
+        collision_radius_q8: 0,
+        separation_strength_q8: 256,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(msg)) => assert!(
+            msg.contains("pushes nothing"),
+            "expected msg to mention 'pushes nothing', got {msg:?}"
+        ),
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
 fn rejects_wrong_hash() {
     let (ron_path, sha_path) = v1_paths();
     let mut bytes = fs::read(&ron_path).expect("read v1 ron");
@@ -116,6 +186,8 @@ fn rejects_bad_obstacle_ratio() {
   atlas_count: 4,
   direction_count: 8,
   frame_count: 4,
+  collision_radius_q8: 102,
+  separation_strength_q8: 256,
   obstacle_cells: [{obs_ron}],
 )
 "#
@@ -188,6 +260,8 @@ fn rejects_unreachable_spawn() {
   atlas_count: 4,
   direction_count: 8,
   frame_count: 4,
+  collision_radius_q8: 102,
+  separation_strength_q8: 256,
   obstacle_cells: [{obs_ron}],
 )
 "#
@@ -223,6 +297,8 @@ fn fixture_spec() -> ScenarioSpec {
         atlas_count: 4,
         direction_count: 8,
         frame_count: 4,
+        collision_radius_q8: 64,
+        separation_strength_q8: 256,
         obstacle_cells: vec![],
     }
 }

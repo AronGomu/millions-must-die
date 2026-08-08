@@ -122,6 +122,11 @@ pub struct GridSpec {
     /// The *scenario's* seed field (must be nonzero) — unrelated to
     /// [`HarnessBuilder::seed`], which seeds the run.
     pub scenario_seed: u64,
+    /// Body radius in 1/256 cell. `0` (the default) leaves separation inert, so an
+    /// inline grid stays a pure flow-field test unless it opts in.
+    pub collision_radius_q8: u32,
+    /// Separation weight in 1/256 (256 = 1.0). Must be 0 when the radius is 0.
+    pub separation_strength_q8: u32,
 }
 
 impl GridSpec {
@@ -137,11 +142,20 @@ impl GridSpec {
             cell_size_px: 4,
             sprite_size_px: 30,
             scenario_seed: 1,
+            collision_radius_q8: 0,
+            separation_strength_q8: 0,
         }
     }
 
     pub fn with_obstacles(mut self, obstacle_cells: Vec<u32>) -> Self {
         self.obstacle_cells = obstacle_cells;
+        self
+    }
+
+    /// Opt an inline grid into collision.
+    pub fn with_collision(mut self, radius_q8: u32, strength_q8: u32) -> Self {
+        self.collision_radius_q8 = radius_q8;
+        self.separation_strength_q8 = strength_q8;
         self
     }
 
@@ -173,6 +187,8 @@ impl From<GridSpec> for ScenarioSpec {
             atlas_count: 4,
             direction_count: 8,
             frame_count: 4,
+            collision_radius_q8: g.collision_radius_q8,
+            separation_strength_q8: g.separation_strength_q8,
             obstacle_cells: g.obstacle_cells,
         }
     }
