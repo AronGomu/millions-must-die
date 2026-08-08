@@ -66,14 +66,14 @@ No package install, account, or key is needed for the whole plan. Two host facts
 
 ## Impl steps
 
-- [ ] 1. Run `cargo test --test validation_contract 2>&1 | tail -20` and save the failing output as the red baseline.
-- [ ] 2. In `tests/validation_contract.rs`, change the const at line ~25 from `const ROADMAP_DOC: &str = "docs/02-prototype-roadmap.md";` to `const ROADMAP_DOC: &str = "docs/CONTEXT.md";`.
-- [ ] 3. Update that const's doc comment to read: `/// Doc that states what each phase claims (roadmap + vision + MVP scope, consolidated).`
-- [ ] 4. In `gate_docs_state_perf_gating_is_retired` (line ~283), replace the bare literal `"docs/02-prototype-roadmap.md"` inside the `for rel in [...]` array with `ROADMAP_DOC`, so the array reads `[README_DOC, ROADMAP_DOC, RESULTS_DOC, "CONTRIBUTING.md"]`.
-- [ ] 5. Add one comment line above that array: `// Paths come from the consts above — a doc rename must break in one place, not two.`
-- [ ] 6. Run `cargo test --test validation_contract` and confirm `7 passed; 0 failed`.
-- [ ] 7. Run `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
-- [ ] 8. Run the full gate (see Validation) and record that it is green — this is the baseline every later ticket compares against.
+- [x] 1. Run `cargo test --test validation_contract 2>&1 | tail -20` and save the failing output as the red baseline.
+- [x] 2. In `tests/validation_contract.rs`, change the const at line ~25 from `const ROADMAP_DOC: &str = "docs/02-prototype-roadmap.md";` to `const ROADMAP_DOC: &str = "docs/CONTEXT.md";`.
+- [x] 3. Update that const's doc comment to read: `/// Doc that states what each phase claims (roadmap + vision + MVP scope, consolidated).`
+- [x] 4. In `gate_docs_state_perf_gating_is_retired` (line ~283), replace the bare literal `"docs/02-prototype-roadmap.md"` inside the `for rel in [...]` array with `ROADMAP_DOC`, so the array reads `[README_DOC, ROADMAP_DOC, RESULTS_DOC, "CONTRIBUTING.md"]`.
+- [x] 5. Add one comment line above that array: `// Paths come from the consts above — a doc rename must break in one place, not two.`
+- [x] 6. Run `cargo test --test validation_contract` and confirm `7 passed; 0 failed`.
+- [x] 7. Run `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
+- [x] 8. Run the full gate (see Validation) and record that it is green — this is the baseline every later ticket compares against.
 
 ## Outputs
 
@@ -83,13 +83,13 @@ No package install, account, or key is needed for the whole plan. Two host facts
 
 ## Validation
 
-- [ ] `cargo test --test validation_contract` → `test result: ok. 7 passed; 0 failed`
-- [ ] `cargo fmt --all -- --check` → exit 0, no output
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → all binaries pass, no skips
-- [ ] `cargo run -p xtask -- bootstrap --check` → exit 0
-- [ ] `cargo run -p xtask -- shaders --check` → exit 0
-- [ ] `cargo run -p xtask -- atlases --check` → exit 0
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0, prints a `run: clean exit ...` line
-- [ ] app functional — no broken path from this slice (test-only edit)
+- [x] `cargo test --test validation_contract` → `test result: ok. 7 passed; 0 failed`
+- [x] `cargo fmt --all -- --check` → exit 0, no output
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → all binaries pass, no skips
+- [x] `cargo run -p xtask -- bootstrap --check` → exit 0
+- [x] `cargo run -p xtask -- shaders --check` → exit 0
+- [x] `cargo run -p xtask -- atlases --check` → exit 0
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0, prints a `run: clean exit ...` line
+- [x] app functional — no broken path from this slice (test-only edit)
 - [ ] commit msg draft: `fix(tests): point the gate scan at docs/CONTEXT.md after the doc consolidation`

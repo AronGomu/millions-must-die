@@ -21,8 +21,8 @@ const README_DOC: &str = "README.md";
 const RESULTS_DOC: &str = "docs/technical-prototype-results.md";
 /// Doc that closes phase 0 on functional evidence (T33).
 const CLOSE_DOC: &str = "docs/technical-prototype-functional-close.md";
-/// Roadmap doc, which states what each phase claims.
-const ROADMAP_DOC: &str = "docs/02-prototype-roadmap.md";
+/// Doc that states what each phase claims (roadmap + vision + MVP scope, consolidated).
+const ROADMAP_DOC: &str = "docs/CONTEXT.md";
 
 /// Heading text (any level) introducing the required-command list. Matched
 /// case-insensitively and ignoring trailing punctuation.
@@ -278,12 +278,8 @@ fn gate_docs_state_perf_gating_is_retired() {
     // truth instead of restating a deferral note — or its own gate list — of
     // its own. CONTRIBUTING.md is included because it tells contributors what
     // the maintainer runs before merging.
-    for rel in [
-        README_DOC,
-        "docs/02-prototype-roadmap.md",
-        RESULTS_DOC,
-        "CONTRIBUTING.md",
-    ] {
+    // Paths come from the consts above — a doc rename must break in one place, not two.
+    for rel in [README_DOC, ROADMAP_DOC, RESULTS_DOC, "CONTRIBUTING.md"] {
         let doc = read_doc(rel);
         assert!(
             doc.contains("05-testing.md"),
