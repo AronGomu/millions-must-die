@@ -9,7 +9,16 @@ pub const TICK_DT: f32 = 1.0 / 60.0;
 /// Arrival radius from destination center (cells).
 pub const ARRIVAL_RADIUS: f32 = 0.5;
 
-/// Advance all agents one tick. No agent-agent queries.
+/// Squared length below which a blended steering vector is treated as
+/// cancelled, and the pure descent direction is kept instead.
+const BLEND_EPS2: f32 = 1e-12;
+
+/// Advance all agents one tick.
+///
+/// One move per agent, always. When the scenario declares a body the descent
+/// vector is first bent by the neighbours pressing on the agent (see
+/// [`super::collision`]); when it does not, no neighbour is ever queried and
+/// the walk is pure flow-field descent.
 pub fn step(sim: &mut Simulation) {
     let width = sim.width;
     let height = sim.height;
@@ -22,6 +31,20 @@ pub fn step(sim: &mut Simulation) {
     let frame_count = sim.frame_count;
     let n_spawn = sim.spawn_x.len();
     let n = sim.x.len();
+
+    let collision = sim.collision;
+    let collision_on = collision.enabled();
+    if collision_on {
+        sim.grid.rebuild(&sim.x, &sim.y);
+        super::collision::accumulate_separation(
+            &sim.x,
+            &sim.y,
+            &sim.grid,
+            collision.radius_cells,
+            &mut sim.sep_x,
+            &mut sim.sep_y,
+        );
+    }
 
     for i in 0..n {
         let px = sim.x[i];
@@ -58,19 +81,43 @@ pub fn step(sim: &mut Simulation) {
             continue;
         }
 
-        let nx = px + vx * step_len;
-        let ny = py + vy * step_len;
+        // Steering blend: the descent direction bent by the neighbours pressing
+        // on this agent, walked at the unchanged speed. Skipped entirely when
+        // the scenario declares no body, so a bodyless run stays bit-identical
+        // to a pure flow-field walk.
+        let (mut mx, mut my) = (vx, vy);
+        if collision_on {
+            let bx = vx + collision.strength * sim.sep_x[i];
+            let by = vy + collision.strength * sim.sep_y[i];
+            let l2 = bx * bx + by * by;
+            if l2 > BLEND_EPS2 {
+                let inv = 1.0 / l2.sqrt();
+                mx = bx * inv;
+                my = by * inv;
+            }
+        }
 
-        // OOB / obstacle next position → retain prior.
+        let mut nx = px + mx * step_len;
+        let mut ny = py + my * step_len;
+
+        // Separation must never wedge an agent the field alone could have
+        // moved: fall back to the pure descent step before giving up. Without
+        // this, a crowd could pin an agent against a wall forever.
         if !position_walkable(nx, ny, width, height, &sim.blocked) {
-            sim.dir[i] = dir_from_vector(vx, vy);
-            advance_frame(&mut sim.frame[i], frame_count);
-            continue;
+            mx = vx;
+            my = vy;
+            nx = px + mx * step_len;
+            ny = py + my * step_len;
+            if !position_walkable(nx, ny, width, height, &sim.blocked) {
+                sim.dir[i] = dir_from_vector(mx, my);
+                advance_frame(&mut sim.frame[i], frame_count);
+                continue;
+            }
         }
 
         sim.x[i] = nx;
         sim.y[i] = ny;
-        sim.dir[i] = dir_from_vector(vx, vy);
+        sim.dir[i] = dir_from_vector(mx, my);
         advance_frame(&mut sim.frame[i], frame_count);
     }
 

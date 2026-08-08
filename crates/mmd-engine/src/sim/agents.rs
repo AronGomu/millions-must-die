@@ -5,6 +5,8 @@ use sha2::{Digest, Sha256};
 use crate::nav::flow_field::{COST_OBSTACLE, FlowField};
 use crate::scenario::{Cell, Scenario};
 
+use super::collision::CollisionParams;
+use super::spatial::SpatialGrid;
 use super::tick;
 
 /// Position quantum: 1/256 cell.
@@ -55,6 +57,12 @@ pub struct Simulation {
     pub(super) atlas: Vec<u8>,
     pub(super) dir: Vec<u8>,
     pub(super) frame: Vec<u8>,
+    pub(super) collision: CollisionParams,
+    /// Rebuilt every tick when collision is enabled; a 1x1 stub otherwise, so a
+    /// bodyless scenario reserves nothing.
+    pub(super) grid: SpatialGrid,
+    pub(super) sep_x: Vec<f32>,
+    pub(super) sep_y: Vec<f32>,
 }
 
 impl Simulation {
@@ -68,10 +76,18 @@ impl Simulation {
             scenario.atlas_count() as u8,
             scenario.direction_count() as u8,
             scenario.frame_count() as u8,
+            CollisionParams::from_scenario(scenario),
         )
     }
 
     /// Construct with explicit counts (unit tests + stretch).
+    ///
+    /// `collision` carries the scenario's body radius and steering weight.
+    /// [`CollisionParams::NONE`] leaves the separation pass switched off, which
+    /// makes the tick bit-identical to a pure flow-field walk.
+    // The parameters mirror scenario fields one-for-one; grouping them into a
+    // struct would only rename the same eight values.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_custom(
         field: &FlowField,
         destination: Cell,
@@ -80,6 +96,7 @@ impl Simulation {
         atlas_count: u8,
         dir_count: u8,
         frame_count: u8,
+        collision: CollisionParams,
     ) -> Self {
         assert!(!spawn_cells.is_empty(), "spawn list empty");
         assert!(agent_count > 0, "agent_count zero");
@@ -135,6 +152,14 @@ impl Simulation {
             frame.push(f);
         }
 
+        let grid = if collision.enabled() {
+            SpatialGrid::new(width, height, collision.bin_size_cells(), agent_count)
+        } else {
+            SpatialGrid::new(1, 1, 1.0, 0)
+        };
+        let sep_x = vec![0.0; agent_count];
+        let sep_y = vec![0.0; agent_count];
+
         Self {
             width,
             height,
@@ -158,11 +183,20 @@ impl Simulation {
             atlas,
             dir,
             frame,
+            collision,
+            grid,
+            sep_x,
+            sep_y,
         }
     }
 
     pub fn agent_count(&self) -> usize {
         self.x.len()
+    }
+
+    /// Body radius and steering weight this sim was built with.
+    pub fn collision(&self) -> CollisionParams {
+        self.collision
     }
 
     pub fn tick_index(&self) -> u64 {

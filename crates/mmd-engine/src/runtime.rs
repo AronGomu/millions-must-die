@@ -8,7 +8,7 @@ use thiserror::Error;
 use crate::nav::flow_field::FlowField;
 use crate::render::{ATLAS_COUNT, DrawGroup, SpriteInstance, frame_uv_rect};
 use crate::scenario::{Scenario, ScenarioError};
-use crate::sim::Simulation;
+use crate::sim::{CollisionParams, Simulation};
 
 /// Stable logical key bindings (OS scancodes mapped in app).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -129,6 +129,7 @@ impl Runtime {
                 scenario.atlas_count() as u8,
                 scenario.direction_count() as u8,
                 scenario.frame_count() as u8,
+                CollisionParams::from_scenario(&scenario),
             )
         };
 

@@ -12,6 +12,7 @@ use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
 use mmd_engine::sim::SpatialGrid;
+use mmd_engine::testkit::{FIXTURE_DENSE_V1, Harness};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -208,6 +209,24 @@ fn spatial_rebuild_allocates_nothing() {
         grid.rebuild(&xs, &ys);
         std::hint::black_box(grid.len());
     }
+    assert_eq!(guard.allocations(), 0);
+    guard.assert_zero();
+}
+
+/// The whole tick, not just the index: rebuilding the grid and accumulating the
+/// repulsion sums must reuse the buffers the sim reserved at construction.
+#[test]
+fn a_collision_tick_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = Harness::fixture(FIXTURE_DENSE_V1).build().expect("dense");
+    assert!(h.sim().collision().enabled(), "fixture must have a body");
+    h.step_exact(2); // warm-up outside the measured scope
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(10);
+    std::hint::black_box(h.tick_index());
     assert_eq!(guard.allocations(), 0);
     guard.assert_zero();
 }

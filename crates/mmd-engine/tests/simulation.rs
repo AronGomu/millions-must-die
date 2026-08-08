@@ -388,6 +388,56 @@ fn aggregate_progress_is_monotone() {
 }
 
 #[test]
+fn aggregate_progress_never_stalls() {
+    // The weaker sibling of `aggregate_progress_is_monotone`, and deliberately
+    // kept alongside it rather than replacing it. Monotonicity is a claim about
+    // the tracked fixtures' current body radius (1/8 cell, so a spawn stack
+    // opens without moving anyone into a costlier cell); this claim survives a
+    // body large enough to push agents backwards for a few ticks. If a future
+    // tuning breaks monotonicity, that test is supposed to fail loudly — and
+    // this one is what still holds the floor afterwards.
+    const STALL_BUDGET_TICKS: u64 = 60; // 1 s at 60 Hz
+    for (name, ticks) in [(FIXTURE_DENSE_V1, 400u64), (FIXTURE_CORRIDOR_V1, 700)] {
+        let mut h = Harness::fixture(name).build().expect("fixture");
+        let mut t = Tracker::new(&h);
+        t.run(&mut h, ticks);
+
+        // The stall window is `first_recycle_tick - 1` ticks long. If a future
+        // change collapses it, `longest_progress_stall` returns 0 and the
+        // budget below would be satisfied by a horde that did nothing.
+        let first = t
+            .first_recycle_tick()
+            .unwrap_or_else(|| panic!("{name}: no agent arrived within {ticks} ticks"));
+        // `+ 2`, not `+ 0`: the helper scans `1..(first - 1)`, so the largest
+        // run it can report is `first - 2`. A window of exactly the budget
+        // would make the assertion below unfalsifiable rather than merely
+        // tight.
+        assert!(
+            first > STALL_BUDGET_TICKS + 2,
+            "{name}: only {first} ticks before the first arrival — a stall budget \
+             of {STALL_BUDGET_TICKS} cannot be measured in that window"
+        );
+
+        let stall = t.longest_progress_stall();
+        assert!(
+            stall <= STALL_BUDGET_TICKS,
+            "{name}: the horde closed no distance for {stall} consecutive ticks \
+             (budget {STALL_BUDGET_TICKS})"
+        );
+        // Without this the assertion above passes trivially on a horde that
+        // never moves. Scoped to the same pre-recycle window the stall is
+        // measured over, so a late post-recycle dip cannot satisfy it.
+        let series = &t.mean_cost_series()[..(first as usize - 1).min(t.mean_cost_series().len())];
+        let start = series[0];
+        let lowest = series.iter().copied().fold(f64::INFINITY, f64::min);
+        assert!(
+            lowest < start,
+            "{name}: mean routing cost never fell below its start ({start} → {lowest})"
+        );
+    }
+}
+
+#[test]
 fn no_group_is_starved() {
     // fixture_dense_v1 has exactly four west-edge spawn groups; each must both
     // close routing distance and land arrivals. Observed: every group's mean

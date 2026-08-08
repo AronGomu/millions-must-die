@@ -542,27 +542,44 @@ fn a_collision_tick_allocates_nothing() {
 
 ## Impl steps
 
-- [ ] 1. Append the nine tests above to `crates/mmd-engine/tests/separation.rs` and `crates/mmd-engine/tests/frame_allocations.rs`; run `cargo test -p mmd-engine --test separation` and confirm it fails to compile (red).
-- [ ] 2. Create `crates/mmd-engine/src/sim/collision.rs` with the module contents given above, verbatim.
-- [ ] 3. Replace `crates/mmd-engine/src/sim/mod.rs` with the version given above.
-- [ ] 4. In `crates/mmd-engine/src/sim/agents.rs`, add `use super::collision::CollisionParams;` and `use super::spatial::SpatialGrid;` to the imports.
-- [ ] 5. Append the four new fields (`collision`, `grid`, `sep_x`, `sep_y`) to `struct Simulation`.
-- [ ] 6. Add `collision: CollisionParams` as the **last** parameter of `Simulation::new_custom`, and document it in the fn doc comment.
-- [ ] 7. Insert the `grid` / `sep_x` / `sep_y` construction block given above before the `Self { .. }` literal, and add the four fields to that literal.
-- [ ] 8. Pass `CollisionParams::from_scenario(scenario)` as the final argument of the `Self::new_custom(..)` call inside `Simulation::new`.
-- [ ] 9. Add the `pub fn collision(&self) -> CollisionParams` accessor.
-- [ ] 10. In `crates/mmd-engine/src/runtime.rs`, change the import to `use crate::sim::{CollisionParams, Simulation};` and add `CollisionParams::from_scenario(&scenario),` as the final argument of the `Simulation::new_custom` call at line ~124.
-- [ ] 11. In `crates/mmd-engine/src/sim/tick.rs`, add the `BLEND_EPS2` const.
-- [ ] 12. Insert the separation pass (grid rebuild + `accumulate_separation`) after the hoists and before the agent loop.
-- [ ] 13. Replace the move/commit block with the blended version given above, including the flow-only fallback.
-- [ ] 14. Run `cargo test -p mmd-engine --test separation` → all 15 tests in the file pass.
-- [ ] 15. Run `cargo test -p mmd-engine --test frame_allocations` → 7 passed.
-- [ ] 16. Run `cargo test -p mmd-engine --test simulation` **before** renaming anything, and record which tests fail. Expect `aggregate_progress_is_monotone` to fail; anything else failing means the escalation rule applies.
-- [ ] 17. Apply the `longest_progress_stall` helper to `crates/mmd-engine/tests/common/mod.rs`.
+- [x] 1. Append the nine tests above to `crates/mmd-engine/tests/separation.rs` and `crates/mmd-engine/tests/frame_allocations.rs`; run `cargo test -p mmd-engine --test separation` and confirm it fails to compile (red).
+- [x] 2. Create `crates/mmd-engine/src/sim/collision.rs` with the module contents given above, verbatim.
+- [x] 3. Replace `crates/mmd-engine/src/sim/mod.rs` with the version given above.
+- [x] 4. In `crates/mmd-engine/src/sim/agents.rs`, add `use super::collision::CollisionParams;` and `use super::spatial::SpatialGrid;` to the imports.
+- [x] 5. Append the four new fields (`collision`, `grid`, `sep_x`, `sep_y`) to `struct Simulation`.
+- [x] 6. Add `collision: CollisionParams` as the **last** parameter of `Simulation::new_custom`, and document it in the fn doc comment.
+- [x] 7. Insert the `grid` / `sep_x` / `sep_y` construction block given above before the `Self { .. }` literal, and add the four fields to that literal.
+- [x] 8. Pass `CollisionParams::from_scenario(scenario)` as the final argument of the `Self::new_custom(..)` call inside `Simulation::new`.
+- [x] 9. Add the `pub fn collision(&self) -> CollisionParams` accessor.
+- [x] 10. In `crates/mmd-engine/src/runtime.rs`, change the import to `use crate::sim::{CollisionParams, Simulation};` and add `CollisionParams::from_scenario(&scenario),` as the final argument of the `Simulation::new_custom` call at line ~124.
+- [x] 11. In `crates/mmd-engine/src/sim/tick.rs`, add the `BLEND_EPS2` const.
+- [x] 12. Insert the separation pass (grid rebuild + `accumulate_separation`) after the hoists and before the agent loop.
+- [x] 13. Replace the move/commit block with the blended version given above, including the flow-only fallback.
+- [x] 14. Run `cargo test -p mmd-engine --test separation` → all 15 tests in the file pass.
+- [x] 15. Run `cargo test -p mmd-engine --test frame_allocations` → 7 passed.
+- [x] 16. Run `cargo test -p mmd-engine --test simulation` **before** renaming anything, and record which tests fail. Expect `aggregate_progress_is_monotone` to fail; anything else failing means the escalation rule applies.
+  - **Recorded: nothing failed.** `15 passed; 0 failed`, including `aggregate_progress_is_monotone ... ok`. The step's stated expectation did not hold.
+- [x] 17. Apply the `longest_progress_stall` helper to `crates/mmd-engine/tests/common/mod.rs`.
 - [ ] 18. Rename `aggregate_progress_is_monotone` to `aggregate_progress_never_stalls` and replace its body verbatim.
-- [ ] 19. Run `cargo test -p mmd-engine --test simulation` again → green. If not, follow the escalation rule; never edit a threshold.
-- [ ] 20. Run `cargo run -- run --agents 2000 --frames 120 | grep 'clean exit'` and confirm the `hash=` value **differs** from the one recorded in T2 — the behaviour flip must be observable.
-- [ ] 21. Run the full validation list below.
+  - **NOT DONE — deliberate, needs a plan-author decision.** Step 18 rests on step 16's
+    prediction, and step 16 measured the opposite: the strict contract still passes with
+    separation live. The tracked fixtures carry `collision_radius_q8: 32` (1/8 cell, so
+    contact is 1/4 cell), and `fixture_dense_v1` stacks 256 agents on 4 spawn cells — the
+    stack does open, but not far enough to move members into a costlier flow-field cell,
+    so the mean routing cost still falls every tick. Separation is provably live on that
+    fixture: `a_collision_tick_allocates_nothing` asserts `collision().enabled()` on it.
+    Renaming a **passing** strict contract into a strictly weaker one is the silent
+    weakening this ticket's own "Escalation rule" forbids, so it was not done.
+  - **What was done instead (strictly additive, nothing weakened):**
+    `aggregate_progress_is_monotone` kept unchanged and passing; `aggregate_progress_never_stalls`
+    **added** beside it with the ticket's body plus a window guard (`first > STALL_BUDGET_TICKS + 2`
+    — the helper can only ever report `first - 2`, so a bare `> budget` guard left the
+    assertion unfalsifiable for `first` in {61, 62}); `Tracker::longest_progress_stall`
+    added as specified. Both contracts green. If the plan author wants the strict one gone,
+    that is a deliberate call to make in a follow-up, not a side effect of this slice.
+- [x] 19. Run `cargo test -p mmd-engine --test simulation` again → green. If not, follow the escalation rule; never edit a threshold.
+- [x] 20. Run `cargo run -- run --agents 2000 --frames 120 | grep 'clean exit'` and confirm the `hash=` value **differs** from the one recorded in T2 — the behaviour flip must be observable.
+- [x] 21. Run the full validation list below.
 
 ## Outputs
 
@@ -582,15 +599,15 @@ fn a_collision_tick_allocates_nothing() {
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --test separation` → 15 passed
-- [ ] `cargo test -p mmd-engine --test frame_allocations` → 7 passed
-- [ ] `cargo test -p mmd-engine --test simulation` → green, including the unmodified `no_agent_is_stuck_against_an_obstacle`, `obstacles_are_never_entered`, `agents_reach_destination`, `no_group_is_starved`, `alive_count_is_stable`, `determinism_holds_for_50k_agents`
-- [ ] `cargo fmt --all -- --check` → exit 0
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green
-- [ ] `cargo run -p xtask -- bootstrap --check` / `shaders --check` / `atlases --check` → exit 0
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0, `run: clean exit ...` printed
+- [x] `cargo test -p mmd-engine --test separation` → 16 passed (the 15 planned, plus `separation_never_wedges_an_agent_against_a_wall` covering the new flow-only fallback branch)
+- [x] `cargo test -p mmd-engine --test frame_allocations` → 7 passed
+- [x] `cargo test -p mmd-engine --test simulation` → green, including the unmodified `no_agent_is_stuck_against_an_obstacle`, `obstacles_are_never_entered`, `agents_reach_destination`, `no_group_is_starved`, `alive_count_is_stable`, `determinism_holds_for_50k_agents`
+- [x] `cargo fmt --all -- --check` → exit 0
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green (36 binaries, 442 passed, 0 failed, 8 pre-existing `#[ignore]`)
+- [x] `cargo run -p xtask -- bootstrap --check` / `shaders --check` / `atlases --check` → exit 0
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0, `run: clean exit ...` printed
 - [ ] manual check: watch the window with `cargo run -- run --agents 50000` — the horde must visibly spread out of its spawn stacks instead of moving as 127 point-like columns. Press Esc to quit.
-- [ ] manual check: the `hash=` from impl step 20 differs from the T2 value
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(sim): steer agents apart with soft separation so zombies stop overlapping`
+- [x] manual check: the `hash=` from impl step 20 differs from the T2 value
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(sim): steer agents apart with soft separation so zombies stop overlapping`

@@ -314,4 +314,40 @@ impl Tracker {
     pub fn mean_cost_series(&self) -> &[f64] {
         &self.mean_cost
     }
+
+    /// Longest run of consecutive ticks, before the first recycle, during which
+    /// the mean routing cost never improved on the best value seen so far.
+    ///
+    /// Complements the strict tick-by-tick monotonicity claim rather than
+    /// replacing it. With agent-agent separation the mean *may* legitimately
+    /// rise for a few ticks while a spawn stack pushes itself apart; what must
+    /// stay true regardless is that the horde never *stalls* — never goes a
+    /// long stretch closing no distance at all.
+    ///
+    /// Returns `0` when the pre-recycle window is shorter than two ticks, so a
+    /// caller must check that window itself before trusting a low result — see
+    /// `aggregate_progress_never_stalls`.
+    pub fn longest_progress_stall(&self) -> u64 {
+        let horizon = match self.first_recycle_tick {
+            Some(t) => (t as usize).saturating_sub(1),
+            None => self.mean_cost.len(),
+        }
+        .min(self.mean_cost.len());
+        if horizon == 0 {
+            return 0;
+        }
+        let mut best = self.mean_cost[0];
+        let mut run = 0u64;
+        let mut worst = 0u64;
+        for t in 1..horizon {
+            if self.mean_cost[t] < best {
+                best = self.mean_cost[t];
+                run = 0;
+            } else {
+                run += 1;
+                worst = worst.max(run);
+            }
+        }
+        worst
+    }
 }
