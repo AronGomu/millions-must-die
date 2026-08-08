@@ -25,6 +25,22 @@ Detailed phase-0 designs:
 - [Local validation lab](local-validation-lab-architecture.html)
 - [Architecture decision records](ADR/README.md)
 
+## Agent collision
+
+Bodies are scenario data: each scenario declares a collision radius and a
+separation strength in Q8 fixed point. The model is soft separation
+*steering*, not resolution — it never guarantees agents cannot overlap. The
+neighbour index is a preallocated uniform grid, rebuilt every tick with no
+allocation. The coincidence tie-break — two agents landing on the exact same
+position — is a 16-entry table keyed on the index pair, so the outcome is
+deterministic rather than order-dependent. Each agent accumulates at most
+eight neighbours per tick. When the blended step would leave the walkable
+area, the agent falls back to the pure descent step rather than being wedged
+in place.
+
+See [ADR 009](ADR/009_ADR_agent_separation_and_collision.md) and the
+[agent collision architecture](agent-collision-architecture.html) page.
+
 ## Design Decisions
 
 Gameplay:

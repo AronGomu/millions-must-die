@@ -52,7 +52,7 @@ cargo run -- run --agents 50000 --frames 300
 ## Architectural constraints (load-bearing — don't break these)
 
 - No per-frame allocations in simulation (enforced by `alloc_guard.rs`, per-thread `MeasureGuard`).
-- No per-enemy pathfinding — navigation via flow fields.
+- No per-enemy pathfinding — navigation via flow fields. Agent-agent collision is *soft separation steering* layered on top: a repulsion sum bends the descent vector, it never resolves an overlap, and no code or doc may claim agents cannot overlap.
 - `mmd_engine::testkit::Harness` is the single seeded, clock-free headless entry point; `testkit` is feature-gated out of the shipping binary (`cargo tree -e features | grep -c testkit` must be 0).
 - Determinism: cross-process determinism proven (test binary re-execs itself, compares hashes); seed 0 is canonical.
 - Render goldens are host-scoped (`lab/goldens/<family>/`), exact-match comparison; never a cross-platform/cross-backend claim.

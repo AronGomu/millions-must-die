@@ -363,6 +363,24 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        system: "Collision — agent separation and neighbour bins",
+        file: "crates/mmd-engine/tests/separation.rs",
+        tests: &[
+            "spatial_bins_hold_every_agent_exactly_once",
+            "spatial_bucket_order_is_ascending_agent_index",
+            "spatial_clamps_positions_outside_the_world",
+            "separation_of_a_pair_is_equal_and_opposite",
+            "separation_is_capped_at_eight_neighbours",
+            "coincident_agents_separate_on_the_first_tick",
+            "separation_keeps_the_step_length",
+            "a_released_stack_spreads_apart",
+            "a_bodyless_scenario_walks_the_flow_only_path",
+            "sprite_scene_pulls_agents_out_of_deep_overlap",
+            "collision_scene_agents_never_enter_an_obstacle",
+        ],
+        gpu_only: &[],
+    },
+    SystemCoverage {
         system: "Navigation — flow field",
         file: "crates/mmd-engine/tests/flow_field.rs",
         tests: &[
@@ -456,6 +474,8 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "guard_resets_between_trials",
             "panic_restores_guard",
             "foreign_thread_allocations_do_not_leak_into_a_measure_scope",
+            "spatial_rebuild_allocates_nothing",
+            "a_collision_tick_allocates_nothing",
         ],
         gpu_only: &[],
     },
@@ -493,11 +513,11 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
 /// that silently stopped finding tests would otherwise satisfy every
 /// membership check vacuously — every lookup would fail loudly, but a *broken
 /// regex* that matched everything would not. This pins the scanner itself.
-const MIN_SCANNED_TESTS: usize = 125;
+const MIN_SCANNED_TESTS: usize = 163;
 
 /// Number of systems phase 0 claims. Pinned so that deleting a `SystemCoverage`
 /// entry — which shrinks the claim without breaking any lookup — fails loudly.
-const SCOPE_SYSTEM_COUNT: usize = 11;
+const SCOPE_SYSTEM_COUNT: usize = 12;
 
 /// One `#[test]` fn found by the source scan.
 #[derive(Debug)]

@@ -9,6 +9,7 @@
 
 - [Technical prototype](technical-prototype-architecture.html)
 - [Simulation + navigation](simulation-navigation-architecture.html)
+- [Agent collision](agent-collision-architecture.html)
 - [Sprite renderer](sprite-renderer-architecture.html)
 - [Local validation lab](local-validation-lab-architecture.html)
 - [Architecture decision records](ADR/README.md)

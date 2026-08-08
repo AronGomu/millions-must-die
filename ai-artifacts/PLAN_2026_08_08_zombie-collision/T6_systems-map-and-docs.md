@@ -205,10 +205,10 @@ sentences and match the file's existing formatting.
 
 ## Measuring `MIN_SCANNED_TESTS` — do not guess
 
-- [ ] Temporarily set `const MIN_SCANNED_TESTS: usize = 100_000;`
-- [ ] Run `cargo test --test validation_contract every_system_has_a_test 2>&1 | grep 'source scan found'`
-- [ ] The panic message reads `source scan found only N #[test] fns ...`. Set `MIN_SCANNED_TESTS` to exactly that `N`.
-- [ ] Re-run and confirm the test passes.
+- [x] Temporarily set `const MIN_SCANNED_TESTS: usize = 100_000;`
+- [x] Run `cargo test --test validation_contract every_system_has_a_test 2>&1 | grep 'source scan found'`
+- [x] The panic message reads `source scan found only N #[test] fns ...`. Set `MIN_SCANNED_TESTS` to exactly that `N`. — measured N = 163
+- [x] Re-run and confirm the test passes.
 
 ## Test plan
 
@@ -223,26 +223,26 @@ sentences and match the file's existing formatting.
 
 ## Impl steps
 
-- [ ] 1. In `tests/validation_contract.rs`, change `SCOPE_SYSTEM_COUNT` from `11` to `12`; run `cargo test --test validation_contract` and confirm the size assertion fires (red).
-- [ ] 2. Insert the new `SystemCoverage` entry verbatim, after the `Simulation — movement, obstacles, recycling` entry.
-- [ ] 3. Replace the `Allocation invariant` entry's `tests:` list with the seven-name version above.
-- [ ] 4. In `docs/technical-prototype-functional-close.md`, insert the new table row verbatim after the simulation row.
-- [ ] 5. Append the two new test names to the `Allocation invariant` row's `Proven by` cell.
-- [ ] 6. Append the `### 10. Collision is steering, not resolution` subsection verbatim, after gap 9 and before `## Phase-1 backlog`.
-- [ ] 7. Run the `MIN_SCANNED_TESTS` measurement procedure above and set the constant to the reported number.
-- [ ] 8. Run `cargo test --test validation_contract` → 7 passed.
-- [ ] 9. Rehearse the negative: misspell one collision test name in `SCOPE_SYSTEMS`, run the test, confirm it fails naming that test, then revert the misspelling and confirm green again.
-- [ ] 10. Append the two scene commands to the fenced gate block in `docs/05-testing.md`, then add the prose paragraph beneath it.
-- [ ] 11. Append the same two commands to the gate block in `README.md`.
-- [ ] 12. Edit `docs/ADR/003_ADR_simulation_and_flow_field.md`: the `Superseded by` header line and the overlap bullet, both verbatim from above.
-- [ ] 13. Edit `docs/ADR/README.md`: the supersession paragraph and the list entry.
-- [ ] 14. Add the architecture link to `docs/README.md`.
-- [ ] 15. Add the `## Agent collision` section to `docs/DESIGN.md`.
-- [ ] 16. Add the seven glossary entries to `docs/GLOSSARY.md`.
-- [ ] 17. Replace the flow-field bullet in `AGENT.md` with the version above.
-- [ ] 18. In `docs/simulation-navigation-architecture.html`, remove `<li>Collision/separation</li>` and `<li>Agent spatial partition</li>` from the "Not present" card, and add to that page's nav paragraph: ` · <a href="agent-collision-architecture.html">Agent collision</a>`. Leave everything else on that page alone.
-- [ ] 19. Re-read every sentence added in steps 4–18 and confirm none states a speed, a frame time, or a hard non-overlap guarantee.
-- [ ] 20. Run the full validation list below.
+- [x] 1. In `tests/validation_contract.rs`, change `SCOPE_SYSTEM_COUNT` from `11` to `12`; run `cargo test --test validation_contract` and confirm the size assertion fires (red).
+- [x] 2. Insert the new `SystemCoverage` entry verbatim, after the `Simulation — movement, obstacles, recycling` entry.
+- [x] 3. Replace the `Allocation invariant` entry's `tests:` list with the seven-name version above.
+- [x] 4. In `docs/technical-prototype-functional-close.md`, insert the new table row verbatim after the simulation row.
+- [x] 5. Append the two new test names to the `Allocation invariant` row's `Proven by` cell.
+- [x] 6. Append the `### 10. Collision is steering, not resolution` subsection verbatim, after gap 9 and before `## Phase-1 backlog`.
+- [x] 7. Run the `MIN_SCANNED_TESTS` measurement procedure above and set the constant to the reported number.
+- [x] 8. Run `cargo test --test validation_contract` → 7 passed.
+- [x] 9. Rehearse the negative: misspell one collision test name in `SCOPE_SYSTEMS`, run the test, confirm it fails naming that test, then revert the misspelling and confirm green again.
+- [x] 10. Append the two scene commands to the fenced gate block in `docs/05-testing.md`, then add the prose paragraph beneath it.
+- [x] 11. Append the same two commands to the gate block in `README.md`.
+- [x] 12. Edit `docs/ADR/003_ADR_simulation_and_flow_field.md`: the `Superseded by` header line and the overlap bullet, both verbatim from above.
+- [x] 13. Edit `docs/ADR/README.md`: the supersession paragraph and the list entry.
+- [x] 14. Add the architecture link to `docs/README.md`.
+- [x] 15. Add the `## Agent collision` section to `docs/DESIGN.md`.
+- [x] 16. Add the seven glossary entries to `docs/GLOSSARY.md`.
+- [x] 17. Replace the flow-field bullet in `AGENT.md` with the version above.
+- [x] 18. In `docs/simulation-navigation-architecture.html`, remove `<li>Collision/separation</li>` and `<li>Agent spatial partition</li>` from the "Not present" card, and add to that page's nav paragraph: ` · <a href="agent-collision-architecture.html">Agent collision</a>`. Leave everything else on that page alone.
+- [x] 19. Re-read every sentence added in steps 4–18 and confirm none states a speed, a frame time, or a hard non-overlap guarantee.
+- [x] 20. Run the full validation list below.
 
 ## Outputs
 
@@ -253,17 +253,17 @@ sentences and match the file's existing formatting.
 
 ## Validation
 
-- [ ] `cargo test --test validation_contract` → 7 passed
-- [ ] `cargo fmt --all -- --check` → exit 0
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green
-- [ ] `nix flake check` → exit 0
-- [ ] `cargo run -p xtask -- bootstrap --check` / `shaders --check` / `atlases --check` → exit 0
-- [ ] `cargo run -- run --agents 50000 --frames 300` → exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` → exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` → exit 0
-- [ ] manual check: `grep -c 'agent-collision-architecture.html' docs/README.md` → `1`
-- [ ] manual check: `grep -c 'Collision/separation' docs/simulation-navigation-architecture.html` → `0`
-- [ ] manual check: the negative rehearsal in impl step 9 actually failed before being reverted
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `docs(collision): map agent separation as a phase-0 system and record the decision`
+- [x] `cargo test --test validation_contract` → 7 passed
+- [x] `cargo fmt --all -- --check` → exit 0
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` → green (35 `test result: ok` blocks, 0 `test result: FAILED`, 0 `error[`/`error:` lines)
+- [x] `nix flake check` → exit 0
+- [x] `cargo run -p xtask -- bootstrap --check` / `shaders --check` / `atlases --check` → exit 0
+- [x] `cargo run -- run --agents 50000 --frames 300` → exit 0, hash `130e3047228c4813156d68641567971cda4ab8ef3f4e5e8c71d7088c7f1e8ba7`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` → exit 0, hash `9b0691550b2a0b3af0a4d58c15662d2631cadf8ad5c8a65e402422facd633e91`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` → exit 0, hash `1909d6c085f74b3490a5cb0548b7b5744b68df605e7357a55a57aa6986b8223d`
+- [x] manual check: `grep -c 'agent-collision-architecture.html' docs/README.md` → `1`
+- [x] manual check: `grep -c 'Collision/separation' docs/simulation-navigation-architecture.html` → `0`
+- [x] manual check: the negative rehearsal in impl step 9 actually failed before being reverted — panic named the misspelled test, reverted, re-ran green
+- [x] app functional — no broken path from this slice (all three `cargo run -- run` invocations above claimed and released the window cleanly, tick=300 frames=300)
+- [x] commit msg draft: `docs(collision): map agent separation as a phase-0 system and record the decision`

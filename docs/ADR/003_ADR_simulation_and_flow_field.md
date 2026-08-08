@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-02
-- Superseded by: —
+- Superseded by: [ADR 009](009_ADR_agent_separation_and_collision.md), in part — the "no agent collision" decision only
 
 ## Context
 
@@ -34,7 +34,7 @@ Simulation:
 - Benchmark: exactly one sim tick per rendered frame.
 - Stable agent iteration.
 - Arrivals recycle to seeded spawn cells without allocation.
-- Overlap allowed. No agent collision/separation/spatial neighbor grid.
+- ~~Overlap allowed. No agent collision/separation/spatial neighbor grid.~~ Superseded by [ADR 009](009_ADR_agent_separation_and_collision.md): agents now carry a scenario-declared body radius and steer apart through a uniform neighbour grid. Every other decision in this record stands.
 - Same-platform state hash exact.
 - Cross-platform positions quantized to 1/256 cell; drift ≤1 quantum; direction/frame exact.
 

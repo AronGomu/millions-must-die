@@ -38,6 +38,7 @@ the claim. This table is therefore checked, not merely written.
 | System | Proven by | Where |
 | --- | --- | --- |
 | Simulation — movement, obstacles, recycling | `tick_moves_eight_cells_per_second`, `blocked_step_holds_position`, `obstacles_are_never_entered`, `no_agent_is_stuck_against_an_obstacle`, `arrival_radius_recycles`, `population_stays_50000`, `determinism_holds_for_50k_agents` | `crates/mmd-engine/tests/simulation.rs` |
+| Collision — agent separation and neighbour bins | `spatial_bins_hold_every_agent_exactly_once`, `spatial_bucket_order_is_ascending_agent_index`, `spatial_clamps_positions_outside_the_world`, `separation_of_a_pair_is_equal_and_opposite`, `separation_is_capped_at_eight_neighbours`, `coincident_agents_separate_on_the_first_tick`, `separation_keeps_the_step_length`, `a_released_stack_spreads_apart`, `a_bodyless_scenario_walks_the_flow_only_path`, `sprite_scene_pulls_agents_out_of_deep_overlap`, `collision_scene_agents_never_enter_an_obstacle` | `crates/mmd-engine/tests/separation.rs` |
 | Navigation — flow field | `destination_cost_is_zero`, `obstacles_unreachable`, `diagonal_cannot_cut_corner`, `vectors_descend`, `every_reachable_cell_has_a_valid_direction`, `agent_in_an_unreachable_region_is_inert_not_panicking` | `crates/mmd-engine/tests/flow_field.rs` |
 | Scenario loading and hash contract | `loads_v1_scene`, `rejects_wrong_hash`, `rejects_unreachable_spawn`, `v1_geometry_stays_frozen_against_the_fixture_relaxation` | `crates/mmd-engine/tests/scenario_contract.rs` |
 | Deterministic test harness | `same_seed_same_state_hash`, `different_seed_differs`, `tick_count_is_exact`, `no_wall_clock_dependence`, `fixture_scenarios_are_hash_verified` | `crates/mmd-engine/tests/harness.rs` |
@@ -45,7 +46,7 @@ the claim. This table is therefore checked, not merely written.
 | Render correctness — instance data, projection, whole frame | `instance_per_alive_agent`, `instances_carry_agent_position_and_animation_uvs`, `packing_is_a_pure_projection_of_sim_state`, `world_to_clip_transform`, `world_to_clip_matches_gpu_raster`, `golden_frame_matches`, `no_gpu_skips_cleanly` | `crates/mmd-engine/tests/render_correctness.rs` |
 | GPU smoke and tracked asset hashes | `instance_layout_is_stable`, `tracked_atlas_hashes_are_enforced`, `readback_is_1920x1080` (GPU-only), `four_groups_drawn` (GPU-only) | `crates/mmd-engine/tests/gpu_smoke.rs` |
 | Golden-image comparator | `exact_image_passes`, `delta_above_tolerance_fails`, `backend_cannot_use_other_golden`, `placeholder_golden_cannot_pass`, `tampered_golden_image_fails_hash` | `crates/mmd-engine/tests/gpu_golden.rs` |
-| Allocation invariant | `alloc_invariant_still_enforced`, `warmup_allocation_passes`, `guard_resets_between_trials`, `panic_restores_guard`, `foreign_thread_allocations_do_not_leak_into_a_measure_scope` | `crates/mmd-engine/tests/frame_allocations.rs` |
+| Allocation invariant | `alloc_invariant_still_enforced`, `warmup_allocation_passes`, `guard_resets_between_trials`, `panic_restores_guard`, `foreign_thread_allocations_do_not_leak_into_a_measure_scope`, `spatial_rebuild_allocates_nothing`, `a_collision_tick_allocates_nothing` | `crates/mmd-engine/tests/frame_allocations.rs` |
 | App and CLI lifecycle | `run_exits_after_n_frames`, `windowed_run_honours_the_frame_budget`, `pause_freezes_state`, `overlay_toggle_is_inert`, `quit_exits_clean_and_releases_window`, `injection_that_never_fires_is_an_error`, `missing_scenario_fails_clean` | `tests/cli_contract.rs` |
 | Merge-gate contract | `gate_list_has_no_perf_thresholds`, `gate_docs_state_perf_gating_is_retired`, `results_doc_is_superseded_history_not_a_claim`, `bench_binary_still_builds`, `every_system_has_a_test`, `no_perf_claim_in_docs`, `perf_claim_scanner_catches_what_it_is_meant_to` | `tests/validation_contract.rs` |
 
@@ -195,6 +196,26 @@ unit tests still run on every merge — which is what proves they still compile 
 but nothing they emit decides whether a change may merge. `lab/` holds no Rust
 at all; it is fixtures, manifests and the tracked goldens the render tests read.
 All of it must be re-validated before the optimization phase reuses it.
+
+### 10. Collision is steering, not resolution
+
+Agents separate by *steering*: each sums a repulsion vector from the
+neighbours overlapping its body, that sum is added to the flow-field descent
+vector, and the agent walks the blended heading at its unchanged speed. Nothing
+in the tick forbids an overlap, and no test claims one is impossible — the
+proven claims are that a coincident pair splits, that a released stack spreads,
+and that deep overlap on the sprite-scale scene collapses by an order of
+magnitude within 300 ticks. Under crowd pressure, and especially in the jam that
+forms at the destination cell, bodies do interpenetrate. That is the accepted
+behaviour of the chosen model, recorded in
+[ADR 009](ADR/009_ADR_agent_separation_and_collision.md).
+
+Two further narrowings live here rather than in the code. Each agent
+accumulates at most eight neighbours per tick, so a very deep stack is pushed
+apart over several ticks instead of one. And when the blended step would leave
+the walkable area, the agent falls back to the pure descent step — separation
+may never wedge an agent the field alone could have moved, which means a wall
+can win against a crowd and let bodies compress against it.
 
 ## Phase-1 backlog
 

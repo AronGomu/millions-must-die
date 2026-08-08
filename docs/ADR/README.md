@@ -6,6 +6,9 @@ lab's merge-gate authority are retired to a later optimization phase. Their
 non-performance decisions still stand. See
 [testing strategy](../05-testing.md#retired-performance-gating).
 
+ADR 003 is **superseded in part** by ADR 009 (2026-08-08): agents no longer pass
+freely through each other. Its navigation and movement decisions still stand.
+
 Accepted phase-0 decisions:
 
 1. [Technical prototype scope + acceptance](001_ADR_technical_prototype_scope_and_acceptance.md)
@@ -16,5 +19,6 @@ Accepted phase-0 decisions:
 6. [Native platforms + reference hardware](006_ADR_native_platform_and_reference_hardware.md)
 7. [Local validation lab + security](007_ADR_local_validation_lab_and_security.md)
 8. [Open-source governance](008_ADR_open_source_governance.md)
+9. [Agent separation + collision](009_ADR_agent_separation_and_collision.md)
 
 New decision → new ADR. Changed decision → superseding ADR; do not rewrite history silently.

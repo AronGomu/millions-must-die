@@ -14,6 +14,13 @@
 | agentsview | Read-only borrowed view into live agent buffers         | `crates/mmd-engine/src/sim/agents.rs`, `struct AgentsView`                      |
 | statehash  | Deterministic 32-byte digest of sim/runtime state        | `crates/mmd-engine/src/runtime.rs`, `fn state_hash`                             |
 | allocguard | Zero-heap-alloc-per-frame counting allocator/guard      | `crates/mmd-engine/src/alloc_guard.rs`, `struct MeasureGuard`                   |
+| body radius | Scenario-declared collision radius an agent's body occupies, in Q8 | `crates/mmd-engine/src/scenario.rs`, `fn collision_radius_cells`             |
+| contact distance | Twice the body radius; agents within it count as overlapping   | `crates/mmd-engine/src/sim/collision.rs`                                    |
+| separation strength | Scenario-declared Q8 weight blending the repulsion sum into the descent vector | `crates/mmd-engine/src/scenario.rs`, `fn separation_strength`  |
+| Q8 | Fixed-point encoding where 256 represents 1.0 (one cell)          | `crates/mmd-engine/src/scenario.rs`, `const COLLISION_Q8`                    |
+| neighbour bin | Preallocated uniform-grid bucket agents are sorted into each tick | `crates/mmd-engine/src/sim/spatial.rs`, `struct SpatialGrid`                 |
+| coincidence tie-break | Deterministic push direction for agents at (near-)identical positions, keyed on the index pair | `crates/mmd-engine/src/sim/collision.rs`, `const SEPARATION_DIR16` |
+| collision scene | A scenario version family requiring a nonzero body radius and locked geometry | `crates/mmd-engine/src/scenario.rs`, `const COLLISION_SCENE_V1`             |
 
 ## Render
 

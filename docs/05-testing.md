@@ -32,12 +32,19 @@ cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
 cargo run -- run --agents 50000 --frames 300
+cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
+cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 ```
+
+The last three commands are the interactive smokes: the 50k scene and both
+collision demo scenes must start, tick and exit cleanly. The demo scenes are
+what make agent separation observable — the gate scene's body radius is a
+fraction of its sprite, because 50 000 sprites cannot be laid out on one screen
+without overlapping.
 
 Hard success is **all tests green**: deterministic simulation and navigation
 behaviour, render correctness on the development host, app and CLI lifecycle,
-contract hashes, and the allocation invariant. The last command is the
-interactive smoke — the 50k scene must start, tick, and exit cleanly.
+contract hashes, and the allocation invariant.
 
 ## Render correctness — development host only
 
