@@ -709,6 +709,64 @@ fn overlay_toggle_is_inert() {
     );
 }
 
+/// `H` toggles the hitbox overlay from a script, and changes nothing else.
+///
+/// The overlay defaults to **on**, so the interesting direction is turning it
+/// off. Without the `hitboxes=` field on the exit line this test could not
+/// exist: a scripted `h` press would produce byte-identical stdout whether the
+/// binding worked or was dropped on the floor, and the ticket's claim that
+/// `--inject-input N:h` drives the toggle headlessly would be unfalsifiable.
+#[test]
+fn hitbox_toggle_is_scriptable() {
+    let Some(plain) = or_skip("hitbox_toggle_is_scriptable", run_small(&["--frames", "6"])) else {
+        return;
+    };
+    plain.assert_success();
+
+    let Some(hidden) = or_skip(
+        "hitbox_toggle_is_scriptable",
+        run_small(&["--frames", "6", "--inject-input", "2:h"]),
+    ) else {
+        return;
+    };
+    hidden.assert_success();
+
+    // The toggle really fired, and the default really is on.
+    assert_eq!(
+        plain.exit_field("hitboxes"),
+        "true",
+        "{plain}\nhitbox rings must default to on"
+    );
+    assert_eq!(
+        hidden.exit_field("hitboxes"),
+        "false",
+        "{hidden}\n`--inject-input 2:h` did not reach the hitbox toggle"
+    );
+
+    // ...and changed nothing about the run. A render overlay that moved the
+    // simulation would be a far worse defect than one that failed to toggle.
+    assert_eq!(
+        hidden.exit_field("tick"),
+        plain.exit_field("tick"),
+        "{hidden}"
+    );
+    assert_eq!(
+        hidden.final_hash(),
+        plain.final_hash(),
+        "{hidden}\n{plain}\nthe hitbox toggle altered simulation state"
+    );
+    assert_eq!(
+        hidden.exit_field("overlay"),
+        plain.exit_field("overlay"),
+        "{hidden}\nthe hitbox toggle moved the HUD overlay flag"
+    );
+    assert_eq!(
+        hidden.exit_field("paused"),
+        plain.exit_field("paused"),
+        "{hidden}\nthe hitbox toggle moved the pause flag"
+    );
+}
+
 /// Quit ends the run early, releases the window from the GPU device before
 /// dropping it, and exits 0 — no panic, no signal.
 ///

@@ -11,9 +11,10 @@ const BINDINGS: &[(BoundKey, Keycode, &str)] = &[
     (BoundKey::Escape, Keycode::Escape, "esc"),
     (BoundKey::F1, Keycode::F1, "f1"),
     (BoundKey::Space, Keycode::Space, "space"),
+    (BoundKey::H, Keycode::H, "h"),
 ];
 
-/// Map SDL keycode to runtime action (stable Esc/F1/Space contract).
+/// Map SDL keycode to runtime action (stable Esc/F1/Space/H contract).
 pub fn action_from_keycode(key: Keycode) -> Option<InputAction> {
     BINDINGS
         .iter()
@@ -105,6 +106,12 @@ mod tests {
         assert_eq!(bound_key_from_name(""), None);
         // Names are case-insensitive; the table is the lowercase form.
         assert_eq!(bound_key_from_name("SPACE"), Some(BoundKey::Space));
+        // The literal `--inject-input` spelling of the hitbox toggle. The
+        // loop above proves the table is self-consistent whatever it says;
+        // this pins what it actually says, so renaming the key would break
+        // `--inject-input N:h` loudly instead of silently.
+        assert_eq!(bound_key_from_name("h"), Some(BoundKey::H));
+        assert_eq!(bound_key_from_name("H"), Some(BoundKey::H));
     }
 
     #[test]

@@ -19,6 +19,23 @@ pub struct SpriteInstance {
     pub tint: [f32; 4],
 }
 
+/// Value written to `uv_rect.x` to select the shader's ring branch.
+///
+/// A *negative* `u0` is the sentinel. It is safe because every rect
+/// [`super::frame_uv_rect`] can emit is a ratio of non-negative integers, so a
+/// sprite's `u0` is never below zero — pinned by
+/// `ring_instances_keep_the_pinned_layout` across the whole animation grid.
+///
+/// The shader side of this contract is `MMD_RING_THRESHOLD` in
+/// `shaders/sprite.hlsl`, which is `0.0` — the *threshold* this value must sit
+/// below, not a copy of it. The invariant is
+/// `RING_SENTINEL < MMD_RING_THRESHOLD <= 0.0`.
+///
+/// Overloading an existing field rather than adding one is what keeps
+/// [`SpriteInstance`] at the 48 bytes `instance_layout_is_stable` locks, and
+/// keeps the ring on the same pipeline and the same vertex format as a sprite.
+pub const RING_SENTINEL: f32 = -1.0;
+
 impl SpriteInstance {
     /// Byte size of one instance record.
     pub const STRIDE: u32 = size_of::<Self>() as u32;
@@ -34,6 +51,28 @@ impl SpriteInstance {
             uv_rect,
             tint,
         }
+    }
+
+    /// Build a procedural hitbox-ring instance — no atlas, no texture.
+    ///
+    /// `inner`/`outer` are radii in normalised quad units, where `0.5` is the
+    /// quad edge. The fragment stage keeps the annulus between them and
+    /// discards the rest, so `outer` is where the ring's outer edge lands.
+    pub fn ring(pos: [f32; 2], size: [f32; 2], inner: f32, outer: f32, tint: [f32; 4]) -> Self {
+        Self {
+            pos,
+            size,
+            uv_rect: [RING_SENTINEL, inner, outer, 0.0],
+            tint,
+        }
+    }
+
+    /// Whether the shader will take the ring branch for this instance.
+    ///
+    /// One predicate shared by the renderer, the tests and the shader comment,
+    /// so "what counts as a ring" cannot be stated two ways.
+    pub fn is_ring(&self) -> bool {
+        self.uv_rect[0] < 0.0
     }
 }
 
@@ -129,6 +168,52 @@ pub fn clip_to_pixel(clip: [f32; 4], view_size: [f32; 2]) -> [f32; 2] {
 mod tests {
     use super::*;
     use std::mem::{align_of, offset_of};
+
+    /// The ring rides the *same* 48-byte record as a sprite — no new field, no
+    /// second instance format — and its `inner`/`outer` survive the trip
+    /// through the fields the shader reads them from.
+    ///
+    /// The second half is the load-bearing one: the branch is selected by a
+    /// negative `uv_rect.x`, so the sentinel is only safe if no atlas rect the
+    /// packer can emit is ever negative. That is asserted over the whole
+    /// animation grid rather than argued.
+    #[test]
+    fn ring_instances_keep_the_pinned_layout() {
+        // Deliberately *not* `RING_INNER`/`RING_OUTER`/`RING_TINT`: this test
+        // owns the record's plumbing, not the overlay's tuning. Arbitrary
+        // values keep it from reading as a second definition of the band that
+        // would go stale the moment the real one is retuned.
+        let ring = SpriteInstance::ring([10.0, 20.0], [48.0, 48.0], 0.3, 0.4, [0.1, 0.2, 0.3, 0.4]);
+
+        assert_eq!(size_of::<SpriteInstance>(), 48);
+        assert_eq!(SpriteInstance::STRIDE, 48);
+
+        assert_eq!(ring.pos, [10.0, 20.0]);
+        assert_eq!(ring.size, [48.0, 48.0]);
+        assert_eq!(ring.tint, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(ring.uv_rect[0], RING_SENTINEL);
+        assert_eq!(ring.uv_rect[1], 0.3, "inner radius round-trip");
+        assert_eq!(ring.uv_rect[2], 0.4, "outer radius round-trip");
+        assert_eq!(ring.uv_rect[3], 0.0);
+        assert!(ring.is_ring());
+
+        // No sprite may trip the ring branch. `frame_uv_rect` divides
+        // non-negative integers, so every rect it produces has `u0 >= 0` —
+        // asserted across the whole animation grid, sized from the atlas
+        // constants so growing the grid cannot leave new frames uncovered
+        // while this still reads as exhaustive.
+        for dir in 0..super::super::atlas::FRAMES_Y {
+            for frame in 0..super::super::atlas::FRAMES_X {
+                let uv = crate::render::frame_uv_rect(dir, frame);
+                let sprite = SpriteInstance::new([0.0, 0.0], [1.0, 1.0], uv, SpriteInstance::WHITE);
+                assert!(
+                    !sprite.is_ring(),
+                    "atlas frame ({dir}, {frame}) has uv_rect {uv:?}, which the shader \
+                     would read as a ring"
+                );
+            }
+        }
+    }
 
     #[test]
     fn instance_layout_is_stable() {

@@ -52,8 +52,14 @@ use mmd_engine::render::{
     host_binding_hashes, load_atlases, load_golden_image, load_golden_manifest, world_to_clip,
     write_golden_diff,
 };
-use mmd_engine::runtime::build_instance_groups;
-use mmd_engine::testkit::{FIXTURE_CORRIDOR_V1, FIXTURE_SMALL_V1, Harness};
+use mmd_engine::runtime::{
+    RING_INNER, RING_OUTER, RING_TINT, build_instance_groups, ring_radius_px,
+};
+use mmd_engine::scenario::Cell;
+use mmd_engine::testkit::{
+    COLLISION_SPRITE_SCENE, FIXTURE_CORRIDOR_V1, FIXTURE_SMALL_V1, GridSpec, Harness,
+    ScenarioSource, scene_path,
+};
 use mmd_engine::workspace_root;
 
 // ---------------------------------------------------------------------------
@@ -160,6 +166,15 @@ fn nonclear_bbox(rb: &Readback) -> Option<(u32, u32, u32, u32)> {
         }
     }
     bbox
+}
+
+/// The [`ATLAS_COUNT`] groups the renderer demands, all empty. For frames that
+/// draw only an overlay.
+fn empty_groups() -> [DrawGroup; ATLAS_COUNT] {
+    std::array::from_fn(|i| DrawGroup {
+        atlas_id: i as u32,
+        instances: Vec::new(),
+    })
 }
 
 /// Four groups with a single sprite in atlas 0 at `pos`/`size`; the renderer
@@ -364,6 +379,260 @@ fn packing_is_a_pure_projection_of_sim_state() {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. Hitbox rings — headless
+// ---------------------------------------------------------------------------
+
+/// A harness on the tracked sprite-scale collision scene: a real body, so a
+/// ring has something true to trace.
+fn bodied_harness(agents: u32, seed: u64) -> Harness {
+    let h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE)))
+        .agents(agents)
+        .seed(seed)
+        .build()
+        .expect("tracked collision scene loads");
+    assert!(
+        h.scenario().collision_radius_q8() > 0,
+        "the collision scene lost its body; every ring claim below would be vacuous"
+    );
+    h
+}
+
+/// Rings are per-entity, not per-scene: one for every agent that is drawn.
+#[test]
+fn a_ring_is_packed_for_every_agent() {
+    let mut h = bodied_harness(256, 5);
+    h.step_exact(19);
+
+    h.runtime_mut().pack_groups();
+    let alive = h.alive_count();
+    let rings = h.runtime().ring_instances();
+    assert_eq!(
+        rings.len(),
+        alive,
+        "packed {} rings for {alive} agents",
+        rings.len()
+    );
+    for (i, r) in rings.iter().enumerate() {
+        assert!(
+            r.is_ring(),
+            "ring {i} does not carry the ring sentinel; the shader would sample it as a sprite"
+        );
+    }
+
+    // The sprites are still there — "rings appear" must not mean "sprites left".
+    let packed: usize = h
+        .runtime()
+        .draw_groups()
+        .iter()
+        .map(|g| g.instances.len())
+        .sum();
+    assert_eq!(packed, alive, "the atlas groups lost agents to the rings");
+
+    // …and no sprite trips the ring branch. `ring_instances_keep_the_pinned_layout`
+    // proves `frame_uv_rect` never emits a negative `u0`; this asks the real
+    // packed groups — the instances that actually reach the GPU — the same
+    // question, so a future packer that synthesised its own UVs could not
+    // silently turn sprites into rings.
+    for inst in h.runtime().draw_groups().iter().flat_map(|g| &g.instances) {
+        assert!(
+            !inst.is_ring(),
+            "a packed sprite carries the ring sentinel: uv_rect {:?}",
+            inst.uv_rect
+        );
+    }
+}
+
+/// No body, no ring. A bodyless scene has nothing to draw a contact circle
+/// around, and a ring of radius zero would be a lie rather than a nicety.
+#[test]
+fn a_bodyless_scene_packs_no_rings() {
+    let spec = GridSpec::new(24, 16, Cell { x: 23, y: 8 })
+        .with_spawns(vec![Cell { x: 1, y: 8 }])
+        .with_agents(32);
+    assert_eq!(
+        spec.collision_radius_q8, 0,
+        "this case is only meaningful on a bodyless scene"
+    );
+    let mut h = Harness::grid(spec).build().expect("bodyless grid");
+    h.step_exact(7);
+
+    h.runtime_mut().pack_groups();
+    assert!(
+        h.runtime().ring_instances().is_empty(),
+        "a bodyless scene packed {} rings",
+        h.runtime().ring_instances().len()
+    );
+
+    // Still a rendered frame: the sprites are packed exactly as before.
+    let packed: usize = h
+        .runtime()
+        .draw_groups()
+        .iter()
+        .map(|g| g.instances.len())
+        .sum();
+    assert_eq!(packed, h.alive_count());
+}
+
+/// The ring shows the radius the simulation actually separates on.
+///
+/// This is the whole point of the overlay: a ring that disagrees with the sim
+/// is worse than no ring.
+///
+/// Two things make that claim hard to assert honestly, and both are handled
+/// deliberately:
+///
+/// 1. **The expectation must not flow through the code under test.**
+///    `want_diameter` is recomputed straight from the scenario's raw
+///    `collision_radius_q8`, *not* via `runtime::ring_radius_px`. Routing both
+///    sides through the production helper would make `ring_radius_px(c, r) {
+///    r * c + 3.0 }` pass.
+/// 2. **The tracked scene hides wrong derivations behind a coincidence.** T0
+///    tuned every tracked scene so the body is exactly half a sprite, so
+///    `2 * radius_px == sprite_size_px` there — which means "derive the body
+///    from the sprite size" would also pass. `the_ring_traces_a_body_that_is_not_half_a_sprite`
+///    below breaks that coincidence on purpose; this case keeps the tracked-scene
+///    relationship because it is what makes the ring sit on the sprite's edge.
+///
+/// It also cross-checks the scenario's radius against `Simulation::collision()`
+/// — the value the separation pass actually pushes on — so the two derivations
+/// cannot drift apart unnoticed.
+#[test]
+fn the_ring_traces_the_real_body() {
+    let mut h = bodied_harness(64, 11);
+    h.step_exact(11);
+
+    let cell = h.scenario().cell_size_px() as f32;
+    let sprite = h.scenario().sprite_size_px() as f32;
+    let radius_cells = h.scenario().collision_radius_cells();
+
+    // The ring is packed from the *sim's* radius; assert the scenario agrees
+    // with it before using the scenario to state the expectation.
+    assert_eq!(
+        radius_cells,
+        h.sim().collision().radius_cells,
+        "the scenario and the simulation disagree on the body radius; the ring \
+         would show one of two different numbers"
+    );
+
+    // Independent of `ring_radius_px`: raw Q8 field → cells → pixels.
+    let want_diameter = 2.0 * (h.scenario().collision_radius_q8() as f32 / 256.0) * cell;
+    assert_eq!(
+        want_diameter,
+        2.0 * ring_radius_px(cell, radius_cells),
+        "the production radius expression no longer agrees with the raw scenario field"
+    );
+
+    // T0 tuned the body to exactly half a sprite, which is what makes "the ring
+    // sits on the sprite's edge" true. Both sides come from the scenario, so
+    // this pins the relationship, not a number.
+    assert!(
+        (want_diameter - sprite).abs() < 1e-3,
+        "the body is {want_diameter} px across but the sprite is {sprite} px; the ring \
+         can no longer sit on the sprite edge"
+    );
+
+    h.runtime_mut().pack_groups();
+
+    // Per-agent, by index: `pack_ring_instances` walks the SoA in order, so
+    // ring `i` belongs to agent `i`. A desync here is exactly the failure the
+    // multiset check below cannot see.
+    {
+        let rings = h.runtime().ring_instances();
+        let v = h.agents();
+        assert_eq!(rings.len(), v.x.len());
+        for (i, r) in rings.iter().enumerate() {
+            assert_eq!(
+                r.size,
+                [want_diameter, want_diameter],
+                "ring {i} is {:?} px across, not 2 * {radius_cells} cells * {cell} px",
+                r.size
+            );
+            assert_eq!(r.uv_rect[1], RING_INNER, "ring {i} inner radius");
+            assert_eq!(r.uv_rect[2], RING_OUTER, "ring {i} outer radius");
+            let centre = [r.pos[0] + r.size[0] * 0.5, r.pos[1] + r.size[1] * 0.5];
+            let want = [v.x[i] * cell, v.y[i] * cell];
+            assert!(
+                (centre[0] - want[0]).abs() < 1e-3 && (centre[1] - want[1]).abs() < 1e-3,
+                "ring {i} is centred at {centre:?} but agent {i} is at {want:?}"
+            );
+        }
+    }
+
+    // …and the ring centres are the *sprite* centres. Compared as multisets
+    // because nothing promises intra-bucket ordering in the atlas groups.
+    let ring_centres: BTreeMap<(i64, i64), usize> = {
+        let mut m = BTreeMap::new();
+        for r in h.runtime().ring_instances() {
+            *m.entry((
+                q256(r.pos[0] + r.size[0] * 0.5),
+                q256(r.pos[1] + r.size[1] * 0.5),
+            ))
+            .or_default() += 1;
+        }
+        m
+    };
+    let sprite_centres: BTreeMap<(i64, i64), usize> = {
+        let mut m = BTreeMap::new();
+        for inst in h.runtime().draw_groups().iter().flat_map(|g| &g.instances) {
+            *m.entry((
+                q256(inst.pos[0] + inst.size[0] * 0.5),
+                q256(inst.pos[1] + inst.size[1] * 0.5),
+            ))
+            .or_default() += 1;
+        }
+        m
+    };
+    assert_eq!(
+        ring_centres, sprite_centres,
+        "the rings are not centred on the sprites they belong to"
+    );
+}
+
+/// The ring follows the *body*, not the sprite — proven on a scene where the
+/// two genuinely differ.
+///
+/// Every tracked scene has `2 * collision_radius == sprite_size_px`, so on
+/// those a packer that derived the ring from the sprite size would be
+/// indistinguishable from one that read `collision_radius_q8`. This grid sets
+/// a body of 1.5 cells against a 30 px sprite, so the two answers are 12 px
+/// and 30 px and only the correct derivation passes.
+#[test]
+fn the_ring_traces_a_body_that_is_not_half_a_sprite() {
+    // 384 q8 = 1.5 cells; the grid's sprite is 30 px and its cell 4 px.
+    let spec = GridSpec::new(24, 16, Cell { x: 23, y: 8 })
+        .with_spawns(vec![Cell { x: 1, y: 8 }])
+        .with_agents(16)
+        .with_collision(384, 256);
+    let mut h = Harness::grid(spec).build().expect("decoupled grid");
+    h.step_exact(5);
+
+    let cell = h.scenario().cell_size_px() as f32;
+    let sprite = h.scenario().sprite_size_px() as f32;
+    let radius_cells = h.sim().collision().radius_cells;
+    assert_eq!(radius_cells, 1.5, "grid body radius");
+
+    let want_diameter = 2.0 * radius_cells * cell; // 12 px
+    assert!(
+        (want_diameter - sprite).abs() > 1.0,
+        "this case is only meaningful when the body ({want_diameter} px) and the \
+         sprite ({sprite} px) disagree"
+    );
+
+    h.runtime_mut().pack_groups();
+    let rings = h.runtime().ring_instances();
+    assert_eq!(rings.len(), h.alive_count());
+    for (i, r) in rings.iter().enumerate() {
+        assert_eq!(
+            r.size,
+            [want_diameter, want_diameter],
+            "ring {i} is {:?} px across; the body is {want_diameter} px and the sprite \
+             is {sprite} px, so this ring is tracking the wrong one",
+            r.size
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 2. Projection — headless mirror
 // ---------------------------------------------------------------------------
 
@@ -492,6 +761,71 @@ fn atlas_manifest_matches_generated_pngs() {
                 [u0, v0, u1, v1]
             );
         }
+    }
+}
+
+/// Every tracked manifest that pins the shader and atlas hashes still pins the
+/// *live* ones — discovered by walking the tree, not by remembering a list.
+///
+/// This exists because editing `shaders/sprite.hlsl` moves
+/// `shader_canonical_sha256` in **five** separate manifests, and only three of
+/// them are obvious. The two under `lab/fixtures/*-candidate/golden/` are read
+/// by the mmd-lab merge gate; the two placeholder families under `lab/goldens/`
+/// are reachable only from hardware this project does not have. Before this
+/// test, a missed pin in the placeholder families would ship silently and
+/// surface on a reference host months later.
+///
+/// It is deliberately host-independent: it compares tracked bytes against
+/// tracked bytes and needs no GPU, so it fails on every machine rather than
+/// only on the one that owns the family. Note that `golden_frame_matches`
+/// cannot cover this — it builds its `HostBinding` from the manifest under
+/// test, so it is structurally incapable of noticing a stale pin.
+#[test]
+fn every_tracked_manifest_pins_the_live_shader_and_atlas() {
+    let root = workspace_root();
+    let (want_atlas, want_shader) = host_binding_hashes(&root).expect("host hashes");
+
+    let mut manifests: Vec<PathBuf> = Vec::new();
+    for dir in std::fs::read_dir(goldens_root()).expect("lab/goldens") {
+        let path = dir.expect("entry").path().join("manifest.json");
+        if path.is_file() {
+            manifests.push(path);
+        }
+    }
+    for dir in std::fs::read_dir(root.join("lab/fixtures")).expect("lab/fixtures") {
+        let path = dir
+            .expect("entry")
+            .path()
+            .join("golden")
+            .join("manifest.json");
+        if path.is_file() {
+            manifests.push(path);
+        }
+    }
+    manifests.sort();
+
+    // A discovery walk that found nothing would pass vacuously.
+    assert!(
+        manifests.len() >= 5,
+        "expected at least the three golden families plus the two candidate \
+         fixtures, found {manifests:?}"
+    );
+
+    for path in &manifests {
+        let manifest = load_golden_manifest(path).unwrap_or_else(|e| {
+            panic!("{}: {e}", path.display());
+        });
+        let rel = path.strip_prefix(&root).unwrap_or(path).display();
+        assert_eq!(
+            manifest.shader_canonical_sha256, want_shader,
+            "{rel} pins a stale shaders/sprite.hlsl. Editing the shader moves this \
+             hash in every manifest that records it — re-pin them all, or the lane \
+             that reads this one fails with ManifestDrift on a host you cannot test."
+        );
+        assert_eq!(
+            manifest.atlas_manifest_sha256, want_atlas,
+            "{rel} pins a stale atlas manifest"
+        );
     }
 }
 
@@ -1008,6 +1342,240 @@ fn world_to_clip_matches_gpu_raster() {
         (700, 300, 796, 364),
         "world_to_clip round trip moved the sprite off its world position"
     );
+}
+
+/// The ring is a *ring*: hollow in the middle, lit on the circumference.
+///
+/// This is the case that distinguishes the feature from a filled disc, and it
+/// can only be answered by the real fragment shader — the CPU packer emits the
+/// same instance either way.
+///
+/// It draws **two** rings with different bands. One would prove only that
+/// *some* annulus appears: a shader that ignored the interpolated
+/// `(inner, outer)` payload and hardcoded the constants would pass. Two bands
+/// checked against their own values pin the per-instance plumbing that
+/// `ring_instances_keep_the_pinned_layout` can only prove in CPU memory.
+#[test]
+fn a_ring_is_hollow() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("a_ring_is_hollow") else {
+        return;
+    };
+
+    // Deliberately large: the band is `outer - inner` in quad units, so a big
+    // quad makes it several pixels wide and the verdict cannot hinge on one
+    // rasterization edge case.
+    let side = 256.0f32;
+    let tint = RING_TINT;
+    // (position, inner, outer). The second band is deliberately *not*
+    // RING_INNER/RING_OUTER, and is both thicker and further in.
+    let cases = [
+        ([700.0f32, 300.0f32], RING_INNER, RING_OUTER),
+        ([1200.0, 300.0], 0.25, 0.32),
+    ];
+    let groups = empty_groups();
+    let rings: Vec<SpriteInstance> = cases
+        .iter()
+        .map(|&(pos, inner, outer)| SpriteInstance::ring(pos, [side, side], inner, outer, tint))
+        .collect();
+
+    let rb = r
+        .draw_offscreen_readback_with_rings(&groups, &rings)
+        .expect("offscreen readback");
+
+    for &(pos, ring_inner, ring_outer) in &cases {
+        assert_ring_band(&rb, pos, side, ring_inner, ring_outer, tint);
+    }
+}
+
+/// Assert one rendered ring: hollow centre, lit circumference, a centre-row
+/// profile matching the shader's own predicate, exactly two lit runs, the
+/// right colour, and a footprint inside its own quad.
+fn assert_ring_band(
+    rb: &Readback,
+    pos: [f32; 2],
+    side: f32,
+    ring_inner: f32,
+    ring_outer: f32,
+    tint: [f32; 4],
+) {
+    let band = format!("band {ring_inner}..{ring_outer} at {pos:?}");
+
+    // Distance from the quad centre, in the same normalised units the shader
+    // uses (`length(uv - 0.5)`).
+    let d_at = |px: u32, py: u32| -> f32 {
+        let u = (px as f32 + 0.5 - pos[0]) / side - 0.5;
+        let v = (py as f32 + 0.5 - pos[1]) / side - 0.5;
+        u.hypot(v)
+    };
+    let lit = |px: u32, py: u32| rb.pixel(px, py) != [0, 0, 0, 0];
+
+    let cx = (pos[0] + side * 0.5).round() as u32;
+    let cy = (pos[1] + side * 0.5).round() as u32;
+
+    // 1. The centre is background. A disc would fail here and nowhere else.
+    assert!(
+        !lit(cx, cy),
+        "the pixel at the ring's centre is lit ({:?}) — this is a disc, not a ring",
+        rb.pixel(cx, cy)
+    );
+
+    // 2. A pixel on this instance's *own* circumference is not background, and
+    //    carries this instance's tint. Colour matters: a shader that returned
+    //    white, or sampled the bound atlas, would pass every geometric check
+    //    here and still be wrong.
+    let mid = (ring_inner + ring_outer) * 0.5;
+    let edge_x = (pos[0] + side * (0.5 + mid)).round() as u32;
+    assert!(
+        lit(edge_x, cy),
+        "{band}: the pixel at d≈{mid} on the circumference is background — nothing was drawn"
+    );
+    let want_rgba = tint.map(|c| (c * 255.0).round() as i32);
+    let got_rgba = rb.pixel(edge_x, cy).map(i32::from);
+    for (i, (got, want)) in got_rgba.iter().zip(want_rgba).enumerate() {
+        assert!(
+            (got - want).abs() <= 1,
+            "{band}: circumference pixel is {got_rgba:?}, but the premultiplied \
+             RING_TINT over a cleared target is {want_rgba:?} (channel {i}) — the ring \
+             is not being painted with its own tint"
+        );
+    }
+
+    // 3. The whole centre row agrees with the shader's own predicate, for *this
+    //    instance's* band. A margin of ~1.5 px in `d` units skips the two
+    //    boundary pixels, where rasterization may legitimately round either way.
+    let margin = 1.5 / side;
+    let (x0, x1) = (pos[0].floor() as u32, (pos[0] + side).ceil() as u32);
+    let (mut lit_checked, mut dark_checked) = (0u32, 0u32);
+    for px in x0..x1 {
+        let d = d_at(px, cy);
+        if d > ring_inner + margin && d < ring_outer - margin {
+            assert!(
+                lit(px, cy),
+                "{band}: pixel ({px},{cy}) at d={d} is inside the band but dark"
+            );
+            lit_checked += 1;
+        } else if d < ring_inner - margin || d > ring_outer + margin {
+            assert!(
+                !lit(px, cy),
+                "{band}: pixel ({px},{cy}) at d={d} is outside the band but lit ({:?})",
+                rb.pixel(px, cy)
+            );
+            dark_checked += 1;
+        }
+    }
+    // Counted separately: one combined counter would still be satisfied by a
+    // row that resolved only dark pixels and never entered the band at all.
+    assert!(
+        lit_checked > 4 && dark_checked > 4,
+        "{band}: centre row resolved {lit_checked} in-band and {dark_checked} \
+         out-of-band pixels — too few to constrain anything"
+    );
+
+    // 4. Exactly two lit runs on the centre row — left arc and right arc. One
+    //    run means a filled disc; zero means nothing drew.
+    let runs = {
+        let mut runs = 0u32;
+        let mut prev = false;
+        for px in x0..x1 {
+            let now = lit(px, cy);
+            if now && !prev {
+                runs += 1;
+            }
+            prev = now;
+        }
+        runs
+    };
+    assert_eq!(
+        runs, 2,
+        "{band}: the centre row has {runs} lit run(s); a hollow ring crosses it twice"
+    );
+
+    // 5. Nothing this instance drew escaped its own quad. Checked as "every lit
+    //    pixel in a window around the quad is within `outer`" rather than via a
+    //    whole-frame bbox, because the frame holds more than one ring.
+    let (wx0, wy0) = (
+        x0.saturating_sub(4),
+        (pos[1].floor() as u32).saturating_sub(4),
+    );
+    let (wx1, wy1) = (
+        (x1 + 4).min(rb.width),
+        ((pos[1] + side).ceil() as u32 + 4).min(rb.height),
+    );
+    for py in wy0..wy1 {
+        for px in wx0..wx1 {
+            if lit(px, py) {
+                let d = d_at(px, py);
+                assert!(
+                    d <= ring_outer + margin,
+                    "{band}: pixel ({px},{py}) is lit at d={d}, outside the ring's \
+                     own outer radius {ring_outer}"
+                );
+            }
+        }
+    }
+}
+
+/// Sprites and rings survive sharing one submit.
+///
+/// Every other case draws one or the other: `a_ring_is_hollow` passes four
+/// empty groups, and the golden scene is ring-free. That leaves the shape the
+/// app actually runs in — four atlas draws *then* the fifth ring range, with
+/// the vertex buffer re-bound at the ring's byte offset and atlas 0 re-bound
+/// after the group loop — exercised by nothing. An off-by-one in `ring_start`
+/// or a rebind that corrupted the group draws would slip through.
+#[test]
+fn a_ring_and_a_sprite_share_a_pass() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("a_ring_and_a_sprite_share_a_pass") else {
+        return;
+    };
+
+    let sprite_pos = [300.0f32, 200.0f32];
+    let sprite_size = [96.0f32, 64.0f32];
+    let ring_pos = [1200.0f32, 500.0f32];
+    let ring_side = 256.0f32;
+
+    // Baseline: the sprite alone.
+    let sprite_only = r
+        .draw_offscreen_readback(&single_sprite_groups(sprite_pos, sprite_size))
+        .expect("sprite-only readback");
+    let sprite_bbox = nonclear_bbox(&sprite_only).expect("the sprite must draw something");
+
+    // Now the same sprite plus a ring, in one submit.
+    let rings = [SpriteInstance::ring(
+        ring_pos,
+        [ring_side, ring_side],
+        RING_INNER,
+        RING_OUTER,
+        RING_TINT,
+    )];
+    let both = r
+        .draw_offscreen_readback_with_rings(&single_sprite_groups(sprite_pos, sprite_size), &rings)
+        .expect("combined readback");
+
+    // The ring really rendered, at its own band.
+    assert_ring_band(
+        &both, ring_pos, ring_side, RING_INNER, RING_OUTER, RING_TINT,
+    );
+
+    // …and the sprite is byte-for-byte what it was without the ring. The two
+    // quads do not overlap, so anything but equality here means the extra
+    // range disturbed the group draws.
+    let (sx0, sy0, sx1, sy1) = sprite_bbox;
+    assert!(
+        sx1 as f32 <= ring_pos[0],
+        "the two footprints must not overlap for this comparison to mean anything"
+    );
+    for py in sy0..sy1 {
+        for px in sx0..sx1 {
+            assert_eq!(
+                both.pixel(px, py),
+                sprite_only.pixel(px, py),
+                "pixel ({px},{py}) of the sprite changed once a ring shared its submit"
+            );
+        }
+    }
 }
 
 /// Bounds of the non-transparent texels of atlas frame `(dir 0, frame 0)`,

@@ -1,7 +1,7 @@
 {
   "version": 1,
   "canonical": "shaders/sprite.hlsl",
-  "canonical_sha256": "110151a8189fed47464614716eba75c7236747cd69a97e259e56c69bcbdcb7b8",
+  "canonical_sha256": "a27856e6b17a26f7a3fd91945637c503690564255739c634012098b1c57aff63",
   "generator": "mmd-shader-pin-v1",
   "entry_points": {
     "vertex": "VSMain",
@@ -21,12 +21,12 @@
         {
           "stage": "vertex",
           "file": "sprite.vert.spv",
-          "sha256": "d45e85f391ba93925df9fc0184b749cbc22f78bbe143648340e03b962d18badd"
+          "sha256": "9d0b637b0a45480fff23b1ef5a8ee903559cdaa83828d1909d17e47e7fda09bb"
         },
         {
           "stage": "fragment",
           "file": "sprite.frag.spv",
-          "sha256": "225195c69b63ccb84d4a9511b30bcf961ee407a90170129cb5b90119f23b81b1"
+          "sha256": "3cd95c43d822b57493e60955bc67823f7ab2510ee77698c3ad98e8a447eae3df"
         }
       ]
     },

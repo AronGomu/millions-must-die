@@ -6,11 +6,11 @@
 //! run: backend=<b> adapter=<a> view=<w>x<h> agents=<n> scenario=<path> (engine <v>)
 //! run: frame0 tick=<t> hash=<64 hex> groups=[<n>,..] sim=<f>ms upload=<f>ms   (a)
 //! run: offscreen draw ok (backend=<b>)                                        (a)
-//! run: window <w>x<h> claimed; Esc quit, F1 overlay, Space pause              (b)
+//! run: window <w>x<h> claimed; Esc quit, F1 overlay, Space pause, H hitboxes  (b)
 //! <two overlay HUD lines per frame>                                           (c)
 //! run: released window                                                        (b)
 //! run: clean exit mode=<offscreen|window> backend=<b> tick=<t> frames=<n> \
-//!      hash=<64 hex> quit=<bool> paused=<bool> overlay=<bool>
+//!      hash=<64 hex> quit=<bool> paused=<bool> overlay=<bool> hitboxes=<bool>
 //! ```
 //!
 //! - (a) absent when a scripted quit lands on frame 1: nothing was rendered,
@@ -50,7 +50,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use mmd_engine::render::{
-    ATLAS_COUNT, DrawGroup, RenderError, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
+    ATLAS_COUNT, DrawGroup, RenderError, SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
 };
 use mmd_engine::runtime::{BoundKey, InputAction, Runtime, RuntimeError, action_for_key};
 use mmd_engine::scenario::ScenarioError;
@@ -294,9 +294,13 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
     // before any window exists. It goes through the same body as every other
     // frame — a parallel first-frame body is how a scripted press, an overlay
     // toggle, or a quit ends up honoured on frame 2 but not frame 1.
-    let frame0 = step_frame(&mut runtime, &mut script, &mut state, &backend, |groups| {
-        renderer.draw_offscreen(groups)
-    })
+    let frame0 = step_frame(
+        &mut runtime,
+        &mut script,
+        &mut state,
+        &backend,
+        |groups, rings| renderer.draw_offscreen_with_rings(groups, rings),
+    )
     .map_err(RunError::from_render)?;
 
     let Some(frame0) = frame0 else {
@@ -369,12 +373,18 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
     };
 
     println!(
-        "run: window {}x{} claimed; Esc quit, F1 overlay, Space pause",
+        "run: window {}x{} claimed; Esc quit, F1 overlay, Space pause, H hitboxes",
         WINDOW_W, WINDOW_H
     );
 
     // Present the frame-1 groups (still frame-1 contents — no further tick yet).
-    if let Err(e) = renderer.draw_to_swapchain(&window, runtime.draw_groups()) {
+    // Rings come along: a first frame drawn without them would show the overlay
+    // switching itself on at frame 2.
+    if let Err(e) = renderer.draw_to_swapchain_with_rings(
+        &window,
+        runtime.draw_groups(),
+        runtime.ring_instances(),
+    ) {
         eprintln!("run: present failed ({e}); offscreen-only");
         // Release before `window` drops: a still-claimed window leaves the
         // device holding a dangling swapchain.
@@ -426,9 +436,13 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
         let frame_start = Instant::now();
         // Errors leave the loop rather than returning through `?`, so the
         // window is always released from the device before it is dropped.
-        match step_frame(&mut runtime, &mut script, &mut state, &backend, |groups| {
-            renderer.draw_to_swapchain(&window, groups)
-        }) {
+        match step_frame(
+            &mut runtime,
+            &mut script,
+            &mut state,
+            &backend,
+            |groups, rings| renderer.draw_to_swapchain_with_rings(&window, groups, rings),
+        ) {
             Ok(None) => break 'running,
             Ok(Some(_)) => {}
             Err(e) => {
@@ -469,8 +483,8 @@ fn run_offscreen(
 ) -> Result<(), RunError> {
     let target = auto_frames.unwrap_or(HEADLESS_DEFAULT_FRAMES);
     while state.frames < target {
-        match step_frame(runtime, script, state, backend, |groups| {
-            renderer.draw_offscreen(groups)
+        match step_frame(runtime, script, state, backend, |groups, rings| {
+            renderer.draw_offscreen_with_rings(groups, rings)
         }) {
             Ok(None) => break,
             Ok(Some(_)) => {}
@@ -501,7 +515,7 @@ fn step_frame<D>(
     mut draw: D,
 ) -> Result<Option<FrameReport>, RenderError>
 where
-    D: FnMut(&[DrawGroup; ATLAS_COUNT]) -> Result<(), RenderError>,
+    D: FnMut(&[DrawGroup; ATLAS_COUNT], &[SpriteInstance]) -> Result<(), RenderError>,
 {
     let frame = state.frames + 1;
     if script.apply(frame, runtime) {
@@ -520,7 +534,7 @@ where
     for (slot, group) in group_lens.iter_mut().zip(out.groups) {
         *slot = group.instances.len();
     }
-    draw(out.groups)?;
+    draw(out.groups, out.rings)?;
 
     if frame == 1 {
         state.first_hash = out.state_hash;
@@ -598,14 +612,19 @@ fn finish(
         )));
     }
 
+    // `hitboxes=` is reported for the same reason `overlay=` is: without it a
+    // scripted `H` press produces byte-identical stdout whether the toggle
+    // worked or was silently dropped, and `--inject-input N:h` would prove
+    // nothing.
     println!(
-        "run: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} paused={} overlay={}",
+        "run: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} paused={} overlay={} hitboxes={}",
         runtime.tick_index(),
         state.frames,
         hex::encode(state.last_hash),
         state.quit,
         runtime.paused(),
-        runtime.overlay_visible()
+        runtime.overlay_visible(),
+        runtime.hitboxes_visible()
     );
     Ok(())
 }

@@ -196,6 +196,12 @@ smoke reproducing the T0-pinned digest
 `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
 byte for byte. What is left needs eyes on a real window.
 
+> Note added by T8: every window check below now also draws a cyan hitbox ring
+> on each agent, because T8 turns the overlay on by default. That is expected
+> and is **not** a T6 regression — press `H` to hide the rings if they get in
+> the way of judging the movement these steps are actually about. T6's claims
+> are about simulation behaviour, which T8 does not touch.
+
 - [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
       exactly as it did in T5; this scene is at `separation_threads: 1`, so any
       visible difference at all is a defect. Press `Esc` and confirm a clean
@@ -211,3 +217,49 @@ byte for byte. What is left needs eyes on a real window.
       process is gone (`pgrep -f millions_must_die` returns nothing). A pool
       worker that failed to join would keep the process alive after the window
       closed.
+
+## T8 hitbox-ring-overlay
+
+Every entity now draws a procedural ring at its **real** body radius —
+`collision_radius_cells * cell_size_px`, read from the live scenario. The ring
+is atlas-free (a branch in `shaders/sprite.hlsl` selected by a negative
+`uv_rect.x`), reuses the pinned 48-byte `SpriteInstance`, is on by default, and
+is toggled with `H`.
+
+Everything automatable is green: `cargo fmt --all -- --check`, `cargo test
+--workspace --locked`, `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test
+render_correctness` (19/19, so `a_ring_is_hollow`, `golden_frame_matches` and
+`world_to_clip_matches_gpu_raster` all really ran rather than skipping),
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`nix flake check`, all three xtask `--check` commands,
+`cargo tree -e features | grep -c testkit` = 0, an empty
+`git diff --stat crates/mmd-engine/src/sim/`, and the gate smoke still printing
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte.
+
+The rings were also inspected off-screen: an offscreen readback of
+`collision_sprite_v1` at 600 agents was written to PNG and viewed, showing one
+thin hollow cyan ring per agent with the sprites visible through them, and an
+A/B against the same frame with the overlay hidden showed identical sprites and
+no rings. What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      every unit carries a hollow ring. Press `H`: the rings disappear and the
+      sprites do not move or flicker. Press `H` again: they come back
+      identically. `Esc` exits cleanly.
+- [ ] Same scene, ring **radius** read: where two units press together, their
+      rings meet edge-to-edge and do not overlap deeply. T0 tuned the body to
+      exactly half a sprite, so each ring should sit on its sprite's edge — not
+      inside it, not floating outside it.
+- [ ] Same scene, ring **legibility**: the ring is 1–2 px thick and
+      semi-transparent, so a dense crowd still reads as separate bodies rather
+      than a solid cyan mass. If it reads as a wash, `RING_TINT` /
+      `RING_INNER` in `crates/mmd-engine/src/runtime.rs` are the two knobs.
+- [ ] `cargo run -- run --agents 5000` — the gate scene at full population with
+      rings on stays interactive (no obvious frame-rate collapse versus `H`
+      off). This is the one cost the automated suite cannot measure: 5 000
+      overlapping ring quads is a fill-rate question, not a CPU one.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      rings appear here too (same body tuning), and `H` toggles them.
+- [ ] The first presented frame already has rings — they must not pop in on
+      frame 2. Watch the very first painted frame after the window appears.

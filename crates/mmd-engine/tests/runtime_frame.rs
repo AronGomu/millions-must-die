@@ -2,8 +2,9 @@
 
 use std::path::PathBuf;
 
-use mmd_engine::render::ATLAS_COUNT;
+use mmd_engine::render::{ATLAS_COUNT, SpriteInstance};
 use mmd_engine::runtime::{BoundKey, InputAction, Runtime, action_for_key};
+use mmd_engine::testkit::{COLLISION_SPRITE_SCENE, scene_path};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -14,6 +15,14 @@ fn workspace_root() -> PathBuf {
 
 fn gate_scenario() -> PathBuf {
     workspace_root().join("assets/scenarios/technical_prototype_v1.ron")
+}
+
+/// A scene with a real body, so there is something for a ring to trace.
+///
+/// Named through the testkit rather than hand-joined, so renaming the asset
+/// breaks the build instead of this test at runtime.
+fn bodied_scenario() -> PathBuf {
+    scene_path(COLLISION_SPRITE_SCENE)
 }
 
 #[test]
@@ -87,8 +96,72 @@ fn input_actions_are_stable() {
     assert_eq!(action_for_key(BoundKey::Escape), InputAction::Quit);
     assert_eq!(action_for_key(BoundKey::F1), InputAction::ToggleOverlay);
     assert_eq!(action_for_key(BoundKey::Space), InputAction::TogglePause);
+    assert_eq!(action_for_key(BoundKey::H), InputAction::ToggleHitboxes);
     // Discriminants stay fixed for overlay/log contracts.
     assert_eq!(InputAction::Quit as u8, 0);
     assert_eq!(InputAction::ToggleOverlay as u8, 1);
     assert_eq!(InputAction::TogglePause as u8, 2);
+    // Appended, never inserted: renumbering an existing action would silently
+    // repoint any recorded log or script that names one by value.
+    assert_eq!(InputAction::ToggleHitboxes as u8, 3);
+}
+
+/// The hitbox overlay is exactly that — an overlay.
+///
+/// Toggling it may move the ring count between `n` and `0` and must move
+/// *nothing else*: not the simulation, and not one byte of the four atlas
+/// groups. The sim is paused first so the only thing that can explain a
+/// difference between the two packs is the toggle itself; without that, a tick
+/// would legitimately move every sprite and the comparison would prove nothing.
+#[test]
+fn toggling_hitboxes_changes_only_the_rings() {
+    let mut rt = Runtime::load(bodied_scenario(), Some(256)).expect("load");
+    assert!(
+        rt.scenario().collision_radius_q8() > 0,
+        "this scene must have a body, or 'rings appear' is unfalsifiable"
+    );
+    // Warm one tick so the state is past spawn-only, then freeze it.
+    let _ = rt.tick_and_render();
+    rt.set_paused(true);
+
+    let agents = rt.agent_count();
+    assert!(
+        rt.hitboxes_visible(),
+        "hitboxes are on by default — that is the point of the ticket"
+    );
+
+    let snapshot = |rt: &mut Runtime| {
+        let out = rt.tick_and_render();
+        let groups: Vec<Vec<SpriteInstance>> =
+            out.groups.iter().map(|g| g.instances.clone()).collect();
+        (out.state_hash, groups, out.rings.to_vec())
+    };
+
+    let (hash_on, groups_on, rings_on) = snapshot(&mut rt);
+    assert_eq!(
+        rings_on.len(),
+        agents,
+        "one ring per agent while hitboxes are visible"
+    );
+
+    rt.apply_action(InputAction::ToggleHitboxes);
+    assert!(!rt.hitboxes_visible());
+    let (hash_off, groups_off, rings_off) = snapshot(&mut rt);
+    assert!(rings_off.is_empty(), "hiding hitboxes must pack no rings");
+    assert_eq!(
+        hash_off, hash_on,
+        "the overlay reached the simulation — a render toggle must never move the state hash"
+    );
+    assert_eq!(
+        groups_off, groups_on,
+        "hiding the rings changed an atlas group; the overlay must be additive only"
+    );
+
+    // And back: the toggle is symmetric, not a one-way switch.
+    rt.apply_action(InputAction::ToggleHitboxes);
+    assert!(rt.hitboxes_visible());
+    let (hash_back, groups_back, rings_back) = snapshot(&mut rt);
+    assert_eq!(rings_back, rings_on, "re-showing rebuilt different rings");
+    assert_eq!(groups_back, groups_on);
+    assert_eq!(hash_back, hash_on);
 }

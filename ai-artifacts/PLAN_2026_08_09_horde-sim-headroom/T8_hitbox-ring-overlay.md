@@ -170,53 +170,212 @@ existing callers and their tests are untouched.
 
 ## Impl steps
 
-- [ ] 1. `graphify query "sprite instance packing draw groups renderer pipeline"` and
+- [x] 1. `graphify query "sprite instance packing draw groups renderer pipeline"` and
       `graphify path "Runtime" "SpriteRenderer"` before touching anything.
-- [ ] 2. Write the tests. Run — red.
-- [ ] 3. Edit `shaders/sprite.hlsl`. Regenerate the SPIR-V and update
+      (criterion: both commands run, subgraph + path returned — `Runtime <-- run_phase() --> SpriteRenderer`,
+      2 hops, via `--undirected`; plus `graphify query "shader spirv manifest xtask check generated blobs"`.)
+- [x] 2. Write the tests. Run — red.
+      (criterion: `cargo test --workspace --locked --no-run` fails with `RING_SENTINEL`,
+      `SpriteInstance::ring`, `is_ring`, `BoundKey::H`, `InputAction::ToggleHitboxes`,
+      `Runtime::hitboxes_visible`, `Runtime::ring_instances`, `FrameOutput.rings`,
+      `RING_INNER`/`RING_OUTER`/`RING_TINT`/`ring_radius_px` all unresolved.)
+- [x] 3. Edit `shaders/sprite.hlsl`. Regenerate the SPIR-V and update
       `shaders/generated/manifest.json`; run `cargo run -p xtask -- shaders --check`.
       The DXIL and metallib slots follow the existing deferred-placeholder path on
       this host — **do not** invent native blobs; record in Outputs that the
       Windows and macOS reference hosts owe a native rebuild.
-- [ ] 4. Add `SpriteInstance::ring`.
-- [ ] 5. Add `pack_ring_instances` + the `Runtime` field, capacity, flag and accessor.
-- [ ] 6. Add `BoundKey::H` / `InputAction::ToggleHitboxes` / the binding.
-- [ ] 7. Draw the ring slice after the atlas groups in both the offscreen and
+      (criterion: `cargo run -p xtask -- shaders --check` →
+      `shaders: ok (spirv+dxil+metallib; native DXIL/metallib regen still host-gated T9/T10)`.
+      Manifest re-pinned: canonical `c290e6e4…`, vert `9d0b637b…`, frag `3cd95c43…`;
+      dxil stays `placeholder`/`T9`, metallib `placeholder`/`T10` — no native blobs invented.)
+- [x] 4. Add `SpriteInstance::ring`.
+      (criterion: `ring_instances_keep_the_pinned_layout` passes and
+      `instance_layout_is_stable` passes **unmodified** — both green in
+      `cargo test -p mmd-engine --lib render::instance`.)
+- [x] 5. Add `pack_ring_instances` + the `Runtime` field, capacity, flag and accessor.
+      (criterion: `a_ring_is_packed_for_every_agent`, `a_bodyless_scene_packs_no_rings`,
+      `the_ring_traces_the_real_body` and `ring_packing_allocates_nothing` all pass.)
+- [x] 6. Add `BoundKey::H` / `InputAction::ToggleHitboxes` / the binding.
+      (criterion: `input_actions_are_stable` pins `ToggleHitboxes as u8 == 3`;
+      `keyboard_and_script_agree` covers the new row; a bad `--inject-input` key now
+      reports `valid: esc, f1, space, h`; `--inject-input 3:h` fires and exits 0.)
+- [x] 7. Draw the ring slice after the atlas groups in both the offscreen and
       swapchain paths.
-- [ ] 8. Regenerate the host goldens — `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine
+      (criterion: `render_offscreen` appends a fifth instance range used by BOTH
+      `draw_offscreen_with_rings` and `draw_to_swapchain_with_rings`; the GPU test
+      `a_ring_is_hollow` passes under `MMD_REQUIRE_GPU=1`, which is only possible if
+      the ring geometry actually reached the render pass.)
+- [x] 8. Regenerate the host goldens — `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine
       --test gpu_golden -- --ignored update_host_golden` — and eyeball the new
       images before committing them. Record in Outputs that the goldens moved and
       why.
-- [ ] 9. `graphify update .`.
+      (criterion: command exits 0; `lab/goldens/linux-vulkan/golden.png` byte-compared
+      before/after → **identical** (`ad843c49…`), and the image was opened and viewed.
+      Only `shader_canonical_sha256` moved, in five manifests. See Outputs.)
+- [x] 9. `graphify update .`.
+      (criterion: run as the last action before committing —
+      `Rebuilt: 3833 nodes, 7372 edges, 239 communities`; `graphify-out/` stays unstaged.)
 
 ## Outputs
 
-- A visible, correct hitbox for every entity, at the body radius the sim
-  actually uses.
-- `H` toggles it; `--inject-input h@N` drives it headlessly.
-- `shaders/generated/*` regenerated for SPIR-V; DXIL/metallib placeholders
-  flagged for the reference hosts.
-- Host goldens regenerated — list the files that moved.
-- The gate digest is **unchanged** from T0: `hash=` must match T0's Outputs
-  exactly. Record the observed value here.
+- **A visible, correct hitbox for every entity.** The ring quad is
+  `2 * collision_radius_cells * cell_size_px` centred on the agent, read from
+  the live scenario via `Scenario::collision_radius_cells()`. On the three
+  tracked scenes that is `2 * 6.0 * 4 = 48 px` — exactly the sprite — so the
+  ring sits on the sprite's edge. `RING_OUTER = 0.5` (the quad edge, i.e. the
+  true contact circle) and `RING_INNER = 0.5 - 1/32` give a 1.5 px band.
+  `RING_TINT = [0.0, 0.55, 0.55, 0.55]` is premultiplied cyan at 55 % alpha.
+- **`H` toggles it.** `BoundKey::H` → `InputAction::ToggleHitboxes` (`= 3`,
+  appended). Headless drive is `--inject-input <FRAME>:h` — note the real,
+  test-enforced grammar is `FRAME:KEY`, so this ticket's `h@N` shorthand is
+  spelled `3:h`. Verified: `run --scenario collision_sprite_v1.ron --frames 6
+  --inject-input 3:h` exits 0 with the press fired, and a bad key now reports
+  `valid: esc, f1, space, h`.
+- **The ring reads the radius off the `Simulation`, not the `Scenario`.**
+  Both derive it from `collision_radius_q8`, but only `CollisionParams::radius_cells`
+  is the number the separation pass actually pushes on. Going through the
+  scenario left two derivations free to drift, which would break the one claim
+  the overlay makes. `the_ring_traces_the_real_body` asserts the two agree.
+- **Shaders.** `shaders/generated/sprite.vert.spv` and `sprite.frag.spv`
+  regenerated; `shaders/generated/manifest.json` re-pinned to
+  `canonical a27856e6b17a26f7a3fd91945637c503690564255739c634012098b1c57aff63`,
+  `vert 9d0b637b0a45480fff23b1ef5a8ee903559cdaa83828d1909d17e47e7fda09bb`,
+  `frag 3cd95c43d822b57493e60955bc67823f7ab2510ee77698c3ad98e8a447eae3df`.
+  **The DXIL and metallib slots are untouched placeholders (`deferred: T9` /
+  `T10`) — the Windows and macOS reference hosts owe a native rebuild of these
+  shaders before their backends can run this branch.**
+  Reproduction: this repo tracks no GLSL mirror even though the Linux SPIR-V is
+  built from one (`shaders/generated/README.md`, and `host_shader_spec` expects
+  entry point `main`). The mirror was reconstructed by disassembling the pinned
+  blobs and was **proved byte-identical to both tracked `.spv` files before any
+  edit**, which is what makes this regeneration trustworthy. Recipe:
+  `nix shell github:NixOS/nixpkgs/148bab9c1c3c53136ecb44a6ea356a0ed5b39b06#shaderc`,
+  then `glslc -fshader-stage=vertex sprite.vert.glsl -o sprite.vert.spv` (and
+  `fragment`), where the mirror is `shaders/sprite.hlsl` transliterated with
+  `set = 1, binding = 0` for the uniform block and `set = 2, binding = 0` for
+  the sampler. **Follow-up (out of scope here): nothing in
+  `xtask::shaders::check_shaders` binds the `.spv` blobs to the `.hlsl` source —
+  it only checks that each file matches its recorded hash — so re-pinning
+  `canonical_sha256` without regenerating would pass every offline gate.**
+- **Goldens.** `lab/goldens/linux-vulkan/golden.png` was regenerated with the
+  documented `MMD_UPDATE_GOLDEN=1` command and is **byte-identical** to the
+  previous capture (`ad843c490b952b17dafb9622091b1626a270fbd74047cc5adf3d7b641b1a429c`)
+  — the pixels did **not** move, because the golden scene is
+  `SpriteRenderer::static_demo_groups()`, which draws no rings, and the sprite
+  path is behaviourally unchanged. The image was opened and visually inspected
+  (four sprites, no rings) before committing. What did move is
+  `shader_canonical_sha256`, which is pinned in **five** tracked manifests, all
+  re-pinned:
+  `lab/goldens/{linux-vulkan,windows-d3d12,macos-metal}/manifest.json` and
+  `lab/fixtures/{windows,macos}-candidate/golden/manifest.json`. The last two
+  are live-checked by the mmd-lab merge gate, so missing them would have failed
+  `merge_gate_all_pass_allows_exact_hash`. Because the golden did not move,
+  `lab/fixtures/ubuntu-candidate/readback-pass.png` (byte-identical to the
+  golden) stays valid and needed no regeneration.
+- **The gate digest is unchanged from T0.** Observed:
+  `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+  from `cargo run -- run --agents 5000 --frames 300`, exit 0 — byte for byte
+  T0's value. `git diff --stat crates/mmd-engine/src/sim/` is empty.
+- **Bench integrity.** `bench::runner::run_scale_point` now sets
+  `hitboxes_visible = false`: the bench submits only `out.groups`, so packing
+  rings it never draws would have charged the frozen phase-0 ladder's
+  `upload_ms` for discarded work. Two consequences, recorded rather than fixed:
+  the ladder therefore measures a configuration the app does not ship (the app
+  default is rings **on**, roughly doubling per-frame pack cost — measured at
+  ~1.0–1.4 ns/agent against the sprite pack's 2.02 ns/agent, so ≈5–7 µs at
+  5 000 agents), and the shader's new branch/varying still costs every sprite
+  draw ≈0.03 ms at the recorded 50k point (~1.8 % of `gpu_queue_latency_ms`)
+  regardless of the flag, so GPU-side ladder numbers are a fresh baseline.
+  Measured fill cost of the overlay itself at 5 000 agents: 11.52 Mfrag/frame,
+  ≈0.166 ms upper bound, ≈1 % of the 16.67 ms budget.
+- **Visual evidence gathered off-screen** (the windowed check is still manual):
+  an offscreen readback of `collision_sprite_v1` at 600 agents rendered one thin
+  hollow cyan ring per agent with sprites visible through them, and an A/B with
+  the overlay hidden showed identical sprites and no rings.
+- **`hitboxes=` added to the `run` exit line.** Without it a scripted `h` press
+  produced byte-identical stdout whether the binding worked or was dropped, so
+  the "`--inject-input` drives it headlessly" claim was unfalsifiable. The
+  stdout contract doc in `src/run.rs` is updated and
+  `cli_contract::hitbox_toggle_is_scriptable` now pins the flip end to end.
+- **`every_tracked_manifest_pins_the_live_shader_and_atlas`** (new, headless)
+  walks `lab/goldens/*/manifest.json` and `lab/fixtures/*/golden/manifest.json`
+  and asserts each pin equals the live `host_binding_hashes`. This ticket had to
+  re-pin five manifests by hand and two of them are reachable only from hardware
+  this project does not own; the test turns "five manifests, all remembered"
+  into "every manifest, enforced on every host".
+
+### Follow-ups this ticket deliberately did not take (out of scope)
+
+1. **Nothing binds the SPIR-V blobs to `shaders/sprite.hlsl`.**
+   `xtask::shaders::check_shaders` verifies each artifact against its *recorded
+   hash*, never against the source, and the GLSL mirror the Linux blobs are
+   compiled from is not tracked. Editing the HLSL, re-pinning
+   `canonical_sha256` and leaving the `.spv` alone would pass every offline
+   gate. Suggested fix: track the mirror under `shaders/` and have
+   `check_shaders` recompile and byte-compare when `glslc` is available.
+2. **`validate_resources` compares the manifest to hardcoded literals**, not to
+   SPIR-V reflection, so the advertised resource contract is an unverified
+   assertion. (Verified by hand for this change.)
+3. **Bench reports bind the shader only via `shader_manifest_version: 1`**, a
+   schema number that cannot move when the shader does; `docs/ADR/005` claims
+   the shader manifest binds the baseline, which overstates the gate.
+4. **DXIL/metallib placeholders keep their old hashes** while
+   `canonical_sha256` moved, and `validate_deferred_placeholders` accepts a slot
+   as native on magic bytes alone — a reference host could later drop in blobs
+   built from an older HLSL and pass.
+5. **Stale docs falsified before this ticket:** `testkit/fixtures.rs` describes
+   the collision scenes with pre-T0 numbers ("10 000 agents", "1.25-cell body",
+   "3.75-cell body … 30 px sprite") when both are now 6.0 cells / 48 px, and
+   `docs/ADR/004` still says the frame is "4 atlas draws" when it is now up to
+   five. Both belong to T0/T7's territory.
+6. **`docs/05-testing.md` key list** does not mention `H`.
+7. **`.tmp/` is not gitignored**, so a `git add -A` would sweep orchestrator
+   scratch files into a commit. This ticket staged explicit paths only.
+8. **The renderer's ring append has no zero-allocation gate.** The bench runs
+   rings off by design, so `render_offscreen`'s `extend_from_slice(rings)` and
+   the fifth draw are never inside a `MeasureGuard`;
+   `ring_packing_allocates_nothing` covers the runtime packer only.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked`
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` on the GPU host —
+- [x] `cargo fmt --all -- --check` → clean, no output
+- [x] `cargo test --workspace --locked` → all binaries `ok`, 0 failed
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` on the GPU host —
       including `a_ring_is_hollow`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -p xtask -- shaders --check`
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0, `hash=` equals
+      → `render_correctness`: **19 passed; 0 failed; 0 ignored**, so
+      `a_ring_is_hollow`, `golden_frame_matches`, `golden_drift_fails_on_gpu`,
+      `world_to_clip_matches_gpu_raster` and `renderer_smoke_device_resize_shutdown`
+      all really ran instead of skipping (adapter: NVIDIA GeForce RTX 5060 Ti).
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` → exit 0
+- [x] `nix flake check` → `all checks passed!`
+- [x] `cargo run -p xtask -- bootstrap --check` →
+      `bootstrap: ok (SDL 3.4.12 / sdl3 0.18.4 / sdl3-sys 0.6.7; win/mac native host-gated T9/T10)`
+- [x] `cargo run -p xtask -- shaders --check` →
+      `shaders: ok (spirv+dxil+metallib; native DXIL/metallib regen still host-gated T9/T10)`
+- [x] `cargo run -p xtask -- atlases --check` → `atlases: ok (4 png + manifest)`
+      (the scenario contract's `atlas_count: 4` is unchanged — the ring is
+      procedural, there is no fifth atlas)
+- [x] `cargo run -- run --agents 5000 --frames 300` — exits 0, `hash=` equals
       T0's pinned digest
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
-- [ ] `cargo tree -e features | grep -c testkit` → 0
-- [ ] `git diff --stat crates/mmd-engine/src/sim/` → empty
-- [ ] `graphify update .` run
+      → `clean exit mode=window backend=vulkan tick=300 frames=300
+      hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
+      → `clean exit mode=window ... tick=300 frames=300 hash=5561f201e804…`
+- [x] `cargo test -p mmd-lab --test merge_gate` → 5 passed, 0 failed
+      (added by this ticket: `merge_gate_all_pass_allows_exact_hash` binds the
+      *live* `shader_canonical_sha256` against
+      `lab/fixtures/{windows,macos}-candidate/golden/manifest.json`, so it is the
+      gate that proves the five-manifest re-pin was complete. Re-pinning only the
+      three `lab/goldens/*` manifests would have failed here.)
+- [x] `cargo tree -e features | grep -c testkit` → 0
+- [x] `git diff --stat crates/mmd-engine/src/sim/` → empty
+- [x] `graphify update .` run → `Rebuilt: 3833 nodes, 7372 edges, 239 communities`
+      (`graphify-out/` is gitignored and is never staged)
 - [ ] manual check: `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron`
       — every unit carries a hollow ring that touches its neighbour's ring when
       they press together; `H` hides and shows them. Esc to quit.
+      **Deliberately left unchecked — needs a real window and a human.** Not run
+      headless and does not gate this ticket. Steps are in
+      `ai-artifacts/manual_test_checklist.md` → `## T8 hitbox-ring-overlay`.
+      Off-screen substitute evidence (an offscreen readback rendered to PNG and
+      viewed, plus an A/B with the overlay hidden) is recorded in Outputs.

@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::nav::flow_field::FlowField;
 use crate::render::{ATLAS_COUNT, DrawGroup, SpriteInstance, frame_uv_rect};
-use crate::scenario::{Scenario, ScenarioError};
+use crate::scenario::{MAX_LIVE_AGENTS, Scenario, ScenarioError};
 use crate::sim::{CollisionParams, Simulation};
 
 /// Stable logical key bindings (OS scancodes mapped in app).
@@ -16,15 +16,20 @@ pub enum BoundKey {
     Escape,
     F1,
     Space,
+    H,
 }
 
 /// Input actions consumed by [`Runtime`].
+///
+/// Discriminants are appended, never inserted: a recorded log or a script that
+/// names an action by value must keep meaning the same action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum InputAction {
     Quit = 0,
     ToggleOverlay = 1,
     TogglePause = 2,
+    ToggleHitboxes = 3,
 }
 
 /// Map bound key → action. Contract locked by `input_actions_are_stable`.
@@ -33,7 +38,39 @@ pub fn action_for_key(key: BoundKey) -> InputAction {
         BoundKey::Escape => InputAction::Quit,
         BoundKey::F1 => InputAction::ToggleOverlay,
         BoundKey::Space => InputAction::TogglePause,
+        BoundKey::H => InputAction::ToggleHitboxes,
     }
+}
+
+/// Outer radius of the hitbox ring, in normalised quad units.
+///
+/// `0.5` is the quad edge, and the quad is exactly the body's diameter, so the
+/// ring's outer edge *is* the contact circle the simulation separates on. It
+/// cannot go above `0.5`: past that the circle leaves the quad and the arcs
+/// would be clipped into four disconnected corners.
+pub const RING_OUTER: f32 = 0.5;
+
+/// Inner radius of the hitbox ring, in normalised quad units.
+///
+/// `1/32` of the quad below [`RING_OUTER`], which is 1.5 px on T0's 48 px body
+/// — thick enough to see, thin enough that a crowd still reads as separate
+/// bodies rather than a wash.
+pub const RING_INNER: f32 = RING_OUTER - 1.0 / 32.0;
+
+/// Hitbox ring colour, premultiplied — cyan `(0, 1, 1)` scaled by its own
+/// alpha.
+///
+/// Alpha is deliberately below 1: at `MAX_LIVE_AGENTS` the rings overlap
+/// heavily, and an opaque ring turns a dense crowd into a solid mass instead
+/// of showing where each body ends.
+pub const RING_TINT: [f32; 4] = [0.0, 0.55, 0.55, 0.55];
+
+/// The drawn body radius in pixels.
+///
+/// The single expression the ring packer and its tests share, so "the ring
+/// shows the radius the sim separates on" cannot drift into two answers.
+pub fn ring_radius_px(cell_size_px: f32, radius_cells: f32) -> f32 {
+    radius_cells * cell_size_px
 }
 
 /// Per-frame CPU timings (milliseconds).
@@ -49,8 +86,8 @@ pub struct FrameStats {
 
 /// Result of one runtime frame.
 ///
-/// `groups` borrows reusable pack buffers on [`Runtime`] — valid until next
-/// [`Runtime::tick_and_render`].
+/// `groups` and `rings` borrow reusable pack buffers on [`Runtime`] — valid
+/// until next [`Runtime::tick_and_render`].
 #[derive(Debug, Clone, Copy)]
 pub struct FrameOutput<'a> {
     pub tick_index: u64,
@@ -58,6 +95,10 @@ pub struct FrameOutput<'a> {
     pub paused: bool,
     pub overlay_visible: bool,
     pub groups: &'a [DrawGroup; ATLAS_COUNT],
+    /// Hitbox rings for this frame — one per agent while
+    /// [`Runtime::hitboxes_visible`], empty otherwise and empty on a bodyless
+    /// scene. Drawn after `groups`, never inside them.
+    pub rings: &'a [SpriteInstance],
     pub stats: FrameStats,
     pub state_hash: [u8; 32],
 }
@@ -85,9 +126,15 @@ pub struct Runtime {
     sim: Simulation,
     paused: bool,
     overlay_visible: bool,
+    /// Hitbox rings default to **on**: the body radius is the whole reason the
+    /// separation pass exists, and an overlay nobody switches on shows nobody
+    /// anything.
+    hitboxes_visible: bool,
     last_stats: FrameStats,
     /// Reused atlas buckets (capacity reserved at load → post-warmup pack is zero-alloc).
     groups: [DrawGroup; ATLAS_COUNT],
+    /// Reused ring buffer, same contract as `groups`.
+    ring_instances: Vec<SpriteInstance>,
 }
 
 impl Runtime {
@@ -140,6 +187,12 @@ impl Runtime {
             instances: Vec::with_capacity(n),
         });
 
+        // Reserved at the live-agent ceiling rather than this scene's `n`.
+        // `check_population` caps every scenario family at `MAX_LIVE_AGENTS`,
+        // so this can never be exceeded and a frame can never grow it; the
+        // fixed 240 KB is worth keeping off the per-scene tuning surface.
+        let ring_instances = Vec::with_capacity(MAX_LIVE_AGENTS as usize);
+
         Ok(Self {
             cell_size_px: scenario.cell_size_px() as f32,
             sprite_size_px: scenario.sprite_size_px() as f32,
@@ -148,8 +201,10 @@ impl Runtime {
             sim,
             paused: false,
             overlay_visible: false,
+            hitboxes_visible: true,
             last_stats: FrameStats::default(),
             groups,
+            ring_instances,
         })
     }
 
@@ -198,6 +253,16 @@ impl Runtime {
         self.paused = paused;
     }
 
+    /// Set hitbox-ring visibility directly (as opposed to toggling it via an
+    /// input action).
+    ///
+    /// The benchmark uses this to run with rings off: it submits only the
+    /// atlas groups, so packing rings it then discards would charge the
+    /// frozen ladder's `upload_ms` for work no measured frame draws.
+    pub fn set_hitboxes_visible(&mut self, visible: bool) {
+        self.hitboxes_visible = visible;
+    }
+
     pub fn agent_count(&self) -> usize {
         self.sim.agent_count()
     }
@@ -214,6 +279,11 @@ impl Runtime {
         self.overlay_visible
     }
 
+    /// Whether hitbox rings are drawn (on by default, toggled with `H`).
+    pub fn hitboxes_visible(&self) -> bool {
+        self.hitboxes_visible
+    }
+
     pub fn last_stats(&self) -> FrameStats {
         self.last_stats
     }
@@ -227,12 +297,20 @@ impl Runtime {
         &self.groups
     }
 
+    /// Borrow last packed hitbox rings (updated by [`Self::tick_and_render`]).
+    ///
+    /// Empty when hitboxes are hidden or the scene is bodyless.
+    pub fn ring_instances(&self) -> &[SpriteInstance] {
+        &self.ring_instances
+    }
+
     /// Apply one input action. `Quit` is observed by caller (no local side effect).
     pub fn apply_action(&mut self, action: InputAction) {
         match action {
             InputAction::Quit => {}
             InputAction::ToggleOverlay => self.overlay_visible = !self.overlay_visible,
             InputAction::TogglePause => self.paused = !self.paused,
+            InputAction::ToggleHitboxes => self.hitboxes_visible = !self.hitboxes_visible,
         }
     }
 
@@ -260,6 +338,25 @@ impl Runtime {
             self.sprite_size_px,
             &mut self.groups,
         );
+        // Hidden still means *packed empty*, not stale: `clear` keeps the
+        // capacity, so toggling back on never grows a buffer mid-frame.
+        if self.hitboxes_visible {
+            // Read the radius off the *simulation*, not off the scenario.
+            // Both derive it from `collision_radius_q8`, but only this one is
+            // the number the separation pass actually pushes on — and "the
+            // ring shows the radius the sim separates on" is the entire claim
+            // the overlay makes. Going through the scenario would leave two
+            // derivations free to drift apart.
+            let radius_cells = self.sim.collision().radius_cells;
+            pack_ring_instances(
+                self.sim.agents(),
+                self.cell_size_px,
+                radius_cells,
+                &mut self.ring_instances,
+            );
+        } else {
+            self.ring_instances.clear();
+        }
     }
 
     /// One frame: optional sim tick + rebuild draw groups into reused buffers.
@@ -292,6 +389,7 @@ impl Runtime {
             paused: self.paused,
             overlay_visible: self.overlay_visible,
             groups: &self.groups,
+            rings: &self.ring_instances,
             stats,
             state_hash: self.sim.state_hash(),
         }
@@ -324,6 +422,49 @@ pub fn pack_instance_groups(
             size,
             uv,
             SpriteInstance::WHITE,
+        ));
+    }
+}
+
+/// Pack one hitbox ring per agent into an existing buffer (clear + push; no
+/// realloc if capacity holds).
+///
+/// The quad is the body's *diameter* and is centred on the agent, so the ring
+/// the shader inscribes in it traces the true contact circle — the same radius
+/// the separation pass pushes on, never an approximation of it.
+///
+/// A bodyless scene (`radius_cells == 0`) yields **no** rings. There is no
+/// body to draw, and a zero-radius ring would state something false rather
+/// than state nothing.
+///
+/// Deliberately a free function alongside [`pack_instance_groups`] rather than
+/// part of it: the atlas packer's signature and its callers stay untouched.
+pub fn pack_ring_instances(
+    agents: crate::sim::AgentsView<'_>,
+    cell_size_px: f32,
+    radius_cells: f32,
+    out: &mut Vec<SpriteInstance>,
+) {
+    out.clear();
+
+    // Both factors come from validated scenario fields, so this is finite and
+    // non-negative; the guard is for the bodyless case, where it is exactly 0.
+    let radius_px = ring_radius_px(cell_size_px, radius_cells);
+    if !radius_px.is_finite() || radius_px <= 0.0 {
+        return;
+    }
+
+    let size = [radius_px * 2.0, radius_px * 2.0];
+    let n = agents.x.len();
+    for i in 0..n {
+        let px = agents.x[i] * cell_size_px - radius_px;
+        let py = agents.y[i] * cell_size_px - radius_px;
+        out.push(SpriteInstance::ring(
+            [px, py],
+            size,
+            RING_INNER,
+            RING_OUTER,
+            RING_TINT,
         ));
     }
 }

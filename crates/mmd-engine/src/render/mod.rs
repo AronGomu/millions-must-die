@@ -31,8 +31,8 @@ pub use golden::{
     write_golden_diff,
 };
 pub use instance::{
-    FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, SpriteInstance, clip_to_pixel,
-    world_to_clip,
+    FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, RING_SENTINEL, SpriteInstance,
+    clip_to_pixel, world_to_clip,
 };
 pub use renderer::{
     DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,

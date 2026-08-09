@@ -335,9 +335,17 @@ impl SpriteRenderer {
         })
     }
 
-    /// Upload instances + draw 4 atlas groups into offscreen 1920×1080 (no readback).
-    pub fn draw_offscreen(&mut self, groups: &[DrawGroup]) -> Result<(), RenderError> {
-        let _fence = self.draw_offscreen_acquire_fence(groups)?;
+    /// Upload instances + draw 4 atlas groups and a hitbox-ring overlay into
+    /// offscreen 1920×1080 (no readback).
+    ///
+    /// Pass an empty `rings` slice for the plain 4-group frame; the ring draw
+    /// is skipped entirely rather than issued empty.
+    pub fn draw_offscreen_with_rings(
+        &mut self,
+        groups: &[DrawGroup],
+        rings: &[SpriteInstance],
+    ) -> Result<(), RenderError> {
+        let _fence = self.draw_offscreen_into(groups, rings)?;
         // Drop fence without waiting — interactive path does not track queue depth here.
         Ok(())
     }
@@ -355,7 +363,33 @@ impl SpriteRenderer {
         &mut self,
         groups: &[DrawGroup],
     ) -> Result<unsafe_sys::RawFrameFence, RenderError> {
+        self.draw_offscreen_into(groups, &[])
+    }
+
+    /// Draw the four atlas groups, then the hitbox rings, into the offscreen
+    /// target and return the render submit's fence.
+    ///
+    /// Rings ride the *same* pass, pipeline and blend state as the sprites —
+    /// they are extra instances in a fifth range, not a second technique. The
+    /// fragment stage picks the ring branch off a sentinel in `uv_rect`
+    /// ([`SpriteInstance::ring`]), so the atlas bound for that draw is never
+    /// sampled; atlas 0 is bound anyway because the pipeline declares one
+    /// sampler and a draw must not leave it unbound.
+    fn draw_offscreen_into(
+        &mut self,
+        groups: &[DrawGroup],
+        rings: &[SpriteInstance],
+    ) -> Result<unsafe_sys::RawFrameFence, RenderError> {
         self.validate_groups(groups)?;
+
+        // Checked before the first byte is written: `pack_scratch` is reserved
+        // at `MAX_INSTANCES` exactly so a frame never grows it, and a guard
+        // that ran after the appends would let the overflowing frame realloc
+        // (and permanently double the buffer) before reporting the error.
+        let total: usize = groups.iter().map(|g| g.instances.len()).sum::<usize>() + rings.len();
+        if total > MAX_INSTANCES as usize {
+            return Err(RenderError::Sdl(format!("too many instances {total}")));
+        }
 
         let device = &self.ctx.device;
         let slot = self.frame_slot % FRAMES_IN_FLIGHT;
@@ -370,12 +404,13 @@ impl SpriteRenderer {
             let count = g.instances.len() as u32;
             ranges[i] = (start, count);
         }
-        if self.pack_scratch.len() as u32 > MAX_INSTANCES {
-            return Err(RenderError::Sdl(format!(
-                "too many instances {}",
-                self.pack_scratch.len()
-            )));
-        }
+        // Rings go last so they land on top of the sprites they annotate.
+        let ring_range = {
+            let start = self.pack_scratch.len() as u32;
+            self.pack_scratch.extend_from_slice(rings);
+            (start, rings.len() as u32)
+        };
+        debug_assert!(self.pack_scratch.len() <= MAX_INSTANCES as usize);
 
         // Upload instances (cycled buffer).
         {
@@ -455,6 +490,27 @@ impl SpriteRenderer {
             pass.draw_indexed_primitives(6, *count, 0, 0, 0);
         }
 
+        // Hitbox rings: after every atlas group, same pass and pipeline.
+        let (ring_start, ring_count) = ring_range;
+        if ring_count > 0 {
+            // Atlas 0 satisfies the pipeline's one declared sampler; the ring
+            // branch never samples it. Without this bind, a frame whose four
+            // groups were all empty would draw with no texture bound at all.
+            pass.bind_fragment_samplers(
+                0,
+                &[TextureSamplerBinding::new()
+                    .with_texture(&self.atlas_tex[0])
+                    .with_sampler(&self.sampler)],
+            );
+            pass.bind_vertex_buffers(
+                1,
+                &[BufferBinding::new()
+                    .with_buffer(&self.instance_bufs[slot])
+                    .with_offset(ring_start * SpriteInstance::STRIDE)],
+            );
+            pass.draw_indexed_primitives(6, ring_count, 0, 0, 0);
+        }
+
         device.end_render_pass(pass);
         unsafe_sys::submit_acquire_raw_fence(device, cmd).map_err(RenderError::Sdl)
     }
@@ -464,7 +520,16 @@ impl SpriteRenderer {
         &mut self,
         groups: &[DrawGroup],
     ) -> Result<Readback, RenderError> {
-        self.draw_offscreen(groups)?;
+        self.draw_offscreen_readback_with_rings(groups, &[])
+    }
+
+    /// [`Self::draw_offscreen_readback`] with a hitbox-ring overlay.
+    pub fn draw_offscreen_readback_with_rings(
+        &mut self,
+        groups: &[DrawGroup],
+        rings: &[SpriteInstance],
+    ) -> Result<Readback, RenderError> {
+        self.draw_offscreen_with_rings(groups, rings)?;
         self.readback_offscreen()
     }
 
@@ -509,7 +574,17 @@ impl SpriteRenderer {
         window: &Window,
         groups: &[DrawGroup],
     ) -> Result<(), RenderError> {
-        self.draw_offscreen(groups)?;
+        self.draw_to_swapchain_with_rings(window, groups, &[])
+    }
+
+    /// [`Self::draw_to_swapchain`] with a hitbox-ring overlay.
+    pub fn draw_to_swapchain_with_rings(
+        &mut self,
+        window: &Window,
+        groups: &[DrawGroup],
+        rings: &[SpriteInstance],
+    ) -> Result<(), RenderError> {
+        self.draw_offscreen_with_rings(groups, rings)?;
         let cmd = self.ctx.device.acquire_command_buffer()?;
         unsafe_sys::present_blit(
             &self.ctx.device,

@@ -146,6 +146,12 @@ fn run_scale_point(
 ) -> Result<ScaleResult, BenchError> {
     let mut runtime = Runtime::load(scenario_path, Some(agent_count))?;
     assert!(!runtime.paused());
+    // The bench submits `out.groups` only (see `submit_frame`), so a packed
+    // ring is work no measured frame ever draws. Leaving the overlay on would
+    // charge the frozen phase-0 ladder's `upload_ms` for it and make new
+    // samples incomparable with the recorded evidence.
+    runtime.set_hitboxes_visible(false);
+    assert!(!runtime.hitboxes_visible());
 
     let mut queue: FenceQueue<BenchFence> = FenceQueue::new(policy.frames_in_flight);
     assert_eq!(policy.frames_in_flight, FRAMES_IN_FLIGHT);

@@ -11,9 +11,12 @@ use std::sync::{Arc, Mutex, OnceLock};
 use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
+use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::SpatialGrid;
-use mmd_engine::testkit::{FIXTURE_DENSE_V1, GridSpec, Harness};
+use mmd_engine::testkit::{
+    COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness, ScenarioSource, scene_path,
+};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -244,6 +247,83 @@ fn an_armed_thread_allocations_do_reach_a_measure_scope() {
         "an armed worker's allocation was invisible to the measuring thread; \
          a zero-allocation assertion would then say nothing about the pool"
     );
+}
+
+/// The hitbox overlay does not get to spend the frame budget it was added
+/// under: packing a ring per agent reuses a buffer reserved at load.
+///
+/// Both states are measured. Rings *off* is the cheap half and would pass on
+/// its own even if the visible path reallocated every frame, so measuring only
+/// one of them would leave the interesting case uncovered.
+///
+/// This lives here, not in `render_correctness.rs`, because the counting
+/// allocator is installed in *this* test binary — a `MeasureGuard` anywhere
+/// else records nothing and the assertion would pass vacuously.
+#[test]
+fn ring_packing_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE)))
+        .agents(512)
+        .build()
+        .expect("collision scene");
+    assert!(
+        h.sim().collision().enabled(),
+        "the scene must have a body, or there are no rings to measure"
+    );
+    assert!(
+        h.runtime().hitboxes_visible(),
+        "rings are on by default; this test must measure the visible path"
+    );
+
+    // Warm-up outside the scope: whatever the first pack grows, it grows now.
+    h.step_exact(2);
+    h.runtime_mut().pack_groups();
+    let packed = h.runtime().ring_instances().len();
+    assert_eq!(
+        packed,
+        h.alive_count(),
+        "warm-up must pack a full set of rings"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..8 {
+        h.runtime_mut().pack_groups();
+        std::hint::black_box(h.runtime().ring_instances().len());
+    }
+    assert_eq!(guard.allocations(), 0, "packing rings allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    // …and with the overlay hidden. `clear()` must keep the capacity, so
+    // toggling back on does not re-grow the buffer inside a later frame.
+    h.runtime_mut().apply_action(InputAction::ToggleHitboxes);
+    assert!(!h.runtime().hitboxes_visible());
+    h.runtime_mut().pack_groups();
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..8 {
+        h.runtime_mut().pack_groups();
+        std::hint::black_box(h.runtime().ring_instances().len());
+    }
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "packing with rings hidden allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    // Toggling back on inside a measured scope must not allocate either.
+    h.runtime_mut().apply_action(InputAction::ToggleHitboxes);
+    let guard = MeasureGuard::enter();
+    h.runtime_mut().pack_groups();
+    std::hint::black_box(h.runtime().ring_instances().len());
+    assert_eq!(guard.allocations(), 0, "re-showing the rings allocated");
+    guard.assert_zero();
+    drop(guard);
+    assert_eq!(h.runtime().ring_instances().len(), packed);
 }
 
 #[test]
