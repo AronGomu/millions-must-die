@@ -358,6 +358,14 @@ manifests to re-pin, and the gap that remains.
   as written rather than being redesigned here — but a follow-up wanting the
   ring to trace the *exact* contact circle should divide
   `runtime::ring_quad_size_px` by `√2`.
+  ***Superseded by T10 (`736c803`).*** The correctness reviewer ruled this a
+  defect, not an accepted approximation: the overlay exists to let a human judge
+  contact, and at √2 two bodies at exactly contact distance render with
+  *overlapping* rings rather than tangent ones. T10 divided both axes by `√2`,
+  corrected the claims in `runtime.rs` and `render_correctness.rs`, and added
+  `the_rings_of_two_touching_bodies_are_tangent`, which asserts the geometric
+  property instead of re-deriving the formula — it fails under the old `2r`
+  form. See ADR 012 for the resolution.
 
 **Artifacts that moved:**
 

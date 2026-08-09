@@ -93,6 +93,9 @@ page, an enforced system→test map, and a glossary that names the new vocabular
   - **Known follow-up, record it:** the ring ellipse ships at
     `[2r·tile_w, 2r·tile_h]` as the ticket specified, which is √2 larger than the
     exact projection of a circular body onto the isometric floor.
+    ***Superseded by T10 (`736c803`)*** — the review ruled it a defect, not an
+    accepted approximation, and T10 divided both axes by `√2`. ADR 012 carries
+    the resolution; this line is kept only as per-ticket history.
   - **Two residual risks to state plainly:** (a) the frozen phase-0 bench ladder
     is **no longer comparable at any rung** — the measured frame changed four
     ways at once (population, body size, projection, an extra pipeline); (b) the
