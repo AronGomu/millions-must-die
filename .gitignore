@@ -1,3 +1,7 @@
 /target
 
 .agentsystem/
+
+# Generated knowledge graph (AGENT.md § graphify). Rebuilt with `graphify update .`;
+# tens of megabytes, and stale the moment the tree moves.
+/graphify-out/
