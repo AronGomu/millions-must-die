@@ -21,6 +21,12 @@
 | neighbour bin | Preallocated uniform-grid bucket agents are sorted into each tick | `crates/mmd-engine/src/sim/spatial.rs`, `struct SpatialGrid`                 |
 | coincidence tie-break | Deterministic push direction for agents at (near-)identical positions, keyed on the index pair | `crates/mmd-engine/src/sim/collision.rs`, `const SEPARATION_DIR16` |
 | collision scene | A scenario version family requiring a nonzero body radius and locked geometry | `crates/mmd-engine/src/scenario.rs`, `const COLLISION_SCENE_V1`             |
+| separation phase | Cadence spreading the neighbour scan and grid rebuild over `separation_phases` ticks; agent `i` recomputes when `i % phases == tick % phases` | `crates/mmd-engine/src/scenario.rs`, `separation_phases`                    |
+| push priority / mass class | Per-agent byte scaling a neighbour's push by `mass[j] / mass[i]`, so heavy agents push harder and are pushed less | `crates/mmd-engine/src/sim/agents.rs`, `mass`, `inv_mass`                   |
+| bin stamp | Per-bin rebuild counter that makes a stale bin read as empty without clearing it | `crates/mmd-engine/src/sim/spatial.rs`, `SpatialGrid::stamp`                |
+| row window | The 3×3 neighbour window walked as three contiguous per-row runs instead of nine per-bin slices | `crates/mmd-engine/src/sim/spatial.rs`, `SpatialGrid::agents_in_bin_row`    |
+| separation pool | Persistent worker pool running the separation pass across `separation_threads` participants, spawned once at construction | `crates/mmd-engine/src/sim/pool.rs`, `struct SeparationPool`                |
+| identity tuning | The default value (`1`) of a scenario knob, at which the tuned code path degenerates to bit-identical behaviour with the untuned engine | `crates/mmd-engine/src/scenario.rs`, `separation_phases`/`mass_class_count`/`separation_threads` |
 
 ## Render
 

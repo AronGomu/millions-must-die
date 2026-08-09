@@ -1,6 +1,6 @@
 # ADR 010: Separation Amortisation, Bin Stamping + Push Priority
 
-- Status: Proposed — accepted when `plan/horde-sim-headroom` T7 lands
+- Status: Accepted
 - Date: 2026-08-09
 - Supplements: [ADR 009](009_ADR_agent_separation_and_collision.md) — the
   separation *model* is unchanged. This records how often it runs, how it is

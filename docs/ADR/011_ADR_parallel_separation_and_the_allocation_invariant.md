@@ -1,6 +1,6 @@
 # ADR 011: Parallel Separation + the Allocation Invariant
 
-- Status: Proposed — accepted when `plan/horde-sim-headroom` T7 lands
+- Status: Accepted
 - Date: 2026-08-09
 - Supplements: [ADR 010](010_ADR_separation_amortisation_and_push_priority.md)
 - Supplements: [ADR 009](009_ADR_agent_separation_and_collision.md) — the
@@ -92,9 +92,32 @@ does not.
 ## Consequences
 
 - `Simulation` gains `Option<Arc<SeparationPool>>`. It stays `Clone`, and clones
-  share one pool. Ticking two clones concurrently is rejected by a debug
-  assertion rather than being made safe; nothing in the tree does it, and
-  pretending otherwise would be a guarantee this does not have.
+  share one pool. Ticking two clones concurrently is rejected by a real
+  `assert!`, not a `debug_assert!` — the pool's `in_use` check. `Simulation` is
+  `pub`, `Clone` and `Send`, so two clones ticking concurrently is reachable
+  from entirely safe code, and it races on the shared job cell; a check that a
+  release build compiled away would leave that race behind a safe API. The
+  check fires *before* the rendezvous barrier, which is what keeps a caught
+  re-entrancy from wedging the gate it exists to protect.
+- **The rendezvous is panic-safe.** A chunk that panics no longer abandons the
+  other participants: every participant — the ticking thread included — catches
+  its own unwind with `catch_unwind`, sets a shared `poisoned` flag, and still
+  reaches the `done` barrier. Only once every participant has arrived does the
+  ticking thread re-raise: its own panic verbatim via `resume_unwind`, or a
+  worker's as a fresh panic naming it. Before this, an abandoned rendezvous left
+  the other participants blocked on `done` forever, and — when the panicking
+  thread was the ticking thread — its unwind then dropped the `Simulation`,
+  which made `SeparationPool::drop` wait on `gate` behind workers parked on
+  `done`, hanging the process mid-unwind instead of failing a test. A test
+  injects `phases = 0` on every participant at once to pin this.
+- **Job publication does not rest on `Barrier`'s ordering.** `std` documents
+  that a `Barrier` is reusable across generations, not that it supplies a
+  happens-before edge, so an `unsafe` read must not lean on that alone. Two
+  explicit `AtomicU64` counters — `publish`, released by the ticking thread and
+  acquired by every worker before it reads the job; `completed`, released by
+  every worker after it writes its chunk and acquired by the ticking thread
+  after `done`, before it reads `sep_x` / `sep_y` back — carry the ordering
+  argument in both directions instead.
 - Dropping the last `Simulation` sharing a pool sets the shutdown flag, releases
   the workers through the gate and joins them. No thread outlives the process.
 - One `unsafe` block on the frame path, in one file, with its safety argument
@@ -104,6 +127,15 @@ does not.
   landed first. It divides the same pass by a known factor with no new failure
   modes; threading brings false sharing, a shutdown path and a determinism
   surface to defend. Cheap and safe first.
+- **Two residual risks, left open rather than fixed here.** (a) The pinned
+  toolchain (stable 1.95.0) runs neither `cargo miri` nor `loom`, so every
+  soundness claim in `crates/mmd-engine/src/sim/pool.rs` — the `Send` impl on
+  `Job`, the `Sync` impl on `Shared`, the release-acquire pairing — is prose
+  plus tests, not machine-checked. (b) `SeparationPool::new` spawns workers in
+  a loop; if `thread::spawn` fails partway through, the already-spawned workers
+  park at the gate forever with no participant left to release them. Fixing it
+  needs an `Option<Self>` plus a condvar-based teardown path and is out of this
+  plan's scope.
 - **No claim of speed is made here about this engine.** Performance measurement
   is retired for phase 0. The acceptance criteria for the pool are behavioural:
   identical output at every thread count, zero allocation on every thread, and a

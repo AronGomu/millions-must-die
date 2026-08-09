@@ -251,7 +251,7 @@ Docs have no unit test, so the contract test *is* the test.
 
 ## Impl steps
 
-- [ ] 1. `docs/ADR/010_ADR_separation_amortisation_and_push_priority.md`
+- [x] 1. `docs/ADR/010_ADR_separation_amortisation_and_push_priority.md`
       **already exists**, authored alongside the plan with
       `Status: Proposed — accepted when plan/horde-sim-headroom T7 lands`.
       Read it end to end against the code T1–T6 actually shipped, correct any
@@ -284,7 +284,7 @@ Docs have no unit test, so the contract test *is* the test.
       index-disjointness the worker pool depends on. The transferable half —
       one contiguous run per row — shipped instead and is bit-exact.
       State plainly that no number in this ADR is a measurement of this engine.
-- [ ] 2. `docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md`
+- [x] 2. `docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md`
       **already exists**, also `Status: Proposed`. Same treatment: verify
       against the shipped pool, correct drift, flip to `- Status: Accepted`.
       Its content must still cover:
@@ -305,7 +305,7 @@ Docs have no unit test, so the contract test *is* the test.
       off. Record the two live limitations: cloned `Simulation`s share one pool
       and must not tick concurrently (debug-asserted), and every tracked scene
       stays at one thread so the merge gate reproduces on any host.
-- [ ] 3. Edit `docs/ADR/README.md`: append
+- [x] 3. Edit `docs/ADR/README.md`: append
       `10. [Separation amortisation, bin stamping + push priority](010_ADR_separation_amortisation_and_push_priority.md)`
       and
       `11. [Parallel separation + the allocation invariant](011_ADR_parallel_separation_and_the_allocation_invariant.md)`
@@ -313,7 +313,7 @@ Docs have no unit test, so the contract test *is* the test.
       *"ADR 009 is **supplemented** by ADR 010 and ADR 011 (2026-08-09): the
       separation model is unchanged; how often it runs, how it is indexed, how
       it is weighted and which threads run it are recorded there."*
-- [ ] 4. `docs/horde-sim-headroom-architecture.html` **already exists**, authored
+- [x] 4. `docs/horde-sim-headroom-architecture.html` **already exists**, authored
       alongside the plan. Read it against the shipped code and correct any
       drift — field names, caps, which tracked scene carries which knob, the
       pass order in the first SVG, the barrier handshake in the second. It is
@@ -321,37 +321,45 @@ Docs have no unit test, so the contract test *is* the test.
       script, font or image), dark by default with a
       `@media (prefers-color-scheme: light)` override, and carries a *What this
       page does not claim* panel. Keep all four properties.
-- [ ] 5. Edit `docs/technical-prototype-functional-close.md`, row **Collision —
+- [x] 5. Edit `docs/technical-prototype-functional-close.md`, row **Collision —
       agent separation and neighbour bins**: append the twenty
       `separation.rs` names from Inputs, comma-separated, each in backticks,
       keeping the existing names and the trailing
       `` | `crates/mmd-engine/tests/separation.rs` | `` cell.
-- [ ] 6. Same file, row **Scenario loading and hash contract**: append the seven
+- [x] 6. Same file, row **Scenario loading and hash contract**: append the seven
       `scenario_contract.rs` names. Row **Allocation invariant**: append
       `a_threaded_collision_tick_allocates_nothing`.
-- [ ] 7. Same file, in `## What "closed" means here`, add one row:
+- [x] 7. Same file, in `## What "closed" means here`, add one row:
       `| Simulation headroom knobs | phase 0.5 — separation cadence, push priority and worker count are scenario data; every scene at the identity tuning walks a bit-identical path, proven by pinned digests |`.
       Re-read the banned-token list in Context before saving this line.
-- [ ] 8. Edit `tests/validation_contract.rs`: add the same 28 names to the three
-      matching `SystemCoverage` entries in `SCOPE_SYSTEMS`. Leave `gpu_only`
-      empty for all of them. **Do not change `SCOPE_SYSTEM_COUNT`** — it stays
-      `12`.
-- [ ] 9. Fix `MIN_SCANNED_TESTS`. Temporarily set it to `usize::MAX`, run
+- [x] 8. Edit `tests/validation_contract.rs`: add the 28 T1–T6 names to the
+      three matching `SystemCoverage` entries in `SCOPE_SYSTEMS`, plus the 17
+      T8/T9 names — 13 in two **new** entries ("Debug hitbox overlay",
+      "Isometric projection and depth order", both filed under
+      `render_correctness.rs`) and 4 more appended to the existing Runtime
+      frame loop / Allocation invariant / App and CLI lifecycle entries whose
+      files they land in. Left `gpu_only` empty for all of them. **Deviation
+      from this step's literal "stays 12" text, logged in the worker's final
+      report:** `SCOPE_SYSTEM_COUNT` changed `12` → `14`, per this ticket's own
+      Assumptions-in-force bullet (line ~36) and the parent's hard constraint
+      3 — both say T8 and T9 add real systems and the count must move; this
+      step's instruction not to move it predates T8/T9 landing.
+- [x] 9. Fix `MIN_SCANNED_TESTS`. Temporarily set it to `usize::MAX`, ran
       `cargo test -p millions_must_die --test validation_contract every_system_has_a_test`,
-      read the real total out of the panic message, then set the constant to
-      that number.
-- [ ] 10. Edit `docs/GLOSSARY.md`, adding one entry each for: **separation
+      read the real total (277) out of the panic message, then set the
+      constant to that number.
+- [x] 10. Edit `docs/GLOSSARY.md`, adding one entry each for: **separation
       phase**, **push priority / mass class**, **bin stamp**, **row window**,
       **separation pool**, **identity tuning**. Keep each to the file's existing
       one-or-two-sentence house style.
-- [ ] 11. Edit `AGENT.md` under `## Status`: add one sentence — *"Phase 0.5
+- [x] 11. Edit `AGENT.md` under `## Status`: add one sentence — *"Phase 0.5
       (`plan/horde-sim-headroom`) adds three scenario-gated simulation knobs —
       `separation_phases`, `mass_class_count`, `separation_threads` — each
       defaulting to the identity value 1; see ADR 010 and ADR 011."* Do not
       touch the performance paragraph.
-- [ ] 12. Add the new architecture page to whichever list in `docs/README.md`
+- [x] 12. Add the new architecture page to whichever list in `docs/README.md`
       enumerates the architecture HTML pages, matching the existing entries.
-- [ ] 13. Run validation.
+- [x] 13. Run validation.
 
 ## Outputs
 
@@ -373,16 +381,26 @@ Docs have no unit test, so the contract test *is* the test.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p millions_must_die --test validation_contract` — green,
-      including `every_system_has_a_test` and `no_perf_claim_in_docs`
-- [ ] `cargo test --workspace --locked` — green
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `cargo fmt --all -- --check` — clean, no output
+- [x] `cargo test -p millions_must_die --test validation_contract` — green (7
+      passed), including `every_system_has_a_test` and `no_perf_claim_in_docs`
+- [x] `cargo test --workspace --locked` — green (35 `test result: ok` blocks,
+      0 failed, exit 0)
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` —
+      clean
 - [ ] manual check — `xdg-open docs/horde-sim-headroom-architecture.html`:
-      renders dark by default, no layout overflow, no network request
-- [ ] manual check — every link in `docs/ADR/README.md` resolves
-- [ ] `nix flake check`
-- [ ] app functional — no code touched; `cargo run -- run --agents 5000 --frames 300` exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] commit msg draft: `docs(sim): record the phase-0.5 scale, headroom and isometric decisions`
+      renders dark by default, no layout overflow, no network request — this
+      needs a real browser window; left unchecked per the manual-box rule.
+      Static evidence (no `http(s)://`, no external `<script src>`/`<link
+      rel="stylesheet">`, `color-scheme: dark` as the default `:root`) is
+      recorded in `ai-artifacts/manual_test_checklist.md` § T7.
+- [x] manual check — every link in `docs/ADR/README.md` resolves — verified by
+      resolving all twelve `NNN_ADR_*.md` targets (001–012) against the
+      filesystem; all present
+- [x] `nix flake check` — "all checks passed!"
+- [x] app functional — no code touched; `cargo run -- run --agents 5000 --frames 300` exits 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte —
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored) —
+      "Rebuilt: 3879 nodes, 7496 edges, 254 communities"
+- [x] commit msg draft: `docs(sim): record the phase-0.5 scale, headroom and isometric decisions`

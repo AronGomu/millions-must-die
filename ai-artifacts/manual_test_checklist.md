@@ -364,3 +364,48 @@ ellipses over everything. What is left needs eyes on a real window.
       Outputs). Confirm whether it reads as "the unit's footprint" or as
       "noticeably too big". If too big, dividing `runtime::ring_quad_size_px` by
       `√2` is the one-line follow-up.
+
+## T7 docs-adr-and-system-map
+
+Docs-only ticket: no engine code changed. ADR 010 and ADR 011 were verified
+against the shipped `sim/collision.rs`, `sim/spatial.rs` and `sim/pool.rs` and
+flipped from `Proposed` to `Accepted`; ADR 011 also corrected a factually wrong
+"debug assertion" bullet (the pool's re-entrancy check is a real `assert!`,
+promoted from `debug_assert!` by T6) and gained the panic-safety and
+release-acquire ordering claims T6 actually shipped. ADR 012 is new, recording
+the StarCraft-scale resize and the render decisions T0/T8/T9 shipped, including
+the `GREATER`/clear-`0` depth convention, the known gaps (`.spv` not bound to
+`sprite.hlsl`, native DXIL/metallib blob debt, the √2 ring-ellipse margin, the
+frozen bench ladder's lost comparability, the pixel-gate tautology on the
+Ubuntu fixture) named as risks rather than fixed. Everything automatable is
+green: `cargo fmt --all -- --check`, `cargo test --workspace --locked` (35
+`test result: ok` blocks, 0 failed), `cargo test -p millions_must_die --test
+validation_contract` (7/7, including `every_system_has_a_test` at
+`SCOPE_SYSTEM_COUNT = 14` and `no_perf_claim_in_docs`), `cargo clippy
+--workspace --all-targets --all-features -- -D warnings`, `nix flake check`,
+all three xtask `--check` commands, and the gate smoke reproducing the
+T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte via `cargo run -- run --agents 5000 --frames 300`.
+
+What was checked without a GPU or a window: every numbered link in
+`docs/ADR/README.md` (001–012) resolves to a file that exists in
+`docs/ADR/`; `docs/horde-sim-headroom-architecture.html` and
+`ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.html` contain no
+`http://`/`https://` reference, no external `<script src>` or
+`<link rel="stylesheet">`, and declare `color-scheme: dark` as their default
+`:root`, with a `prefers-color-scheme: light` override present — the same
+static checks used for every other architecture page in this repo, since
+opening a real browser window is out of scope for a headless worker.
+
+- [ ] Open `docs/horde-sim-headroom-architecture.html` in a real browser: it
+      renders dark by default (no flash of light theme before the media query
+      applies), nothing overflows the content column at common widths, and the
+      browser's network panel shows no request while the page loads.
+- [ ] Open `ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.html` the same way:
+      the two ticket-flow SVGs (T1–T7, then T0/T8/T9) render without clipping,
+      and the ticket-order table shows all ten tickets (T0 first, T7 last).
+- [ ] Click every link in `docs/ADR/README.md` in a browser or editor preview
+      and confirm each opens the right ADR body, including the two new
+      "superseded in part" / "supplemented" notes at the top pointing at
+      ADR 010, ADR 011 and ADR 012.

@@ -111,31 +111,44 @@
   <p class="kicker">Millions Must Die · Plan · 2026-08-09 · plan/horde-sim-headroom</p>
   <h1>Horde sim headroom</h1>
   <p class="lede">
-    Five changes to one loop — the per-agent, per-tick neighbour scan — with no
-    behavioural guarantee spent. Every capability is scenario data with an
-    identity default, so a scene that does not opt in walks a bit-identical path.
+    Two things, one branch: resize the game to StarCraft scale, and keep the
+    headroom work in the per-agent, per-tick neighbour scan that resize makes
+    hotter. No behavioural guarantee spent. Every capability is scenario data
+    with an identity default, so a scene that does not opt in walks a
+    bit-identical path.
   </p>
   <div class="stats">
-    <div class="stat"><b>7</b><span>tickets</span></div>
+    <div class="stat"><b>10</b><span>tickets</span></div>
     <div class="stat"><b>5</b><span>backlog items</span></div>
     <div class="stat"><b>3</b><span>scenario knobs</span></div>
-    <div class="stat"><b>28</b><span>new tests</span></div>
+    <div class="stat"><b>45</b><span>new tests</span></div>
     <div class="stat"><b>0</b><span>new dependencies</span></div>
   </div>
 </header>
 
 <h2>Goal</h2>
 <p>
-  Buy simulation headroom in the one loop that scales with agent count, without
-  spending a guarantee. Five changes from the research backlog
-  (<code>.tmp/RESEARCH_they_are_billions_performance.md</code> § C.8, items 1, 3,
-  5, 8, 9), all confined to <code>crates/mmd-engine/src/sim/</code>.
+  <strong>First, resize the game.</strong> Decision of 2026-08-09: make the
+  game feel closer to StarCraft — fewer entities, but bigger. The absolute
+  simultaneous-entity ceiling becomes <code>5 000</code>; sprites grow to
+  48 px with the body radius exactly half a sprite; every entity draws its own
+  hitbox ring; the render layer moves to a 2:1 isometric projection with a
+  real depth order.
 </p>
 <p>
-  <strong>Success</strong> = every new capability is scenario data with an
-  identity default, every tracked scene that does not opt in keeps a
-  bit-identical state hash, the zero-allocation invariant still holds on every
-  thread, and the merge gate is green after each ticket.
+  <strong>Second, keep the headroom work.</strong> The resize makes the one
+  loop that scales with agent count <em>hotter, not colder</em> — the body
+  radius grows from <code>102 q8</code> to <code>1 536 q8</code>. Five changes
+  from the research backlog
+  (<code>.tmp/RESEARCH_they_are_billions_performance.md</code> § C.8, items 1, 3,
+  5, 8, 9) land on top, all confined to <code>crates/mmd-engine/src/sim/</code>.
+</p>
+<p>
+  <strong>Success</strong> = T0 is the only ticket that moves a hash; every
+  ticket after it keeps a bit-identical state hash on every tracked scene that
+  does not opt in; every new simulation capability is scenario data with an
+  identity default; the zero-allocation invariant still holds on every thread;
+  and the merge gate is green after each ticket.
 </p>
 
 <h2>Scope</h2>
@@ -143,30 +156,43 @@
   <div class="card in">
     <h3>In</h3>
     <ul class="plain">
+      <li><b>T0</b> · <code>MAX_LIVE_AGENTS = 5_000</code>; sprites 48 px; body radius exactly half a sprite; gate digest re-pinned once.</li>
       <li>Three scenario knobs: <code>separation_phases</code>, <code>mass_class_count</code>, <code>separation_threads</code> — each identity <code>1</code>, each bounded, each rejected on a bodyless scene.</li>
       <li><b>1</b> · amortise the scan <em>and</em> the grid rebuild over N ticks.</li>
       <li><b>5</b> · stamped bin counts; no per-rebuild clear; O(1) <code>bin_count</code>.</li>
       <li><b>9 (adapted)</b> · row-contiguous scan + empty-window early-out.</li>
       <li><b>8</b> · per-agent push priority, so a goal sink breaks its own symmetry.</li>
       <li><b>3</b> · parallel separation on a persistent pool, bit-identical at any thread count.</li>
-      <li>Docs: ADR 010, ADR 011, architecture page, close-doc system map, glossary.</li>
+      <li><b>T8</b> · a procedural hitbox ring, on by default, toggled with <code>H</code>.</li>
+      <li><b>T9</b> · 2:1 isometric projection with an alpha-tested-cutout depth order; the sim stays Cartesian.</li>
+      <li>Docs: ADR 010, ADR 011, ADR 012, architecture page, close-doc system map, glossary.</li>
     </ul>
   </div>
   <div class="card out">
     <h3>Out</h3>
     <ul class="plain">
       <li><strong>Any performance number, anywhere.</strong> Perf gating stays retired; every ticket is accepted on behaviour.</li>
-      <li>Renderer, shaders, culling, isometric depth (backlog 2 and 4) — separate plan.</li>
+      <li>Camera control. T9 ships a fixed view centred on the destination cell; scrolling, edge-pan, zoom and selection are Phase 1.</li>
       <li>Flow field tiling, dirty flags, LOS pass (backlog 6 and 7) — Phase 1, when walls become destructible.</li>
       <li>Flocking goal propagation (backlog 10) — needs targeting.</li>
-      <li>The gate scene's walk. <code>technical_prototype_v1</code> stays pinned to identity.</li>
+      <li>Retuning the <code>fixture_*</code> scenes — their arrival-tick constants are calibrated against their current bodies.</li>
       <li>Any new third-party dependency. <code>rayon</code> is not added.</li>
-      <li>Hard non-overlap. Unchanged from ADR 009 — this is steering.</li>
+      <li>Hard non-overlap. Unchanged from ADR 009 — this is steering, and the bigger body makes overlap rarer and more visible, not impossible.</li>
     </ul>
   </div>
 </div>
 
 <h2>Ticket flow</h2>
+
+<p>
+  Two sub-graphs share one root. <code>T0</code> (the resize) feeds both the
+  headroom sub-graph below (<code>T1</code>&ndash;<code>T7</code>, unchanged
+  by the resize) and the render sub-graph
+  (<code>T8</code>&nbsp;&rarr;&nbsp;<code>T9</code>), and both
+  <code>T6</code> and <code>T9</code> feed <code>T7</code>. The full graph is
+  in <code>PLAN_2026_08_09_horde-sim-headroom.md</code>'s mermaid diagram; the
+  figure below is the sim-only slice that predates the resize decision.
+</p>
 
 <div class="figure scroll">
 <svg viewBox="0 0 940 268" width="100%" height="268" role="img"
@@ -227,6 +253,47 @@
   false sharing, a shutdown path and a determinism surface to defend.
 </p>
 
+<div class="figure scroll">
+<svg viewBox="0 0 720 120" width="100%" height="120" role="img"
+     aria-label="Render sub-graph: T0 feeds T1 and T8; T8 feeds T9; T6 and T9 both feed T7.">
+  <defs>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <g color="var(--edge)" stroke="currentColor" stroke-width="1.5" fill="none">
+    <path d="M108 30 L108 60 L230 60" marker-end="url(#a3)"/>
+    <path d="M108 30 L280 30 L280 30" marker-end="url(#a3)"/>
+    <path d="M108 30 L230 30" marker-end="url(#a3)"/>
+    <path d="M380 30 L432 30" marker-end="url(#a3)"/>
+    <path d="M582 30 L610 30 L610 60 L640 60" marker-end="url(#a3)"/>
+    <path d="M582 60 L610 60" marker-end="url(#a3)" opacity="0"/>
+  </g>
+  <g font-family="system-ui, sans-serif">
+    <rect x="18" y="6" width="90" height="48" rx="8" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.6"/>
+    <text x="30" y="26" fill="var(--s1)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T0</text>
+    <text x="30" y="42" fill="var(--ink)" font-size="11">scale + body</text>
+
+    <rect x="230" y="6" width="150" height="48" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.6"/>
+    <text x="242" y="26" fill="var(--s2)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T8</text>
+    <text x="242" y="42" fill="var(--ink)" font-size="11">hitbox ring overlay</text>
+
+    <rect x="432" y="6" width="150" height="48" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.6"/>
+    <text x="444" y="26" fill="var(--s2)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T9</text>
+    <text x="444" y="42" fill="var(--ink)" font-size="11">isometric + depth</text>
+
+    <rect x="640" y="36" width="64" height="48" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.6"/>
+    <text x="652" y="56" fill="var(--s3)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T7</text>
+    <text x="652" y="72" fill="var(--ink)" font-size="11">(joins T6)</text>
+  </g>
+</svg>
+</div>
+<p class="caption">
+  <code>T0</code> also feeds <code>T1</code> (headroom knobs, above) — it is
+  the single ticket both sub-graphs depend on. <code>T7</code> depends on both
+  <code>T6</code> and <code>T9</code>.
+</p>
+
 <h2>Ticket order</h2>
 
 <div class="scroll">
@@ -235,8 +302,11 @@
     <tr><th>ID</th><th>Title</th><th>Depends</th><th>Commit outcome</th></tr>
   </thead>
   <tbody>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T0_starcraft-scale-cap-and-body.md">T0</a></td>
+        <td><strong>StarCraft-scale cap and body</strong></td><td>—</td>
+        <td>5 000 is the absolute entity ceiling; sprites are 48 px and bodies are half a sprite; the gate digest is re-pinned once</td></tr>
     <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T1_scenario-headroom-knobs.md">T1</a></td>
-        <td><strong>Scenario headroom knobs</strong></td><td>—</td>
+        <td><strong>Scenario headroom knobs</strong></td><td>T0</td>
         <td>Every scenario declares three tuning knobs at their identity values; not one hash moves</td></tr>
     <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T2_stamped-bin-counts.md">T2</a></td>
         <td><strong>Stamped bin counts</strong></td><td>T1</td>
@@ -253,8 +323,14 @@
     <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T6_parallel-separation.md">T6</a></td>
         <td><strong>Parallel separation pass</strong></td><td>T3, T4, T5</td>
         <td>Persistent worker pool, bit-identical at any thread count, still zero-alloc</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T8_hitbox-ring-overlay.md">T8</a></td>
+        <td><strong>Hitbox ring overlay</strong></td><td>T0</td>
+        <td>Every entity draws a ring at its real body radius, procedural and zero-alloc, toggled with <code>H</code></td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T9_isometric-projection-and-depth.md">T9</a></td>
+        <td><strong>Isometric projection and depth</strong></td><td>T8</td>
+        <td>The render layer projects 2:1 isometric and draws depth-ordered; the sim is untouched and every state hash holds</td></tr>
     <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T7_docs-adr-and-system-map.md">T7</a></td>
-        <td><strong>ADRs, architecture doc, system map</strong></td><td>T6</td>
+        <td><strong>ADRs, architecture doc, system map</strong></td><td>T6, T9</td>
         <td>Phase 0.5 is a written decision with an enforced test map</td></tr>
   </tbody>
 </table>
@@ -263,7 +339,19 @@
 <h2>What each ticket proves</h2>
 
 <div class="ticket">
-  <div class="ticket-head"><span class="tid">T1</span><h3>Scenario headroom knobs</h3><span class="dep">depends: none</span></div>
+  <div class="ticket-head"><span class="tid">T0</span><h3>StarCraft-scale cap and body</h3><span class="dep">depends: none</span></div>
+  <p>
+    <code>MAX_LIVE_AGENTS = 5_000</code> enforced by one <code>check_population</code>
+    call at the validator dispatcher. <code>technical_prototype_v1</code> is
+    retuned in place — same version id, new locked constants — rather than
+    frozen behind a v2. Sprites grow to 48 px; <code>collision_radius_q8</code>
+    grows to exactly half that, so two touching bodies are edge-to-edge.
+  </p>
+  <p class="proof"><b>Proof:</b> the gate smoke's <code>hash=</code> is re-pinned exactly once, and every ticket after T0 must reproduce it byte for byte. The four <code>fixture_*</code> scenes are deliberately left untouched.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T1</span><h3>Scenario headroom knobs</h3><span class="dep">depends: T0</span></div>
   <p>
     Contract only. Three required fields on <code>ScenarioSpec</code> and
     <code>Scenario</code>, carried through <code>CollisionParams</code> so
@@ -331,12 +419,42 @@
 </div>
 
 <div class="ticket">
-  <div class="ticket-head"><span class="tid">T7</span><h3>ADRs, architecture doc, system map</h3><span class="dep">depends: T6</span></div>
+  <div class="ticket-head"><span class="tid">T8</span><h3>Hitbox ring overlay</h3><span class="dep">depends: T0</span></div>
   <p>
-    Verify the two ADRs and the architecture page against what shipped, flip them
-    to Accepted, and map all 28 new tests into
-    <code>tests/validation_contract.rs</code> and the close doc — in both
-    directions, which is what makes the map unfakeable.
+    A ring at <code>collision_radius_cells · cell_size_px</code>, read from the
+    live simulation rather than the scenario document. Procedural: a sentinel
+    in <code>uv_rect.x</code> selects the shader's ring branch, so
+    <code>SpriteInstance</code> stays pinned at 48 bytes and no fifth atlas is
+    added. On by default, toggled with <code>H</code>, scriptable as
+    <code>--inject-input N:h</code>.
+  </p>
+  <p class="proof"><b>Proof:</b> a ring is packed for every agent and none for a bodyless scene; the ring traces the real body radius, including a body that is not half a sprite; ten new tests, zero new allocation.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T9</span><h3>Isometric projection and depth</h3><span class="dep">depends: T8</span></div>
+  <p>
+    A 2:1 world→screen projection at the render layer only — the simulation
+    stays in Cartesian cell space, so no pinned state hash moves. Depth is keyed
+    off each quad's ground point, tested <code>GREATER</code> against a clear
+    of <code>0</code>, with sprite depth floored at one <code>D16_UNORM</code>
+    quantum so a degenerate map cannot blank a frame. Alpha correctness comes
+    from a <code>clip()</code> cutout, not a sort, so the 4-atlas batching
+    survives. The camera is fixed, centred on the destination cell, with an
+    AABB reject for off-screen quads.
+  </p>
+  <p class="proof"><b>Proof:</b> <code>git diff --stat crates/mmd-engine/src/sim/</code> is empty; <code>instance_layout_is_stable</code> unmodified; an agent in front occludes one behind and rings are never occluded; seven new tests, zero new allocation.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T7</span><h3>ADRs, architecture doc, system map</h3><span class="dep">depends: T6, T9</span></div>
+  <p>
+    Verify ADR 010 and ADR 011 against what shipped, flip them to Accepted;
+    author ADR 012 for the resize and render decisions; and map all 45 new
+    tests into <code>tests/validation_contract.rs</code> and the close doc — in
+    both directions, which is what makes the map unfakeable.
+    <code>SCOPE_SYSTEM_COUNT</code> rises from 12 to 14: T8 and T9 each add a
+    real system, T1&ndash;T6 do not.
   </p>
   <p class="proof"><b>Proof:</b> <code>every_system_has_a_test</code> and <code>no_perf_claim_in_docs</code> green. The close doc is a <em>live</em> doc — every added line must dodge the banned perf tokens.</p>
 </div>
@@ -386,7 +504,7 @@
     <tr><td class="tid">A10</td><td><code>graphify</code> is documented in <code>AGENT.md</code> but not installed on this host; no ticket runs <code>graphify update .</code>.</td></tr>
     <tr><td class="tid">A11</td><td>Artifacts go to <code>ai-artifacts/</code>, the directory that exists and is documented.</td></tr>
     <tr><td class="tid">A12</td><td>Sidecars are bare lowercase hex: <code>sha256sum f.ron | cut -d' ' -f1 &gt; f.sha256</code>.</td></tr>
-    <tr><td class="tid">A13</td><td>No new system — every test lands in a file <code>SCOPE_SYSTEMS</code> already maps. <code>SCOPE_SYSTEM_COUNT</code> stays 12.</td></tr>
+    <tr><td class="tid">A13</td><td>T1&ndash;T6 add no new system — every test lands in a file <code>SCOPE_SYSTEMS</code> already maps. T8 and T9 each add a real system (&ldquo;Debug hitbox overlay&rdquo;, &ldquo;Isometric projection and depth order&rdquo;); T7 raises <code>SCOPE_SYSTEM_COUNT</code> from 12 to 14.</td></tr>
     <tr><td class="tid">A14</td><td>The close doc is in <code>LIVE_DOCS</code>; every line added to it must dodge the banned perf tokens.</td></tr>
   </tbody>
 </table>
@@ -413,6 +531,7 @@
   Tickets: <code>ai-artifacts/PLAN_2026_08_09_horde-sim-headroom/</code><br>
   Records: <a href="../docs/ADR/010_ADR_separation_amortisation_and_push_priority.md">ADR 010</a> ·
   <a href="../docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md">ADR 011</a> ·
+  <a href="../docs/ADR/012_ADR_starcraft_scale_and_isometric_render.md">ADR 012</a> ·
   <a href="../docs/horde-sim-headroom-architecture.html">Architecture</a> ·
   Evidence: <code>.tmp/RESEARCH_they_are_billions_performance.md</code>
 </footer>

@@ -18,6 +18,9 @@ end-to-end on Linux/Vulkan. Performance/benchmarking is explicitly retired
 and frozen for a later optimization phase — no perf number may gate a merge.
 Branch `plan/technical-prototype` is pushed to `origin`; PR to `main` not yet
 opened. Phase 1 not started. Details: `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`.
+Phase 0.5 (`plan/horde-sim-headroom`) adds three scenario-gated simulation
+knobs — `separation_phases`, `mass_class_count`, `separation_threads` — each
+defaulting to the identity value 1; see ADR 010 and ADR 011.
 
 ## Workspace layout
 

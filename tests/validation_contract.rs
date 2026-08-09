@@ -377,6 +377,26 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "a_bodyless_scenario_walks_the_flow_only_path",
             "sprite_scene_pulls_agents_out_of_deep_overlap",
             "collision_scene_agents_never_enter_an_obstacle",
+            "spatial_bin_counts_match_the_bucket_lengths",
+            "spatial_reuses_bins_without_clearing_them",
+            "spatial_survives_a_stamp_wrap",
+            "separation_phases_of_one_is_the_identity",
+            "an_amortised_agent_keeps_its_repulsion_between_phases",
+            "the_grid_rebuilds_once_per_phase_cycle",
+            "an_amortised_stack_still_spreads",
+            "bin_row_matches_bin_by_bin_order",
+            "bin_row_clamps_to_the_last_column",
+            "bin_row_is_empty_off_the_grid",
+            "a_lone_agent_accumulates_no_repulsion",
+            "one_mass_class_leaves_every_agent_equal",
+            "mass_is_assigned_round_robin_by_index",
+            "a_heavier_neighbour_pushes_a_lighter_one_harder",
+            "mass_classes_change_the_bodied_digest",
+            "threads_do_not_change_the_walk",
+            "threads_do_not_change_an_amortised_walk",
+            "a_single_thread_spawns_no_workers",
+            "a_pool_spawns_one_fewer_worker_than_participants",
+            "the_pool_shuts_down_cleanly",
         ],
         gpu_only: &[],
     },
@@ -401,6 +421,13 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "rejects_wrong_hash",
             "rejects_unreachable_spawn",
             "v1_geometry_stays_frozen_against_the_fixture_relaxation",
+            "tracked_scenes_declare_the_identity_tuning",
+            "zero_separation_phases_is_rejected",
+            "separation_phases_above_the_cap_is_rejected",
+            "mass_classes_above_the_cap_is_rejected",
+            "separation_threads_above_the_cap_is_rejected",
+            "a_bodyless_scenario_may_not_tune_separation",
+            "the_gate_scene_pins_the_identity_tuning",
         ],
         gpu_only: &[],
     },
@@ -425,6 +452,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "builds_one_instance_per_agent",
             "partitions_four_groups",
             "input_actions_are_stable",
+            "toggling_hitboxes_changes_only_the_rings",
         ],
         gpu_only: &[],
     },
@@ -439,6 +467,33 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "world_to_clip_matches_gpu_raster",
             "golden_frame_matches",
             "no_gpu_skips_cleanly",
+        ],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        system: "Debug hitbox overlay",
+        file: "crates/mmd-engine/tests/render_correctness.rs",
+        tests: &[
+            "a_ring_is_packed_for_every_agent",
+            "a_bodyless_scene_packs_no_rings",
+            "the_ring_traces_the_real_body",
+            "the_ring_traces_a_body_that_is_not_half_a_sprite",
+            "every_tracked_manifest_pins_the_live_shader_and_atlas",
+            "a_ring_is_hollow",
+            "a_ring_and_a_sprite_share_a_pass",
+        ],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        system: "Isometric projection and depth order",
+        file: "crates/mmd-engine/tests/render_correctness.rs",
+        tests: &[
+            "ring_and_sprite_stand_on_the_same_ground_point",
+            "shader_defines_match_their_rust_mirrors",
+            "depth_is_the_ground_point_not_the_quad",
+            "offscreen_quads_are_culled",
+            "an_agent_in_front_occludes_one_behind",
+            "rings_are_never_occluded",
         ],
         gpu_only: &[],
     },
@@ -476,6 +531,9 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "foreign_thread_allocations_do_not_leak_into_a_measure_scope",
             "spatial_rebuild_allocates_nothing",
             "a_collision_tick_allocates_nothing",
+            "a_threaded_collision_tick_allocates_nothing",
+            "ring_packing_allocates_nothing",
+            "iso_packing_allocates_nothing",
         ],
         gpu_only: &[],
     },
@@ -490,6 +548,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "quit_exits_clean_and_releases_window",
             "injection_that_never_fires_is_an_error",
             "missing_scenario_fails_clean",
+            "hitbox_toggle_is_scriptable",
         ],
         gpu_only: &[],
     },
@@ -513,11 +572,11 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
 /// that silently stopped finding tests would otherwise satisfy every
 /// membership check vacuously — every lookup would fail loudly, but a *broken
 /// regex* that matched everything would not. This pins the scanner itself.
-const MIN_SCANNED_TESTS: usize = 174;
+const MIN_SCANNED_TESTS: usize = 277;
 
 /// Number of systems phase 0 claims. Pinned so that deleting a `SystemCoverage`
 /// entry — which shrinks the claim without breaking any lookup — fails loudly.
-const SCOPE_SYSTEM_COUNT: usize = 12;
+const SCOPE_SYSTEM_COUNT: usize = 14;
 
 /// One `#[test]` fn found by the source scan.
 #[derive(Debug)]

@@ -42,8 +42,15 @@ the pure descent step rather than wedging the agent in place, so separation can
 neither pin an agent against a wall nor steer one into a walkable-but-
 unreachable corner pocket.
 
-See [ADR 009](ADR/009_ADR_agent_separation_and_collision.md) and the
-[agent collision architecture](agent-collision-architecture.html) page.
+Three scenario knobs — `separation_phases`, `mass_class_count`,
+`separation_threads` — gate how often the scan and grid rebuild run, how the
+push is weighted, and how many threads run it, each with an identity default
+of `1` at which the engine's walk is unchanged. See
+[ADR 009](ADR/009_ADR_agent_separation_and_collision.md),
+[ADR 010](ADR/010_ADR_separation_amortisation_and_push_priority.md),
+[ADR 011](ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md), the
+[agent collision architecture](agent-collision-architecture.html) page and the
+[horde sim headroom architecture](horde-sim-headroom-architecture.html) page.
 
 ## Design Decisions
 

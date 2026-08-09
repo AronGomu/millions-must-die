@@ -14,6 +14,10 @@
 - [Local validation lab](local-validation-lab-architecture.html)
 - [Architecture decision records](ADR/README.md)
 
+## Phase 0.5 architecture
+
+- [Horde sim headroom](horde-sim-headroom-architecture.html)
+
 ## Implementation plan
 
 - `.tmp/IMPLEMENTATION_PLAN_technical_prototype.md`
