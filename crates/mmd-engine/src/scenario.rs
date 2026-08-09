@@ -601,9 +601,17 @@ fn validate_fixture_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioE
     Ok(())
 }
 
-/// Screen geometry is locked so the demo scenes stay comparable with the gate
+/// Grid geometry is locked so the demo scenes stay comparable with the gate
 /// scene; population and body radius are the point of the family and stay free
 /// within caps.
+///
+/// `width`/`height`/`cell_size_px` describe the **cell grid**, not a mapping
+/// onto the screen. Since the render layer projects 2:1 isometric, a cell is
+/// drawn as a `2 * cell_size_px` × `cell_size_px` tile and the grid becomes a
+/// diamond wider and shorter than `width * cell_size_px` by `height *
+/// cell_size_px` — bigger than the view, in the tracked scenes' case. Where
+/// that grid lands on screen is the camera's business
+/// ([`IsoView`](crate::render::IsoView)), not this scene contract's.
 fn validate_collision_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
     let locked = [
         (doc.width, V1_WIDTH, "width"),

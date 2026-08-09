@@ -9,15 +9,27 @@ Landed on `plan/horde-sim-headroom`. Everything automatable is green
 (460 tests, clippy, `nix flake check`, all three xtask checks, all three
 scene smokes). What is left needs eyes on a real window.
 
+> **Restated by T9.** These steps described a flat top-down view. Since T9 the
+> render layer projects 2:1 isometric and depth-orders the frame, so "two agents
+> pressed together are edge-to-edge" is no longer what the screen shows: the
+> sprites now stand on a projected ground point and deliberately overlap
+> vertically, and the camera is fixed on the destination so most of the horde
+> starts off screen. The *sim-side* claim these steps exist for — the body is
+> exactly half a sprite — is unchanged and is now read off the floor ellipse.
+
 - [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves.
       Units read as chunky StarCraft-scale sprites, clearly bigger than the old
-      30 px units (the drawn quad is now 48 px). Press `Esc` to quit and confirm
+      30 px units (the drawn quad is still 48 px). The view is **isometric** and
+      fixed on the destination, so the horde marches in from the upper left
+      rather than filling the window at once. Press `Esc` to quit and confirm
       a clean exit.
 - [ ] In that same window, watch two agents press together at a choke point or
-      against an obstacle. Their sprites must meet **edge to edge**, not overlap
-      — the body is exactly half a sprite (6 cells = 24 px radius), so contact
-      happens at one full sprite width. Overlapping art means the body/sprite
-      ratio is wrong.
+      against an obstacle. Judge contact by the **floor ellipses** (`H`), not by
+      the sprite art: the ellipses must meet edge to edge and not overlap
+      deeply. The body is exactly half a sprite (6 cells = 24 px radius), but
+      under the projection the sprites themselves overlap on screen — a nearer
+      unit standing partly over the one behind it is correct isometric depth,
+      not a body/sprite ratio bug.
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` — the
       5 000-agent demo scene starts, spreads out of its spawn stacks, and quits
       cleanly on `Esc`.
@@ -243,14 +255,25 @@ thin hollow cyan ring per agent with the sprites visible through them, and an
 A/B against the same frame with the overlay hidden showed identical sprites and
 no rings. What is left needs eyes on a real window.
 
+> **Restated by T9.** The ring is unchanged in code, but the projection under it
+> is not: the quad is now `2r·tile_w` by `2r·tile_h`, so the shader's circle
+> becomes an **ellipse twice as wide as it is tall**, centred on the unit's feet
+> instead of on its middle. A circle, or a ring hugging the sprite's outline, is
+> now the failure. The ring also draws on its own depth-free pipeline, so it is
+> never covered by a unit in front of it.
+
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
       every unit carries a hollow ring. Press `H`: the rings disappear and the
       sprites do not move or flicker. Press `H` again: they come back
       identically. `Esc` exits cleanly.
+- [ ] Same scene, ring **shape and placement**: each ring is an ellipse lying on
+      the floor *under* the unit's feet, about twice as wide as tall — not a
+      circle, and not centred on the unit's chest. A circle means the ring quad
+      lost the projection's aspect.
 - [ ] Same scene, ring **radius** read: where two units press together, their
-      rings meet edge-to-edge and do not overlap deeply. T0 tuned the body to
-      exactly half a sprite, so each ring should sit on its sprite's edge — not
-      inside it, not floating outside it.
+      ellipses meet and do not overlap deeply. T0 tuned the body to exactly half
+      a sprite, so an ellipse should be about one sprite tall in its short
+      (screen-y) axis.
 - [ ] Same scene, ring **legibility**: the ring is 1–2 px thick and
       semi-transparent, so a dense crowd still reads as separate bodies rather
       than a solid cyan mass. If it reads as a wash, `RING_TINT` /
@@ -263,3 +286,81 @@ no rings. What is left needs eyes on a real window.
       rings appear here too (same body tuning), and `H` toggles them.
 - [ ] The first presented frame already has rings — they must not pop in on
       frame 2. Watch the very first painted frame after the window appears.
+
+## T9 isometric-projection-and-depth
+
+The render layer now projects the world 2:1 isometric and draws depth-ordered.
+The simulation is untouched and stays in Cartesian cell space — that is what
+keeps every pinned digest alive. A cell is drawn as an `8 × 4` px tile, so the
+480 × 270 grid becomes a 3 000 × 1 500 px diamond, deliberately larger than the
+1920 × 1080 view; the camera is **fixed** on the destination cell and everything
+outside the view is culled. Scrolling, edge-pan, zoom and selection are Phase 1
+and are *not* in this build.
+
+Everything automatable is green: `cargo fmt --all -- --check`,
+`cargo test --workspace --locked` (516 passed) and the same suite again under
+`MMD_REQUIRE_GPU=1` (so `an_agent_in_front_occludes_one_behind`,
+`rings_are_never_occluded`, `world_to_clip_matches_gpu_raster` and
+`golden_frame_matches` really ran rather than skipping),
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`nix flake check`, all three xtask `--check` commands,
+`cargo test -p mmd-lab --test merge_gate`, `cargo tree -e features | grep -c
+testkit` = 0, an empty `git diff --stat crates/mmd-engine/src/sim/`, and the
+gate smoke still printing
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte.
+
+The frame was also inspected off-screen before this list was written: a real
+`Runtime` frame (`collision_mid_v1`, 5 000 agents, 900 ticks) was rendered to
+PNG and viewed. The crowd's leading edge is a clean 2:1 diagonal, units lower on
+screen cover the rank behind them with no slicing, and the ring pass paints cyan
+ellipses over everything. What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --agents 5000` — the horde reads as an **isometric**
+      crowd on a 2:1 floor, not a flat top-down grid. Ranks recede up and to the
+      right; the mass has a diamond edge, not a rectangular one. `Esc` exits
+      cleanly.
+- [ ] Same window, **depth order**: pick a spot where two units overlap. The one
+      whose feet are lower on screen must be drawn in front, completely and
+      cleanly. A unit sliced horizontally by its neighbour, or flickering
+      between front and back as the pair moves, is the failure this whole ticket
+      exists to prevent (that would mean the vertex stage is emitting a
+      per-vertex depth instead of one value off the quad's bottom edge).
+- [ ] Same window, **cutout edges**: sprites have hard pixel-art edges with no
+      halo or dark fringe where they overlap. The alpha test replaced blending
+      for the sprite pass, so a soft or grey outline means the cutoff is wrong.
+- [ ] Same window, press `H`: a floor **ellipse** appears under each unit, about
+      twice as wide as it is tall, lying flat under the feet. It must stay fully
+      visible even where a unit in front overlaps it — a ring that disappears
+      behind a neighbour means the ring pass picked up the depth state.
+- [ ] Same window, **the fixed camera**: the view is centred on the destination
+      cell and never moves. At `--agents 5000` the horde marches in from the
+      upper left and only part of it is on screen at spawn. That is correct and
+      is what the cull is for; there is no scrolling in this build, so do not
+      report "cannot see the whole map" as a bug.
+- [ ] Watch the boundary as units enter and leave the view. A unit must fade in
+      and out of the frame by moving across the edge, never **pop** into
+      existence a sprite-width inside the view — popping means the cull rejects
+      quads that still straddle an edge.
+- [ ] Same window, **the far edge of the map**: units at the top of the diamond
+      (smallest `x + y`) must draw like any other. The depth key is the position
+      down the diamond and the test is `GREATER` against a buffer cleared to 0,
+      so a key of exactly 0 would be discarded rather than drawn behind
+      everything — the shader floors sprites one depth quantum above it. A unit
+      that vanishes only at the far corner means that floor was lost.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` — same
+      isometric read and same depth ordering at 5 000 agents on the demo scene.
+      `Esc` exits cleanly.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      at 1 200 agents the depth ordering and the floor ellipses are easiest to
+      judge one unit at a time. Quit with `Esc`.
+- [ ] Judgement call for the plan owner, not a bug in this ticket: the eight
+      atlas directions are now reinterpreted as the eight *isometric* facings.
+      Confirm a unit walking toward the destination faces roughly the way it is
+      moving. If the diagonals read wrong, that is an **art** fix in a later
+      ticket — the direction index was deliberately not rotated in code.
+- [ ] Judgement call: the floor ellipse is drawn a factor √2 larger than the
+      geometrically exact projection of the body circle (see this ticket's
+      Outputs). Confirm whether it reads as "the unit's footprint" or as
+      "noticeably too big". If too big, dividing `runtime::ring_quad_size_px` by
+      `√2` is the one-line follow-up.

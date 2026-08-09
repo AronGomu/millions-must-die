@@ -153,6 +153,15 @@ fn run_scale_point(
     runtime.set_hitboxes_visible(false);
     assert!(!runtime.hitboxes_visible());
 
+    // Measured frames must rasterize the depth the real run rasterizes: the
+    // fragment cutout and the depth test are what decide how much of a dense
+    // crowd's overdraw survives, and a bench normalising over the wrong span
+    // would be measuring a different frame than the game draws.
+    if let Some(r) = renderer.as_deref_mut() {
+        let iso = runtime.iso_view();
+        r.set_depth_params(iso.depth_scale, iso.depth_bias);
+    }
+
     let mut queue: FenceQueue<BenchFence> = FenceQueue::new(policy.frames_in_flight);
     assert_eq!(policy.frames_in_flight, FRAMES_IN_FLIGHT);
 

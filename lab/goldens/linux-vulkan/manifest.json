@@ -7,10 +7,10 @@
   "width": 1920,
   "height": 1080,
   "image_file": "golden.png",
-  "image_sha256": "ad843c490b952b17dafb9622091b1626a270fbd74047cc5adf3d7b641b1a429c",
+  "image_sha256": "90202a865598c4415019e4521dabd397fd546c15618e5e60da0ff81e0e68dde1",
   "adapter": "NVIDIA GeForce RTX 5060 Ti",
   "driver_info": "captured via SDL3 GPU on linux",
   "atlas_manifest_sha256": "2133e24ea23bd4929a9e8e39a51b08ad42ad0dd673af82e23cd41f57bd5a6cbe",
-  "shader_canonical_sha256": "a27856e6b17a26f7a3fd91945637c503690564255739c634012098b1c57aff63",
+  "shader_canonical_sha256": "7dfbeaf8753c5a1490581547b6ac0123b0e41366dab87e0df19684fe0eee660d",
   "max_channel_delta": 0
 }

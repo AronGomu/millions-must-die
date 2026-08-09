@@ -6,7 +6,10 @@ use std::time::Instant;
 use thiserror::Error;
 
 use crate::nav::flow_field::FlowField;
-use crate::render::{ATLAS_COUNT, DrawGroup, SpriteInstance, frame_uv_rect};
+use crate::render::{
+    ATLAS_COUNT, DrawGroup, IsoView, SpriteInstance, VIEW_HEIGHT, VIEW_WIDTH, frame_uv_rect,
+    quad_is_visible,
+};
 use crate::scenario::{MAX_LIVE_AGENTS, Scenario, ScenarioError};
 use crate::sim::{CollisionParams, Simulation};
 
@@ -65,12 +68,28 @@ pub const RING_INNER: f32 = RING_OUTER - 1.0 / 32.0;
 /// of showing where each body ends.
 pub const RING_TINT: [f32; 4] = [0.0, 0.55, 0.55, 0.55];
 
-/// The drawn body radius in pixels.
+/// The drawn body radius in pixels, measured in **cell space** — before the
+/// isometric projection stretches it.
+///
+/// Under the 2:1 projection this is exactly the drawn ellipse's semi-*minor*
+/// (screen-y) axis, because the tile is one cell tall; the semi-major axis is
+/// twice it. [`ring_quad_size_px`] is the expression the packer actually uses.
+pub fn ring_radius_px(cell_size_px: f32, radius_cells: f32) -> f32 {
+    radius_cells * cell_size_px
+}
+
+/// The drawn body quad in pixels for a body of `radius_cells`.
 ///
 /// The single expression the ring packer and its tests share, so "the ring
 /// shows the radius the sim separates on" cannot drift into two answers.
-pub fn ring_radius_px(cell_size_px: f32, radius_cells: f32) -> f32 {
-    radius_cells * cell_size_px
+///
+/// A circular body lying on an isometric floor is an **ellipse** on screen, so
+/// the quad is the body's diameter along each of the projection's two axes —
+/// twice as wide as it is tall. T8's fragment branch measures its distance in
+/// normalised quad units and therefore inscribes that ellipse with no shader
+/// change at all.
+pub fn ring_quad_size_px(tile_w: f32, tile_h: f32, radius_cells: f32) -> [f32; 2] {
+    [2.0 * radius_cells * tile_w, 2.0 * radius_cells * tile_h]
 }
 
 /// Per-frame CPU timings (milliseconds).
@@ -118,8 +137,14 @@ pub enum RuntimeError {
 #[derive(Debug)]
 pub struct Runtime {
     scenario: Scenario,
-    cell_size_px: f32,
     sprite_size_px: f32,
+    /// The one place `(tile, origin, depth_scale, depth_bias)` is derived.
+    ///
+    /// Both packers project through it and the renderer uploads its two depth
+    /// scalars, so the CPU mirror and the GPU cannot disagree about where an
+    /// agent is or how deep it is. The camera is fixed, so it is computed once
+    /// at load.
+    iso: IsoView,
     /// Retained so navigation state stays inspectable for tests and future
     /// systems (debug overlay, repathing) instead of being dropped after init.
     field: FlowField,
@@ -193,9 +218,17 @@ impl Runtime {
         // fixed 240 KB is worth keeping off the per-scene tuning surface.
         let ring_instances = Vec::with_capacity(MAX_LIVE_AGENTS as usize);
 
+        let iso = IsoView::new(
+            scenario.width(),
+            scenario.height(),
+            scenario.destination(),
+            scenario.cell_size_px() as f32,
+            [VIEW_WIDTH as f32, VIEW_HEIGHT as f32],
+        );
+
         Ok(Self {
-            cell_size_px: scenario.cell_size_px() as f32,
             sprite_size_px: scenario.sprite_size_px() as f32,
+            iso,
             scenario,
             field,
             sim,
@@ -215,6 +248,16 @@ impl Runtime {
     /// The verified scenario this runtime was built from.
     pub fn scenario(&self) -> &Scenario {
         &self.scenario
+    }
+
+    /// The fixed world→screen projection this runtime packs through.
+    ///
+    /// The renderer takes its two depth scalars from here
+    /// ([`SpriteRenderer::set_depth_params`](crate::render::SpriteRenderer::set_depth_params)),
+    /// which is what binds the uniform the GPU reads to the projection the CPU
+    /// packed with.
+    pub fn iso_view(&self) -> IsoView {
+        self.iso
     }
 
     /// The flow field built from this scenario at load.
@@ -334,7 +377,7 @@ impl Runtime {
     pub fn pack_groups(&mut self) {
         pack_instance_groups(
             self.sim.agents(),
-            self.cell_size_px,
+            &self.iso,
             self.sprite_size_px,
             &mut self.groups,
         );
@@ -350,7 +393,7 @@ impl Runtime {
             let radius_cells = self.sim.collision().radius_cells;
             pack_ring_instances(
                 self.sim.agents(),
-                self.cell_size_px,
+                &self.iso,
                 radius_cells,
                 &mut self.ring_instances,
             );
@@ -397,9 +440,20 @@ impl Runtime {
 }
 
 /// Pack SoA agents into existing atlas groups (clear + push; no realloc if capacity holds).
+///
+/// The agent's cell-space position is projected through `iso`, and the quad is
+/// anchored so its **bottom edge** sits on that ground point — the sprite
+/// stands on the tile rather than being centred on it, which is what makes a
+/// crowd read as depth rather than as a scatter.
+///
+/// A quad whose AABB lies entirely outside the view is dropped before it is
+/// pushed. The map diamond is deliberately larger than the view (a 480 × 270
+/// grid under an 8 × 4 tile is 3 000 × 1 500 px against 1920 × 1080), so
+/// without the cull most of a frame's instances would be uploaded and
+/// rasterized only to fall off screen.
 pub fn pack_instance_groups(
     agents: crate::sim::AgentsView<'_>,
-    cell_size_px: f32,
+    iso: &IsoView,
     sprite_size_px: f32,
     out: &mut [DrawGroup; ATLAS_COUNT],
 ) {
@@ -413,58 +467,60 @@ pub fn pack_instance_groups(
     let n = agents.x.len();
 
     for i in 0..n {
+        let ground = iso.project(agents.x[i], agents.y[i]);
+        let pos = [ground[0] - half, ground[1] - sprite_size_px];
+        if !quad_is_visible(pos, size, iso.view_size) {
+            continue;
+        }
         let atlas = agents.atlas[i] as usize % ATLAS_COUNT;
-        let px = agents.x[i] * cell_size_px - half;
-        let py = agents.y[i] * cell_size_px - half;
         let uv = frame_uv_rect(u32::from(agents.dir[i]), u32::from(agents.frame[i]));
-        out[atlas].instances.push(SpriteInstance::new(
-            [px, py],
-            size,
-            uv,
-            SpriteInstance::WHITE,
-        ));
+        out[atlas]
+            .instances
+            .push(SpriteInstance::new(pos, size, uv, SpriteInstance::WHITE));
     }
 }
 
 /// Pack one hitbox ring per agent into an existing buffer (clear + push; no
 /// realloc if capacity holds).
 ///
-/// The quad is the body's *diameter* and is centred on the agent, so the ring
-/// the shader inscribes in it traces the true contact circle — the same radius
-/// the separation pass pushes on, never an approximation of it.
+/// The quad is the body's *diameter* along each projected axis and is centred
+/// **on** the agent's ground point — the same point the sprite stands on — so
+/// the ellipse the shader inscribes in it traces the true contact circle lying
+/// on the isometric floor, never an approximation of it.
 ///
 /// A bodyless scene (`radius_cells == 0`) yields **no** rings. There is no
 /// body to draw, and a zero-radius ring would state something false rather
 /// than state nothing.
 ///
+/// Offscreen rings are culled on the same rect test as the sprites.
+///
 /// Deliberately a free function alongside [`pack_instance_groups`] rather than
 /// part of it: the atlas packer's signature and its callers stay untouched.
 pub fn pack_ring_instances(
     agents: crate::sim::AgentsView<'_>,
-    cell_size_px: f32,
+    iso: &IsoView,
     radius_cells: f32,
     out: &mut Vec<SpriteInstance>,
 ) {
     out.clear();
 
-    // Both factors come from validated scenario fields, so this is finite and
+    // Every factor comes from validated scenario fields, so this is finite and
     // non-negative; the guard is for the bodyless case, where it is exactly 0.
-    let radius_px = ring_radius_px(cell_size_px, radius_cells);
-    if !radius_px.is_finite() || radius_px <= 0.0 {
+    let size = ring_quad_size_px(iso.tile_w, iso.tile_h, radius_cells);
+    if !size[0].is_finite() || !size[1].is_finite() || size[0] <= 0.0 || size[1] <= 0.0 {
         return;
     }
 
-    let size = [radius_px * 2.0, radius_px * 2.0];
+    let half = [size[0] * 0.5, size[1] * 0.5];
     let n = agents.x.len();
     for i in 0..n {
-        let px = agents.x[i] * cell_size_px - radius_px;
-        let py = agents.y[i] * cell_size_px - radius_px;
+        let ground = iso.project(agents.x[i], agents.y[i]);
+        let pos = [ground[0] - half[0], ground[1] - half[1]];
+        if !quad_is_visible(pos, size, iso.view_size) {
+            continue;
+        }
         out.push(SpriteInstance::ring(
-            [px, py],
-            size,
-            RING_INNER,
-            RING_OUTER,
-            RING_TINT,
+            pos, size, RING_INNER, RING_OUTER, RING_TINT,
         ));
     }
 }
@@ -472,7 +528,7 @@ pub fn pack_ring_instances(
 /// Convert SoA agent view → 4 atlas draw groups (allocating; prefer [`pack_instance_groups`]).
 pub fn build_instance_groups(
     agents: crate::sim::AgentsView<'_>,
-    cell_size_px: f32,
+    iso: &IsoView,
     sprite_size_px: f32,
 ) -> [DrawGroup; ATLAS_COUNT] {
     let n = agents.x.len();
@@ -480,6 +536,6 @@ pub fn build_instance_groups(
         atlas_id: i as u32,
         instances: Vec::with_capacity(n),
     });
-    pack_instance_groups(agents, cell_size_px, sprite_size_px, &mut out);
+    pack_instance_groups(agents, iso, sprite_size_px, &mut out);
     out
 }

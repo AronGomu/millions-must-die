@@ -5,13 +5,14 @@ use std::path::Path;
 
 use sdl3::gpu::{
     BlendFactor, BlendOp, Buffer, BufferBinding, BufferRegion, BufferUsageFlags,
-    ColorTargetBlendState, ColorTargetDescription, ColorTargetInfo, CullMode, Device, FillMode,
-    Filter, GraphicsPipeline, GraphicsPipelineTargetInfo, IndexElementSize, LoadOp, PrimitiveType,
-    RasterizerState, SampleCount, Sampler, SamplerAddressMode, SamplerCreateInfo,
-    SamplerMipmapMode, ShaderFormat, ShaderStage, StoreOp, Texture, TextureCreateInfo,
-    TextureFormat, TextureRegion, TextureSamplerBinding, TextureTransferInfo, TextureType,
-    TextureUsage, TransferBuffer, TransferBufferLocation, TransferBufferUsage, VertexAttribute,
-    VertexBufferDescription, VertexElementFormat, VertexInputRate, VertexInputState,
+    ColorTargetBlendState, ColorTargetDescription, ColorTargetInfo, CompareOp, CullMode,
+    DepthStencilState, DepthStencilTargetInfo, Device, FillMode, Filter, GraphicsPipeline,
+    GraphicsPipelineTargetInfo, IndexElementSize, LoadOp, PrimitiveType, RasterizerState,
+    SampleCount, Sampler, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode, Shader,
+    ShaderFormat, ShaderStage, StoreOp, Texture, TextureCreateInfo, TextureFormat, TextureRegion,
+    TextureSamplerBinding, TextureTransferInfo, TextureType, TextureUsage, TransferBuffer,
+    TransferBufferLocation, TransferBufferUsage, VertexAttribute, VertexBufferDescription,
+    VertexElementFormat, VertexInputRate, VertexInputState,
 };
 use sdl3::pixels::Color;
 use sdl3::video::Window;
@@ -32,6 +33,31 @@ pub const VIEW_HEIGHT: u32 = 1080;
 pub const FRAMES_IN_FLIGHT: usize = 2;
 /// Max sprites uploaded per frame across all groups (hard 50k; stretch 100k).
 pub const MAX_INSTANCES: u32 = 100_000;
+
+/// Depth attachment format for the sprite pass.
+///
+/// `D16_UNORM` is the one depth format SDL3 guarantees on every backend, and
+/// 16 bits is ample here: the key is a cell's position down the map diamond in
+/// `[0, 1]`, so the 480 × 270 gate scene needs 750 distinguishable levels and
+/// this has 65 536.
+const DEPTH_FORMAT: TextureFormat = TextureFormat::D16Unorm;
+
+/// Depth the attachment is cleared to at the start of every pass.
+///
+/// `0`, not `1`: the key is the agent's position down the map diamond, so a
+/// larger value is nearer the camera and the test is `GREATER`. Clearing to the
+/// *smallest* key is what makes the first sprite at any pixel win.
+const DEPTH_CLEAR: f32 = 0.0;
+
+/// Default depth normalisation: screen-space `y` over the view.
+///
+/// Content authored directly in view pixels — the static golden scene, the GPU
+/// probes — has no map diamond behind it, so "further down the screen is
+/// nearer" is the only honest reading. A [`Runtime`](crate::runtime::Runtime)
+/// overrides both scalars with its scene's own via
+/// [`SpriteRenderer::set_depth_params`].
+const DEFAULT_DEPTH_SCALE: f32 = 1.0 / VIEW_HEIGHT as f32;
+const DEFAULT_DEPTH_BIAS: f32 = 0.0;
 
 // Host shader blobs: SPIR-V (Linux), DXIL (Windows), metallib (macOS).
 // macOS uses one library blob for both stages (entry points differ).
@@ -80,6 +106,11 @@ impl Readback {
 /// Field order matters: `ctx` (owns `Device`) is last so GPU objects release first.
 pub struct SpriteRenderer {
     pipeline: GraphicsPipeline,
+    /// Overlay pipeline: same shader modules, depth test **and** write off.
+    ///
+    /// Rings annotate bodies; a unit standing in front of one must not hide the
+    /// annotation. This is the second pipeline T8 deliberately deferred.
+    ring_pipeline: GraphicsPipeline,
     quad_vb: Buffer,
     quad_ib: Buffer,
     instance_bufs: [Buffer; FRAMES_IN_FLIGHT],
@@ -89,6 +120,13 @@ pub struct SpriteRenderer {
     atlas_tex: [Texture<'static>; ATLAS_COUNT],
     sampler: Sampler,
     offscreen: Texture<'static>,
+    /// Depth attachment for the sprite pass, cleared to [`DEPTH_CLEAR`] every
+    /// frame.
+    depth: Texture<'static>,
+    /// `FrameUniforms::depth_scale` for every frame this renderer draws.
+    depth_scale: f32,
+    /// `FrameUniforms::depth_bias` for every frame this renderer draws.
+    depth_bias: f32,
     frame_slot: usize,
     /// Reused contiguous pack for GPU upload (reserved at construct).
     pack_scratch: Vec<SpriteInstance>,
@@ -132,72 +170,93 @@ impl SpriteRenderer {
             .with_dst_alpha_blendfactor(BlendFactor::OneMinusSrcAlpha)
             .with_alpha_blend_op(BlendOp::Add);
 
-        let pipeline = device
-            .create_graphics_pipeline()
-            .with_primitive_type(PrimitiveType::TriangleList)
-            .with_vertex_shader(&vert)
-            .with_fragment_shader(&frag)
-            .with_vertex_input_state(
-                VertexInputState::new()
-                    .with_vertex_buffer_descriptions(&[
-                        VertexBufferDescription::new()
-                            .with_slot(0)
-                            .with_pitch(QuadVertex::STRIDE)
-                            .with_input_rate(VertexInputRate::Vertex)
-                            .with_instance_step_rate(0),
-                        VertexBufferDescription::new()
-                            .with_slot(1)
-                            .with_pitch(SpriteInstance::STRIDE)
-                            .with_input_rate(VertexInputRate::Instance)
-                            // SDL3 requires instance_step_rate == 0 for every slot.
-                            .with_instance_step_rate(0),
-                    ])
-                    .with_vertex_attributes(&[
-                        VertexAttribute::new()
-                            .with_location(0)
-                            .with_buffer_slot(0)
-                            .with_format(VertexElementFormat::Float2)
-                            .with_offset(0),
-                        VertexAttribute::new()
-                            .with_location(1)
-                            .with_buffer_slot(0)
-                            .with_format(VertexElementFormat::Float2)
-                            .with_offset(8),
-                        VertexAttribute::new()
-                            .with_location(2)
-                            .with_buffer_slot(1)
-                            .with_format(VertexElementFormat::Float2)
-                            .with_offset(0),
-                        VertexAttribute::new()
-                            .with_location(3)
-                            .with_buffer_slot(1)
-                            .with_format(VertexElementFormat::Float2)
-                            .with_offset(8),
-                        VertexAttribute::new()
-                            .with_location(4)
-                            .with_buffer_slot(1)
-                            .with_format(VertexElementFormat::Float4)
-                            .with_offset(16),
-                        VertexAttribute::new()
-                            .with_location(5)
-                            .with_buffer_slot(1)
-                            .with_format(VertexElementFormat::Float4)
-                            .with_offset(32),
-                    ]),
-            )
-            .with_rasterizer_state(
-                RasterizerState::new()
-                    .with_fill_mode(FillMode::Fill)
-                    .with_cull_mode(CullMode::None),
-            )
-            .with_target_info(
-                GraphicsPipelineTargetInfo::new().with_color_target_descriptions(&[
-                    ColorTargetDescription::new()
-                        .with_format(TextureFormat::R8g8b8a8Unorm)
-                        .with_blend_state(blend),
-                ]),
-            )
-            .build()?;
+        // Bound to named locals rather than written inline: both pipelines are
+        // built from exactly the same vertex layout and colour target, and
+        // `VertexInputState` borrows these slices for as long as it lives.
+        let buffer_descs = [
+            VertexBufferDescription::new()
+                .with_slot(0)
+                .with_pitch(QuadVertex::STRIDE)
+                .with_input_rate(VertexInputRate::Vertex)
+                .with_instance_step_rate(0),
+            VertexBufferDescription::new()
+                .with_slot(1)
+                .with_pitch(SpriteInstance::STRIDE)
+                .with_input_rate(VertexInputRate::Instance)
+                // SDL3 requires instance_step_rate == 0 for every slot.
+                .with_instance_step_rate(0),
+        ];
+        let attributes = [
+            VertexAttribute::new()
+                .with_location(0)
+                .with_buffer_slot(0)
+                .with_format(VertexElementFormat::Float2)
+                .with_offset(0),
+            VertexAttribute::new()
+                .with_location(1)
+                .with_buffer_slot(0)
+                .with_format(VertexElementFormat::Float2)
+                .with_offset(8),
+            VertexAttribute::new()
+                .with_location(2)
+                .with_buffer_slot(1)
+                .with_format(VertexElementFormat::Float2)
+                .with_offset(0),
+            VertexAttribute::new()
+                .with_location(3)
+                .with_buffer_slot(1)
+                .with_format(VertexElementFormat::Float2)
+                .with_offset(8),
+            VertexAttribute::new()
+                .with_location(4)
+                .with_buffer_slot(1)
+                .with_format(VertexElementFormat::Float4)
+                .with_offset(16),
+            VertexAttribute::new()
+                .with_location(5)
+                .with_buffer_slot(1)
+                .with_format(VertexElementFormat::Float4)
+                .with_offset(32),
+        ];
+        let color_targets = [ColorTargetDescription::new()
+            .with_format(TextureFormat::R8g8b8a8Unorm)
+            .with_blend_state(blend)];
+
+        // Sprites: depth-tested and depth-writing, so a unit standing in front
+        // of another covers it without anyone sorting a thing. Correctness
+        // under alpha comes from the fragment stage's cutout, not from order.
+        //
+        // The comparison is `GREATER` against a buffer cleared to [`DEPTH_CLEAR`]
+        // = 0, because the key the vertex stage emits is the agent's position
+        // *down the map diamond*: larger is further down the screen, which in an
+        // isometric view is nearer the camera. A `LESS` test would draw the
+        // horde back to front and let the rank behind cover the rank in front.
+        let pipeline = build_pipeline(
+            device,
+            &vert,
+            &frag,
+            &buffer_descs,
+            &attributes,
+            &color_targets,
+            DepthStencilState::new()
+                .with_compare_op(CompareOp::Greater)
+                .with_enable_depth_test(true)
+                .with_enable_depth_write(true),
+        )?;
+        // Rings: the *same* shader modules, with the depth block off. A debug
+        // overlay that a unit could stand in front of would stop annotating the
+        // thing it exists to annotate.
+        let ring_pipeline = build_pipeline(
+            device,
+            &vert,
+            &frag,
+            &buffer_descs,
+            &attributes,
+            &color_targets,
+            DepthStencilState::new()
+                .with_enable_depth_test(false)
+                .with_enable_depth_write(false),
+        )?;
         drop(vert);
         drop(frag);
 
@@ -288,8 +347,23 @@ impl SpriteRenderer {
                 .with_usage(TextureUsage::COLOR_TARGET | TextureUsage::SAMPLER),
         )?;
 
+        // Never sampled and never read back: it exists only so the sprite pass
+        // can resolve front-to-back within one submit.
+        let depth = device.create_texture(
+            TextureCreateInfo::new()
+                .with_type(TextureType::_2D)
+                .with_format(DEPTH_FORMAT)
+                .with_width(VIEW_WIDTH)
+                .with_height(VIEW_HEIGHT)
+                .with_layer_count_or_depth(1)
+                .with_num_levels(1)
+                .with_sample_count(SampleCount::NoMultiSampling)
+                .with_usage(TextureUsage::DEPTH_STENCIL_TARGET),
+        )?;
+
         let out = Self {
             pipeline,
+            ring_pipeline,
             quad_vb,
             quad_ib,
             instance_bufs,
@@ -299,6 +373,9 @@ impl SpriteRenderer {
             atlas_tex,
             sampler,
             offscreen,
+            depth,
+            depth_scale: DEFAULT_DEPTH_SCALE,
+            depth_bias: DEFAULT_DEPTH_BIAS,
             frame_slot: 0,
             pack_scratch: Vec::with_capacity(MAX_INSTANCES as usize),
             ctx,
@@ -312,6 +389,23 @@ impl SpriteRenderer {
 
     pub fn atlases(&self) -> &[AtlasRgba; ATLAS_COUNT] {
         &self.atlases_cpu
+    }
+
+    /// Point the vertex stage's depth normalisation at a scene's own map.
+    ///
+    /// The camera is fixed, so this is set once per scene from
+    /// [`IsoView`](super::IsoView) rather than per frame — see
+    /// `Runtime::iso_view`. Left alone, the renderer normalises over the view
+    /// height ([`DEFAULT_DEPTH_SCALE`]), which is what content authored
+    /// directly in view pixels wants.
+    pub fn set_depth_params(&mut self, depth_scale: f32, depth_bias: f32) {
+        self.depth_scale = depth_scale;
+        self.depth_bias = depth_bias;
+    }
+
+    /// The `(depth_scale, depth_bias)` this renderer uploads each frame.
+    pub fn depth_params(&self) -> (f32, f32) {
+        (self.depth_scale, self.depth_bias)
     }
 
     /// Canonical static scene: one sprite per atlas at fixed positions.
@@ -369,9 +463,11 @@ impl SpriteRenderer {
     /// Draw the four atlas groups, then the hitbox rings, into the offscreen
     /// target and return the render submit's fence.
     ///
-    /// Rings ride the *same* pass, pipeline and blend state as the sprites —
-    /// they are extra instances in a fifth range, not a second technique. The
-    /// fragment stage picks the ring branch off a sentinel in `uv_rect`
+    /// Rings ride the *same* pass, shader modules and blend state as the
+    /// sprites — they are extra instances in a fifth range, not a second
+    /// technique — but on the pipeline whose depth test and depth write are
+    /// off, so a unit standing in front of a ring never hides it. The fragment
+    /// stage picks the ring branch off a sentinel in `uv_rect`
     /// ([`SpriteInstance::ring`]), so the atlas bound for that draw is never
     /// sampled; atlas 0 is bound anyway because the pipeline declares one
     /// sampler and a draw must not leave it unbound.
@@ -440,7 +536,8 @@ impl SpriteRenderer {
         let cmd = device.acquire_command_buffer()?;
         let uniforms = FrameUniforms {
             view_size: [VIEW_WIDTH as f32, VIEW_HEIGHT as f32],
-            _pad: [0.0, 0.0],
+            depth_scale: self.depth_scale,
+            depth_bias: self.depth_bias,
         };
         cmd.push_vertex_uniform_data(0, &uniforms);
 
@@ -449,7 +546,16 @@ impl SpriteRenderer {
             .with_load_op(LoadOp::CLEAR)
             .with_store_op(StoreOp::STORE)
             .with_clear_color(Color::RGBA(0, 0, 0, 0))];
-        let pass = device.begin_render_pass(&cmd, &color_targets, None)?;
+        // Cleared to the far plane every frame and discarded at the end — the
+        // buffer is scratch for one pass, never read by anything else.
+        let depth_target = DepthStencilTargetInfo::new()
+            .with_texture(&mut self.depth)
+            .with_clear_depth(DEPTH_CLEAR)
+            .with_load_op(LoadOp::CLEAR)
+            .with_store_op(StoreOp::DONT_CARE)
+            .with_stencil_load_op(LoadOp::DONT_CARE)
+            .with_stencil_store_op(StoreOp::DONT_CARE);
+        let pass = device.begin_render_pass(&cmd, &color_targets, Some(&depth_target))?;
         pass.bind_graphics_pipeline(&self.pipeline);
         pass.bind_vertex_buffers(
             0,
@@ -490,9 +596,32 @@ impl SpriteRenderer {
             pass.draw_indexed_primitives(6, *count, 0, 0, 0);
         }
 
-        // Hitbox rings: after every atlas group, same pass and pipeline.
+        // Hitbox rings: after every atlas group, same pass and same shader
+        // modules, on the pipeline whose depth block is off.
         let (ring_start, ring_count) = ring_range;
         if ring_count > 0 {
+            pass.bind_graphics_pipeline(&self.ring_pipeline);
+            // Slot 1 below is the bind this draw genuinely needs — it moves to
+            // the ring range's byte offset. Slot 0, the index buffer and the
+            // sampler are re-issued defensively; every backend dedupes an
+            // identical rebind, so they cost nothing, and SDL3 does not
+            // *document* what survives a pipeline switch.
+            //
+            // The one thing deliberately NOT re-issued is the frame uniform:
+            // `push_vertex_uniform_data` is documented to hold its value for the
+            // whole command buffer, and the ring draw depends on that.
+            pass.bind_vertex_buffers(
+                0,
+                &[BufferBinding::new()
+                    .with_buffer(&self.quad_vb)
+                    .with_offset(0)],
+            );
+            pass.bind_index_buffer(
+                &BufferBinding::new()
+                    .with_buffer(&self.quad_ib)
+                    .with_offset(0),
+                IndexElementSize::_16BIT,
+            );
             // Atlas 0 satisfies the pipeline's one declared sampler; the ring
             // branch never samples it. Without this bind, a frame whose four
             // groups were all empty would draw with no texture bound at all.
@@ -632,6 +761,48 @@ fn host_shader_spec() -> (ShaderFormat, &'static CStr, &'static CStr) {
     {
         (ShaderFormat::METALLIB, c"VSMain", c"PSMain")
     }
+}
+
+/// Build one graphics pipeline over the shared vertex layout and colour
+/// target, differing only in its depth-stencil block.
+///
+/// The sprite pass and the ring overlay run the *same* shader modules; the only
+/// thing that separates them is whether they read and write depth. Threading
+/// that through one builder is what keeps "same shaders, different depth state"
+/// a fact rather than a comment.
+#[allow(clippy::too_many_arguments)]
+fn build_pipeline(
+    device: &Device,
+    vert: &Shader,
+    frag: &Shader,
+    buffer_descs: &[VertexBufferDescription],
+    attributes: &[VertexAttribute],
+    color_targets: &[ColorTargetDescription],
+    depth_state: DepthStencilState,
+) -> Result<GraphicsPipeline, RenderError> {
+    Ok(device
+        .create_graphics_pipeline()
+        .with_primitive_type(PrimitiveType::TriangleList)
+        .with_vertex_shader(vert)
+        .with_fragment_shader(frag)
+        .with_vertex_input_state(
+            VertexInputState::new()
+                .with_vertex_buffer_descriptions(buffer_descs)
+                .with_vertex_attributes(attributes),
+        )
+        .with_rasterizer_state(
+            RasterizerState::new()
+                .with_fill_mode(FillMode::Fill)
+                .with_cull_mode(CullMode::None),
+        )
+        .with_depth_stencil_state(depth_state)
+        .with_target_info(
+            GraphicsPipelineTargetInfo::new()
+                .with_color_target_descriptions(color_targets)
+                .with_depth_stencil_format(DEPTH_FORMAT)
+                .with_has_depth_stencil_target(true),
+        )
+        .build()?)
 }
 
 fn upload_slice<T: Copy>(

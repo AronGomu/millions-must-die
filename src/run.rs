@@ -268,6 +268,11 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
     let mut runtime =
         Runtime::load(&scenario_path, opts.agents).map_err(|e| load_error(&scenario_path, e))?;
     let mut renderer = SpriteRenderer::new(&root, true).map_err(RunError::from_render)?;
+    // The camera is fixed, so the depth normalisation is a per-scene constant:
+    // set it once from the same projection the packers use, and the uniform the
+    // GPU reads can never describe a different map than the CPU packed.
+    let iso = runtime.iso_view();
+    renderer.set_depth_params(iso.depth_scale, iso.depth_bias);
     let backend = renderer.backend().to_string();
 
     println!(

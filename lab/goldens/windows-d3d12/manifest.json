@@ -11,6 +11,6 @@
   "adapter": "AMD Radeon RX 6400 (pending native capture)",
   "driver_info": "deferred-hw (2026-08-05): no Windows ref PC; capture on real D3D12 hardware per T9/T13 before use",
   "atlas_manifest_sha256": "2133e24ea23bd4929a9e8e39a51b08ad42ad0dd673af82e23cd41f57bd5a6cbe",
-  "shader_canonical_sha256": "a27856e6b17a26f7a3fd91945637c503690564255739c634012098b1c57aff63",
+  "shader_canonical_sha256": "7dfbeaf8753c5a1490581547b6ac0123b0e41366dab87e0df19684fe0eee660d",
   "max_channel_delta": 0
 }

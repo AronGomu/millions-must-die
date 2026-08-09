@@ -249,6 +249,76 @@ fn an_armed_thread_allocations_do_reach_a_measure_scope() {
     );
 }
 
+/// The isometric projection and the cull are free of the heap.
+///
+/// The projection added arithmetic and a per-instance rect test to the hottest
+/// loop the frame has. Neither may cost an allocation — and the cull in
+/// particular must not: a packer that collected the surviving instances into a
+/// fresh `Vec` before pushing them would still pass every correctness case in
+/// `render_correctness.rs` while allocating once per frame per group.
+///
+/// Measured on the tracked scene precisely *because* the cull bites there: its
+/// map diamond is larger than the view, so most agents take the reject path and
+/// only some take the push path, and both are inside the guard.
+///
+/// This lives here, not in `render_correctness.rs`, because the counting
+/// allocator is installed in *this* test binary — a `MeasureGuard` anywhere
+/// else records nothing and the assertion would pass vacuously.
+#[test]
+fn iso_packing_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE)))
+        .agents(2_048)
+        .seed(17)
+        .build()
+        .expect("collision scene");
+
+    // Warm-up outside the scope: whatever the first pack grows, it grows now.
+    h.step_exact(3);
+    h.runtime_mut().pack_groups();
+    let alive = h.alive_count();
+    let packed: usize = h
+        .runtime()
+        .draw_groups()
+        .iter()
+        .map(|g| g.instances.len())
+        .sum();
+    assert!(
+        packed > 0 && packed < alive,
+        "this case must exercise *both* sides of the cull: {packed} of {alive} agents \
+         packed"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..8 {
+        h.runtime_mut().pack_groups();
+        std::hint::black_box(h.runtime().draw_groups()[0].instances.len());
+        std::hint::black_box(h.runtime().ring_instances().len());
+    }
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "packing an isometric frame with the cull allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    // The pack is still the same frame after eight repeats — a cull that
+    // dropped a different set each time would be a different defect.
+    let again: usize = h
+        .runtime()
+        .draw_groups()
+        .iter()
+        .map(|g| g.instances.len())
+        .sum();
+    assert_eq!(
+        again, packed,
+        "re-packing an unchanged sim changed the frame"
+    );
+}
+
 /// The hitbox overlay does not get to spend the frame budget it was added
 /// under: packing a ring per agent reuses a buffer reserved at load.
 ///
@@ -281,10 +351,13 @@ fn ring_packing_allocates_nothing() {
     h.step_exact(2);
     h.runtime_mut().pack_groups();
     let packed = h.runtime().ring_instances().len();
-    assert_eq!(
-        packed,
-        h.alive_count(),
-        "warm-up must pack a full set of rings"
+    // Not `alive_count()`: this scene's map diamond is larger than the view, so
+    // the packer culls. What matters here is that the warm-up really packed
+    // rings — an empty warm-up would leave the growth for the measured scope.
+    assert!(
+        packed > 0 && packed <= h.alive_count(),
+        "warm-up packed {packed} rings for {} agents",
+        h.alive_count()
     );
 
     let guard = MeasureGuard::enter();

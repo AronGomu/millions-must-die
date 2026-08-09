@@ -46,14 +46,14 @@ use std::sync::{Mutex, MutexGuard};
 use mmd_engine::render::{
     ATLAS_COUNT, DrawGroup, FRAME_SIZE_PX, GOLDEN_DIFF_ACTUAL_PNG, GOLDEN_DIFF_MASK_PNG,
     GOLDEN_DIFF_SUMMARY_JSON, GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_STATUS_CAPTURED,
-    GoldenDiffSummary, GoldenError, GoldenManifest, HostBinding, Readback, RenderError,
-    SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, clip_to_pixel,
+    GoldenDiffSummary, GoldenError, GoldenManifest, HostBinding, ISO_DEPTH_EPSILON, IsoView,
+    Readback, RenderError, SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, clip_to_pixel,
     compare_readback_writing_diff, diff_readback, frame_uv_rect, golden_family_dir,
-    host_binding_hashes, load_atlases, load_golden_image, load_golden_manifest, world_to_clip,
-    write_golden_diff,
+    host_binding_hashes, iso_depth, load_atlases, load_golden_image, load_golden_manifest,
+    world_to_clip, write_golden_diff,
 };
 use mmd_engine::runtime::{
-    RING_INNER, RING_OUTER, RING_TINT, build_instance_groups, ring_radius_px,
+    RING_INNER, RING_OUTER, RING_TINT, build_instance_groups, ring_quad_size_px, ring_radius_px,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::{
@@ -195,6 +195,43 @@ fn single_sprite_groups(pos: [f32; 2], size: [f32; 2]) -> [DrawGroup; ATLAS_COUN
     })
 }
 
+/// The projected ground point of a cell-space position, written out longhand.
+///
+/// Deliberately *not* [`IsoView::project`]: every case that states where an
+/// instance should land needs an expectation that does not flow through the
+/// function under test, or a projection that silently changed would move the
+/// packer and the expectation together and pass.
+fn ground_point(iso: &IsoView, cx: f32, cy: f32) -> [f32; 2] {
+    [
+        iso.origin[0] + (cx - cy) * iso.tile_w * 0.5,
+        iso.origin[1] + (cx + cy) * iso.tile_h * 0.5,
+    ]
+}
+
+/// Whether a quad of `size` at `pos` puts any pixel inside the view, written
+/// out longhand for the same reason as [`ground_point`].
+fn on_screen(pos: [f32; 2], size: [f32; 2], view: [f32; 2]) -> bool {
+    pos[0] + size[0] > 0.0 && pos[1] + size[1] > 0.0 && pos[0] < view[0] && pos[1] < view[1]
+}
+
+/// How many alive agents have a sprite quad the view can see at all.
+fn visible_sprite_count(
+    agents: mmd_engine::sim::AgentsView<'_>,
+    iso: &IsoView,
+    sprite: f32,
+) -> usize {
+    (0..agents.x.len())
+        .filter(|&i| {
+            let g = ground_point(iso, agents.x[i], agents.y[i]);
+            on_screen(
+                [g[0] - sprite * 0.5, g[1] - sprite],
+                [sprite, sprite],
+                iso.view_size,
+            )
+        })
+        .count()
+}
+
 // ---------------------------------------------------------------------------
 // 1. Instance data — headless
 // ---------------------------------------------------------------------------
@@ -212,19 +249,35 @@ fn instance_per_alive_agent() {
         // have spread across the map.
         h.step_exact(37);
 
+        let iso = h.runtime().iso_view();
+        let sprite = h.scenario().sprite_size_px() as f32;
         let expected_per_bucket = {
             let v = h.agents();
             let mut counts = vec![0usize; ATLAS_COUNT];
-            for &atlas in v.atlas {
-                counts[atlas as usize % ATLAS_COUNT] += 1;
+            for i in 0..v.x.len() {
+                let g = ground_point(&iso, v.x[i], v.y[i]);
+                if !on_screen(
+                    [g[0] - sprite * 0.5, g[1] - sprite],
+                    [sprite, sprite],
+                    iso.view_size,
+                ) {
+                    continue;
+                }
+                counts[v.atlas[i] as usize % ATLAS_COUNT] += 1;
             }
             counts
         };
         let alive = h.alive_count();
+        // These fixtures are small enough that the whole map diamond fits the
+        // view, so the cull removes nothing and "one instance per alive agent"
+        // is still the full claim. Stated rather than assumed: a fixture that
+        // grew past the view would otherwise turn this into a weaker test
+        // without anyone noticing.
         assert_eq!(
             expected_per_bucket.iter().sum::<usize>(),
             alive,
-            "{fixture}: fixture sanity — every alive agent has an atlas channel"
+            "{fixture}: the whole fixture must project inside the view for this case \
+             to mean 'one instance per alive agent'"
         );
 
         let groups = h.render_frame_groups();
@@ -246,15 +299,16 @@ fn instance_per_alive_agent() {
     }
 }
 
-/// Each instance is centred on its agent's world position and carries the UV
-/// rect for that agent's `(dir, frame)`.
+/// Each instance **stands on** its agent's projected ground point and carries
+/// the UV rect for that agent's `(dir, frame)`.
 ///
-/// Position is asserted as *the sprite's centre equals the agent's world pixel*
-/// — the contract a reader cares about — rather than by restating the pack
-/// step's top-left arithmetic. UVs are matched as a multiset per bucket, since
+/// Position is asserted as *the quad's bottom-centre equals the isometric
+/// projection of the agent's cell* — the contract a reader cares about, and the
+/// one the depth key depends on — rather than by restating the pack step's
+/// top-left arithmetic. UVs are matched as a multiset per bucket, since
 /// nothing promises intra-bucket ordering.
 ///
-/// Centres are keyed at 1/256 px. Recovering the centre costs one f32 add that
+/// Foot points are keyed at 1/256 px. Recovering the foot costs f32 adds that
 /// the pack step's subtraction does not, so the two can differ by an ULP;
 /// 1/256 px absorbs that while still resolving a misplacement 256× finer than
 /// the smallest error that could matter (one pixel).
@@ -266,7 +320,7 @@ fn instances_carry_agent_position_and_animation_uvs() {
         .expect("fixture");
     h.step_exact(23);
 
-    let cell = h.scenario().cell_size_px() as f32;
+    let iso = h.runtime().iso_view();
     let sprite = h.scenario().sprite_size_px() as f32;
     let dirs = h.scenario().direction_count();
     let frames = h.scenario().frame_count();
@@ -283,7 +337,8 @@ fn instances_carry_agent_position_and_animation_uvs() {
         let v = h.agents();
         for i in 0..v.x.len() {
             let bucket = v.atlas[i] as usize % ATLAS_COUNT;
-            let centre = (q256(v.x[i] * cell), q256(v.y[i] * cell));
+            let g = ground_point(&iso, v.x[i], v.y[i]);
+            let centre = (q256(g[0]), q256(g[1]));
             let uv = frame_uv_rect(u32::from(v.dir[i]), u32::from(v.frame[i])).map(f32::to_bits);
             *want[bucket].entry((centre, uv)).or_default() += 1;
             assert!(
@@ -301,10 +356,8 @@ fn instances_carry_agent_position_and_animation_uvs() {
         for inst in &g.instances {
             assert_eq!(inst.size, [sprite, sprite], "bucket {bucket}: sprite size");
             assert_eq!(inst.tint, SpriteInstance::WHITE, "bucket {bucket}: tint");
-            let centre = (
-                q256(inst.pos[0] + sprite * 0.5),
-                q256(inst.pos[1] + sprite * 0.5),
-            );
+            // Bottom-centre, not centre: the quad's *feet* sit on the tile.
+            let centre = (q256(inst.pos[0] + sprite * 0.5), q256(inst.pos[1] + sprite));
             got.entry((centre, inst.uv_rect.map(f32::to_bits)))
                 .and_modify(|n| *n += 1)
                 .or_insert(1);
@@ -327,7 +380,7 @@ fn instances_carry_agent_position_and_animation_uvs() {
         }
         assert_eq!(
             got, want[bucket],
-            "bucket {bucket}: (position, UV) pairs do not match agent state"
+            "bucket {bucket}: (ground point, UV) pairs do not match agent state"
         );
     }
 }
@@ -342,7 +395,7 @@ fn packing_is_a_pure_projection_of_sim_state() {
         .expect("fixture");
     h.step_exact(15);
 
-    let cell = h.scenario().cell_size_px() as f32;
+    let iso = h.runtime().iso_view();
     let sprite = h.scenario().sprite_size_px() as f32;
 
     let first: Vec<Vec<SpriteInstance>> = h
@@ -362,7 +415,7 @@ fn packing_is_a_pure_projection_of_sim_state() {
 
     // The allocating builder is the same projection as the reusing packer —
     // a divergence would mean the interactive path and this test disagree.
-    let built = build_instance_groups(h.agents(), cell, sprite);
+    let built = build_instance_groups(h.agents(), &iso, sprite);
     let built: Vec<Vec<SpriteInstance>> = built.iter().map(|g| g.instances.clone()).collect();
     assert_eq!(first, built, "build_instance_groups diverged from pack");
 
@@ -397,19 +450,52 @@ fn bodied_harness(agents: u32, seed: u64) -> Harness {
     h
 }
 
-/// Rings are per-entity, not per-scene: one for every agent that is drawn.
+/// Rings are per-entity, not per-scene: one for every agent whose ring the view
+/// can see.
+///
+/// The tracked scene's map diamond is larger than the view, so the count is the
+/// *visible* population rather than the alive one — and the two rects differ,
+/// because a 48 px sprite quad anchored on its feet and a `2r`-wide floor
+/// ellipse do not leave the view at the same moment.
 #[test]
 fn a_ring_is_packed_for_every_agent() {
     let mut h = bodied_harness(256, 5);
     h.step_exact(19);
 
     h.runtime_mut().pack_groups();
-    let alive = h.alive_count();
+    let iso = h.runtime().iso_view();
+    let sprite = h.scenario().sprite_size_px() as f32;
+    let radius_cells = h.sim().collision().radius_cells;
+    let ring_size = [
+        2.0 * radius_cells * iso.tile_w,
+        2.0 * radius_cells * iso.tile_h,
+    ];
+
+    let want_rings = {
+        let v = h.agents();
+        (0..v.x.len())
+            .filter(|&i| {
+                let g = ground_point(&iso, v.x[i], v.y[i]);
+                on_screen(
+                    [g[0] - ring_size[0] * 0.5, g[1] - ring_size[1] * 0.5],
+                    ring_size,
+                    iso.view_size,
+                )
+            })
+            .count()
+    };
+    let want_sprites = visible_sprite_count(h.agents(), &iso, sprite);
+    assert!(
+        want_rings > 0 && want_sprites > 0,
+        "this case is only meaningful when the view holds something: {want_rings} rings, \
+         {want_sprites} sprites"
+    );
+
     let rings = h.runtime().ring_instances();
     assert_eq!(
         rings.len(),
-        alive,
-        "packed {} rings for {alive} agents",
+        want_rings,
+        "packed {} rings for {want_rings} on-screen agents",
         rings.len()
     );
     for (i, r) in rings.iter().enumerate() {
@@ -426,7 +512,10 @@ fn a_ring_is_packed_for_every_agent() {
         .iter()
         .map(|g| g.instances.len())
         .sum();
-    assert_eq!(packed, alive, "the atlas groups lost agents to the rings");
+    assert_eq!(
+        packed, want_sprites,
+        "the atlas groups lost agents to the rings"
+    );
 
     // …and no sprite trips the ring branch. `ring_instances_keep_the_pinned_layout`
     // proves `frame_uv_rect` never emits a negative `u0`; this asks the real
@@ -496,6 +585,16 @@ fn a_bodyless_scene_packs_no_rings() {
 /// It also cross-checks the scenario's radius against `Simulation::collision()`
 /// — the value the separation pass actually pushes on — so the two derivations
 /// cannot drift apart unnoticed.
+///
+/// Under the isometric projection the drawn body is an **ellipse**: a circle
+/// lying on a 2:1 floor is twice as wide on screen as it is tall. The height is
+/// therefore still the body's true diameter, and the width is twice it — which
+/// is what the size assertions below say.
+///
+/// The per-index pairing (ring `i` belongs to agent `i`) moved to
+/// [`ring_and_sprite_stand_on_the_same_ground_point`]: on this scene the map
+/// diamond is larger than the view, so the cull drops agents and packed index
+/// `i` is no longer SoA index `i`.
 #[test]
 fn the_ring_traces_the_real_body() {
     let mut h = bodied_harness(64, 11);
@@ -532,33 +631,127 @@ fn the_ring_traces_the_real_body() {
     );
 
     h.runtime_mut().pack_groups();
+    let iso = h.runtime().iso_view();
 
-    // Per-agent, by index: `pack_ring_instances` walks the SoA in order, so
-    // ring `i` belongs to agent `i`. A desync here is exactly the failure the
-    // multiset check below cannot see.
+    // Height is the body's diameter; width is twice it, because the body is a
+    // circle seen on a 2:1 floor. Derived from the raw scenario field above,
+    // then cross-checked against the production expression.
+    let want_size = [2.0 * want_diameter, want_diameter];
+    assert_eq!(
+        want_size,
+        ring_quad_size_px(iso.tile_w, iso.tile_h, radius_cells),
+        "the production ring-quad expression no longer agrees with the raw scenario field"
+    );
+
+    // How many rings the view can hold, by this test's own rect arithmetic.
+    let want_rings = {
+        let v = h.agents();
+        (0..v.x.len())
+            .filter(|&i| {
+                let g = ground_point(&iso, v.x[i], v.y[i]);
+                on_screen(
+                    [g[0] - want_size[0] * 0.5, g[1] - want_size[1] * 0.5],
+                    want_size,
+                    iso.view_size,
+                )
+            })
+            .count()
+    };
+
+    // Every packed ring is that ellipse, carries the tuned band, and is centred
+    // on an agent's ground point — as a **multiset**, consumed one agent per
+    // ring. The cull means packed order is not SoA order on this scene, so the
+    // pairing cannot be by index here; but counting rather than merely testing
+    // membership is what stops a packer that emitted two rings for one agent,
+    // or `agents.x[i & !1]`, from passing.
+    let mut agent_grounds: BTreeMap<(i64, i64), usize> = {
+        let mut m = BTreeMap::new();
+        let v = h.agents();
+        for i in 0..v.x.len() {
+            let g = ground_point(&iso, v.x[i], v.y[i]);
+            *m.entry((q256(g[0]), q256(g[1]))).or_default() += 1;
+        }
+        m
+    };
+    let rings = h.runtime().ring_instances().to_vec();
+    assert_eq!(
+        rings.len(),
+        want_rings,
+        "packed {} rings for {want_rings} on-screen agents",
+        rings.len()
+    );
+    assert!(want_rings > 0, "no ring reached the view to check");
+    for (i, r) in rings.iter().enumerate() {
+        assert_eq!(
+            r.size, want_size,
+            "ring {i} is {:?} px across, not the {radius_cells}-cell body on a \
+             {}x{} px tile",
+            r.size, iso.tile_w, iso.tile_h
+        );
+        assert_eq!(r.uv_rect[1], RING_INNER, "ring {i} inner radius");
+        assert_eq!(r.uv_rect[2], RING_OUTER, "ring {i} outer radius");
+        let centre = (
+            q256(r.pos[0] + r.size[0] * 0.5),
+            q256(r.pos[1] + r.size[1] * 0.5),
+        );
+        let left = agent_grounds.get_mut(&centre).unwrap_or_else(|| {
+            panic!("ring {i} is centred at {centre:?}, which is no agent's ground point")
+        });
+        assert!(
+            *left > 0,
+            "ring {i} is the second ring centred at {centre:?}, but only one agent \
+             stands there"
+        );
+        *left -= 1;
+    }
+
+    // The ring's quad half-height is exactly the body radius in cell space, so
+    // the helper the rest of the repo reads still means what it says.
+    assert_eq!(want_size[1] * 0.5, ring_radius_px(cell, radius_cells));
+}
+
+/// A ring and the sprite it belongs to stand on the **same** projected ground
+/// point — the ring on the floor, the sprite's feet in it.
+///
+/// Proven on a grid small enough that the whole map projects inside the view,
+/// so nothing is culled and packed index `i` really is SoA index `i`. That is
+/// what makes the per-agent pairing assertable at all; an SoA desync between
+/// `x/y` and the ring buffer is invisible to any multiset comparison.
+#[test]
+fn ring_and_sprite_stand_on_the_same_ground_point() {
+    // 1536 q8 = 6 cells of body against a 30 px sprite on a 4 px cell.
+    let spec = GridSpec::new(24, 16, Cell { x: 22, y: 8 })
+        .with_spawns(vec![Cell { x: 1, y: 8 }, Cell { x: 1, y: 4 }])
+        .with_agents(48)
+        .with_collision(1_536, 256);
+    let mut h = Harness::grid(spec).build().expect("bodied grid");
+    h.step_exact(9);
+    h.runtime_mut().pack_groups();
+
+    let iso = h.runtime().iso_view();
+    let sprite = h.scenario().sprite_size_px() as f32;
+    let alive = h.alive_count();
+    assert_eq!(
+        visible_sprite_count(h.agents(), &iso, sprite),
+        alive,
+        "this grid must project entirely inside the view, or index `i` is not agent `i`"
+    );
+
     {
         let rings = h.runtime().ring_instances();
         let v = h.agents();
-        assert_eq!(rings.len(), v.x.len());
+        assert_eq!(rings.len(), v.x.len(), "one ring per agent, in SoA order");
         for (i, r) in rings.iter().enumerate() {
-            assert_eq!(
-                r.size,
-                [want_diameter, want_diameter],
-                "ring {i} is {:?} px across, not 2 * {radius_cells} cells * {cell} px",
-                r.size
-            );
-            assert_eq!(r.uv_rect[1], RING_INNER, "ring {i} inner radius");
-            assert_eq!(r.uv_rect[2], RING_OUTER, "ring {i} outer radius");
+            let want = ground_point(&iso, v.x[i], v.y[i]);
             let centre = [r.pos[0] + r.size[0] * 0.5, r.pos[1] + r.size[1] * 0.5];
-            let want = [v.x[i] * cell, v.y[i] * cell];
             assert!(
                 (centre[0] - want[0]).abs() < 1e-3 && (centre[1] - want[1]).abs() < 1e-3,
-                "ring {i} is centred at {centre:?} but agent {i} is at {want:?}"
+                "ring {i} is centred at {centre:?} but agent {i} stands at {want:?}"
             );
         }
     }
 
-    // …and the ring centres are the *sprite* centres. Compared as multisets
+    // …and the ring centres are the sprite *feet*. Compared as multisets
     // because nothing promises intra-bucket ordering in the atlas groups.
     let ring_centres: BTreeMap<(i64, i64), usize> = {
         let mut m = BTreeMap::new();
@@ -571,20 +764,20 @@ fn the_ring_traces_the_real_body() {
         }
         m
     };
-    let sprite_centres: BTreeMap<(i64, i64), usize> = {
+    let sprite_feet: BTreeMap<(i64, i64), usize> = {
         let mut m = BTreeMap::new();
         for inst in h.runtime().draw_groups().iter().flat_map(|g| &g.instances) {
             *m.entry((
                 q256(inst.pos[0] + inst.size[0] * 0.5),
-                q256(inst.pos[1] + inst.size[1] * 0.5),
+                q256(inst.pos[1] + inst.size[1]),
             ))
             .or_default() += 1;
         }
         m
     };
     assert_eq!(
-        ring_centres, sprite_centres,
-        "the rings are not centred on the sprites they belong to"
+        ring_centres, sprite_feet,
+        "the rings are not under the feet of the sprites they belong to"
     );
 }
 
@@ -617,16 +810,23 @@ fn the_ring_traces_a_body_that_is_not_half_a_sprite() {
         "this case is only meaningful when the body ({want_diameter} px) and the \
          sprite ({sprite} px) disagree"
     );
+    // …and the isometric ellipse must not accidentally match the sprite either,
+    // on *either* axis, or a sprite-derived packer could still pass.
+    let want_size = [2.0 * want_diameter, want_diameter]; // 24 x 12 px
+    assert!(
+        (want_size[0] - sprite).abs() > 1.0 && (want_size[1] - sprite).abs() > 1.0,
+        "the projected body {want_size:?} must differ from the sprite ({sprite} px) on \
+         both axes"
+    );
 
     h.runtime_mut().pack_groups();
     let rings = h.runtime().ring_instances();
     assert_eq!(rings.len(), h.alive_count());
     for (i, r) in rings.iter().enumerate() {
         assert_eq!(
-            r.size,
-            [want_diameter, want_diameter],
-            "ring {i} is {:?} px across; the body is {want_diameter} px and the sprite \
-             is {sprite} px, so this ring is tracking the wrong one",
+            r.size, want_size,
+            "ring {i} is {:?} px across; the body projects to {want_size:?} and the \
+             sprite is {sprite} px, so this ring is tracking the wrong one",
             r.size
         );
     }
@@ -653,24 +853,47 @@ fn world_to_clip_transform() {
         ([0.0, 0.0], [0.0, 0.0]),    // centre         → clip origin
     ];
     for (corner, want) in cases {
-        let clip = world_to_clip(full.0, full.1, corner, view);
+        let clip = world_to_clip(full.0, full.1, corner, view, 0.0);
         assert!(
             (clip[0] - want[0]).abs() < 1e-6 && (clip[1] - want[1]).abs() < 1e-6,
             "corner {corner:?} → clip {:?}, expected {want:?}",
             [clip[0], clip[1]]
         );
-        assert_eq!([clip[2], clip[3]], [0.0, 1.0], "clip z/w are fixed");
+        assert_eq!(
+            [clip[2], clip[3]],
+            [0.0, 1.0],
+            "clip w is fixed; z is the key"
+        );
+    }
+
+    // The depth key is carried through untouched rather than recomputed from
+    // the corner. This is a *signature-shape* check and nothing more: `depth`
+    // is an argument the function never derives, so it cannot fail for any
+    // mutation of the depth logic — which lives in `iso_depth` and in the
+    // shader. The claim that one quad carries one key is a property of the
+    // vertex stage and is asserted where it can actually fail, on the GPU, in
+    // `an_agent_in_front_occludes_one_behind`.
+    for depth in [0.0f32, 0.25, 1.0] {
+        for corner in [[-0.5, -0.5], [0.5, -0.5], [-0.5, 0.5], [0.5, 0.5]] {
+            let clip = world_to_clip(full.0, full.1, corner, view, depth);
+            assert_eq!(
+                clip[2], depth,
+                "corner {corner:?} reported depth {} instead of {depth}",
+                clip[2]
+            );
+        }
     }
 
     // Y is flipped, not merely scaled: a sprite in the upper half of the view
     // must sit in the positive half of clip space.
-    let upper = world_to_clip([0.0, 0.0], [10.0, 10.0], [0.0, 0.0], view);
+    let upper = world_to_clip([0.0, 0.0], [10.0, 10.0], [0.0, 0.0], view, 0.0);
     assert!(upper[1] > 0.0, "a sprite near the top must have clip y > 0");
     let lower = world_to_clip(
         [0.0, VIEW_HEIGHT as f32 - 10.0],
         [10.0, 10.0],
         [0.0, 0.0],
         view,
+        0.0,
     );
     assert!(
         lower[1] < 0.0,
@@ -702,7 +925,7 @@ fn world_to_clip_transform() {
     for pos in [[0.0, 0.0], [640.0, 360.0], [1889.5, 1049.5]] {
         let size = [30.0, 30.0];
         for corner in [[-0.5, -0.5], [0.5, 0.5], [0.0, 0.0]] {
-            let clip = world_to_clip(pos, size, corner, view);
+            let clip = world_to_clip(pos, size, corner, view, 0.0);
             let px = clip_to_pixel(clip, view);
             let want = [
                 pos[0] + (corner[0] + 0.5) * size[0],
@@ -713,6 +936,216 @@ fn world_to_clip_transform() {
                 "clip→pixel round trip for {pos:?}/{corner:?} gave {px:?}, expected {want:?}"
             );
         }
+    }
+}
+
+/// Constants that exist **twice** — once in Rust, once as a `#define` in
+/// `shaders/sprite.hlsl` — really do agree.
+///
+/// Nothing else can catch this. The depth buffer is created
+/// `DEPTH_STENCIL_TARGET`-only with `StoreOp::DONT_CARE`, so no test can read a
+/// depth value back; a shader whose epsilon or cutoff drifted from its Rust
+/// mirror renders a frame that is merely wrong, and every GPU probe in this file
+/// still passes. The canonical HLSL is a tracked file, so asserting on its text
+/// costs one `include_str!`.
+///
+/// This pins the constants **this ticket introduced**. `RING_SENTINEL` /
+/// `MMD_RING_THRESHOLD` carry the same duplication from T8 and are deliberately
+/// left alone here rather than picked up as a drive-by.
+#[test]
+fn shader_defines_match_their_rust_mirrors() {
+    const HLSL: &str = include_str!("../../../shaders/sprite.hlsl");
+
+    // The define's value is parsed and compared as an `f32` rather than matched
+    // as text: the shader spells it `0.0000152587890625` and Rust's own
+    // formatter would render the same number `1.5258789e-5`, so a text match
+    // would pin the *spelling* and break on a harmless reformat while still
+    // missing a genuine numeric drift.
+    let defined = |name: &str| -> f32 {
+        let line = HLSL
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("#define {name} ")))
+            .unwrap_or_else(|| panic!("shaders/sprite.hlsl no longer defines {name}"));
+        line.trim()
+            .rsplit(' ')
+            .next()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or_else(|| panic!("cannot read a float out of `{line}`"))
+    };
+
+    assert_eq!(
+        defined("MMD_DEPTH_EPSILON"),
+        ISO_DEPTH_EPSILON,
+        "the sprite depth floor exists once in Rust (ISO_DEPTH_EPSILON) and once in \
+         the shader, and no test can read a depth value back to catch a disagreement"
+    );
+    // The floor must be exactly one quantum of the D16_UNORM attachment: any
+    // smaller and it quantises back to the far plane the GREATER test discards.
+    assert_eq!(ISO_DEPTH_EPSILON, 1.0 / 65_536.0);
+
+    // The alpha cutout is the other constant this ticket added to the shader.
+    // It has no Rust mirror by design — only the fragment stage uses it — so
+    // what is pinned is the value every host golden was regenerated under.
+    assert_eq!(
+        defined("MMD_ALPHA_CUTOFF"),
+        0.5,
+        "every host golden was regenerated under a 0.5 alpha cutoff; moving it \
+         silently re-baselines what the goldens mean"
+    );
+}
+
+/// The depth key is a property of where the agent *stands*, not of the quad it
+/// is drawn with.
+///
+/// An agent one cell nearer (`+y`, which walks down the screen) gets the
+/// **larger** key, which is why the pipeline tests `GREATER` against an
+/// attachment cleared to `0`. Under `LESS` the nearer agent would lose and the
+/// horde would draw back to front.
+///
+/// The other half of the claim — that all four corners of one quad carry the
+/// *same* key, so a sprite cannot slice into its neighbours — cannot be
+/// asserted from here. It is a property of the vertex stage, and the CPU mirror
+/// takes the key as an argument rather than deriving it. It is asserted where
+/// it can actually fail, on the GPU, by the reversed draw order in
+/// [`an_agent_in_front_occludes_one_behind`].
+#[test]
+fn depth_is_the_ground_point_not_the_quad() {
+    let spec = GridSpec::new(24, 16, Cell { x: 22, y: 8 })
+        .with_spawns(vec![Cell { x: 1, y: 8 }])
+        .with_agents(2);
+    let mut h = Harness::grid(spec).build().expect("grid");
+
+    // Two agents one cell apart in +y, deliberately overlapping on screen.
+    h.sim_mut().set_position(0, 8.5, 6.5);
+    h.sim_mut().set_position(1, 8.5, 7.5);
+    h.runtime_mut().pack_groups();
+
+    let iso = h.runtime().iso_view();
+    let sprite = h.scenario().sprite_size_px() as f32;
+
+    let key = |cx: f32, cy: f32| -> f32 {
+        let g = ground_point(&iso, cx, cy);
+        let pos = [g[0] - sprite * 0.5, g[1] - sprite];
+        // What the shader computes: the quad's bottom edge.
+        iso_depth(pos[1] + sprite, iso.depth_scale, iso.depth_bias)
+    };
+
+    let farther = key(8.5, 6.5);
+    let nearer = key(8.5, 7.5);
+    assert!(
+        nearer > farther,
+        "the agent one cell nearer has depth {nearer}, the one behind it {farther}; \
+         under a LESS test the nearer one would lose"
+    );
+
+    // Neither key is the far plane. Exactly 0 is discarded by the GREATER test
+    // rather than sorted last, so the shader floors sprites at one depth
+    // quantum — see `ISO_DEPTH_EPSILON`.
+    for (name, d) in [("farther", farther), ("nearer", nearer)] {
+        assert!(
+            d >= ISO_DEPTH_EPSILON,
+            "the {name} agent's key is {d}, which the depth test would discard"
+        );
+    }
+
+    // The packed instances really are the two quads this reasoned about.
+    let packed: Vec<SpriteInstance> = h
+        .runtime()
+        .draw_groups()
+        .iter()
+        .flat_map(|g| g.instances.iter().copied())
+        .collect();
+    assert_eq!(packed.len(), 2, "both agents must be on screen");
+    let mut ground_ys: Vec<i64> = packed.iter().map(|i| q256(i.pos[1] + i.size[1])).collect();
+    ground_ys.sort_unstable();
+    let want_far = q256(ground_point(&iso, 8.5, 6.5)[1]);
+    let want_near = q256(ground_point(&iso, 8.5, 7.5)[1]);
+    assert_eq!(
+        ground_ys,
+        vec![want_far.min(want_near), want_far.max(want_near)],
+        "the packed quads' bottom edges are not the two agents' ground points"
+    );
+}
+
+/// A quad wholly outside the view is never pushed; one that still straddles an
+/// edge is.
+///
+/// The map diamond is deliberately larger than the view, so this is not an
+/// optimisation detail — without it the gate scene would upload and rasterize
+/// several times the instances it can show.
+#[test]
+fn offscreen_quads_are_culled() {
+    // The gate scene: 480 x 270 cells under an 8 x 4 tile is a 3000 x 1500 px
+    // diamond against a 1920 x 1080 view, so cells past every edge exist.
+    let mut h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_SPRITE_SCENE)))
+        .agents(1)
+        .build()
+        .expect("tracked collision scene loads");
+    let iso = h.runtime().iso_view();
+    let sprite = h.scenario().sprite_size_px() as f32;
+    let view = iso.view_size;
+
+    let pack_at = |h: &mut Harness, cx: f32, cy: f32| -> usize {
+        h.sim_mut().set_position(0, cx, cy);
+        h.runtime_mut().pack_groups();
+        h.runtime()
+            .draw_groups()
+            .iter()
+            .map(|g| g.instances.len())
+            .sum()
+    };
+
+    // Screen position → cell position. `sx = ox + (cx - cy) * tw / 2` and
+    // `sy = oy + (cx + cy) * th / 2`, inverted.
+    let cell_at = |sx: f32, sy: f32| -> (f32, f32) {
+        let a = (sx - iso.origin[0]) / (iso.tile_w * 0.5); // cx - cy
+        let b = (sy - iso.origin[1]) / (iso.tile_h * 0.5); // cx + cy
+        ((b + a) * 0.5, (b - a) * 0.5)
+    };
+
+    // The quad is anchored bottom-centre, so a ground point at these screen
+    // coordinates puts the quad fully outside the named edge.
+    let outside = [
+        ("left", -sprite, view[1] * 0.5),
+        ("right", view[0] + sprite, view[1] * 0.5),
+        ("top", view[0] * 0.5, -1.0),
+        ("bottom", view[0] * 0.5, view[1] + sprite),
+    ];
+    for (edge, sx, sy) in outside {
+        let (cx, cy) = cell_at(sx, sy);
+        // Sanity: this really is outside, by the test's own rect arithmetic.
+        let pos = [sx - sprite * 0.5, sy - sprite];
+        assert!(
+            !on_screen(pos, [sprite, sprite], view),
+            "{edge}: the case itself places a quad {pos:?} that is still on screen"
+        );
+        assert_eq!(
+            pack_at(&mut h, cx, cy),
+            0,
+            "an agent past the {edge} edge (cell {cx},{cy} → quad {pos:?}) still packed \
+             an instance"
+        );
+    }
+
+    // Straddling: one pixel of the quad is inside, so the instance survives.
+    let straddling = [
+        ("left", -sprite * 0.5 + 1.0, view[1] * 0.5),
+        ("right", view[0] + sprite * 0.5 - 1.0, view[1] * 0.5),
+        ("top", view[0] * 0.5, sprite - 1.0),
+        ("bottom", view[0] * 0.5, view[1] - 1.0),
+    ];
+    for (edge, sx, sy) in straddling {
+        let (cx, cy) = cell_at(sx, sy);
+        let pos = [sx - sprite * 0.5, sy - sprite];
+        assert!(
+            on_screen(pos, [sprite, sprite], view),
+            "{edge}: the case itself places a quad {pos:?} that is already off screen"
+        );
+        assert_eq!(
+            pack_at(&mut h, cx, cy),
+            1,
+            "an agent straddling the {edge} edge (quad {pos:?}) was culled"
+        );
     }
 }
 
@@ -1275,6 +1708,14 @@ fn golden_drift_fails_on_gpu() {
 /// oracle, and the assertion is one-sided (every lit pixel must be inside the
 /// predicted rect), so a transform that shifted, scaled, or un-flipped the
 /// projection fails no matter which way it moved.
+///
+/// **Scope: `x` and `y` only.** `SV_Position.z` cannot be read back — the depth
+/// attachment is created `DEPTH_STENCIL_TARGET`-only with `StoreOp::DONT_CARE`,
+/// so it is neither sampleable nor downloadable. The mirror's `z` is bound to
+/// the GPU indirectly, through the draw order that
+/// [`an_agent_in_front_occludes_one_behind`] resolves. Asserting `z` here
+/// against the same `iso_depth` the mirror was fed would check the mirror
+/// against itself.
 #[test]
 fn world_to_clip_matches_gpu_raster() {
     let _g = gpu_guard();
@@ -1287,8 +1728,18 @@ fn world_to_clip_matches_gpu_raster() {
     let pos = [700.0, 300.0];
     let size = [96.0, 64.0];
 
-    let top_left = clip_to_pixel(world_to_clip(pos, size, [-0.5, -0.5], view), view);
-    let bottom_right = clip_to_pixel(world_to_clip(pos, size, [0.5, 0.5], view), view);
+    // The depth the shader will emit for this instance: `saturate(ground_y *
+    // depth_scale + depth_bias)` off the quad's bottom edge, through the
+    // renderer's own live scalars.
+    let (ds, db) = r.depth_params();
+    let depth = iso_depth(pos[1] + size[1], ds, db);
+    assert!(
+        depth > 0.0 && depth < 1.0,
+        "the probe must sit strictly between the near and far planes, not at {depth}"
+    );
+
+    let top_left = clip_to_pixel(world_to_clip(pos, size, [-0.5, -0.5], view, depth), view);
+    let bottom_right = clip_to_pixel(world_to_clip(pos, size, [0.5, 0.5], view, depth), view);
     let (px0, py0) = (top_left[0].round() as u32, top_left[1].round() as u32);
     let (px1, py1) = (
         bottom_right[0].round() as u32,
@@ -1341,6 +1792,217 @@ fn world_to_clip_matches_gpu_raster() {
         (px0, py0, px1, py1),
         (700, 300, 796, 364),
         "world_to_clip round trip moved the sprite off its world position"
+    );
+}
+
+/// The whole point of the ticket: a unit in front covers a unit behind, with
+/// nobody sorting anything.
+///
+/// Both sprites go in **atlas group 0**, so the only thing separating them is
+/// the depth attachment. Tints separate them visually: premultiplied opaque
+/// green and red over a cleared target come back as exactly themselves.
+///
+/// **Both draw orders are exercised, and the second one is load-bearing.**
+///
+/// - Nearer first, farther second — the farther one must be rejected.
+/// - Farther first, nearer second — the nearer one must overwrite it.
+///
+/// Only the second order can catch the defect this ticket calls the one that
+/// must not be got wrong. If the vertex stage emitted its interpolated
+/// `world.y` instead of the quad's bottom edge, both quads would emit an
+/// *identical* `z` at every pixel they share. Under the first order that tie
+/// still fails the `GREATER` test and the nearer sprite still survives — the
+/// test passes with the bug in. Under the second order the tie means the nearer
+/// sprite is the one rejected, and the assertion fires.
+///
+/// That asymmetry is also why the pipeline uses strict `GREATER` rather than
+/// `GreaterOrEqual`: `GreaterOrEqual` would let the tie through and make this
+/// case blind again.
+#[test]
+fn an_agent_in_front_occludes_one_behind() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("an_agent_in_front_occludes_one_behind") else {
+        return;
+    };
+
+    let size = [240.0f32, 240.0f32];
+    // `near` has the larger bottom edge, so the larger depth key.
+    let near = [600.0f32, 400.0f32];
+    let far = [700.0f32, 300.0f32];
+    let near_tint = [0.0f32, 1.0, 0.0, 1.0];
+    let far_tint = [1.0f32, 0.0, 0.0, 1.0];
+
+    let (ds, db) = r.depth_params();
+    let near_depth = iso_depth(near[1] + size[1], ds, db);
+    let far_depth = iso_depth(far[1] + size[1], ds, db);
+    assert!(
+        near_depth > far_depth,
+        "the case is only meaningful when the two quads have different depths"
+    );
+
+    let uv = frame_uv_rect(0, 0);
+    let near_inst = SpriteInstance::new(near, size, uv, near_tint);
+    let far_inst = SpriteInstance::new(far, size, uv, far_tint);
+
+    let mut near_only = empty_groups();
+    near_only[0].instances = vec![near_inst];
+    let alone = r
+        .draw_offscreen_readback(&near_only)
+        .expect("near-only readback");
+
+    // The two quads overlap over x in [700, 840), y in [400, 540).
+    //
+    // Restricted to pixels where the nearer sprite alone is **fully opaque**
+    // (alpha 255), for two independent reasons. The art is a cutout with
+    // transparent holes, and the alpha test discards those fragments without
+    // writing depth, so the farther sprite legitimately shows *through* the
+    // gaps. And blending is still enabled, so the nearer sprite's partial-alpha
+    // fringe (the atlases carry a band at alpha 200–254) legitimately
+    // composites over whatever is behind it, which differs between the two draw
+    // orders. Neither is an ordering defect. Where the nearer sprite is opaque,
+    // though, the result cannot depend on what is behind it or on submit order.
+    let overlap_verdict = |frame: &Readback| -> (u32, u32) {
+        let (mut kept, mut lost) = (0u32, 0u32);
+        for y in 400..540u32 {
+            for x in 700..840u32 {
+                if alone.pixel(x, y)[3] != 255 {
+                    continue;
+                }
+                if frame.pixel(x, y) == alone.pixel(x, y) {
+                    kept += 1;
+                } else {
+                    lost += 1;
+                }
+            }
+        }
+        (kept, lost)
+    };
+
+    for (order, instances) in [
+        ("nearer first, farther second", vec![near_inst, far_inst]),
+        ("farther first, nearer second", vec![far_inst, near_inst]),
+    ] {
+        let mut groups = empty_groups();
+        groups[0].instances = instances;
+        let frame = r.draw_offscreen_readback(&groups).expect("readback");
+
+        let (kept, lost) = overlap_verdict(&frame);
+        assert!(
+            kept + lost > 1_000,
+            "{order}: the nearer sprite painted only {} pixels of the overlap — it \
+             barely drew",
+            kept + lost
+        );
+        assert_eq!(
+            lost,
+            0,
+            "{order}: {lost} of {} pixels the nearer sprite painted do not belong to \
+             it in the combined frame. If this fired only for 'farther first', the \
+             vertex stage is deriving depth per-vertex instead of from the quad's \
+             bottom edge, so the two quads tie and the nearer one loses the \
+             GREATER test.",
+            kept + lost
+        );
+
+        // Not vacuous: the farther sprite really did draw, in the band above the
+        // near quad where it is alone.
+        let mut red_solo = 0u32;
+        for y in 300..400u32 {
+            for x in 700..940u32 {
+                let p = frame.pixel(x, y);
+                if p != [0, 0, 0, 0] && p[0] > p[1] {
+                    red_solo += 1;
+                }
+            }
+        }
+        assert!(
+            red_solo > 1_000,
+            "{order}: the farther sprite left only {red_solo} pixels of its own; \
+             nothing was occluded because nothing was there"
+        );
+    }
+}
+
+/// A ring is an overlay, so a unit standing in front of it must not hide it.
+///
+/// This is falsifiable rather than tautological because of what the ring emits:
+/// `z = 0`, the far end of the map diamond, which fails the sprite pipeline's
+/// `GREATER` test against a depth buffer cleared to `0` *everywhere*. A ring
+/// drawn on the sprite pipeline would therefore not appear at all, and one
+/// drawn on a depth-*writing* pipeline would stamp the far plane over the
+/// sprites it annotates. Only the second, depth-free pipeline renders this
+/// frame.
+#[test]
+fn rings_are_never_occluded() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("rings_are_never_occluded") else {
+        return;
+    };
+
+    let sprite_pos = [700.0f32, 300.0f32];
+    let sprite_size = [320.0f32, 320.0f32];
+    let ring_side = 256.0f32;
+    // Centred inside the sprite's footprint, so the band crosses it.
+    let ring_pos = [
+        sprite_pos[0] + sprite_size[0] * 0.5 - ring_side * 0.5,
+        sprite_pos[1] + sprite_size[1] * 0.5 - ring_side * 0.5,
+    ];
+
+    let groups = single_sprite_groups(sprite_pos, sprite_size);
+    let without = r
+        .draw_offscreen_readback(&groups)
+        .expect("sprite-only readback");
+
+    let rings = [SpriteInstance::ring(
+        ring_pos,
+        [ring_side, ring_side],
+        RING_INNER,
+        RING_OUTER,
+        RING_TINT,
+    )];
+    let with = r
+        .draw_offscreen_readback_with_rings(&groups, &rings)
+        .expect("sprite + ring readback");
+
+    // Every pixel on the ring's band that the sprite already covers. Counted
+    // over the whole annulus rather than probed at one coordinate: the sprite
+    // art has transparent holes, so a single pixel is a coin flip.
+    let (x0, y0) = (ring_pos[0] as u32, ring_pos[1] as u32);
+    let (x1, y1) = (
+        (ring_pos[0] + ring_side) as u32,
+        (ring_pos[1] + ring_side) as u32,
+    );
+    let (mut covered, mut changed) = (0u32, 0u32);
+    for py in y0..y1 {
+        for px in x0..x1 {
+            let u = (px as f32 + 0.5 - ring_pos[0]) / ring_side - 0.5;
+            let v = (py as f32 + 0.5 - ring_pos[1]) / ring_side - 0.5;
+            let d = u.hypot(v);
+            // A 1.5 px margin keeps the two rasterization boundary rows out.
+            let margin = 1.5 / ring_side;
+            if d < RING_INNER + margin || d > RING_OUTER - margin {
+                continue;
+            }
+            if without.pixel(px, py) == [0, 0, 0, 0] {
+                continue;
+            }
+            covered += 1;
+            if with.pixel(px, py) != without.pixel(px, py) {
+                changed += 1;
+            }
+        }
+    }
+    assert!(
+        covered > 50,
+        "only {covered} band pixels are behind the sprite; there is nothing here to be \
+         occluded by"
+    );
+    assert_eq!(
+        changed,
+        covered,
+        "{} of {covered} band pixels behind the sprite are unchanged by the ring — \
+         the overlay was occluded",
+        covered - changed
     );
 }
 

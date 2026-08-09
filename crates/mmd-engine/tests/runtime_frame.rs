@@ -2,9 +2,48 @@
 
 use std::path::PathBuf;
 
-use mmd_engine::render::{ATLAS_COUNT, SpriteInstance};
+use mmd_engine::render::{ATLAS_COUNT, IsoView, SpriteInstance};
 use mmd_engine::runtime::{BoundKey, InputAction, Runtime, action_for_key};
+use mmd_engine::sim::AgentsView;
 use mmd_engine::testkit::{COLLISION_SPRITE_SCENE, scene_path};
+
+/// How many alive agents have a quad of `size` the view can see at all, where
+/// `anchor` places the quad's top-left relative to the agent's ground point.
+///
+/// The tracked scenes project to a map diamond larger than the 1920 × 1080
+/// view, so the packer culls and "one instance per alive agent" is no longer
+/// the claim — "one instance per *visible* agent" is. The projection and the
+/// rect test are written out longhand rather than borrowed from the engine, so
+/// the expectation does not flow through the code under test.
+fn visible_quads(agents: AgentsView<'_>, iso: &IsoView, size: [f32; 2], anchor: [f32; 2]) -> usize {
+    (0..agents.x.len())
+        .filter(|&i| {
+            let (cx, cy) = (agents.x[i], agents.y[i]);
+            let sx = iso.origin[0] + (cx - cy) * iso.tile_w * 0.5;
+            let sy = iso.origin[1] + (cx + cy) * iso.tile_h * 0.5;
+            let (px, py) = (sx + anchor[0], sy + anchor[1]);
+            px + size[0] > 0.0
+                && py + size[1] > 0.0
+                && px < iso.view_size[0]
+                && py < iso.view_size[1]
+        })
+        .count()
+}
+
+/// [`visible_quads`] for a sprite: a square quad standing on its bottom edge.
+fn visible_count(agents: AgentsView<'_>, iso: &IsoView, sprite: f32) -> usize {
+    visible_quads(agents, iso, [sprite, sprite], [-sprite * 0.5, -sprite])
+}
+
+/// [`visible_quads`] for a hitbox ring: a 2:1 ellipse centred on the ground
+/// point, `2r` across each projected axis.
+fn visible_rings(agents: AgentsView<'_>, iso: &IsoView, radius_cells: f32) -> usize {
+    let size = [
+        2.0 * radius_cells * iso.tile_w,
+        2.0 * radius_cells * iso.tile_h,
+    ];
+    visible_quads(agents, iso, size, [-size[0] * 0.5, -size[1] * 0.5])
+}
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -52,12 +91,11 @@ fn pause_keeps_checksum() {
 #[test]
 fn builds_one_instance_per_agent() {
     let mut rt = Runtime::load(gate_scenario(), None).expect("load");
-    // The scenario's hard count is the expectation, so retuning the scene
-    // cannot leave this test asserting a population that no longer exists.
-    let expected = rt.agent_count();
+    let population = rt.agent_count();
     // The drawn quad is the *scenario's* sprite size, not the atlas source
     // frame: `render::SPRITE_SIZE_PX` only sizes the static GPU-golden demo.
     let sprite_px = rt.scenario().sprite_size_px() as f32;
+    let iso = rt.iso_view();
     let total: usize = {
         let out = rt.tick_and_render();
         for inst in out.groups.iter().flat_map(|group| &group.instances) {
@@ -65,12 +103,27 @@ fn builds_one_instance_per_agent() {
         }
         out.groups.iter().map(|g| g.instances.len()).sum()
     };
+    // One instance per agent the view can see. Recomputed from sim state rather
+    // than hard-coded, so retuning the scene cannot leave this asserting a
+    // population that no longer exists.
+    let expected = visible_count(rt.agents(), &iso, sprite_px);
     assert_eq!(total, expected);
+    // …and the gate scene really does exercise both sides of the cull: its
+    // 480 × 270 grid projects to a 3000 × 1500 px diamond against a 1920 × 1080
+    // view. Without this the case would silently degrade to a tautology if the
+    // cull ever started rejecting everything.
+    assert!(
+        total > 0 && total < population,
+        "packed {total} of {population} agents; the gate scene must have some agents \
+         on screen and some off it"
+    );
 }
 
 #[test]
 fn partitions_four_groups() {
     let mut rt = Runtime::load(gate_scenario(), None).expect("load");
+    let sprite_px = rt.scenario().sprite_size_px() as f32;
+    let iso = rt.iso_view();
     let counts = {
         let out = rt.tick_and_render();
         assert_eq!(out.groups.len(), ATLAS_COUNT);
@@ -81,13 +134,37 @@ fn partitions_four_groups() {
         }
         counts
     };
+    // Exact per-bucket expectation, recomputed from sim state. The cull removes
+    // a screen-space region rather than a multiple of four, so the split is no
+    // longer exactly even — but "which bucket each surviving agent lands in" is
+    // still exactly determined, and a band would let a packer misroute a few
+    // percent of instances into group 0 unnoticed.
+    let want = {
+        let v = rt.agents();
+        let mut want = [0u32; ATLAS_COUNT];
+        for i in 0..v.x.len() {
+            let (cx, cy) = (v.x[i], v.y[i]);
+            let sx = iso.origin[0] + (cx - cy) * iso.tile_w * 0.5;
+            let sy = iso.origin[1] + (cx + cy) * iso.tile_h * 0.5;
+            let (px, py) = (sx - sprite_px * 0.5, sy - sprite_px);
+            if px + sprite_px > 0.0
+                && py + sprite_px > 0.0
+                && px < iso.view_size[0]
+                && py < iso.view_size[1]
+            {
+                want[v.atlas[i] as usize % ATLAS_COUNT] += 1;
+            }
+        }
+        want
+    };
+    assert_eq!(counts, want, "per-bucket instance counts");
+
     let sum: usize = counts.iter().map(|&c| c as usize).sum();
-    assert_eq!(sum, rt.agent_count());
-    // Exact even split for the hard count (5000 % 4 == 0).
-    let per_group = (rt.agent_count() / ATLAS_COUNT) as u32;
+    assert_eq!(sum, visible_count(rt.agents(), &iso, sprite_px));
     assert!(
-        counts.iter().all(|&c| c == per_group),
-        "counts={counts:?} per_group={per_group}"
+        sum > 0 && sum < rt.agent_count(),
+        "packed {sum} of {} agents; the gate scene must exercise both sides of the cull",
+        rt.agent_count()
     );
 }
 
@@ -125,6 +202,8 @@ fn toggling_hitboxes_changes_only_the_rings() {
     rt.set_paused(true);
 
     let agents = rt.agent_count();
+    let iso = rt.iso_view();
+    let radius_cells = rt.sim().collision().radius_cells;
     assert!(
         rt.hitboxes_visible(),
         "hitboxes are on by default — that is the point of the ticket"
@@ -138,10 +217,20 @@ fn toggling_hitboxes_changes_only_the_rings() {
     };
 
     let (hash_on, groups_on, rings_on) = snapshot(&mut rt);
+    // Not `agents`: this scene's map diamond is larger than the view, so the
+    // packer culls. Still an exact count, though — recomputed from sim state
+    // through this file's own longhand rect test, so a packer that emitted a
+    // ring for every *other* agent would still fail.
+    let want_rings = visible_rings(rt.agents(), &iso, radius_cells);
     assert_eq!(
         rings_on.len(),
-        agents,
-        "one ring per agent while hitboxes are visible"
+        want_rings,
+        "packed {} rings for {want_rings} on-screen agents (of {agents} alive)",
+        rings_on.len()
+    );
+    assert!(
+        want_rings > 0,
+        "no ring is on screen; the toggle proves nothing"
     );
 
     rt.apply_action(InputAction::ToggleHitboxes);

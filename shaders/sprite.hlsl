@@ -10,8 +10,15 @@
 
 cbuffer FrameUniforms : register(b0, space1)
 {
-    float2 view_size; // pixels, e.g. 1920x1080
-    float2 _pad0;
+    float2 view_size;  // pixels, e.g. 1920x1080
+    // Depth normalisation for the isometric sort key. The two scalars occupy
+    // what used to be padding, so `SpriteInstance` keeps its pinned 48 bytes:
+    //   depth_scale = 1 / iso_map_height_px
+    //   depth_bias  = -origin.y / iso_map_height_px
+    // so `ground_y * depth_scale + depth_bias` is the agent's position down the
+    // *map* diamond in [0, 1] and does not change when the camera does.
+    float depth_scale;
+    float depth_bias;
 };
 
 struct VSInput
@@ -49,6 +56,31 @@ struct VSOutput
 // and silently render every ring as an atlas sprite.
 #define MMD_RING_THRESHOLD 0.0
 
+// Alpha below this is discarded outright rather than blended.
+//
+// Depth-buffered draw order needs a per-fragment opaque/transparent decision:
+// a blended fragment that also wrote depth would occlude whatever it was
+// supposed to show through. Pixel art is effectively 1-bit alpha — the tracked
+// atlases put 46% of their texels at exactly 0 and almost all of the rest above
+// 200 — so a cutout is honest here, and it is what lets all four atlas groups
+// stay batched instead of being sorted back-to-front.
+#define MMD_ALPHA_CUTOFF 0.5
+
+// Smallest depth a *sprite* may be given. One quantum of the D16_UNORM depth
+// attachment (1/65536), which the renderer clears to 0 and tests with GREATER.
+//
+// Without this floor, a sprite whose key saturates to exactly 0 fails `0 > 0`
+// and is discarded outright — not drawn behind everything, drawn *nowhere*. An
+// agent standing on the far corner of the map diamond normalises to 0, and a
+// degenerate map (`IsoView` with a zero cell size) zeroes both scalars and
+// would blank the entire frame. Flooring costs one quantum of sort precision
+// out of 65536 and removes the whole class.
+//
+// Rings deliberately do NOT get this floor: they emit an exact 0 so that a ring
+// wrongly placed on the sprite pipeline would fail GREATER everywhere and
+// vanish, which is what keeps `rings_are_never_occluded` falsifiable.
+#define MMD_DEPTH_EPSILON 0.0000152587890625
+
 VSOutput VSMain(VSInput input)
 {
     VSOutput output;
@@ -57,17 +89,33 @@ VSOutput VSMain(VSInput input)
     float2 ndc = (world / view_size) * 2.0 - 1.0;
     ndc.y = -ndc.y; // y-down pixel space → y-up clip space
 
-    output.position = float4(ndc, 0.0, 1.0);
+    // The agent's feet: the quad's *bottom* edge, which the packer anchors on
+    // the projected ground point. It is a property of the instance, not of the
+    // vertex — emitting the interpolated `world.y` instead would give one
+    // sprite a depth gradient down its own quad and let it slice into the
+    // sprites beside it.
+    float ground_y = input.instance_pos.y + input.instance_size.y;
+    float depth = max(saturate(ground_y * depth_scale + depth_bias), MMD_DEPTH_EPSILON);
 
     if (input.uv_rect.x < MMD_RING_THRESHOLD)
     {
         // Ring: raw unit-quad coords, no atlas lerp. The pixel stage measures
         // its own distance from the quad centre in these coordinates.
+        //
+        // Depth 0 because rings are a debug overlay drawn on the pipeline whose
+        // depth test and write are both off; a ring that could be occluded
+        // would stop annotating the body it exists to annotate. The key is
+        // "position down the map diamond", so 0 is the far end of it — a value
+        // that would fail the sprite pipeline's GREATER test everywhere, which
+        // is exactly what makes "the ring pass is not depth-tested" a fact this
+        // frame can be asked about rather than an assertion in a comment.
+        output.position = float4(ndc, 0.0, 1.0);
         output.uv = input.uv;
         output.ring = float3(1.0, input.uv_rect.y, input.uv_rect.z);
     }
     else
     {
+        output.position = float4(ndc, depth, 1.0);
         output.uv = lerp(input.uv_rect.xy, input.uv_rect.zw, input.uv);
         output.ring = float3(0.0, 0.0, 0.0);
     }
@@ -97,6 +145,9 @@ float4 PSMain(VSOutput input) : SV_Target0
     }
 
     float4 texel = SpriteAtlas.Sample(AtlasSampler, input.uv);
+    // Alpha test before the blend: this fragment writes depth, so a nearly
+    // transparent texel that survived would occlude every sprite behind it.
+    clip(texel.a - MMD_ALPHA_CUTOFF);
     // Atlas + tint already premultiplied; multiply keeps blend contract.
     return texel * input.tint;
 }
