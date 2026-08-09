@@ -67,6 +67,38 @@ page, an enforced system→test map, and a glossary that names the new vocabular
 
 ## Inputs
 
+- **From Depends (T6) — corrections this ticket MUST make, discovered during
+  implementation:**
+  - **ADR 011 is now factually wrong in one consequence bullet.** It says the
+    pool's re-entrancy check is "a debug assertion". It is not: `debug_assert!`
+    compiled the guard swap out in release, leaving a data race reachable from
+    100% safe code (`Simulation` is `pub`, `Clone`, `Send`), so T6 promoted it to
+    a real `assert!`. Correct that bullet to say a real assertion, and keep ADR
+    011's existing "clones share one pool" decision — the live assertion is the
+    mechanism that enforces it.
+  - **Record the panic protocol.** A panic in any separation chunk used to
+    abandon the rendezvous: the other participants blocked on `done` forever, and
+    a panicking ticker then blocked in `Drop` behind them, hanging the process
+    mid-unwind — a failed assertion would have surfaced as a stalled merge gate,
+    not a red test. T6 fixed it with catch-flag-rendezvous-rethrow and pinned it
+    with a test that injects `phases = 0`. ADR 011 should state that the pool
+    rendezvous is panic-safe and why.
+  - **Record the ordering.** Job publication no longer rests on `Barrier`'s
+    undocumented ordering; T6 added explicit release-acquire `publish` /
+    `completed` pairs in both directions.
+  - **Two residual risks to write down, not to fix here:** (a) no `cargo miri`
+    and no `loom` on the pinned 1.95.0 stable toolchain, so every soundness claim
+    in `crates/mmd-engine/src/sim/pool.rs` is prose plus tests, not
+    machine-checked; (b) if `thread::spawn` fails partway through
+    `SeparationPool::new`, already-spawned workers park forever — the fix is an
+    `Option<Self>` + condvar redesign, out of this plan's scope.
+- **From Depends (T0) — one more residual to document:** `cargo run -- bench`
+  **without** `--test-policy` now hits the live ceiling at its second tier,
+  because `BenchPolicy::production()` keeps the frozen phase-0 ladder while
+  `test_short()` was split onto its own `test-short-v1` ladder. The perf tool is
+  retired and non-gating, so this was left rather than redesigned. Say so
+  somewhere a reader will find it.
+
 - **Inherited from T0 — the pinned gate digest (do not recompute, do not
   re-derive):**
   `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
