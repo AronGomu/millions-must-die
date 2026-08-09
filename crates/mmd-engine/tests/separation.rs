@@ -133,6 +133,56 @@ fn spatial_bin_counts_match_the_bucket_lengths() {
 }
 
 #[test]
+fn bin_row_matches_bin_by_bin_order() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 16);
+    let xs = [
+        0.5f32, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5,
+    ];
+    let ys = [
+        2.5f32, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5,
+    ];
+    grid.rebuild(&xs, &ys);
+
+    let expected: Vec<u32> = [1u32, 2, 3]
+        .iter()
+        .flat_map(|cx| grid.agents_in_bin(*cx, 2))
+        .copied()
+        .collect();
+    assert_eq!(grid.agents_in_bin_row(1, 3, 2).to_vec(), expected);
+}
+
+#[test]
+fn bin_row_clamps_to_the_last_column() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 16);
+    let xs = [
+        0.5f32, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5,
+    ];
+    let ys = [
+        2.5f32, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5,
+    ];
+    grid.rebuild(&xs, &ys);
+
+    let mut expected: Vec<u32> = grid.agents_in_bin(6, 0).to_vec();
+    expected.extend_from_slice(grid.agents_in_bin(7, 0));
+    assert_eq!(grid.agents_in_bin_row(6, 99, 0).to_vec(), expected);
+}
+
+#[test]
+fn bin_row_is_empty_off_the_grid() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 16);
+    let xs = [
+        0.5f32, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5,
+    ];
+    let ys = [
+        2.5f32, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5, 5.5,
+    ];
+    grid.rebuild(&xs, &ys);
+
+    assert_eq!(grid.agents_in_bin_row(0, 2, 99), &[] as &[u32]);
+    assert_eq!(grid.agents_in_bin_row(99, 100, 0), &[] as &[u32]);
+}
+
+#[test]
 fn spatial_reuses_bins_without_clearing_them() {
     let mut grid = SpatialGrid::new(8, 8, 1.0, 4);
     let xs = [0.5f32, 0.5, 0.5, 0.5];
@@ -306,6 +356,25 @@ fn separation_ignores_agents_beyond_contact() {
         sep_x[1]
     );
     assert_eq!(sep_x[1], -sep_x[2], "and they must push each other apart");
+}
+
+#[test]
+fn a_lone_agent_accumulates_no_repulsion() {
+    // Two agents 20 cells apart in a 32x32 grid: neither is ever in the
+    // other's 3x3 window, so each agent's window holds only itself and the
+    // early-out must fire, writing zero without touching `items`.
+    let params = CollisionParams::from_q8(128, 256);
+    let xs = [1.5f32, 21.5];
+    let ys = [1.5f32, 1.5];
+    let mut grid = SpatialGrid::new(32, 32, params.bin_size_cells(), 2);
+    grid.rebuild(&xs, &ys);
+
+    let mut sep_x = [1.0f32; 2];
+    let mut sep_y = [1.0f32; 2];
+    accumulate_separation(&xs, &ys, &grid, params.radius_cells, &mut sep_x, &mut sep_y);
+
+    assert_eq!(sep_x, [0.0, 0.0]);
+    assert_eq!(sep_y, [0.0, 0.0]);
 }
 
 // --- the blend, through the tick -----------------------------------------

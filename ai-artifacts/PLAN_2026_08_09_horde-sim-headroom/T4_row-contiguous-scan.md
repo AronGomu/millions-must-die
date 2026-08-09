@@ -144,7 +144,7 @@ the scan entirely. Every state hash is bit-identical.
 
 ## Impl steps
 
-- [ ] 1. In `crates/mmd-engine/src/sim/spatial.rs`, add directly below
+- [x] 1. In `crates/mmd-engine/src/sim/spatial.rs`, add directly below
       `agents_in_bin`:
       ```rust
       /// Agents in bins `bx0..=bx1` of row `by`, as one contiguous slice.
@@ -170,7 +170,7 @@ the scan entirely. Every state hash is bit-identical.
           &self.items[start..end]
       }
       ```
-- [ ] 2. In `crates/mmd-engine/src/sim/collision.rs`, inside
+- [x] 2. In `crates/mmd-engine/src/sim/collision.rs`, inside
       `accumulate_separation_phase`, immediately after the four window bounds
       (`bx0`, `bx1`, `by0`, `by1`) are computed and **before** `let mut sx`,
       insert the early-out:
@@ -191,7 +191,7 @@ the scan entirely. Every state hash is bit-identical.
       **Note the `i += step;` before `continue;`** — the per-agent loop is a
       `while`, not a `for`, so an early `continue` must advance the index itself
       or the pass hangs.
-- [ ] 3. Replace the nested bin walk with the row walk. The `'scan` label moves
+- [x] 3. Replace the nested bin walk with the row walk. The `'scan` label moves
       to the outer `for cy`, and the middle `for cx` disappears:
       ```rust
       'scan: for cy in by0..=by1 {
@@ -211,16 +211,16 @@ the scan entirely. Every state hash is bit-identical.
       Copy the body between `if j == i { continue; }` and
       `if taken == MAX_SEPARATION_NEIGHBORS` **character for character**. Any
       reordering there changes the digest.
-- [ ] 4. Update the determinism note in the `collision.rs` module doc: change
+- [x] 4. Update the determinism note in the `collision.rs` module doc: change
       *"the neighbour scan visits bins in a fixed order"* to *"the neighbour
       scan visits each row of the window as one contiguous run, in a fixed
       order,"* and keep the rest of the sentence.
-- [ ] 5. Add the four new tests from the test plan to
+- [x] 5. Add the four new tests from the test plan to
       `crates/mmd-engine/tests/separation.rs` — the three spatial ones beside
       `spatial_bin_counts_match_the_bucket_lengths`, and
       `a_lone_agent_accumulates_no_repulsion` beside
       `separation_ignores_agents_beyond_contact`.
-- [ ] 6. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
+- [x] 6. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
       moves, step 3 changed the visit order — do **not** re-measure the digest;
       diff the loop body against the original.
 
@@ -235,19 +235,21 @@ the scan entirely. Every state hash is bit-identical.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green
-- [ ] `cargo test -p mmd-engine --test separation` — green, with
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test --workspace --locked` — green
+- [x] `cargo test -p mmd-engine --test separation` — green, with
       `a_bodied_scenario_is_pinned_to_a_golden_digest`,
       `separation_is_capped_at_eight_neighbours` and
       `separation_of_a_pair_is_equal_and_opposite` **unedited**
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — green
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
-- [ ] `nix flake check`
-- [ ] app functional — every scene loads, ticks and exits; nothing observable
-      changed
-- [ ] commit msg draft: `refactor(sim): walk each neighbour row as one contiguous slice`
+- [x] `cargo test -p mmd-engine --test frame_allocations` — green
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
+- [x] `nix flake check`
+- [x] app functional — every scene loads, ticks and exits; nothing observable
+      changed — verified via the two `cargo run -- run` invocations above
+      (offscreen draw ok, clean exit, matching digests); no windowed/GUI
+      manual pass performed — see manual checklist
+- [x] commit msg draft: `refactor(sim): walk each neighbour row as one contiguous slice`

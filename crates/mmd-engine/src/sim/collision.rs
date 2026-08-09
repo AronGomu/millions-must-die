@@ -6,7 +6,8 @@
 //! walks along at its unchanged speed. Overlap is therefore reduced, never
 //! forbidden — no caller may claim a zero-overlap guarantee.
 //!
-//! Determinism: the neighbour scan visits bins in a fixed order and each bin's
+//! Determinism: the neighbour scan visits each row of the window as one
+//! contiguous run, in a fixed order, and each bin's
 //! agents in ascending index order (`super::spatial::SpatialGrid`), the
 //! coincidence tie-break is a table lookup keyed on the index pair, and nothing
 //! reads a clock or an RNG.
@@ -185,44 +186,55 @@ pub fn accumulate_separation_phase(
         let by0 = by.saturating_sub(1);
         let by1 = (by + 1).min(last_row);
 
+        // A window holding one agent holds only this one. The scan below would
+        // find no `j` and write zeroes, so write them without touching `items`.
+        let mut window = 0usize;
+        for cy in by0..=by1 {
+            window += grid.agents_in_bin_row(bx0, bx1, cy).len();
+        }
+        if window <= 1 {
+            sep_x[i] = 0.0;
+            sep_y[i] = 0.0;
+            i += step;
+            continue;
+        }
+
         let mut sx = 0.0f32;
         let mut sy = 0.0f32;
         let mut taken = 0usize;
 
         'scan: for cy in by0..=by1 {
-            for cx in bx0..=bx1 {
-                for &raw in grid.agents_in_bin(cx, cy) {
-                    let j = raw as usize;
-                    if j == i {
-                        continue;
-                    }
-                    let dx = px - x[j];
-                    let dy = py - y[j];
-                    let d2 = dx * dx + dy * dy;
-                    if d2 >= contact2 {
-                        continue;
-                    }
-                    if d2 <= COINCIDENT_EPS2 {
-                        // No direction exists between two identical points.
-                        // The table gives one that is stable across runs and
-                        // opposite for the two members of the pair.
-                        let (ux, uy) = SEPARATION_DIR16[(i ^ j) & 15];
-                        let sign = if i < j { 1.0 } else { -1.0 };
-                        sx += sign * ux;
-                        sy += sign * uy;
-                    } else {
-                        let d = d2.sqrt();
-                        // Linear falloff: full push at coincidence, none at
-                        // contact distance.
-                        let w = (contact - d) * inv_contact;
-                        let inv_d = 1.0 / d;
-                        sx += dx * inv_d * w;
-                        sy += dy * inv_d * w;
-                    }
-                    taken += 1;
-                    if taken == MAX_SEPARATION_NEIGHBORS {
-                        break 'scan;
-                    }
+            for &raw in grid.agents_in_bin_row(bx0, bx1, cy) {
+                let j = raw as usize;
+                if j == i {
+                    continue;
+                }
+                let dx = px - x[j];
+                let dy = py - y[j];
+                let d2 = dx * dx + dy * dy;
+                if d2 >= contact2 {
+                    continue;
+                }
+                if d2 <= COINCIDENT_EPS2 {
+                    // No direction exists between two identical points.
+                    // The table gives one that is stable across runs and
+                    // opposite for the two members of the pair.
+                    let (ux, uy) = SEPARATION_DIR16[(i ^ j) & 15];
+                    let sign = if i < j { 1.0 } else { -1.0 };
+                    sx += sign * ux;
+                    sy += sign * uy;
+                } else {
+                    let d = d2.sqrt();
+                    // Linear falloff: full push at coincidence, none at
+                    // contact distance.
+                    let w = (contact - d) * inv_contact;
+                    let inv_d = 1.0 / d;
+                    sx += dx * inv_d * w;
+                    sy += dy * inv_d * w;
+                }
+                taken += 1;
+                if taken == MAX_SEPARATION_NEIGHBORS {
+                    break 'scan;
                 }
             }
         }

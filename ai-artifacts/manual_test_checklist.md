@@ -104,3 +104,35 @@ byte for byte). What is left needs eyes on a real window.
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
       unaffected by this ticket (stays at `separation_phases: 1`); same check
       as T2 at the lower-density scale.
+
+## T4 row-contiguous-scan
+
+Pure restructuring of the per-agent 3x3 neighbour scan in
+`crates/mmd-engine/src/sim/collision.rs`: it now fetches three row-contiguous
+slices (`SpatialGrid::agents_in_bin_row`) instead of nine per-bin slices, and
+an agent whose whole window holds only itself skips the scan and writes zero
+directly. Behaviour is bit-identical to before this ticket — a human should
+observe **zero visible change**. Everything automatable is green (`cargo fmt
+--all -- --check`, `cargo test --workspace --locked`, `cargo test -p
+mmd-engine --test separation` (32 tests, including
+`a_bodied_scenario_is_pinned_to_a_golden_digest`,
+`separation_is_capped_at_eight_neighbours` and
+`separation_of_a_pair_is_equal_and_opposite` unedited), `cargo test -p
+mmd-engine --test frame_allocations`, `cargo clippy --workspace
+--all-targets --all-features -- -D warnings`, `nix flake check`, and the gate
+smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte). What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
+      exactly as it did before this ticket: same 48 px sprites, same
+      edge-to-edge contact at chokepoints, same separation behaviour at
+      chokepoints and in the corner-pocket case. Press `Esc` to quit and
+      confirm a clean exit.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      starts, the stacked spawn column still visibly spreads apart over the
+      run (amortised over 4 phases, as in T3), no agent stuck inside the
+      scene's obstacle, quits cleanly on `Esc`; indistinguishable from T3.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      unaffected by this ticket (stays at `separation_phases: 1`); same check
+      as T3 at the lower-density scale.

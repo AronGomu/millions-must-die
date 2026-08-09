@@ -202,4 +202,27 @@ impl SpatialGrid {
         let hi = self.starts[b + 1] as usize;
         &self.items[lo..hi]
     }
+
+    /// Agents in bins `bx0..=bx1` of row `by`, as one contiguous slice.
+    ///
+    /// A bin's linear index is `bx + by * cols` and the counting sort lays
+    /// buckets out in ascending linear index, so a row window is already a
+    /// single run in `items`. The slice therefore yields exactly the agents a
+    /// bin-by-bin walk would visit, in exactly that order — empty bins inside
+    /// the window contribute a zero-width span and are invisible.
+    ///
+    /// Empty for a row off the grid or a window starting past the last
+    /// column; `bx1` is clamped.
+    pub fn agents_in_bin_row(&self, bx0: u32, bx1: u32, by: u32) -> &[u32] {
+        if by >= self.rows || bx0 >= self.cols || bx1 < bx0 {
+            return &[];
+        }
+        let hi = bx1.min(self.cols - 1);
+        let row = by * self.cols;
+        let lo_bin = (bx0 + row) as usize;
+        let hi_bin = (hi + row) as usize;
+        let start = self.starts[lo_bin] as usize;
+        let end = self.starts[hi_bin + 1] as usize;
+        &self.items[start..end]
+    }
 }
