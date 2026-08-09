@@ -102,6 +102,40 @@ depth-ordered; the simulation is untouched and every state hash holds.
 
 ## Inputs
 
+- **From Depends (T8, `d5c0ba9`) — CONCRETE, what actually landed and the traps
+  it found (this supersedes the one-line summary below):**
+  - The ring ships as a **second pipeline over the same quad**, procedural and
+    atlas-free. `SpriteInstance` is unchanged at 48 bytes
+    (`instance_layout_is_stable` passes unmodified) — the ring is flagged by a
+    **sentinel in `uv_rect.x`**, not by a new field. Do not add one.
+  - The renderer gained **additive `*_with_rings` methods** rather than changing
+    four existing signatures, so the bench and goldens stayed untouched. Follow
+    that pattern rather than rewriting the existing draw entry points.
+  - The ring radius comes from **`CollisionParams::radius_cells` (the
+    simulation's), not the scenario's**. A test
+    (`the_ring_traces_a_body_that_is_not_half_a_sprite`) deliberately breaks the
+    half-a-sprite coincidence with a 1.5-cell body on a 30 px sprite — keep it
+    green under your projection.
+  - **The shader canonical hash is pinned in FIVE manifests, not three.**
+    `lab/fixtures/windows-candidate/golden/manifest.json` and
+    `lab/fixtures/macos-candidate/golden/manifest.json` are read *live* by the
+    mmd-lab merge gate. T8 added
+    `every_tracked_manifest_pins_the_live_shader_and_atlas`, which walks the tree
+    and enforces all of them on every host — if you touch a shader, that test
+    tells you every manifest you owe. Run `cargo test -p mmd-lab --test merge_gate`.
+  - **The `.spv` blobs are not bound to `sprite.hlsl`.** `xtask` checks recorded
+    hashes only. The repo tracks no GLSL mirror despite building the Linux SPIR-V
+    from one; T8 reconstructed it and **proved it reproduces both pinned blobs
+    byte-for-byte before editing**. The recipe is in T8's Outputs section of its
+    own ticket file — but you may not read that file, so: reconstruct, prove
+    byte-for-byte reproduction of the current blobs, and only then edit.
+  - **Native blob debt:** DXIL and metallib slots follow the deferred placeholder
+    path on this host. The Windows and macOS reference hosts owe a native
+    rebuild. Do not invent native blobs.
+  - Input injection grammar is `FRAME:KEY` (e.g. `3:h`), not `h@N`.
+  - The counting allocator exists only in the `frame_allocations.rs` test binary
+    — an allocation test placed anywhere else passes **vacuously**.
+
 - **Inherited from T0 — the pinned gate digest (do not recompute, do not
   re-derive):**
   `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
