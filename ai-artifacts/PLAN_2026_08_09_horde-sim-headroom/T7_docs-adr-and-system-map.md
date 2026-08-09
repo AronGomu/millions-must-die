@@ -1,0 +1,267 @@
+# T7: ADRs, architecture doc, system map
+
+**Plan:** `./ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
+**Depends:** T6
+**Commit outcome:** Phase 0.5 is a written decision — two ADRs, an architecture
+page, an enforced system→test map, and a glossary that names the new vocabulary.
+
+## Context (self-contained)
+
+- Goal: buy simulation headroom in the per-agent neighbour scan
+  (`crates/mmd-engine/src/sim/collision.rs`) without spending a behavioural
+  guarantee. T1–T6 shipped the engine work; this ticket writes it down.
+- This slice: docs and the contract test that keeps them honest. The repo's own
+  rule (`docs/ADR/README.md`) is *"New decision → new ADR. Changed decision →
+  superseding ADR; do not rewrite history silently."* Three of this plan's five
+  changes are new decisions and two of them **reject** a recommendation from the
+  research dossier — those rejections are the most valuable thing to record,
+  because the next reader will find the same recommendation and try it again.
+- Out of scope here: any engine change. If a test fails in this ticket, fix the
+  doc or the map, not the code.
+- Assumptions in force:
+  - `docs/technical-prototype-functional-close.md` is in `LIVE_DOCS` in
+    `tests/validation_contract.rs`. **Every line added to it must avoid every
+    perf token**, or `no_perf_claim_in_docs` turns red. Banned substrings
+    include `p95`, `p99`, `16.67`, `frame time`, `frame-time`, `percentile`,
+    `median`, `throughput`, `latency`, `fps`, `frames per second`, `per second`,
+    `hertz`, ` hz`, `millisecond`, `microsecond`, `nanosecond`, `real-time`,
+    `realtime`, **`faster`**, **`slower`**, `benchmark result`, and any
+    `<digits> ms`. Write about *what the code does*, never about how quickly.
+  - ADRs and the new architecture HTML are outside `LIVE_DOCS`, but this plan
+    keeps them free of speed claims too. Nothing in this repo has been measured
+    since phase-0 close.
+  - No new system is added: every test written in T1–T6 lives in a file
+    `SCOPE_SYSTEMS` already maps. `SCOPE_SYSTEM_COUNT` stays `12`.
+  - `graphify` is not installed on this host; do not run `graphify update .`.
+
+## Requirements
+
+- ADR 010 records amortisation, bin stamping and push priority — including the
+  two rejections (Ericson's min-corner 2×2; BioDynaMo's O(#agents) rebuild).
+- ADR 011 records the worker pool and what it cost the allocation invariant.
+- `docs/ADR/README.md` lists both and states how they relate to ADR 009.
+- `docs/horde-sim-headroom-architecture.html` exists, dark-mode by default,
+  self-contained (no external asset), and shows the tick's pass order and the
+  three knobs.
+- `docs/technical-prototype-functional-close.md` names every new test in the
+  right system row.
+- `tests/validation_contract.rs` maps the same names, and `MIN_SCANNED_TESTS`
+  matches the real total.
+- `docs/GLOSSARY.md` defines the new vocabulary.
+
+## Inputs
+
+- `docs/ADR/README.md` — the index, and the two "superseded in part" notes at
+  the top.
+- `docs/ADR/009_ADR_agent_separation_and_collision.md` — the format to follow:
+  `# ADR NNN: Title`, then `- Status:`, `- Date:`, `- Supersedes in part:`, then
+  `## Context`, `## Decision`, `## Consequences`.
+- `docs/technical-prototype-functional-close.md` — the `## System → test map`
+  table at line ~38. Rows to edit: **Collision — agent separation and neighbour
+  bins** (line ~41), **Scenario loading and hash contract** (line ~43),
+  **Allocation invariant** (line ~49).
+- `tests/validation_contract.rs` — `SCOPE_SYSTEMS` (line ~350),
+  `MIN_SCANNED_TESTS` (line ~516, currently `168`), `SCOPE_SYSTEM_COUNT`
+  (line ~520, `12`), `LIVE_DOCS` (line ~770).
+- `docs/GLOSSARY.md`, `docs/DESIGN.md`, `AGENT.md`.
+- `docs/agent-collision-architecture.html` — the existing architecture page,
+  for visual house style.
+- **From Depends (T1–T6, all landed).** The exact test names to map:
+
+  `crates/mmd-engine/tests/separation.rs` (system *Collision — agent separation
+  and neighbour bins*), twenty new names:
+  `spatial_bin_counts_match_the_bucket_lengths`,
+  `spatial_reuses_bins_without_clearing_them`,
+  `spatial_survives_a_stamp_wrap`,
+  `separation_phases_of_one_is_the_identity`,
+  `an_amortised_agent_keeps_its_repulsion_between_phases`,
+  `the_grid_rebuilds_once_per_phase_cycle`,
+  `an_amortised_stack_still_spreads`,
+  `bin_row_matches_bin_by_bin_order`,
+  `bin_row_clamps_to_the_last_column`,
+  `bin_row_is_empty_off_the_grid`,
+  `a_lone_agent_accumulates_no_repulsion`,
+  `one_mass_class_leaves_every_agent_equal`,
+  `mass_is_assigned_round_robin_by_index`,
+  `a_heavier_neighbour_pushes_a_lighter_one_harder`,
+  `mass_classes_change_the_bodied_digest`,
+  `threads_do_not_change_the_walk`,
+  `threads_do_not_change_an_amortised_walk`,
+  `a_single_thread_spawns_no_workers`,
+  `a_pool_spawns_one_fewer_worker_than_participants`,
+  `the_pool_shuts_down_cleanly`.
+
+  `crates/mmd-engine/tests/frame_allocations.rs` (system *Allocation
+  invariant*), one new name:
+  `a_threaded_collision_tick_allocates_nothing`.
+
+  `crates/mmd-engine/tests/scenario_contract.rs` (system *Scenario loading and
+  hash contract*), seven new names:
+  `tracked_scenes_declare_the_identity_tuning`,
+  `zero_separation_phases_is_rejected`,
+  `separation_phases_above_the_cap_is_rejected`,
+  `mass_classes_above_the_cap_is_rejected`,
+  `separation_threads_above_the_cap_is_rejected`,
+  `a_bodyless_scenario_may_not_tune_separation`,
+  `the_gate_scene_pins_the_identity_tuning`.
+
+  Engine facts to record: three scenario fields
+  (`separation_phases` ≤ 16, `mass_class_count` ≤ 8, `separation_threads` ≤ 16),
+  all identity `1`; `collision_mid_v1` runs 4 phases; `collision_sprite_v1` runs
+  2 mass classes; every tracked scene runs 1 thread; `SpatialGrid` carries
+  `counts` / `count_stamp` / `stamp` and exposes `bin_count` and
+  `agents_in_bin_row`; `Simulation` carries `mass`, `inv_mass`, `grid_rebuilds`
+  and an optional `Arc<SeparationPool>`; `alloc_guard` gained
+  `arm_worker() -> WorkerArm`.
+
+## TDD
+
+Docs have no unit test, so the contract test *is* the test.
+
+1. **Red** — add the 28 names to `SCOPE_SYSTEMS` first, without touching the
+   close doc. `every_system_has_a_test` fails with *"CLOSE_DOC does not name …"*.
+2. **Green** — add the same names to the close doc's three rows; fix
+   `MIN_SCANNED_TESTS`; write the ADRs, the architecture page and the glossary
+   entries.
+3. **Refactor** — none.
+
+## Check plan
+
+| Check | Input | Expect |
+| ---- | ---- | ---- |
+| `every_system_has_a_test` | `cargo test -p millions_must_die --test validation_contract` | green — const list and close doc agree in both directions |
+| `no_perf_claim_in_docs` | same | green — the close-doc edit carries no perf token |
+| `gate_docs_state_perf_gating_is_retired` | same | green — unchanged |
+| ADR index resolves | `docs/ADR/README.md` | links to `010_…md` and `011_…md` open |
+| Architecture page | open `docs/horde-sim-headroom-architecture.html` | renders dark by default, no network request, no broken layout |
+
+## Impl steps
+
+- [ ] 1. `docs/ADR/010_ADR_separation_amortisation_and_push_priority.md`
+      **already exists**, authored alongside the plan with
+      `Status: Proposed — accepted when plan/horde-sim-headroom T7 lands`.
+      Read it end to end against the code T1–T6 actually shipped, correct any
+      drift (field names, caps, which scene carries which knob, rejected
+      alternatives), then change the status line to `- Status: Accepted`.
+      Its content must still cover, and these are the parts most likely to have
+      drifted:
+      `## Context` states that navigation is not the cost — the field is
+      sublinear in agent count and steering is near-linear — so the whole plan
+      targets one loop. `## Decision` covers three parts:
+      **(a) amortisation** — `separation_phases`, one cadence for the scan and
+      the grid rebuild, strided bucketing, `1` is the identity, bounded
+      staleness, Reynolds' `skipThink` of 8–10 as the precedent, and Graham's
+      distinction: `skipThink` does **less** work, it does not spread the same
+      work thinner;
+      **(b) bin stamping** — what `counts` / `count_stamp` / `stamp` buy, and the
+      **rejection**: BioDynaMo's O(#agents) rebuild needs either a per-bin linked
+      list (which destroys the bucket contiguity `agents_in_bin_row` depends on)
+      or a per-tick sort of touched bins, and with the gate scene's bin-to-agent
+      ratio there is no reason to expect that trade to pay — and perf is retired,
+      so it cannot be settled by measurement;
+      **(c) push priority** — the mass byte, `mass[j] / mass[i]`, one class is
+      exactly `1.0` and therefore bit-exact, Froblins' goal-sink deadlock as the
+      motivation, and SC2 5.0.15's allied push priority as the shipped
+      precedent.
+      `## Consequences` must include: **the min-corner rejection.** Ericson's
+      2×2 window needs each pair enumerated once; `accumulate_separation` is a
+      gather, so a 2×2 window misses every neighbour one bin lower on either
+      axis, and converting to a symmetric scatter would destroy the
+      index-disjointness the worker pool depends on. The transferable half —
+      one contiguous run per row — shipped instead and is bit-exact.
+      State plainly that no number in this ADR is a measurement of this engine.
+- [ ] 2. `docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md`
+      **already exists**, also `Status: Proposed`. Same treatment: verify
+      against the shipped pool, correct drift, flip to `- Status: Accepted`.
+      Its content must still cover:
+      `## Context` — the pass is already pure, index-disjoint and read-only in
+      its inputs; the movement loop is not, because `recycle_one` advances a
+      shared cursor. `## Decision` —
+      persistent pool sized by `separation_threads`, spawned at construction
+      because thread creation allocates; two `Barrier`s, which do not; the
+      ticking thread is participant 0; contiguous index ranges, so every output
+      element has exactly one writer and no partial sum crosses a boundary,
+      which is why the result does not depend on thread count; **no new
+      dependency** — `rayon`'s bridge carries no allocation-free guarantee and
+      `alloc_guard` is a merge gate; one `unsafe impl Send for Job` with its
+      safety argument quoted. `## Consequences` — the allocation invariant is
+      **stronger**, not weaker: workers arm themselves via
+      `alloc_guard::arm_worker`, so their allocations are counted rather than
+      invisible, and the module doc's "must be revisited" paragraph is now paid
+      off. Record the two live limitations: cloned `Simulation`s share one pool
+      and must not tick concurrently (debug-asserted), and every tracked scene
+      stays at one thread so the merge gate reproduces on any host.
+- [ ] 3. Edit `docs/ADR/README.md`: append
+      `10. [Separation amortisation, bin stamping + push priority](010_ADR_separation_amortisation_and_push_priority.md)`
+      and
+      `11. [Parallel separation + the allocation invariant](011_ADR_parallel_separation_and_the_allocation_invariant.md)`
+      to the numbered list, and add above it:
+      *"ADR 009 is **supplemented** by ADR 010 and ADR 011 (2026-08-09): the
+      separation model is unchanged; how often it runs, how it is indexed, how
+      it is weighted and which threads run it are recorded there."*
+- [ ] 4. `docs/horde-sim-headroom-architecture.html` **already exists**, authored
+      alongside the plan. Read it against the shipped code and correct any
+      drift — field names, caps, which tracked scene carries which knob, the
+      pass order in the first SVG, the barrier handshake in the second. It is
+      already self-contained (one inline `<style>`, no external stylesheet,
+      script, font or image), dark by default with a
+      `@media (prefers-color-scheme: light)` override, and carries a *What this
+      page does not claim* panel. Keep all four properties.
+- [ ] 5. Edit `docs/technical-prototype-functional-close.md`, row **Collision —
+      agent separation and neighbour bins**: append the twenty
+      `separation.rs` names from Inputs, comma-separated, each in backticks,
+      keeping the existing names and the trailing
+      `` | `crates/mmd-engine/tests/separation.rs` | `` cell.
+- [ ] 6. Same file, row **Scenario loading and hash contract**: append the seven
+      `scenario_contract.rs` names. Row **Allocation invariant**: append
+      `a_threaded_collision_tick_allocates_nothing`.
+- [ ] 7. Same file, in `## What "closed" means here`, add one row:
+      `| Simulation headroom knobs | phase 0.5 — separation cadence, push priority and worker count are scenario data; every scene at the identity tuning walks a bit-identical path, proven by pinned digests |`.
+      Re-read the banned-token list in Context before saving this line.
+- [ ] 8. Edit `tests/validation_contract.rs`: add the same 28 names to the three
+      matching `SystemCoverage` entries in `SCOPE_SYSTEMS`. Leave `gpu_only`
+      empty for all of them. **Do not change `SCOPE_SYSTEM_COUNT`** — it stays
+      `12`.
+- [ ] 9. Fix `MIN_SCANNED_TESTS`. Temporarily set it to `usize::MAX`, run
+      `cargo test -p millions_must_die --test validation_contract every_system_has_a_test`,
+      read the real total out of the panic message, then set the constant to
+      that number.
+- [ ] 10. Edit `docs/GLOSSARY.md`, adding one entry each for: **separation
+      phase**, **push priority / mass class**, **bin stamp**, **row window**,
+      **separation pool**, **identity tuning**. Keep each to the file's existing
+      one-or-two-sentence house style.
+- [ ] 11. Edit `AGENT.md` under `## Status`: add one sentence — *"Phase 0.5
+      (`plan/horde-sim-headroom`) adds three scenario-gated simulation knobs —
+      `separation_phases`, `mass_class_count`, `separation_threads` — each
+      defaulting to the identity value 1; see ADR 010 and ADR 011."* Do not
+      touch the performance paragraph.
+- [ ] 12. Add the new architecture page to whichever list in `docs/README.md`
+      enumerates the architecture HTML pages, matching the existing entries.
+- [ ] 13. Run validation.
+
+## Outputs
+
+- Verified against the shipped code, corrected for drift, and flipped from
+  `Proposed` to `Accepted`:
+  `docs/ADR/010_ADR_separation_amortisation_and_push_priority.md`,
+  `docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md`.
+  Verified and corrected: `docs/horde-sim-headroom-architecture.html`. All three
+  were authored alongside the plan and are already in the tree.
+- Edited: `docs/ADR/README.md`, `docs/README.md`,
+  `docs/technical-prototype-functional-close.md`, `docs/GLOSSARY.md`,
+  `AGENT.md`, `tests/validation_contract.rs`.
+- Public API / behaviour change: none.
+
+## Validation
+
+- [ ] `cargo fmt --all -- --check`
+- [ ] `cargo test -p millions_must_die --test validation_contract` — green,
+      including `every_system_has_a_test` and `no_perf_claim_in_docs`
+- [ ] `cargo test --workspace --locked` — green
+- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [ ] manual check — `xdg-open docs/horde-sim-headroom-architecture.html`:
+      renders dark by default, no layout overflow, no network request
+- [ ] manual check — every link in `docs/ADR/README.md` resolves
+- [ ] `nix flake check`
+- [ ] app functional — no code touched; `cargo run -- run --agents 50000 --frames 300` exits 0
+- [ ] commit msg draft: `docs(sim): record the phase-0.5 separation headroom decisions`

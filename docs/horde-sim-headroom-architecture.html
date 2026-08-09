@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Horde Sim Headroom — Architecture (Phase 0.5)</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --plane:      #0d0d0d;
+    --surface:    #1a1a19;
+    --surface-2:  #232321;
+    --ink:        #ffffff;
+    --ink-2:      #c3c2b7;
+    --muted:      #898781;
+    --rule:       #2c2c2a;
+    --edge:       #383835;
+    --s1: #3987e5;  /* scenario data      */
+    --s2: #d95926;  /* per-tick work      */
+    --s3: #199e70;  /* invariant / proof  */
+    --s4: #c98500;  /* rejected           */
+    --s7: #9085e9;  /* threads            */
+    --ring: rgba(255,255,255,0.10);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) {
+      color-scheme: light;
+      --plane: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ee;
+      --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+      --rule: #e1e0d9; --edge: #c3c2b7;
+      --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s7: #4a3aa7;
+      --ring: rgba(11,11,11,0.10);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --plane: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ee;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --rule: #e1e0d9; --edge: #c3c2b7;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s7: #4a3aa7;
+    --ring: rgba(11,11,11,0.10);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--plane); color: var(--ink);
+    font: 16px/1.62 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 3rem 1.25rem 5rem; }
+
+  header { border-bottom: 1px solid var(--rule); padding-bottom: 1.5rem; margin-bottom: 2.5rem; }
+  .kicker {
+    font-size: .75rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 .6rem;
+  }
+  h1 { font-size: clamp(1.6rem, 4vw, 2.3rem); line-height: 1.18; margin: 0 0 .7rem; font-weight: 650; }
+  .lede { color: var(--ink-2); font-size: 1.05rem; margin: 0; max-width: 46rem; }
+
+  h2 {
+    font-size: 1.22rem; margin: 3rem 0 .9rem; font-weight: 640;
+    padding-bottom: .45rem; border-bottom: 1px solid var(--rule);
+  }
+  h3 { font-size: .98rem; margin: 1.8rem 0 .5rem; font-weight: 640; color: var(--ink); }
+  p  { margin: 0 0 1rem; color: var(--ink-2); }
+  p.tight { margin-bottom: .4rem; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .875em; background: var(--surface-2);
+    border: 1px solid var(--ring); border-radius: 4px; padding: .08em .35em;
+    color: var(--ink);
+  }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--ring);
+    border-radius: 10px; padding: 1.25rem 1.4rem; margin: 1.2rem 0;
+  }
+  .panel > :last-child { margin-bottom: 0; }
+
+  .figure { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 1rem; margin: 1.4rem 0; }
+  .scroll { overflow-x: auto; }
+  .figure svg { display: block; min-width: 640px; }
+  .caption { color: var(--muted); font-size: .82rem; margin: .8rem .2rem 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .scroll table { min-width: 42rem; }
+  th, td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .74rem; letter-spacing: .07em; text-transform: uppercase; }
+  td { color: var(--ink-2); }
+  td strong { color: var(--ink); font-weight: 620; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .4rem 1.3rem; margin: 0 0 1rem; padding: 0; list-style: none; font-size: .82rem; color: var(--ink-2); }
+  .legend li { display: flex; align-items: center; gap: .45rem; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+  .tag {
+    display: inline-block; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase;
+    padding: .16em .5em; border-radius: 4px; border: 1px solid currentColor; font-weight: 640;
+  }
+  .tag.keep { color: var(--s3); }
+  .tag.no   { color: var(--s4); }
+
+  ul.plain { margin: 0 0 1rem; padding-left: 1.15rem; color: var(--ink-2); }
+  ul.plain li { margin-bottom: .4rem; }
+
+  .fence {
+    border-left: 3px solid var(--s4); background: var(--surface);
+    border-radius: 0 8px 8px 0; padding: 1rem 1.2rem; margin: 1.2rem 0;
+  }
+  .fence h3 { margin-top: 0; }
+  .fence > :last-child { margin-bottom: 0; }
+
+  .claimbox { border: 1px dashed var(--edge); border-radius: 10px; padding: 1.2rem 1.4rem; margin: 2rem 0 0; }
+  .claimbox h2 { border: none; margin-top: 0; padding-bottom: 0; }
+
+  footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .82rem; }
+  footer a { color: var(--s1); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="kicker">Millions Must Die · Phase 0.5 · plan/horde-sim-headroom</p>
+  <h1>Horde sim headroom: the separation pass</h1>
+  <p class="lede">
+    Five changes to one loop. Every capability is scenario data with an identity
+    default, so a scene that does not opt in walks a bit-identical path — and the
+    pinned digests are what prove it.
+  </p>
+</header>
+
+<h2>Why only this loop</h2>
+
+<p>
+  The tick has two halves that scale differently. Navigation reads a precomputed
+  flow field — one array lookup per agent, and the field itself is built once.
+  Separation visits neighbours, and the number of neighbour visits tracks the
+  crowd. Age of Empires IV published the shape of that split: raising unit count
+  by a factor of 200 raised flow-field cost by a small factor and steering cost
+  by a large one.
+</p>
+<p>
+  So the flow field is deliberately untouched here, and so is the renderer.
+  <code>sim::collision::accumulate_separation_phase</code> is the whole subject.
+</p>
+
+<h2>The tick, after phase 0.5</h2>
+
+<ul class="legend">
+  <li><span class="dot" style="background:var(--s1)"></span>gated by scenario data</li>
+  <li><span class="dot" style="background:var(--s2)"></span>per-agent, per-tick work</li>
+  <li><span class="dot" style="background:var(--s7)"></span>may run on the pool</li>
+  <li><span class="dot" style="background:var(--s3)"></span>invariant, always on</li>
+</ul>
+
+<div class="figure scroll">
+<svg viewBox="0 0 940 320" width="100%" height="320" role="img"
+     aria-label="Order of passes inside one simulation tick, showing which are gated by scenario data and which run on the worker pool.">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <text x="8" y="22" fill="var(--muted)" font-size="12" font-family="system-ui, sans-serif">tick_index % separation_phases</text>
+
+  <!-- decision -->
+  <g color="var(--edge)">
+    <path d="M120 44 L206 76 L120 108 L34 76 Z" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.5"/>
+    <text x="120" y="72" text-anchor="middle" fill="var(--ink)" font-size="12" font-family="system-ui, sans-serif">phase</text>
+    <text x="120" y="88" text-anchor="middle" fill="var(--ink)" font-size="12" font-family="system-ui, sans-serif">== 0 ?</text>
+  </g>
+
+  <!-- grid rebuild -->
+  <g>
+    <rect x="250" y="46" width="188" height="60" rx="8" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.5"/>
+    <text x="344" y="70" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">SpatialGrid::rebuild</text>
+    <text x="344" y="88" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">stamped counts, no clear</text>
+  </g>
+  <g color="var(--edge)">
+    <line x1="206" y1="76" x2="244" y2="76" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+    <text x="222" y="66" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">yes</text>
+    <path d="M120 108 L120 150 L344 150 L344 112" fill="none" stroke="currentColor" stroke-width="1.5" stroke-dasharray="4 4"/>
+    <text x="150" y="144" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">no — reuse last cycle's bins</text>
+  </g>
+
+  <!-- separation scan -->
+  <g>
+    <rect x="486" y="30" width="212" height="92" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="592" y="54" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">separation scan</text>
+    <text x="592" y="73" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">i % phases == phase</text>
+    <text x="592" y="89" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">3 row runs, cap 8</text>
+    <text x="592" y="105" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">× mass[j] / mass[i]</text>
+  </g>
+  <g color="var(--edge)">
+    <line x1="438" y1="76" x2="480" y2="76" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+  </g>
+
+  <!-- writes -->
+  <g>
+    <rect x="746" y="46" width="180" height="60" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.5"/>
+    <text x="836" y="70" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">sep_x[i], sep_y[i]</text>
+    <text x="836" y="88" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">persistent between phases</text>
+  </g>
+  <g color="var(--edge)">
+    <line x1="698" y1="76" x2="740" y2="76" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+  </g>
+
+  <!-- movement row -->
+  <line x1="8" y1="186" x2="932" y2="186" stroke="var(--rule)" stroke-width="1"/>
+  <text x="8" y="208" fill="var(--muted)" font-size="12" font-family="system-ui, sans-serif">then, for every agent, every tick — serial, never amortised</text>
+
+  <g>
+    <rect x="34" y="226" width="182" height="58" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="125" y="250" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">arrival → recycle</text>
+    <text x="125" y="268" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">shared recycle_cursor</text>
+  </g>
+  <g>
+    <rect x="264" y="226" width="182" height="58" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="355" y="250" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">blend</text>
+    <text x="355" y="268" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">flow + strength · sep</text>
+  </g>
+  <g>
+    <rect x="494" y="226" width="204" height="58" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.5"/>
+    <text x="596" y="250" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">step_admissible</text>
+    <text x="596" y="268" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">walls + no corner cut</text>
+  </g>
+  <g>
+    <rect x="746" y="226" width="180" height="58" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="836" y="250" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">x[i], y[i], dir[i]</text>
+    <text x="836" y="268" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">one step, fixed length</text>
+  </g>
+  <g color="var(--edge)">
+    <line x1="216" y1="255" x2="258" y2="255" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="446" y1="255" x2="488" y2="255" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+    <line x1="698" y1="255" x2="740" y2="255" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar)"/>
+  </g>
+</svg>
+</div>
+<p class="caption">
+  The green boxes are the two things phase 0.5 refuses to touch: an agent's step
+  is one step of fixed length, and <code>step_admissible</code> runs on every
+  agent on every tick regardless of phase — so an amortised agent still cannot
+  enter a blocked cell or cut a blocked corner.
+</p>
+
+<h2>The three knobs</h2>
+
+<p>
+  All three are required fields on every <code>.ron</code> scenario. A file
+  authored before phase 0.5 fails to parse, deliberately: a stale scenario must
+  never run silently untuned.
+</p>
+
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>Field</th><th>Identity</th><th>Cap</th><th>What it changes</th><th>Exercised by</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong><code>separation_phases</code></strong></td>
+      <td class="num">1</td><td class="num">16</td>
+      <td>Agent <code>i</code> recomputes its repulsion when <code>i % phases == tick % phases</code>; the grid rebuilds on phase 0. A skipped agent keeps the value it already had.</td>
+      <td><code>collision_mid_v1</code> — 4</td>
+    </tr>
+    <tr>
+      <td><strong><code>mass_class_count</code></strong></td>
+      <td class="num">1</td><td class="num">8</td>
+      <td>Each push is scaled by <code>mass[j] / mass[i]</code>. Heavy neighbours push harder and are pushed less, which is what breaks the symmetry of a jam at the goal.</td>
+      <td><code>collision_sprite_v1</code> — 2</td>
+    </tr>
+    <tr>
+      <td><strong><code>separation_threads</code></strong></td>
+      <td class="num">1</td><td class="num">16</td>
+      <td>Participants in the separation pass. The ticking thread is one of them; the rest are a pool spawned once at construction.</td>
+      <td>inline harness grids only</td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <strong>Identity means bit-identical.</strong> At one phase both amortisation
+  rules degenerate to the pre-phase-0.5 walk. At one mass class every mass is
+  <code>1</code>, every reciprocal is <code>1.0</code>, and IEEE multiplication
+  by exactly <code>1.0</code> is exact. At one thread no pool is created. The two
+  pinned digests in <code>crates/mmd-engine/tests/separation.rs</code> —
+  <code>BODIED_STACK_HASH</code> and
+  <code>BODYLESS_GRID_PRE_SEPARATION_HASH</code> — are the regression guard for
+  the whole plan, and no ticket is allowed to re-measure them.
+</p>
+
+<h2>The neighbour index</h2>
+
+<p>
+  <code>SpatialGrid</code> is a counting sort over fixed-size bins. Two things
+  changed and neither is visible from outside.
+</p>
+
+<h3>Bins carry a stamp</h3>
+<p>
+  <code>rebuild</code> no longer clears <code>starts</code> before counting into
+  it. Bin populations carry a rebuild stamp; a bin whose stamp is stale reads as
+  empty, and the prefix pass reads zero for it. <code>starts</code> is still
+  written for <em>every</em> bin — including empty ones — because the row window
+  below indexes them. The stamp is <code>u32</code> and wraps by doing one full
+  clear, so a stale bin can never resurrect an old population.
+</p>
+
+<h3>A row is one run</h3>
+<p>
+  A bin's linear index is <code>bx + by * cols</code>, and buckets are laid out
+  in ascending linear index. The three bins of one row of the 3×3 window are
+  therefore <em>already</em> a single contiguous run in <code>items</code>. The
+  scan fetches three row slices instead of nine bin slices and gets the identical
+  agents in the identical order — which is why this is bit-exact rather than
+  merely equivalent. An agent whose entire window holds one agent, itself, writes
+  zeroes without touching <code>items</code>.
+</p>
+
+<h2>The worker pool</h2>
+
+<p>
+  <code>accumulate_separation_phase</code> reads <code>x</code>, <code>y</code>,
+  <code>mass</code>, <code>inv_mass</code> and the grid — all immutable — and
+  writes only <code>sep_x[i]</code> and <code>sep_y[i]</code>. It is already a
+  pure, index-disjoint, read-only-input pass. Participant <code>w</code> of
+  <code>T</code> owns <code>[w·n/T, (w+1)·n/T)</code>.
+</p>
+
+<div class="figure scroll">
+<svg viewBox="0 0 900 236" width="100%" height="236" role="img"
+     aria-label="Barrier handshake between the ticking thread and the worker pool across one tick.">
+  <line x1="150" y1="46" x2="150" y2="212" stroke="var(--edge)" stroke-width="1"/>
+  <line x1="470" y1="46" x2="470" y2="212" stroke="var(--edge)" stroke-width="1"/>
+  <line x1="790" y1="46" x2="790" y2="212" stroke="var(--edge)" stroke-width="1"/>
+
+  <text x="150" y="32" text-anchor="middle" fill="var(--s7)" font-size="12" font-weight="640" font-family="system-ui, sans-serif">publish job</text>
+  <text x="470" y="32" text-anchor="middle" fill="var(--s7)" font-size="12" font-weight="640" font-family="system-ui, sans-serif">gate.wait()</text>
+  <text x="790" y="32" text-anchor="middle" fill="var(--s7)" font-size="12" font-weight="640" font-family="system-ui, sans-serif">done.wait()</text>
+
+  <text x="8" y="82" fill="var(--muted)" font-size="11.5" font-family="system-ui, sans-serif">ticking thread</text>
+  <rect x="470" y="66" width="320" height="26" rx="5" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.4"/>
+  <text x="630" y="84" text-anchor="middle" fill="var(--ink)" font-size="11.5" font-family="ui-monospace, monospace">chunk 0</text>
+
+  <text x="8" y="126" fill="var(--muted)" font-size="11.5" font-family="system-ui, sans-serif">worker 1</text>
+  <rect x="470" y="110" width="320" height="26" rx="5" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.4"/>
+  <text x="630" y="128" text-anchor="middle" fill="var(--ink)" font-size="11.5" font-family="ui-monospace, monospace">chunk 1 · armed</text>
+
+  <text x="8" y="170" fill="var(--muted)" font-size="11.5" font-family="system-ui, sans-serif">worker 2</text>
+  <rect x="470" y="154" width="320" height="26" rx="5" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.4"/>
+  <text x="630" y="172" text-anchor="middle" fill="var(--ink)" font-size="11.5" font-family="ui-monospace, monospace">chunk 2 · armed</text>
+
+  <line x1="150" y1="79" x2="464" y2="79" stroke="var(--edge)" stroke-width="1" stroke-dasharray="3 4"/>
+  <line x1="150" y1="123" x2="464" y2="123" stroke="var(--edge)" stroke-width="1" stroke-dasharray="3 4"/>
+  <line x1="150" y1="167" x2="464" y2="167" stroke="var(--edge)" stroke-width="1" stroke-dasharray="3 4"/>
+  <text x="300" y="196" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">parked — no allocation, no spin</text>
+  <text x="630" y="204" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">disjoint index ranges · no partial sum crosses a boundary</text>
+</svg>
+</div>
+
+<p>
+  Every output element is written by exactly one participant, from immutable
+  inputs, in the same intra-agent order it would have had serially. No partial
+  sum crosses a range boundary, so no floating-point reassociation is possible
+  and <strong>the result cannot depend on thread count</strong>. That is asserted
+  by <code>threads_do_not_change_the_walk</code>, not argued.
+</p>
+
+<div class="panel">
+  <h3 style="margin-top:0">The allocation invariant got stronger</h3>
+  <p class="tight">
+    <code>alloc_guard.rs</code> used to carry a debt in its own module doc:
+    <em>"Introducing a worker thread on the frame path means this guard must be
+    revisited before it can still claim 'zero allocations per frame'."</em>
+  </p>
+  <p>
+    Workers arm themselves with <code>alloc_guard::arm_worker()</code> around
+    each chunk. The counter is process-wide and only records an allocation when
+    the allocating thread is armed — so an unarmed worker would be invisible, and
+    an armed one is counted. The existing zero-allocation assertions now cover
+    the pool. A thread that never arms is still invisible, which is exactly what
+    <code>foreign_thread_allocations_do_not_leak_into_a_measure_scope</code>
+    pins, and that test is untouched.
+  </p>
+</div>
+
+<h2>What was rejected, and why it will come up again</h2>
+
+<div class="fence">
+  <h3><span class="tag no">rejected</span>&nbsp; Min-corner binning, 2×2 window</h3>
+  <p>
+    Ericson's trick works because each <em>pair</em> is enumerated once and
+    contributes to both members. <code>accumulate_separation</code> is a
+    <strong>gather</strong>: for agent <code>i</code> it must see every neighbour
+    <code>j</code>, and a 2×2 window anchored at <code>i</code>'s min-corner bin
+    misses every <code>j</code> one bin lower on either axis. Converting to a
+    symmetric scatter would write <code>sep[j]</code> from agent <code>i</code>'s
+    iteration — destroying the index-disjointness the pool depends on, and
+    contradicting the recorded decision that a cap-truncated pair need not
+    cancel. The transferable half shipped as the row run above.
+  </p>
+</div>
+
+<div class="fence">
+  <h3><span class="tag no">rejected</span>&nbsp; An O(#agents) grid rebuild</h3>
+  <p>
+    Reaching it means abandoning the prefix-sum layout for a per-bin linked list,
+    which destroys the bucket contiguity the row run exploits, or sorting the
+    touched-bin list every tick. Neither can be settled by measurement, because
+    measurement is retired. The stamped form ships and earns its keep by giving
+    the scan an O(1) <code>bin_count</code>.
+  </p>
+</div>
+
+<div class="fence">
+  <h3><span class="tag no">rejected</span>&nbsp; ORCA/RVO2, and a physical force model</h3>
+  <p>
+    ORCA's own authors document the linear program becoming infeasible in dense
+    conditions and producing global deadlock. The measured power-law force is
+    documented as unstable at timesteps longer than this one. The existing linear
+    falloff and an asymmetric mass byte are the cheaper and safer pair.
+  </p>
+</div>
+
+<div class="fence">
+  <h3><span class="tag no">rejected</span>&nbsp; A new dependency for threading</h3>
+  <p>
+    <code>rayon</code> was the obvious candidate. Its parallel bridge carries no
+    documented allocation-free guarantee, and the allocation invariant is a merge
+    gate — "probably fine" is not a standard it can be held to. The cost of
+    refusing is one <code>unsafe impl Send</code> over a pointer descriptor, with
+    its safety argument written next to it.
+  </p>
+</div>
+
+<div class="panel">
+  <h3 style="margin-top:0"><span class="tag keep">kept</span>&nbsp; What did not change</h3>
+  <ul class="plain">
+    <li>The neighbour cap stays at <strong>8</strong> — inside the band every shipped crowd system uses.</li>
+    <li>The coincidence tie-break table, the linear falloff and the 3×3 window are untouched.</li>
+    <li>Separation is still <strong>steering, not resolution</strong>. Overlap is bounded, never forbidden, and no code or doc may claim otherwise.</li>
+    <li>The movement loop stays serial. <code>recycle_one</code> advances a shared cursor, and that ordering is load-bearing for the cross-process determinism proof.</li>
+    <li>The flow field, the renderer and the shaders are outside this plan entirely.</li>
+  </ul>
+</div>
+
+<div class="claimbox">
+  <h2>What this page does not claim</h2>
+  <p class="tight">
+    Nothing here has been measured on this engine. Performance measurement is
+    retired for phase 0 and no number gates a merge. Every figure quoted in the
+    ADRs behind this page is someone else's published result, cited to attribute
+    a mechanism.
+  </p>
+  <p>
+    The acceptance criteria for all five changes are behavioural: identity
+    tunings produce bit-identical state hashes, the threaded pass produces the
+    same output at every thread count, nothing on the tick path allocates on any
+    thread, obstacles are still never entered, and the pool shuts down cleanly.
+    Whether any of it is worth switching on is a question for the optimization
+    phase, with instruments this project does not currently run.
+  </p>
+</div>
+
+<footer>
+  Records:
+  <a href="ADR/010_ADR_separation_amortisation_and_push_priority.md">ADR 010</a> ·
+  <a href="ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md">ADR 011</a> ·
+  <a href="ADR/009_ADR_agent_separation_and_collision.md">ADR 009</a> (the model this supplements) ·
+  <a href="agent-collision-architecture.html">Agent collision architecture</a>
+  <br>Plan: <code>ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md</code> ·
+  Evidence: <code>.tmp/RESEARCH_they_are_billions_performance.md</code>
+</footer>
+
+</div>
+</body>
+</html>

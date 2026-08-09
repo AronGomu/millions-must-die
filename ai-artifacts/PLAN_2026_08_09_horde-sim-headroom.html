@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — Horde Sim Headroom (Phase 0.5)</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#232321;
+    --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
+    --rule:#2c2c2a; --edge:#383835;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s7:#9085e9;
+    --ring:rgba(255,255,255,0.10);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) {
+      color-scheme: light;
+      --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ee;
+      --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+      --rule:#e1e0d9; --edge:#c3c2b7;
+      --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s7:#4a3aa7;
+      --ring:rgba(11,11,11,0.10);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ee;
+    --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+    --rule:#e1e0d9; --edge:#c3c2b7;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s7:#4a3aa7;
+    --ring:rgba(11,11,11,0.10);
+  }
+
+  * { box-sizing:border-box; }
+  body {
+    margin:0; background:var(--plane); color:var(--ink);
+    font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:64rem; margin:0 auto; padding:3rem 1.25rem 5rem; }
+
+  header { border-bottom:1px solid var(--rule); padding-bottom:1.5rem; margin-bottom:2.2rem; }
+  .kicker { font-size:.75rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 .6rem; }
+  h1 { font-size:clamp(1.6rem,4vw,2.3rem); line-height:1.16; margin:0 0 .7rem; font-weight:650; }
+  .lede { color:var(--ink-2); font-size:1.05rem; margin:0; max-width:46rem; }
+
+  h2 { font-size:1.2rem; margin:2.8rem 0 .9rem; font-weight:640; padding-bottom:.45rem; border-bottom:1px solid var(--rule); }
+  h3 { font-size:.96rem; margin:0 0 .5rem; font-weight:640; }
+  p  { margin:0 0 1rem; color:var(--ink-2); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.87em;
+         background:var(--surface-2); border:1px solid var(--ring); border-radius:4px;
+         padding:.08em .35em; color:var(--ink); }
+  a { color:var(--s1); }
+
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(9rem,1fr)); gap:.8rem; margin:1.6rem 0 0; }
+  .stat { background:var(--surface); border:1px solid var(--ring); border-radius:9px; padding:.85rem 1rem; }
+  .stat b { display:block; font-size:1.5rem; font-weight:650; line-height:1.1; margin-bottom:.2rem; }
+  .stat span { font-size:.76rem; color:var(--muted); letter-spacing:.05em; text-transform:uppercase; }
+
+  .cols { display:grid; grid-template-columns:repeat(auto-fit,minmax(19rem,1fr)); gap:1rem; }
+  .card { background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:1.1rem 1.25rem; }
+  .card > :last-child { margin-bottom:0; }
+  .card.in  { border-left:3px solid var(--s3); }
+  .card.out { border-left:3px solid var(--s4); }
+
+  ul.plain { margin:0; padding-left:1.1rem; color:var(--ink-2); font-size:.92rem; }
+  ul.plain li { margin-bottom:.42rem; }
+  ul.plain li:last-child { margin-bottom:0; }
+
+  .figure { background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:1rem; margin:1.3rem 0; }
+  .scroll { overflow-x:auto; }
+  .figure svg { display:block; min-width:660px; }
+  .caption { color:var(--muted); font-size:.82rem; margin:.75rem .2rem 0; }
+
+  table { width:100%; border-collapse:collapse; font-size:.88rem; }
+  .scroll table { min-width:44rem; }
+  th,td { text-align:left; padding:.58rem .65rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:.72rem; letter-spacing:.07em; text-transform:uppercase; }
+  td { color:var(--ink-2); }
+  td strong { color:var(--ink); font-weight:620; }
+  tbody tr:last-child td { border-bottom:none; }
+
+  .tid { font-family:ui-monospace,monospace; font-weight:650; color:var(--ink); }
+
+  .ticket { background:var(--surface); border:1px solid var(--ring); border-radius:10px;
+            padding:1.15rem 1.3rem; margin:0 0 .85rem; }
+  .ticket-head { display:flex; flex-wrap:wrap; align-items:baseline; gap:.6rem; margin-bottom:.55rem; }
+  .ticket-head .tid { font-size:.95rem; }
+  .ticket-head h3 { margin:0; font-size:1.02rem; }
+  .dep { font-size:.74rem; color:var(--muted); letter-spacing:.05em; text-transform:uppercase; margin-left:auto; }
+  .ticket p { font-size:.93rem; margin-bottom:.7rem; }
+  .proof { font-size:.83rem; color:var(--muted); border-top:1px solid var(--rule); padding-top:.6rem; margin:0; }
+  .proof b { color:var(--s3); font-weight:640; }
+
+  .fence { border-left:3px solid var(--s4); background:var(--surface); border-radius:0 8px 8px 0;
+           padding:1rem 1.2rem; margin:1.1rem 0; }
+  .fence > :last-child { margin-bottom:0; }
+  .fence h3 { color:var(--s4); }
+
+  .claimbox { border:1px dashed var(--edge); border-radius:10px; padding:1.2rem 1.4rem; margin:2.4rem 0 0; }
+  .claimbox h2 { border:none; margin-top:0; padding-bottom:0; }
+
+  footer { margin-top:3.2rem; padding-top:1.2rem; border-top:1px solid var(--rule); color:var(--muted); font-size:.82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="kicker">Millions Must Die · Plan · 2026-08-09 · plan/horde-sim-headroom</p>
+  <h1>Horde sim headroom</h1>
+  <p class="lede">
+    Five changes to one loop — the per-agent, per-tick neighbour scan — with no
+    behavioural guarantee spent. Every capability is scenario data with an
+    identity default, so a scene that does not opt in walks a bit-identical path.
+  </p>
+  <div class="stats">
+    <div class="stat"><b>7</b><span>tickets</span></div>
+    <div class="stat"><b>5</b><span>backlog items</span></div>
+    <div class="stat"><b>3</b><span>scenario knobs</span></div>
+    <div class="stat"><b>28</b><span>new tests</span></div>
+    <div class="stat"><b>0</b><span>new dependencies</span></div>
+  </div>
+</header>
+
+<h2>Goal</h2>
+<p>
+  Buy simulation headroom in the one loop that scales with agent count, without
+  spending a guarantee. Five changes from the research backlog
+  (<code>.tmp/RESEARCH_they_are_billions_performance.md</code> § C.8, items 1, 3,
+  5, 8, 9), all confined to <code>crates/mmd-engine/src/sim/</code>.
+</p>
+<p>
+  <strong>Success</strong> = every new capability is scenario data with an
+  identity default, every tracked scene that does not opt in keeps a
+  bit-identical state hash, the zero-allocation invariant still holds on every
+  thread, and the merge gate is green after each ticket.
+</p>
+
+<h2>Scope</h2>
+<div class="cols">
+  <div class="card in">
+    <h3>In</h3>
+    <ul class="plain">
+      <li>Three scenario knobs: <code>separation_phases</code>, <code>mass_class_count</code>, <code>separation_threads</code> — each identity <code>1</code>, each bounded, each rejected on a bodyless scene.</li>
+      <li><b>1</b> · amortise the scan <em>and</em> the grid rebuild over N ticks.</li>
+      <li><b>5</b> · stamped bin counts; no per-rebuild clear; O(1) <code>bin_count</code>.</li>
+      <li><b>9 (adapted)</b> · row-contiguous scan + empty-window early-out.</li>
+      <li><b>8</b> · per-agent push priority, so a goal sink breaks its own symmetry.</li>
+      <li><b>3</b> · parallel separation on a persistent pool, bit-identical at any thread count.</li>
+      <li>Docs: ADR 010, ADR 011, architecture page, close-doc system map, glossary.</li>
+    </ul>
+  </div>
+  <div class="card out">
+    <h3>Out</h3>
+    <ul class="plain">
+      <li><strong>Any performance number, anywhere.</strong> Perf gating stays retired; every ticket is accepted on behaviour.</li>
+      <li>Renderer, shaders, culling, isometric depth (backlog 2 and 4) — separate plan.</li>
+      <li>Flow field tiling, dirty flags, LOS pass (backlog 6 and 7) — Phase 1, when walls become destructible.</li>
+      <li>Flocking goal propagation (backlog 10) — needs targeting.</li>
+      <li>The gate scene's walk. <code>technical_prototype_v1</code> stays pinned to identity.</li>
+      <li>Any new third-party dependency. <code>rayon</code> is not added.</li>
+      <li>Hard non-overlap. Unchanged from ADR 009 — this is steering.</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Ticket flow</h2>
+
+<div class="figure scroll">
+<svg viewBox="0 0 940 268" width="100%" height="268" role="img"
+     aria-label="Dependency graph: T1 feeds T2, T3 and T5; T2 feeds T4; T3, T4 and T5 feed T6; T6 feeds T7.">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g color="var(--edge)" stroke="currentColor" stroke-width="1.5" fill="none">
+    <path d="M158 60 L216 60"  marker-end="url(#a2)"/>
+    <path d="M158 74 L188 74 L188 134 L216 134" marker-end="url(#a2)"/>
+    <path d="M158 88 L172 88 L172 208 L216 208" marker-end="url(#a2)"/>
+    <path d="M366 60 L424 60"  marker-end="url(#a2)"/>
+    <path d="M366 134 L620 134" marker-end="url(#a2)"/>
+    <path d="M574 60 L598 60 L598 120 L620 120" marker-end="url(#a2)"/>
+    <path d="M366 208 L598 208 L598 148 L620 148" marker-end="url(#a2)"/>
+    <path d="M770 134 L828 134" marker-end="url(#a2)"/>
+  </g>
+
+  <g font-family="system-ui, sans-serif">
+    <rect x="18" y="40" width="140" height="68" rx="8" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.6"/>
+    <text x="30" y="62" fill="var(--s1)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T1</text>
+    <text x="30" y="80" fill="var(--ink)" font-size="12">scenario</text>
+    <text x="30" y="96" fill="var(--ink)" font-size="12">headroom knobs</text>
+
+    <rect x="216" y="34" width="150" height="52" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.6"/>
+    <text x="228" y="54" fill="var(--s2)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T2</text>
+    <text x="228" y="72" fill="var(--ink)" font-size="12">stamped bin counts</text>
+
+    <rect x="424" y="34" width="150" height="52" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.6"/>
+    <text x="436" y="54" fill="var(--s2)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T4</text>
+    <text x="436" y="72" fill="var(--ink)" font-size="12">row-contiguous scan</text>
+
+    <rect x="216" y="108" width="150" height="52" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.6"/>
+    <text x="228" y="128" fill="var(--s2)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T3</text>
+    <text x="228" y="146" fill="var(--ink)" font-size="12">amortised separation</text>
+
+    <rect x="216" y="182" width="150" height="52" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.6"/>
+    <text x="228" y="202" fill="var(--s2)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T5</text>
+    <text x="228" y="220" fill="var(--ink)" font-size="12">push priority</text>
+
+    <rect x="620" y="102" width="150" height="64" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.6"/>
+    <text x="632" y="124" fill="var(--s7)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T6</text>
+    <text x="632" y="142" fill="var(--ink)" font-size="12">parallel separation</text>
+    <text x="632" y="158" fill="var(--muted)" font-size="11">persistent pool</text>
+
+    <rect x="828" y="108" width="100" height="52" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.6"/>
+    <text x="840" y="128" fill="var(--s3)" font-size="12" font-weight="650" font-family="ui-monospace, monospace">T7</text>
+    <text x="840" y="146" fill="var(--ink)" font-size="12">ADRs + map</text>
+  </g>
+</svg>
+</div>
+<p class="caption">
+  Cheap and safe first: amortisation (T3) divides the same pass by a known factor
+  with no new failure modes, so it lands before threading (T6), which brings
+  false sharing, a shutdown path and a determinism surface to defend.
+</p>
+
+<h2>Ticket order</h2>
+
+<div class="scroll">
+<table>
+  <thead>
+    <tr><th>ID</th><th>Title</th><th>Depends</th><th>Commit outcome</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T1_scenario-headroom-knobs.md">T1</a></td>
+        <td><strong>Scenario headroom knobs</strong></td><td>—</td>
+        <td>Every scenario declares three tuning knobs at their identity values; not one hash moves</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T2_stamped-bin-counts.md">T2</a></td>
+        <td><strong>Stamped bin counts</strong></td><td>T1</td>
+        <td><code>rebuild</code> stops clearing <code>starts</code>; bin population is an O(1) query; bit-exact</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T3_amortised-separation.md">T3</a></td>
+        <td><strong>Amortised separation</strong></td><td>T1</td>
+        <td>Scan and grid rebuild spread over <code>separation_phases</code> ticks; <code>collision_mid_v1</code> runs at 4</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T4_row-contiguous-scan.md">T4</a></td>
+        <td><strong>Row-contiguous scan</strong></td><td>T2</td>
+        <td>The 3×3 window is three contiguous runs, with an empty-window early-out; bit-exact</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T5_push-priority-mass.md">T5</a></td>
+        <td><strong>Per-agent push priority</strong></td><td>T1</td>
+        <td>Repulsion weighted by a mass byte; <code>collision_sprite_v1</code> runs two classes</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T6_parallel-separation.md">T6</a></td>
+        <td><strong>Parallel separation pass</strong></td><td>T3, T4, T5</td>
+        <td>Persistent worker pool, bit-identical at any thread count, still zero-alloc</td></tr>
+    <tr><td class="tid"><a href="PLAN_2026_08_09_horde-sim-headroom/T7_docs-adr-and-system-map.md">T7</a></td>
+        <td><strong>ADRs, architecture doc, system map</strong></td><td>T6</td>
+        <td>Phase 0.5 is a written decision with an enforced test map</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>What each ticket proves</h2>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T1</span><h3>Scenario headroom knobs</h3><span class="dep">depends: none</span></div>
+  <p>
+    Contract only. Three required fields on <code>ScenarioSpec</code> and
+    <code>Scenario</code>, carried through <code>CollisionParams</code> so
+    <code>Simulation::new_custom</code> keeps its arity. Seven <code>.ron</code>
+    files edited, seven <code>.sha256</code> sidecars regenerated. Nothing reads
+    the values yet.
+  </p>
+  <p class="proof"><b>Proof:</b> the two pinned digests pass <em>unedited</em>. Seven new rejection tests: zero, over-cap, bodyless-and-tuned, gate-scene-not-identity.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T2</span><h3>Stamped bin counts</h3><span class="dep">depends: T1</span></div>
+  <p>
+    <code>counts</code>, <code>count_stamp</code>, <code>stamp</code> on
+    <code>SpatialGrid</code>. The <code>starts.fill(0)</code> pass goes; the
+    prefix pass reads zero for a stale bin and still writes <code>starts</code>
+    for <em>every</em> bin, which T4 depends on. Wrap does one full clear.
+  </p>
+  <p class="proof"><b>Proof:</b> bit-exact — <code>BODIED_STACK_HASH</code> unmoved. Bin counts match bucket lengths; a bin that empties reports zero; the wrap path is reachable through a testkit-gated hook.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T3</span><h3>Amortised separation</h3><span class="dep">depends: T1</span></div>
+  <p>
+    Agent <code>i</code> recomputes when <code>i % phases == tick % phases</code>;
+    the grid rebuilds on phase 0. Strided, not blocked — agent index correlates
+    with spawn cell, and a blocked split would read as a wave crossing the horde.
+    Reynolds ran 15 000 agents on a <code>skipThink</code> of 8 to 10.
+  </p>
+  <p class="proof"><b>Proof:</b> one phase is the identity. A skipped agent's repulsion is unchanged until its phase returns; the grid rebuilds twice in eight ticks at four phases; an amortised stack still spreads; and the amortised scene still never enters an obstacle.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T4</span><h3>Row-contiguous scan</h3><span class="dep">depends: T2</span></div>
+  <p>
+    Bin index is <code>bx + by * cols</code> and buckets are laid out in
+    ascending index, so each row of the 3×3 window is <em>already</em> one run in
+    <code>items</code>. Three slices instead of nine, identical agents, identical
+    order. An agent alone in its window writes zeroes without touching
+    <code>items</code>.
+  </p>
+  <p class="proof"><b>Proof:</b> the row slice equals the bin-by-bin concatenation; the cap's <code>break 'scan</code> survives; <code>BODIED_STACK_HASH</code> unmoved.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T5</span><h3>Per-agent push priority</h3><span class="dep">depends: T1</span></div>
+  <p>
+    Push on <code>i</code> from <code>j</code> scaled by
+    <code>mass[j] · inv_mass[i]</code>, reciprocal precomputed at construction.
+    Froblins names the bug — agents pile at a small goal and cannot get out.
+    StarCraft II's answer is asymmetry, not a better solver.
+  </p>
+  <p class="proof"><b>Proof:</b> one class means every mass is 1 and every scale is exactly 1.0, so the digest cannot move. A heavier neighbour demonstrably pushes a lighter one harder, and two classes <em>do</em> move the digest — so it is not a no-op.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T6</span><h3>Parallel separation pass</h3><span class="dep">depends: T3, T4, T5</span></div>
+  <p>
+    Persistent pool spawned at construction — never inside a tick, because
+    creating a thread allocates. Two barriers, no channel. Participant
+    <code>w</code> of <code>T</code> owns <code>[w·n/T, (w+1)·n/T)</code>, so no
+    partial sum crosses a boundary and no reassociation is possible.
+  </p>
+  <p class="proof"><b>Proof:</b> identical state hash at 1, 2, 4 and 8 threads, run ten times. Zero allocation on every thread — workers arm the counting flag, so the invariant now covers them. Clean shutdown, no hang.</p>
+</div>
+
+<div class="ticket">
+  <div class="ticket-head"><span class="tid">T7</span><h3>ADRs, architecture doc, system map</h3><span class="dep">depends: T6</span></div>
+  <p>
+    Verify the two ADRs and the architecture page against what shipped, flip them
+    to Accepted, and map all 28 new tests into
+    <code>tests/validation_contract.rs</code> and the close doc — in both
+    directions, which is what makes the map unfakeable.
+  </p>
+  <p class="proof"><b>Proof:</b> <code>every_system_has_a_test</code> and <code>no_perf_claim_in_docs</code> green. The close doc is a <em>live</em> doc — every added line must dodge the banned perf tokens.</p>
+</div>
+
+<h2>Two rejections worth reading before implementing</h2>
+
+<div class="fence">
+  <h3>Backlog 9 does not apply as written</h3>
+  <p>
+    Ericson's min-corner 2×2 window works because each <em>pair</em> is
+    enumerated once and contributes to both members.
+    <code>accumulate_separation</code> is a <strong>gather</strong> — for agent
+    <code>i</code> it must see every neighbour <code>j</code> — and a 2×2 window
+    misses every <code>j</code> one bin lower on either axis. A symmetric scatter
+    would write <code>sep[j]</code> from <code>i</code>'s loop and destroy the
+    index-disjointness T6 needs. T4 ships the transferable half, which is
+    bit-exact where the 2×2 would not have been.
+  </p>
+</div>
+
+<div class="fence">
+  <h3>Backlog 5 cannot reach O(#agents) here</h3>
+  <p>
+    The prefix-sum pass over bins is structural to a counting sort; only the
+    clear can go. Reaching O(#agents) needs a per-bin linked list — which
+    destroys the contiguity T4 exploits — or a per-tick sort of touched bins.
+    Neither can be settled by measurement, because measurement is retired. T2
+    ships the stamped form and earns its keep by giving T4 an O(1)
+    <code>bin_count</code>.
+  </p>
+</div>
+
+<h2>Assumptions</h2>
+<div class="scroll">
+<table>
+  <thead><tr><th>#</th><th>Assumption</th></tr></thead>
+  <tbody>
+    <tr><td class="tid">A1</td><td>Branch <code>plan/horde-sim-headroom</code> off <code>main</code>. Assumes <code>plan/zombie-collision</code> merges first — T1 carries the <code>TODO(user)</code>.</td></tr>
+    <tr><td class="tid">A2</td><td>Every capability is scenario data with identity default <code>1</code>, following the <code>collision_radius_q8</code> precedent.</td></tr>
+    <tr><td class="tid">A3</td><td>Backlog 9 does not transfer to a gather loop — see the rejection above.</td></tr>
+    <tr><td class="tid">A4</td><td>Backlog 5 cannot reach BioDynaMo's O(#agents) rebuild here — see the rejection above.</td></tr>
+    <tr><td class="tid">A5</td><td>Amortisation stales the grid too. At four phases a neighbour position is at most three ticks old. Bounded and accepted; ADR 009 already refuses a zero-overlap claim.</td></tr>
+    <tr><td class="tid">A6</td><td>No new dependency. <code>rayon</code>'s bridge has no documented allocation-free guarantee and the invariant is a merge gate.</td></tr>
+    <tr><td class="tid">A7</td><td><code>alloc_guard.rs</code>'s own "must be revisited" note is paid off in T6, not deferred.</td></tr>
+    <tr><td class="tid">A8</td><td>Thread count never changes results — asserted directly, not argued.</td></tr>
+    <tr><td class="tid">A9</td><td>Every tracked scene keeps <code>separation_threads: 1</code>, so the gate reproduces on any core count.</td></tr>
+    <tr><td class="tid">A10</td><td><code>graphify</code> is documented in <code>AGENT.md</code> but not installed on this host; no ticket runs <code>graphify update .</code>.</td></tr>
+    <tr><td class="tid">A11</td><td>Artifacts go to <code>ai-artifacts/</code>, the directory that exists and is documented.</td></tr>
+    <tr><td class="tid">A12</td><td>Sidecars are bare lowercase hex: <code>sha256sum f.ron | cut -d' ' -f1 &gt; f.sha256</code>.</td></tr>
+    <tr><td class="tid">A13</td><td>No new system — every test lands in a file <code>SCOPE_SYSTEMS</code> already maps. <code>SCOPE_SYSTEM_COUNT</code> stays 12.</td></tr>
+    <tr><td class="tid">A14</td><td>The close doc is in <code>LIVE_DOCS</code>; every line added to it must dodge the banned perf tokens.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<div class="claimbox">
+  <h2>What this plan does not claim</h2>
+  <p>
+    Nothing here has been measured on this engine, and no ticket passes or fails
+    on a speed figure. Performance gating is retired for phase 0. The figures in
+    the research dossier behind this plan are other people's published results,
+    cited to attribute a mechanism, and they gate nothing.
+  </p>
+  <p style="margin-bottom:0">
+    Every acceptance criterion is behavioural: identity tunings produce
+    bit-identical state hashes, the threaded pass produces the same output at
+    every thread count, nothing on the tick path allocates on any thread,
+    obstacles are still never entered, and the pool shuts down cleanly.
+  </p>
+</div>
+
+<footer>
+  Index: <code>ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md</code> ·
+  Tickets: <code>ai-artifacts/PLAN_2026_08_09_horde-sim-headroom/</code><br>
+  Records: <a href="../docs/ADR/010_ADR_separation_amortisation_and_push_priority.md">ADR 010</a> ·
+  <a href="../docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md">ADR 011</a> ·
+  <a href="../docs/horde-sim-headroom-architecture.html">Architecture</a> ·
+  Evidence: <code>.tmp/RESEARCH_they_are_billions_performance.md</code>
+</footer>
+
+</div>
+</body>
+</html>
