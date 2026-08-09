@@ -47,6 +47,23 @@ every state hash are bit-identical.
 
 ## Inputs
 
+- **Inherited from T0 — the pinned gate digest (do not recompute, do not
+  re-derive):**
+  `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+  produced by `cargo run -- run --agents 5000 --frames 300` on commit `df309d3`.
+  Every ticket after T0 must reproduce this value byte for byte. A different
+  `hash=` means the plan's core invariant is broken — stop and report `failed`
+  rather than re-pinning it. The pre-T0 value
+  `f647e7f590ed5814e4e61388e23836dfacb980217fb1762542ec3abfe85549b3` is
+  superseded and must never reappear.
+  T0 also delivered: `MAX_LIVE_AGENTS = 5_000` enforced by a single
+  `check_population` at the validator dispatcher (not per family),
+  `COLLISION_SCENE_MAX_AGENTS` removed, the three tracked scenes retuned to
+  48 px sprites / `collision_radius_q8: 1_536` with fresh `.sha256` sidecars,
+  the four `fixture_*` scenes byte-identical, `MIN_SCANNED_TESTS` at `174`, and
+  `BenchPolicy::test_short()` split onto its own `test-short-v1` ladder while
+  `production()` keeps the frozen phase-0 ladder verbatim.
+
 - `crates/mmd-engine/src/sim/spatial.rs` — the whole file. Current `rebuild`
   (line ~98) is:
   ```rust
