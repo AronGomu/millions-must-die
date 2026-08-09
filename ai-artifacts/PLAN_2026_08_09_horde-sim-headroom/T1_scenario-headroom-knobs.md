@@ -53,6 +53,23 @@ engine carries them through to `CollisionParams`; not one state hash moves.
 
 ## Inputs
 
+- **Inherited from T0 — the pinned gate digest (do not recompute, do not
+  re-derive):**
+  `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+  produced by `cargo run -- run --agents 5000 --frames 300` on commit `df309d3`.
+  Every ticket after T0 must reproduce this value byte for byte. A different
+  `hash=` means the plan's core invariant is broken — stop and report `failed`
+  rather than re-pinning it. The pre-T0 value
+  `f647e7f590ed5814e4e61388e23836dfacb980217fb1762542ec3abfe85549b3` is
+  superseded and must never reappear.
+  T0 also delivered: `MAX_LIVE_AGENTS = 5_000` enforced by a single
+  `check_population` at the validator dispatcher (not per family),
+  `COLLISION_SCENE_MAX_AGENTS` removed, the three tracked scenes retuned to
+  48 px sprites / `collision_radius_q8: 1_536` with fresh `.sha256` sidecars,
+  the four `fixture_*` scenes byte-identical, `MIN_SCANNED_TESTS` at `174`, and
+  `BenchPolicy::test_short()` split onto its own `test-short-v1` ladder while
+  `production()` keeps the frozen phase-0 ladder verbatim.
+
 - `crates/mmd-engine/src/scenario.rs` — `ScenarioSpec` (line ~102), `Scenario`
   (line ~73), `from_spec` (line ~191), `validate_version_and_dims` (line ~346),
   `validate_collision` (line ~422), `validate_collision_scene_dims` (line ~490).
@@ -133,7 +150,7 @@ ticket's real acceptance criterion:
       `plan/horde-sim-headroom` was cut from that `main` in pre-flight and is
       already checked out. **Do not create or switch branches** — work on the
       current one.
-- [ ] 2. In `crates/mmd-engine/src/scenario.rs`, below
+- [x] 2. In `crates/mmd-engine/src/scenario.rs`, below
       `MAX_SEPARATION_STRENGTH_Q8`, add:
       ```rust
       /// Largest number of ticks the separation pass may be spread over.
@@ -146,11 +163,11 @@ ticket's real acceptance criterion:
       /// identity: the pass runs inline on the calling thread, no pool exists.
       pub const MAX_SEPARATION_THREADS: u32 = 16;
       ```
-- [ ] 3. In the same file, below `V1_SEPARATION_STRENGTH_Q8`, add
+- [x] 3. In the same file, below `V1_SEPARATION_STRENGTH_Q8`, add
       `const V1_SEPARATION_PHASES: u32 = 1;`,
       `const V1_MASS_CLASSES: u32 = 1;`,
       `const V1_SEPARATION_THREADS: u32 = 1;`.
-- [ ] 4. Add three fields to `struct Scenario`, directly after
+- [x] 4. Add three fields to `struct Scenario`, directly after
       `separation_strength_q8`:
       ```rust
       /// Ticks the separation pass is spread over. 1 = every agent, every tick.
@@ -160,17 +177,17 @@ ticket's real acceptance criterion:
       /// Worker threads for the separation pass. 1 = inline, no pool.
       separation_threads: u32,
       ```
-- [ ] 5. Add the same three `pub` fields, same order, same doc comments, to
+- [x] 5. Add the same three `pub` fields, same order, same doc comments, to
       `struct ScenarioSpec`.
-- [ ] 6. In `Scenario::from_spec`, copy all three through alongside the existing
+- [x] 6. In `Scenario::from_spec`, copy all three through alongside the existing
       `collision_radius_q8: doc.collision_radius_q8,` line.
-- [ ] 7. Add three accessors next to `separation_strength_q8()`:
+- [x] 7. Add three accessors next to `separation_strength_q8()`:
       ```rust
       pub fn separation_phases(&self) -> u32 { self.separation_phases }
       pub fn mass_class_count(&self) -> u32 { self.mass_class_count }
       pub fn separation_threads(&self) -> u32 { self.separation_threads }
       ```
-- [ ] 8. In `validate_collision`, append — after the existing
+- [x] 8. In `validate_collision`, append — after the existing
       `separation_strength_q8 is set but collision_radius_q8 is 0` check:
       ```rust
       for (got, max, name) in [
@@ -204,20 +221,20 @@ ticket's real acceptance criterion:
           ));
       }
       ```
-- [ ] 9. In `validate_version_and_dims`, extend the `technical_prototype_v1`
+- [x] 9. In `validate_version_and_dims`, extend the `technical_prototype_v1`
       `checks` array with three more rows:
       `(doc.separation_phases, V1_SEPARATION_PHASES, "separation_phases")`,
       `(doc.mass_class_count, V1_MASS_CLASSES, "mass_class_count")`,
       `(doc.separation_threads, V1_SEPARATION_THREADS, "separation_threads")`.
-- [ ] 10. In `crates/mmd-engine/src/sim/collision.rs`, extend
+- [x] 10. In `crates/mmd-engine/src/sim/collision.rs`, extend
       `struct CollisionParams` with `pub phases: u32`, `pub mass_classes: u32`,
       `pub threads: u32`, each documented as "1 = identity".
-- [ ] 11. Set `CollisionParams::NONE` to
+- [x] 11. Set `CollisionParams::NONE` to
       `Self { radius_cells: 0.0, strength: 0.0, phases: 1, mass_classes: 1, threads: 1 }`.
-- [ ] 12. In `CollisionParams::from_q8`, fill the three new fields with `1` and
+- [x] 12. In `CollisionParams::from_q8`, fill the three new fields with `1` and
       add the doc line: *"the tuning knobs stay at their identity values;
       only `from_scenario` reads a scenario's."*
-- [ ] 13. In `CollisionParams::from_scenario`, build the struct directly (do not
+- [x] 13. In `CollisionParams::from_scenario`, build the struct directly (do not
       route through `from_q8`) so all five values come from the scenario:
       ```rust
       pub fn from_scenario(scenario: &Scenario) -> Self {
@@ -230,7 +247,7 @@ ticket's real acceptance criterion:
           }
       }
       ```
-- [ ] 14. In `crates/mmd-engine/src/testkit/mod.rs`, add three `pub` fields to
+- [x] 14. In `crates/mmd-engine/src/testkit/mod.rs`, add three `pub` fields to
       `GridSpec` (`separation_phases`, `mass_class_count`, `separation_threads`,
       all `u32`), default them to `1` in `GridSpec::new`, and add:
       ```rust
@@ -253,8 +270,8 @@ ticket's real acceptance criterion:
           self
       }
       ```
-- [ ] 15. Map all three in `impl From<GridSpec> for ScenarioSpec`.
-- [ ] 16. Add the three lines to each of the seven `.ron` files, immediately
+- [x] 15. Map all three in `impl From<GridSpec> for ScenarioSpec`.
+- [x] 16. Add the three lines to each of the seven `.ron` files, immediately
       after the `separation_strength_q8:` line, exactly:
       ```
         separation_phases: 1,
@@ -265,17 +282,17 @@ ticket's real acceptance criterion:
       `assets/scenarios/collision_mid_v1.ron`,
       `assets/scenarios/collision_sprite_v1.ron`, and the four under
       `assets/scenarios/fixtures/`.
-- [ ] 17. Regenerate every sidecar:
+- [x] 17. Regenerate every sidecar:
       ```sh
       for f in assets/scenarios/*.ron assets/scenarios/fixtures/*.ron; do
         sha256sum "$f" | cut -d' ' -f1 > "${f%.ron}.sha256"
       done
       ```
-- [ ] 18. Add the seven tests from the test plan to
+- [x] 18. Add the seven tests from the test plan to
       `crates/mmd-engine/tests/scenario_contract.rs`, building each invalid case
       from a valid `ScenarioSpec` and calling `Scenario::from_spec`. Match on the
       error variant, not the message string.
-- [ ] 19. Run the full validation block below. Do **not** update
+- [x] 19. Run the full validation block below. Do **not** update
       `BODIED_STACK_HASH` or `BODYLESS_GRID_PRE_SEPARATION_HASH` — if either
       moves, the identity default is wrong and the bug is in steps 10–13.
 
@@ -294,16 +311,17 @@ ticket's real acceptance criterion:
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green, and
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test --workspace --locked` — green, and
       `a_bodied_scenario_is_pinned_to_a_golden_digest` passes **unedited**
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
-- [ ] `nix flake check`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `cargo run -p xtask -- bootstrap --check`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
+- [x] `nix flake check`
 - [ ] app functional — a scene still loads, ticks and exits; no behaviour changed
-- [ ] commit msg draft: `feat(scenario): declare the separation headroom knobs at their identity values`
+      (manual/windowed check — see `ai-artifacts/manual_test_checklist.md` §T1)
+- [x] commit msg draft: `feat(scenario): declare the separation headroom knobs at their identity values`

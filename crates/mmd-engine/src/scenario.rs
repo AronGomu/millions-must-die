@@ -51,6 +51,15 @@ pub const COLLISION_Q8: u32 = 256;
 pub const MAX_COLLISION_RADIUS_Q8: u32 = 2_048;
 /// Largest separation weight a scenario may declare: 10.0.
 pub const MAX_SEPARATION_STRENGTH_Q8: u32 = 2_560;
+/// Largest number of ticks the separation pass may be spread over.
+/// `1` is the identity: every agent, every tick.
+pub const MAX_SEPARATION_PHASES: u32 = 16;
+/// Largest number of distinct push-priority classes. `1` is the identity:
+/// every agent pushes and is pushed equally.
+pub const MAX_MASS_CLASSES: u32 = 8;
+/// Largest worker-thread count for the separation pass. `1` is the
+/// identity: the pass runs inline on the calling thread, no pool exists.
+pub const MAX_SEPARATION_THREADS: u32 = 16;
 
 const V1_WIDTH: u32 = 480;
 const V1_HEIGHT: u32 = 270;
@@ -65,6 +74,9 @@ const V1_FRAMES: u32 = 4;
 /// one full sprite width apart and their art meets edge to edge.
 const V1_COLLISION_RADIUS_Q8: u32 = 1_536;
 const V1_SEPARATION_STRENGTH_Q8: u32 = 256;
+const V1_SEPARATION_PHASES: u32 = 1;
+const V1_MASS_CLASSES: u32 = 1;
+const V1_SEPARATION_THREADS: u32 = 1;
 const V1_DEST_X: u32 = 240;
 const V1_DEST_Y: u32 = 135;
 
@@ -95,6 +107,12 @@ pub struct Scenario {
     collision_radius_q8: u32,
     /// Separation weight, in 1/256 (256 = 1.0).
     separation_strength_q8: u32,
+    /// Ticks the separation pass is spread over. 1 = every agent, every tick.
+    separation_phases: u32,
+    /// Distinct push-priority classes. 1 = every agent equal.
+    mass_class_count: u32,
+    /// Worker threads for the separation pass. 1 = inline, no pool.
+    separation_threads: u32,
     /// Sorted unique obstacle cell indices (`x + y * width`).
     obstacle_cells: Vec<u32>,
 }
@@ -124,6 +142,12 @@ pub struct ScenarioSpec {
     pub collision_radius_q8: u32,
     /// Separation weight, in 1/256 (256 = 1.0).
     pub separation_strength_q8: u32,
+    /// Ticks the separation pass is spread over. 1 = every agent, every tick.
+    pub separation_phases: u32,
+    /// Distinct push-priority classes. 1 = every agent equal.
+    pub mass_class_count: u32,
+    /// Worker threads for the separation pass. 1 = inline, no pool.
+    pub separation_threads: u32,
     pub obstacle_cells: Vec<u32>,
 }
 
@@ -275,6 +299,9 @@ impl Scenario {
             frame_count: doc.frame_count,
             collision_radius_q8: doc.collision_radius_q8,
             separation_strength_q8: doc.separation_strength_q8,
+            separation_phases: doc.separation_phases,
+            mass_class_count: doc.mass_class_count,
+            separation_threads: doc.separation_threads,
             obstacle_cells: obstacles,
         })
     }
@@ -335,6 +362,16 @@ impl Scenario {
     /// Separation weight relative to the unit flow vector. Exact, as above.
     pub fn separation_strength(&self) -> f32 {
         self.separation_strength_q8 as f32 / COLLISION_Q8 as f32
+    }
+
+    pub fn separation_phases(&self) -> u32 {
+        self.separation_phases
+    }
+    pub fn mass_class_count(&self) -> u32 {
+        self.mass_class_count
+    }
+    pub fn separation_threads(&self) -> u32 {
+        self.separation_threads
     }
 
     pub fn obstacle_count(&self) -> u32 {
@@ -399,6 +436,17 @@ fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), Scena
             doc.separation_strength_q8,
             V1_SEPARATION_STRENGTH_Q8,
             "separation_strength_q8",
+        ),
+        (
+            doc.separation_phases,
+            V1_SEPARATION_PHASES,
+            "separation_phases",
+        ),
+        (doc.mass_class_count, V1_MASS_CLASSES, "mass_class_count"),
+        (
+            doc.separation_threads,
+            V1_SEPARATION_THREADS,
+            "separation_threads",
         ),
     ];
     for (got, want, name) in checks {
@@ -467,6 +515,42 @@ fn validate_collision(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
         return Err(ScenarioError::InvalidCollision(
             "separation_strength_q8 is set but collision_radius_q8 is 0; a \
              weight without a body pushes nothing"
+                .into(),
+        ));
+    }
+    for (got, max, name) in [
+        (
+            doc.separation_phases,
+            MAX_SEPARATION_PHASES,
+            "separation_phases",
+        ),
+        (doc.mass_class_count, MAX_MASS_CLASSES, "mass_class_count"),
+        (
+            doc.separation_threads,
+            MAX_SEPARATION_THREADS,
+            "separation_threads",
+        ),
+    ] {
+        if got == 0 {
+            return Err(ScenarioError::InvalidCollision(format!(
+                "{name} must be >= 1; 1 is the identity tuning"
+            )));
+        }
+        if got > max {
+            return Err(ScenarioError::InvalidCollision(format!(
+                "{name}: got {got}, max {max}"
+            )));
+        }
+    }
+    // A knob on a pass that never runs is an authoring mistake, not a no-op:
+    // it reads as tuned and changes nothing.
+    if doc.collision_radius_q8 == 0
+        && (doc.separation_phases != 1 || doc.mass_class_count != 1 || doc.separation_threads != 1)
+    {
+        return Err(ScenarioError::InvalidCollision(
+            "a bodyless scenario must leave separation_phases, \
+             mass_class_count and separation_threads at 1; there is no \
+             separation pass to tune"
                 .into(),
         ));
     }

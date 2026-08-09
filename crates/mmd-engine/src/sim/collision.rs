@@ -78,6 +78,12 @@ pub struct CollisionParams {
     pub radius_cells: f32,
     /// Weight of the repulsion sum against the unit flow vector.
     pub strength: f32,
+    /// Ticks the separation pass is spread over. 1 = identity.
+    pub phases: u32,
+    /// Distinct push-priority classes. 1 = identity.
+    pub mass_classes: u32,
+    /// Worker threads for the separation pass. 1 = identity.
+    pub threads: u32,
 }
 
 impl CollisionParams {
@@ -86,22 +92,32 @@ impl CollisionParams {
     pub const NONE: Self = Self {
         radius_cells: 0.0,
         strength: 0.0,
+        phases: 1,
+        mass_classes: 1,
+        threads: 1,
     };
 
     /// Convert from the scenario's Q8 fixed point. Exact: the divisor is a
-    /// power of two.
+    /// power of two. The tuning knobs stay at their identity values; only
+    /// `from_scenario` reads a scenario's.
     pub fn from_q8(radius_q8: u32, strength_q8: u32) -> Self {
         Self {
             radius_cells: radius_q8 as f32 / COLLISION_Q8 as f32,
             strength: strength_q8 as f32 / COLLISION_Q8 as f32,
+            phases: 1,
+            mass_classes: 1,
+            threads: 1,
         }
     }
 
     pub fn from_scenario(scenario: &Scenario) -> Self {
-        Self::from_q8(
-            scenario.collision_radius_q8(),
-            scenario.separation_strength_q8(),
-        )
+        Self {
+            radius_cells: scenario.collision_radius_q8() as f32 / COLLISION_Q8 as f32,
+            strength: scenario.separation_strength_q8() as f32 / COLLISION_Q8 as f32,
+            phases: scenario.separation_phases(),
+            mass_classes: scenario.mass_class_count(),
+            threads: scenario.separation_threads(),
+        }
     }
 
     pub fn enabled(&self) -> bool {

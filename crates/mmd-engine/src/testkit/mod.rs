@@ -128,6 +128,12 @@ pub struct GridSpec {
     pub collision_radius_q8: u32,
     /// Separation weight in 1/256 (256 = 1.0). Must be 0 when the radius is 0.
     pub separation_strength_q8: u32,
+    /// Ticks the separation pass is spread over. `1` is the identity.
+    pub separation_phases: u32,
+    /// Distinct push-priority classes. `1` is the identity.
+    pub mass_class_count: u32,
+    /// Worker threads for the separation pass. `1` runs it inline.
+    pub separation_threads: u32,
 }
 
 impl GridSpec {
@@ -145,6 +151,9 @@ impl GridSpec {
             scenario_seed: 1,
             collision_radius_q8: 0,
             separation_strength_q8: 0,
+            separation_phases: 1,
+            mass_class_count: 1,
+            separation_threads: 1,
         }
     }
 
@@ -169,6 +178,27 @@ impl GridSpec {
         self.agents = agents;
         self
     }
+
+    /// Spread the separation pass over `phases` ticks. `1` (the default) is
+    /// the identity.
+    pub fn with_separation_phases(mut self, phases: u32) -> Self {
+        self.separation_phases = phases;
+        self
+    }
+
+    /// Give agents `classes` distinct push priorities. `1` (the default) is
+    /// the identity.
+    pub fn with_mass_classes(mut self, classes: u32) -> Self {
+        self.mass_class_count = classes;
+        self
+    }
+
+    /// Run the separation pass on `threads` threads. `1` (the default) runs
+    /// it inline.
+    pub fn with_separation_threads(mut self, threads: u32) -> Self {
+        self.separation_threads = threads;
+        self
+    }
 }
 
 impl From<GridSpec> for ScenarioSpec {
@@ -190,6 +220,9 @@ impl From<GridSpec> for ScenarioSpec {
             frame_count: 4,
             collision_radius_q8: g.collision_radius_q8,
             separation_strength_q8: g.separation_strength_q8,
+            separation_phases: g.separation_phases,
+            mass_class_count: g.mass_class_count,
+            separation_threads: g.separation_threads,
             obstacle_cells: g.obstacle_cells,
         }
     }

@@ -27,3 +27,27 @@ scene smokes). What is left needs eyes on a real window.
 - [ ] Judgement call for the plan owner, not a bug in this ticket: confirm
       5 000 agents at 48 px still reads as a horde rather than a sparse field.
       If it reads sparse, that is a design signal for the density knobs.
+
+## T1 scenario-headroom-knobs
+
+Contract-only slice: three new scenario fields (`separation_phases`,
+`mass_class_count`, `separation_threads`), all pinned to their identity value
+`1`. Nothing reads them yet, so a human should observe **zero visible change**
+from T0. Everything automatable is green (`cargo fmt`, `cargo test --workspace
+--locked`, clippy, `nix flake check`, `xtask bootstrap --check`, and all three
+scene smokes with the gate hash reproduced byte for byte). What is left needs
+eyes on a real window, same as T0.
+
+- [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
+      exactly as it did before this ticket: same 48 px sprites, same
+      edge-to-edge contact at chokepoints. Press `Esc` to quit and confirm a
+      clean exit.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      starts, spreads, quits cleanly on `Esc`; behaviour indistinguishable
+      from T0.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      same check at the lower-density scale.
+- [ ] Try authoring a scenario `.ron` that omits `separation_phases`,
+      `mass_class_count` or `separation_threads` (or sets one to `0`) and
+      confirm it fails to load with a named error instead of running
+      silently untuned — the new fields are required, not defaulted.

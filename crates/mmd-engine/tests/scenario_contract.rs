@@ -226,6 +226,9 @@ fn rejects_bad_obstacle_ratio() {
   frame_count: 4,
   collision_radius_q8: 1536,
   separation_strength_q8: 256,
+  separation_phases: 1,
+  mass_class_count: 1,
+  separation_threads: 1,
   obstacle_cells: [{obs_ron}],
 )
 "#
@@ -300,6 +303,9 @@ fn rejects_unreachable_spawn() {
   frame_count: 4,
   collision_radius_q8: 1536,
   separation_strength_q8: 256,
+  separation_phases: 1,
+  mass_class_count: 1,
+  separation_threads: 1,
   obstacle_cells: [{obs_ron}],
 )
 "#
@@ -337,6 +343,9 @@ fn fixture_spec() -> ScenarioSpec {
         frame_count: 4,
         collision_radius_q8: 64,
         separation_strength_q8: 256,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
         obstacle_cells: vec![],
     }
 }
@@ -573,6 +582,9 @@ fn collision_scene_spec() -> ScenarioSpec {
         frame_count: 4,
         collision_radius_q8: 1_536,
         separation_strength_q8: 256,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
         obstacle_cells: vec![],
     }
 }
@@ -861,5 +873,123 @@ fn v1_geometry_stays_frozen_against_the_fixture_relaxation() {
             )
         }
         other => panic!("v1 must reject fixture geometry, got {other:?}"),
+    }
+}
+
+// --- separation headroom knobs (T1) -----------------------------------------
+//
+// Contract only: three new scenario fields, all pinned to their identity
+// value `1`. Nothing reads them yet — these tests exist so a later ticket
+// that starts reading them cannot also quietly change what "identity" means.
+
+#[test]
+fn tracked_scenes_declare_the_identity_tuning() {
+    let mut checked = 0;
+    let tracked = ["assets/scenarios/technical_prototype_v1.ron"]
+        .into_iter()
+        .chain(ALL_COLLISION_SCENES.iter().copied())
+        .map(scene_path)
+        .chain(ALL_FIXTURES.iter().copied().map(fixture_path));
+    for path in tracked {
+        let scene = Scenario::load_verified(&path).expect("tracked scene must load");
+        assert_eq!(
+            scene.separation_phases(),
+            1,
+            "{}: separation_phases must stay at identity",
+            path.display()
+        );
+        assert_eq!(
+            scene.mass_class_count(),
+            1,
+            "{}: mass_class_count must stay at identity",
+            path.display()
+        );
+        assert_eq!(
+            scene.separation_threads(),
+            1,
+            "{}: separation_threads must stay at identity",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 7, "all seven tracked scenes must be covered");
+}
+
+#[test]
+fn zero_separation_phases_is_rejected() {
+    let spec = ScenarioSpec {
+        separation_phases: 0,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(_)) => {}
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn separation_phases_above_the_cap_is_rejected() {
+    let spec = ScenarioSpec {
+        separation_phases: 17,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(_)) => {}
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn mass_classes_above_the_cap_is_rejected() {
+    let spec = ScenarioSpec {
+        mass_class_count: 9,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(_)) => {}
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn separation_threads_above_the_cap_is_rejected() {
+    let spec = ScenarioSpec {
+        separation_threads: 17,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(_)) => {}
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_bodyless_scenario_may_not_tune_separation() {
+    let spec = ScenarioSpec {
+        collision_radius_q8: 0,
+        separation_strength_q8: 0,
+        separation_phases: 4,
+        ..fixture_spec()
+    };
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidCollision(_)) => {}
+        other => panic!("expected InvalidCollision, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_gate_scene_pins_the_identity_tuning() {
+    let (ron_path, _) = v1_paths();
+    let text = fs::read_to_string(&ron_path).expect("read v1 ron");
+    let mutated = text.replace("separation_phases: 1,", "separation_phases: 2,");
+    assert_ne!(
+        text, mutated,
+        "separation_phases anchor not found in v1 ron"
+    );
+    let err =
+        Scenario::parse_and_validate(mutated.as_bytes()).expect_err("retuned phases must fail");
+    match err {
+        ScenarioError::InvalidDimension(_) => {}
+        other => panic!("expected InvalidDimension, got {other:?}"),
     }
 }
