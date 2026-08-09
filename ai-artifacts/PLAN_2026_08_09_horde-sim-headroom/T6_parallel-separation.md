@@ -439,5 +439,5 @@ allocating nothing per tick — on every thread, now provably.
       process. *Criterion:* windowed/GPU box — recorded in
       `ai-artifacts/manual_test_checklist.md` under `## T6 parallel-separation`,
       left unchecked here; not run headless, does not gate this ticket
-- [ ] commit msg draft: `feat(sim): run the separation pass on a persistent worker pool`
+- [x] commit msg draft: `feat(sim): run the separation pass on a persistent worker pool`
       *Criterion:* the commit landing this ticket uses that subject
