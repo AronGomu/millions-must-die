@@ -13,13 +13,19 @@ import hashlib
 import pathlib
 
 WIDTH, HEIGHT = 480, 270
-CELL_PX, SPRITE_PX = 4, 30
+CELL_PX, SPRITE_PX = 4, 48
 DEST = (240, 135)
 
+# `scenario::MAX_LIVE_AGENTS`. The engine caps *every* family here, so a scene
+# this script emits above the cap is a scene the loader refuses to load. Keep
+# the two in step by hand: this file is provenance, not a build step, and
+# importing a Rust constant into it would be a build step.
+MAX_LIVE_AGENTS = 5_000
+
 SCENES = [
-    # (filename, hard_agents, collision_radius_q8, seed)
-    ("collision_mid_v1.ron", 10_000, 320, 7355608251463129073),
-    ("collision_sprite_v1.ron", 1_200, 960, 4411920776318552601),
+    # (filename, hard_agents, collision_radius_q8, phases, mass_classes, seed)
+    ("collision_mid_v1.ron", 5_000, 1536, 4, 1, 7355608251463129073),
+    ("collision_sprite_v1.ron", 1_200, 1536, 1, 2, 4411920776318552601),
 ]
 
 
@@ -39,7 +45,7 @@ def spawn_cells():
     return [(2, y) for y in range(8, 264, 2)]
 
 
-def render(name, hard, radius_q8, seed, obstacles, spawns):
+def render(name, hard, radius_q8, phases, mass_classes, seed, obstacles, spawns):
     lines = [
         "(",
         f'  version: "collision_scene_v1",',
@@ -48,7 +54,7 @@ def render(name, hard, radius_q8, seed, obstacles, spawns):
         f"  cell_size_px: {CELL_PX},",
         f"  sprite_size_px: {SPRITE_PX},",
         f"  hard_agent_count: {hard},",
-        "  stretch_agent_count: 20000,",
+        f"  stretch_agent_count: {MAX_LIVE_AGENTS},",
         f"  seed: {seed},",
         f"  destination: (x: {DEST[0]}, y: {DEST[1]}),",
         "  spawn_cells: [",
@@ -61,6 +67,9 @@ def render(name, hard, radius_q8, seed, obstacles, spawns):
         "  frame_count: 4,",
         f"  collision_radius_q8: {radius_q8},",
         "  separation_strength_q8: 256,",
+        f"  separation_phases: {phases},",
+        f"  mass_class_count: {mass_classes},",
+        "  separation_threads: 1,",
         "  obstacle_cells: [",
     ]
     for i in range(0, len(obstacles), 20):
@@ -79,8 +88,17 @@ def main():
     blocked = set(obstacles)
     for x, y in spawns:
         assert x + y * WIDTH not in blocked, f"spawn ({x}, {y}) must be free"
-    for name, hard, radius_q8, seed in SCENES:
-        text = render(name, hard, radius_q8, seed, obstacles, spawns)
+    for name, hard, radius_q8, phases, mass_classes, seed in SCENES:
+        # The loader applies `MAX_LIVE_AGENTS` to the hard *and* the stretch
+        # count, so emitting past it writes a file that cannot be loaded back.
+        assert hard <= MAX_LIVE_AGENTS, (
+            f"{name}: hard_agent_count {hard} exceeds MAX_LIVE_AGENTS "
+            f"{MAX_LIVE_AGENTS}; the loader would refuse the file this script "
+            f"just wrote"
+        )
+        text = render(
+            name, hard, radius_q8, phases, mass_classes, seed, obstacles, spawns
+        )
         path = out_dir / name
         path.write_text(text)
         digest = hashlib.sha256(path.read_bytes()).hexdigest()

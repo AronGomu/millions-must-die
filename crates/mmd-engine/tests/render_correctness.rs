@@ -455,8 +455,8 @@ fn bodied_harness(agents: u32, seed: u64) -> Harness {
 ///
 /// The tracked scene's map diamond is larger than the view, so the count is the
 /// *visible* population rather than the alive one — and the two rects differ,
-/// because a 48 px sprite quad anchored on its feet and a `2r`-wide floor
-/// ellipse do not leave the view at the same moment.
+/// because a 48 px sprite quad anchored on its feet and the projected floor
+/// ellipse (`sqrt(2) * r` per axis) do not leave the view at the same moment.
 #[test]
 fn a_ring_is_packed_for_every_agent() {
     let mut h = bodied_harness(256, 5);
@@ -466,9 +466,12 @@ fn a_ring_is_packed_for_every_agent() {
     let iso = h.runtime().iso_view();
     let sprite = h.scenario().sprite_size_px() as f32;
     let radius_cells = h.sim().collision().radius_cells;
+    // The projected body: `2 * r * tile / sqrt(2)` on each axis. Re-derived
+    // here rather than taken from `ring_quad_size_px`, so the cull's rect and
+    // the packer's are not the same expression by construction.
     let ring_size = [
-        2.0 * radius_cells * iso.tile_w,
-        2.0 * radius_cells * iso.tile_h,
+        2.0 * radius_cells * iso.tile_w * std::f32::consts::FRAC_1_SQRT_2,
+        2.0 * radius_cells * iso.tile_h * std::f32::consts::FRAC_1_SQRT_2,
     ];
 
     let want_rings = {
@@ -562,10 +565,15 @@ fn a_bodyless_scene_packs_no_rings() {
     assert_eq!(packed, h.alive_count());
 }
 
-/// The ring shows the radius the simulation actually separates on.
+/// The ring shows the radius the simulation actually separates on — as the
+/// exact screen image of that circle, not a shape merely derived from it.
 ///
 /// This is the whole point of the overlay: a ring that disagrees with the sim
-/// is worse than no ring.
+/// is worse than no ring. It was `sqrt(2)` too large on both axes until T10 —
+/// the bounding box of the circle under the shearing projection rather than the
+/// circle's image — so two bodies at exactly contact distance drew *overlapping*
+/// rings. [`the_rings_of_two_touching_bodies_are_tangent`] asserts the
+/// consequence directly; this case asserts the size.
 ///
 /// Two things make that claim hard to assert honestly, and both are handled
 /// deliberately:
@@ -587,8 +595,11 @@ fn a_bodyless_scene_packs_no_rings() {
 /// cannot drift apart unnoticed.
 ///
 /// Under the isometric projection the drawn body is an **ellipse**: a circle
-/// lying on a 2:1 floor is twice as wide on screen as it is tall. The height is
-/// therefore still the body's true diameter, and the width is twice it — which
+/// lying on a 2:1 floor is twice as wide on screen as it is tall. Both axes are
+/// also `1/sqrt(2)` of the naive cell-space diameter, because the projection
+/// `[[tw/2, -tw/2], [th/2, th/2]]` maps `(r cos t, r sin t)` to semi-axes
+/// `r*tw/sqrt(2)` and `r*th/sqrt(2)`. The height is therefore the body's
+/// diameter *divided by* `sqrt(2)`, and the width is twice the height — which
 /// is what the size assertions below say.
 ///
 /// The per-index pairing (ring `i` belongs to agent `i`) moved to
@@ -633,15 +644,45 @@ fn the_ring_traces_the_real_body() {
     h.runtime_mut().pack_groups();
     let iso = h.runtime().iso_view();
 
-    // Height is the body's diameter; width is twice it, because the body is a
-    // circle seen on a 2:1 floor. Derived from the raw scenario field above,
-    // then cross-checked against the production expression.
-    let want_size = [2.0 * want_diameter, want_diameter];
-    assert_eq!(
-        want_size,
-        ring_quad_size_px(iso.tile_w, iso.tile_h, radius_cells),
-        "the production ring-quad expression no longer agrees with the raw scenario field"
+    // The projected ellipse: each axis is the cell-space diameter scaled by the
+    // tile's cells-to-pixels ratio and by `1/sqrt(2)`. Derived from the raw
+    // scenario field above and from `iso_project`'s own matrix, then
+    // cross-checked against the production expression.
+    //
+    // `iso.tile_w == 2 * cell` and `iso.tile_h == cell`, so this is
+    // `[2 * d / sqrt(2), d / sqrt(2)]` — height is the diameter over `sqrt(2)`,
+    // width is twice the height.
+    let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+    let want_size = [
+        want_diameter * (iso.tile_w / cell) * inv_sqrt2,
+        want_diameter * (iso.tile_h / cell) * inv_sqrt2,
+    ];
+    let got_size = ring_quad_size_px(iso.tile_w, iso.tile_h, radius_cells);
+    assert!(
+        (want_size[0] - got_size[0]).abs() < 1e-3 && (want_size[1] - got_size[1]).abs() < 1e-3,
+        "the production ring-quad expression {got_size:?} no longer agrees with the \
+         raw scenario field ({want_size:?})"
     );
+    assert!(
+        (want_size[0] - 2.0 * want_size[1]).abs() < 1e-3,
+        "a body on a 2:1 floor must project twice as wide as it is tall"
+    );
+    // The `sqrt(2)`, stated as a fact rather than left implicit in the formula:
+    // the drawn height is strictly smaller than the cell-space diameter, and by
+    // exactly that factor.
+    assert!(
+        (want_size[1] * std::f32::consts::SQRT_2 - want_diameter).abs() < 1e-3,
+        "the drawn height {} is not the cell-space diameter {want_diameter} over \
+         sqrt(2); the ring is back to circumscribing the body instead of tracing it",
+        want_size[1]
+    );
+    // `want_size` deliberately stays the *independently derived* value from
+    // here on. An earlier revision shadowed it with `got_size` to keep the
+    // per-ring checks below on exact equality; that quietly turned the
+    // strongest-looking assertions in this test into "the packer calls the
+    // helper", which is the tautology the docstring above says it is avoiding.
+    // The f32 rounding between the two derivations is under 1e-3, so the
+    // comparisons below carry that tolerance instead.
 
     // How many rings the view can hold, by this test's own rect arithmetic.
     let want_rings = {
@@ -682,11 +723,13 @@ fn the_ring_traces_the_real_body() {
     );
     assert!(want_rings > 0, "no ring reached the view to check");
     for (i, r) in rings.iter().enumerate() {
-        assert_eq!(
-            r.size, want_size,
+        assert!(
+            (r.size[0] - want_size[0]).abs() < 1e-3 && (r.size[1] - want_size[1]).abs() < 1e-3,
             "ring {i} is {:?} px across, not the {radius_cells}-cell body on a \
-             {}x{} px tile",
-            r.size, iso.tile_w, iso.tile_h
+             {}x{} px tile (expected {want_size:?})",
+            r.size,
+            iso.tile_w,
+            iso.tile_h
         );
         assert_eq!(r.uv_rect[1], RING_INNER, "ring {i} inner radius");
         assert_eq!(r.uv_rect[2], RING_OUTER, "ring {i} outer radius");
@@ -705,9 +748,20 @@ fn the_ring_traces_the_real_body() {
         *left -= 1;
     }
 
-    // The ring's quad half-height is exactly the body radius in cell space, so
-    // the helper the rest of the repo reads still means what it says.
-    assert_eq!(want_size[1] * 0.5, ring_radius_px(cell, radius_cells));
+    // The quad half-height is the cell-space body radius projected: the radius
+    // the helper reports, over `sqrt(2)`. Both sides are anchored to the raw
+    // scenario field — `want_diameter` on the left, `ring_radius_px` on the
+    // right — so this relates the helper to the *scenario*, not to the other
+    // production expression, and cannot be satisfied by two helpers drifting
+    // together.
+    assert!(
+        (want_diameter * 0.5 - ring_radius_px(cell, radius_cells)).abs() < 1e-3,
+        "`ring_radius_px` reports {}, but the raw scenario field gives a body \
+         radius of {}; the helper the rest of the repo reads has stopped \
+         meaning \"the radius the sim separates on, in cell-space pixels\"",
+        ring_radius_px(cell, radius_cells),
+        want_diameter * 0.5
+    );
 }
 
 /// A ring and the sprite it belongs to stand on the **same** projected ground
@@ -812,7 +866,9 @@ fn the_ring_traces_a_body_that_is_not_half_a_sprite() {
     );
     // …and the isometric ellipse must not accidentally match the sprite either,
     // on *either* axis, or a sprite-derived packer could still pass.
-    let want_size = [2.0 * want_diameter, want_diameter]; // 24 x 12 px
+    // `[2d, d] / sqrt(2)` = about 17.0 x 8.5 px.
+    let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+    let want_size = [2.0 * want_diameter * inv_sqrt2, want_diameter * inv_sqrt2];
     assert!(
         (want_size[0] - sprite).abs() > 1.0 && (want_size[1] - sprite).abs() > 1.0,
         "the projected body {want_size:?} must differ from the sprite ({sprite} px) on \
@@ -823,13 +879,142 @@ fn the_ring_traces_a_body_that_is_not_half_a_sprite() {
     let rings = h.runtime().ring_instances();
     assert_eq!(rings.len(), h.alive_count());
     for (i, r) in rings.iter().enumerate() {
-        assert_eq!(
-            r.size, want_size,
+        assert!(
+            (r.size[0] - want_size[0]).abs() < 1e-3 && (r.size[1] - want_size[1]).abs() < 1e-3,
             "ring {i} is {:?} px across; the body projects to {want_size:?} and the \
              sprite is {sprite} px, so this ring is tracking the wrong one",
             r.size
         );
     }
+}
+
+/// **The property the overlay exists for**: two bodies at exactly contact
+/// distance draw rings that *touch*, and do not overlap.
+///
+/// Every other ring case re-derives its expectation from the same formula the
+/// packer uses — necessarily, since they are asserting that formula. That makes
+/// them blind to the formula itself being wrong, which is exactly what happened:
+/// the quad was `sqrt(2)` too large on both axes for the whole of T8 and T9, and
+/// every one of those tests stayed green because they all asked "is the drawn
+/// size `2 * r * tile`?" rather than "does the drawn shape answer the question
+/// the overlay is on screen to answer?".
+///
+/// This asserts the *geometric* consequence instead. Place two agents exactly
+/// `2 * radius_cells` apart in cell space — the simulation's own contact
+/// distance — and the two drawn ellipses must be tangent: the gap between the
+/// near edges is zero, from either side, and they must not overlap. A formula
+/// that drifts by any factor at all fails this, because the ellipses' separation
+/// on screen scales with the projection while their drawn size scales with the
+/// formula, and only the correct formula makes the two cancel.
+///
+/// Asserted along both projection axes, since the two semi-axes differ: a pair
+/// separated along cell `+x` is separated along the screen diagonal, so the
+/// check is done on the true screen-space distance against the ellipse's radius
+/// in that direction.
+#[test]
+fn the_rings_of_two_touching_bodies_are_tangent() {
+    // 1536 q8 = 6 cells, the tracked scenes' body. Two agents, hand-placed.
+    let spec = GridSpec::new(64, 64, Cell { x: 63, y: 32 })
+        .with_spawns(vec![Cell { x: 8, y: 32 }])
+        .with_agents(2)
+        .with_collision(1_536, 256);
+    let mut h = Harness::grid(spec).build().expect("contact pair");
+
+    let r = h.sim().collision().radius_cells;
+    assert_eq!(r, 6.0, "fixture body radius");
+    let contact = 2.0 * r;
+
+    let (a, b) = (16.0f32, 32.0f32);
+
+    // Four placements, so the pair is tested along both cell axes and both
+    // diagonals — i.e. along the ellipse's major axis, its minor axis and two
+    // directions in between.
+    let offsets: [(f32, f32); 4] = [
+        (contact, 0.0),
+        (0.0, contact),
+        (
+            contact * std::f32::consts::FRAC_1_SQRT_2,
+            contact * std::f32::consts::FRAC_1_SQRT_2,
+        ),
+        (
+            contact * std::f32::consts::FRAC_1_SQRT_2,
+            -contact * std::f32::consts::FRAC_1_SQRT_2,
+        ),
+    ];
+
+    for (dx, dy) in offsets {
+        h.sim_mut().set_position(0, a, b);
+        h.sim_mut().set_position(1, a + dx, b + dy);
+
+        // The premise: the two really are at contact distance in cell space,
+        // which is where the simulation measures it.
+        let d_cells = (dx * dx + dy * dy).sqrt();
+        assert!(
+            (d_cells - contact).abs() < 1e-4,
+            "the pair must be at exactly contact distance ({contact} cells), not {d_cells}"
+        );
+
+        h.runtime_mut().pack_groups();
+        let rings = h.runtime().ring_instances();
+        assert_eq!(rings.len(), 2, "both rings must be packed and on screen");
+
+        let centre = |i: usize| {
+            [
+                rings[i].pos[0] + rings[i].size[0] * 0.5,
+                rings[i].pos[1] + rings[i].size[1] * 0.5,
+            ]
+        };
+        let (c0, c1) = (centre(0), centre(1));
+        let (sx, sy) = (c1[0] - c0[0], c1[1] - c0[1]);
+
+        // Semi-axes of the drawn ellipse, read off the packed quad — not
+        // recomputed from the formula under test.
+        let (ax, ay) = (rings[0].size[0] * 0.5, rings[0].size[1] * 0.5);
+        assert!(ax > 0.0 && ay > 0.0, "a ring must have a positive extent");
+
+        // Both ellipses are the same axis-aligned shape, so scaling screen
+        // space by `(1/ax, 1/ay)` turns each into a unit circle. Tangency is
+        // then simply "the centres are exactly 2 apart" in that space.
+        let normalised = ((sx / ax).powi(2) + (sy / ay).powi(2)).sqrt();
+        assert!(
+            (normalised - 2.0).abs() < 1e-3,
+            "two bodies at exactly contact distance ({dx}, {dy} cells apart) draw \
+             rings whose centres are {normalised:.4} radii apart, not 2. Below 2 the \
+             rings overlap and the overlay cannot be used to judge contact; above 2 \
+             they float apart. Screen offset ({sx:.3}, {sy:.3}) px against semi-axes \
+             ({ax:.3}, {ay:.3}) px."
+        );
+    }
+
+    // And the falsifying direction: pull the pair to *half* contact distance.
+    //
+    // `overlapping < 2.0` would be the obvious assertion here and would be
+    // worthless — the projection is linear, so `normalised == 2` at contact
+    // already forces `< 2` at any shorter distance, and the inequality could
+    // never fire. Assert the **value** instead: exactly 1 radius apart. That
+    // pins the linearity of the cell-space-to-screen map, which nothing else
+    // in this test constrains, and it is what makes "the ring answers *how
+    // far apart*, not merely *touching or not*" a checked claim.
+    h.sim_mut().set_position(0, a, b);
+    h.sim_mut().set_position(1, a + contact * 0.5, b);
+    h.runtime_mut().pack_groups();
+    let rings = h.runtime().ring_instances();
+    let c0 = [
+        rings[0].pos[0] + rings[0].size[0] * 0.5,
+        rings[0].pos[1] + rings[0].size[1] * 0.5,
+    ];
+    let c1 = [
+        rings[1].pos[0] + rings[1].size[0] * 0.5,
+        rings[1].pos[1] + rings[1].size[1] * 0.5,
+    ];
+    let (ax, ay) = (rings[0].size[0] * 0.5, rings[0].size[1] * 0.5);
+    let overlapping = (((c1[0] - c0[0]) / ax).powi(2) + ((c1[1] - c0[1]) / ay).powi(2)).sqrt();
+    assert!(
+        (overlapping - 1.0).abs() < 1e-3,
+        "two bodies at half contact distance must draw rings whose centres are \
+         exactly 1 radius apart, got {overlapping:.4}; the cell-space distance no \
+         longer maps linearly onto the drawn ellipse"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -939,22 +1124,38 @@ fn world_to_clip_transform() {
     }
 }
 
-/// Constants that exist **twice** — once in Rust, once as a `#define` in
-/// `shaders/sprite.hlsl` — really do agree.
+/// Constants that exist **three** times — once in Rust, once as a `#define` in
+/// the canonical `shaders/sprite.hlsl`, and once as a bare literal in the GLSL
+/// the shipped SPIR-V is actually built from — really do agree.
 ///
 /// Nothing else can catch this. The depth buffer is created
 /// `DEPTH_STENCIL_TARGET`-only with `StoreOp::DONT_CARE`, so no test can read a
 /// depth value back; a shader whose epsilon or cutoff drifted from its Rust
 /// mirror renders a frame that is merely wrong, and every GPU probe in this file
-/// still passes. The canonical HLSL is a tracked file, so asserting on its text
-/// costs one `include_str!`.
+/// still passes. All three files are tracked, so asserting on their text costs
+/// three `include_str!`s.
 ///
-/// This pins the constants **this ticket introduced**. `RING_SENTINEL` /
+/// **The GLSL half is the half that matters on this host.** The blob the app and
+/// every GPU test load is `shaders/generated/sprite.{vert,frag}.spv`, compiled
+/// from `shaders/glsl/*.glsl` — *not* from the HLSL, which is canonical by
+/// convention rather than by toolchain. Until T10 this test read the HLSL alone,
+/// so editing the HLSL and the Rust mirror together while forgetting the GLSL
+/// left the test whose whole job is catching that drift green, with the shipped
+/// shader disagreeing with both.
+///
+/// The GLSL spells these as bare literals rather than `#define`s, so each is
+/// pinned by anchoring on the expression that uses it (`max(clamp(...), eps)`
+/// for the depth floor, `texel.a - cutoff` for the cutout) rather than by
+/// searching for a loose number, which would match the ring's `0.5`s too.
+///
+/// This pins the constants **T9 introduced**. `RING_SENTINEL` /
 /// `MMD_RING_THRESHOLD` carry the same duplication from T8 and are deliberately
 /// left alone here rather than picked up as a drive-by.
 #[test]
 fn shader_defines_match_their_rust_mirrors() {
     const HLSL: &str = include_str!("../../../shaders/sprite.hlsl");
+    const VERT_GLSL: &str = include_str!("../../../shaders/glsl/sprite.vert.glsl");
+    const FRAG_GLSL: &str = include_str!("../../../shaders/glsl/sprite.frag.glsl");
 
     // The define's value is parsed and compared as an `f32` rather than matched
     // as text: the shader spells it `0.0000152587890625` and Rust's own
@@ -973,25 +1174,92 @@ fn shader_defines_match_their_rust_mirrors() {
             .unwrap_or_else(|| panic!("cannot read a float out of `{line}`"))
     };
 
+    /// The float literal a GLSL line carries between `after` and `before`.
+    ///
+    /// Anchored on both sides so the number is identified by the expression it
+    /// sits in, not by position: a literal that moved into a different
+    /// expression should fail loudly rather than be silently re-matched.
+    fn glsl_literal(src: &str, file: &str, after: &str, before: &str) -> f32 {
+        let line = src
+            .lines()
+            .find(|l| l.contains(after) && l[l.find(after).unwrap()..].contains(before))
+            .unwrap_or_else(|| {
+                panic!("{file} no longer contains a line with `{after}` ... `{before}`")
+            });
+        let start = line.find(after).unwrap() + after.len();
+        let rest = &line[start..];
+        let end = rest.find(before).unwrap();
+        rest[..end].trim().parse::<f32>().unwrap_or_else(|e| {
+            panic!(
+                "cannot read a float out of `{}` in {file}: {e}",
+                &rest[..end]
+            )
+        })
+    }
+
+    // `float depth = max(clamp(ground_y * ... , 0.0, 1.0), <EPSILON>);`
+    let glsl_depth_epsilon = glsl_literal(
+        VERT_GLSL,
+        "shaders/glsl/sprite.vert.glsl",
+        "0.0, 1.0),",
+        ");",
+    );
+    // `if (texel.a - <CUTOFF> < 0.0)`
+    let glsl_alpha_cutoff = glsl_literal(
+        FRAG_GLSL,
+        "shaders/glsl/sprite.frag.glsl",
+        "texel.a -",
+        "< 0.0",
+    );
+
     assert_eq!(
         defined("MMD_DEPTH_EPSILON"),
         ISO_DEPTH_EPSILON,
         "the sprite depth floor exists once in Rust (ISO_DEPTH_EPSILON) and once in \
          the shader, and no test can read a depth value back to catch a disagreement"
     );
+    assert_eq!(
+        glsl_depth_epsilon, ISO_DEPTH_EPSILON,
+        "sprite.vert.glsl's depth floor disagrees with ISO_DEPTH_EPSILON. This is \
+         the file the shipped SPIR-V is built from, so this is the copy the GPU \
+         actually runs"
+    );
     // The floor must be exactly one quantum of the D16_UNORM attachment: any
     // smaller and it quantises back to the far plane the GREATER test discards.
     assert_eq!(ISO_DEPTH_EPSILON, 1.0 / 65_536.0);
 
-    // The alpha cutout is the other constant this ticket added to the shader.
-    // It has no Rust mirror by design — only the fragment stage uses it — so
-    // what is pinned is the value every host golden was regenerated under.
+    // The alpha cutout is the other constant T9 added to the shader. It has no
+    // Rust mirror by design — only the fragment stage uses it — so what is
+    // pinned is the value every host golden was regenerated under, in both the
+    // canonical HLSL and the GLSL the blobs are built from.
     assert_eq!(
         defined("MMD_ALPHA_CUTOFF"),
         0.5,
         "every host golden was regenerated under a 0.5 alpha cutoff; moving it \
          silently re-baselines what the goldens mean"
     );
+    assert_eq!(
+        glsl_alpha_cutoff, 0.5,
+        "sprite.frag.glsl's alpha cutout disagrees with the canonical HLSL. This \
+         is the file the shipped SPIR-V is built from, so every host golden was \
+         regenerated under *this* number"
+    );
+
+    // Deliberately no third "all three agree" assertion. Each copy above is
+    // already pinned to a *constant*, so agreement between them follows by
+    // transitivity: such an assertion could only fire after an earlier one had
+    // already failed, and could therefore never fire at all. Writing one anyway
+    // — with a comment claiming it catches what the others miss — would be the
+    // same defect this ticket removed from `pool.rs`: a comment asserting more
+    // than the code discharges.
+    //
+    // What is genuinely **not** checked here, stated rather than left to be
+    // assumed: nothing relates these three *text* copies to
+    // `shaders/generated/sprite.{vert,frag}.spv`, the blobs the app and every
+    // GPU test actually load. Editing all three and forgetting to re-run
+    // `glslc` leaves this test green with the shipped shader disagreeing with
+    // all of them. That gap is recorded as accepted residual risk in
+    // `shaders/generated/README.md`, not closed here.
 }
 
 /// The depth key is a property of where the agent *stands*, not of the quad it

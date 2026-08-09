@@ -25,16 +25,17 @@
 </section>
 
 <h2>The geometry that forced the design</h2>
-<p class="lede">The view is 1920×1080 = 2 073 600 px. One sprite is 30×30 = 900 px. The gate scene carries 50 000 of them — 45 000 000 px of sprite, 22× the screen. Hex-packed 30 px discs on the free 80% of that screen top out near 1 700. "50 000 agents" and "sprites never overlap" are not simultaneously satisfiable, so body radius became scenario data and three tunings ship.</p>
+<p class="lede">The view is 1920×1080 = 2 073 600 px. One gate-scene sprite is 48×48 = 2 304 px. The gate scene carries 5 000 of them — 11 520 000 px of sprite, 5.6× the screen. Hex-packed 48 px discs on the free 80% of that screen top out near 830. Even at the engine's live ceiling, "every agent on screen" and "sprites never overlap" are not simultaneously satisfiable, so body radius stayed scenario data — the mechanism that made a smaller body expressible in the first place.</p>
 
-<figure><figcaption><b>Shipped tunings</b>One model, four radii. Radius is data; the code is identical in every row.</figcaption>
+<figure><figcaption><b>Shipped tunings</b>One model, two radii. Radius is data; the code is identical in every row.</figcaption>
 <table>
 <tr><th>Scenario</th><th>Agents</th><th>radius_q8</th><th>Radius</th><th>Reads as</th></tr>
-<tr><td><code>technical_prototype_v1</code></td><td>50 000</td><td>102</td><td>0.398 cell ≈ 1.6 px</td><td>dense fluid; sprites still overlap</td></tr>
-<tr><td><code>collision_mid_v1</code></td><td>10 000</td><td>320</td><td>1.25 cells = 5 px</td><td>body boxes touch, shoulders overlap</td></tr>
-<tr><td><code>collision_sprite_v1</code></td><td>1 200</td><td>960</td><td>3.75 cells = 15 px</td><td>sprites keep clear of each other</td></tr>
+<tr><td><code>technical_prototype_v1</code></td><td>5 000</td><td>1536</td><td>6 cells = half a 48 px sprite</td><td>dense crowd; sprites still overlap</td></tr>
+<tr><td><code>collision_mid_v1</code></td><td>5 000</td><td>1536</td><td>6 cells</td><td>same body, separation spread over 4 phases</td></tr>
+<tr><td><code>collision_sprite_v1</code></td><td>1 200</td><td>1536</td><td>6 cells</td><td>same body, 2 push-priority classes, thin enough to watch</td></tr>
 <tr><td><code>fixture_*</code></td><td>64–256</td><td>32</td><td>0.125 cell</td><td>exercised without choking corridors</td></tr>
-</table></figure>
+</table>
+<p class="lede">The three shipped scenes converged on one radius when the population ceiling came down to <code>MAX_LIVE_AGENTS</code> = 5 000: a body of exactly half a sprite width is expressible at that count, so the scenes no longer need to differ on radius and differ on the amortisation and mass-class knobs instead. "Half a sprite" is a <em>cell-space</em> equality — that is where the contact test lives; on screen the isometric projection turns the body circle into an ellipse.</p></figure>
 
 <h2>One tick</h2>
 <figure><figcaption><b>Hot path</b>Two extra stages before the existing move. Both are skipped entirely when the scenario declares no body, so a bodyless run is bit-identical to the old flow-only walk.</figcaption>
@@ -69,7 +70,7 @@
 <text x="360" y="74" class="note">rows top→bottom, columns left→right, agents ascending within a bin.</text>
 <text x="360" y="92" class="note">Same input → same pairs, in the same order, in every process.</text>
 <text x="360" y="126" class="label">Accepted contributions are capped at 8</text>
-<text x="360" y="148" class="note">Correctness, not speed: 50 000 agents seed onto 127 spawn cells, so ~394</text>
+<text x="360" y="148" class="note">Correctness, not speed: 5 000 agents seed onto 127 spawn cells, so 39 or 40</text>
 <text x="360" y="166" class="note">share one exact coordinate at tick 0. An uncapped scan is quadratic in that</text>
 <text x="360" y="184" class="note">stack. Capped, the stack unpacks over several ticks instead of one.</text>
 <text x="360" y="218" class="label">Coincident pairs</text>

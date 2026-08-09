@@ -47,17 +47,20 @@ pub fn action_for_key(key: BoundKey) -> InputAction {
 
 /// Outer radius of the hitbox ring, in normalised quad units.
 ///
-/// `0.5` is the quad edge, and the quad is exactly the body's diameter, so the
-/// ring's outer edge *is* the contact circle the simulation separates on. It
-/// cannot go above `0.5`: past that the circle leaves the quad and the arcs
+/// `0.5` is the quad edge, and [`ring_quad_size_px`] makes the quad exactly the
+/// projected body's two diameters, so the ellipse the fragment stage inscribes
+/// at `0.5` *is* the image of the contact circle the simulation separates on.
+/// It cannot go above `0.5`: past that the ellipse leaves the quad and the arcs
 /// would be clipped into four disconnected corners.
 pub const RING_OUTER: f32 = 0.5;
 
 /// Inner radius of the hitbox ring, in normalised quad units.
 ///
-/// `1/32` of the quad below [`RING_OUTER`], which is 1.5 px on T0's 48 px body
-/// — thick enough to see, thin enough that a crowd still reads as separate
-/// bodies rather than a wash.
+/// `1/32` of the quad below [`RING_OUTER`]. On the tracked scenes that is a
+/// band roughly 2 px across the wide axis and 1 px across the narrow one —
+/// thick enough to see, thin enough that a crowd still reads as separate bodies
+/// rather than a wash. Being a *fraction of the quad* rather than a pixel count
+/// is what keeps it proportionate when the body radius changes.
 pub const RING_INNER: f32 = RING_OUTER - 1.0 / 32.0;
 
 /// Hitbox ring colour, premultiplied — cyan `(0, 1, 1)` scaled by its own
@@ -68,12 +71,13 @@ pub const RING_INNER: f32 = RING_OUTER - 1.0 / 32.0;
 /// of showing where each body ends.
 pub const RING_TINT: [f32; 4] = [0.0, 0.55, 0.55, 0.55];
 
-/// The drawn body radius in pixels, measured in **cell space** — before the
-/// isometric projection stretches it.
+/// The body radius in pixels, measured in **cell space** — before the
+/// isometric projection maps it to screen.
 ///
-/// Under the 2:1 projection this is exactly the drawn ellipse's semi-*minor*
-/// (screen-y) axis, because the tile is one cell tall; the semi-major axis is
-/// twice it. [`ring_quad_size_px`] is the expression the packer actually uses.
+/// This is *not* either semi-axis of the drawn ellipse. It is the radius the
+/// simulation's Euclidean contact test uses, expressed in the pixel units cell
+/// space is measured in; [`ring_quad_size_px`] is the expression the packer
+/// actually uses, and it is the only one that knows about the projection.
 pub fn ring_radius_px(cell_size_px: f32, radius_cells: f32) -> f32 {
     radius_cells * cell_size_px
 }
@@ -83,13 +87,37 @@ pub fn ring_radius_px(cell_size_px: f32, radius_cells: f32) -> f32 {
 /// The single expression the ring packer and its tests share, so "the ring
 /// shows the radius the sim separates on" cannot drift into two answers.
 ///
-/// A circular body lying on an isometric floor is an **ellipse** on screen, so
-/// the quad is the body's diameter along each of the projection's two axes —
-/// twice as wide as it is tall. T8's fragment branch measures its distance in
-/// normalised quad units and therefore inscribes that ellipse with no shader
-/// change at all.
+/// A circular body lying on an isometric floor is an **ellipse** on screen, and
+/// the `1/sqrt(2)` is what makes it the *right* ellipse rather than a
+/// circumscribing one.
+///
+/// The projection is `M = [[tw/2, -tw/2], [th/2, th/2]]`
+/// ([`iso_project`](crate::render::iso_project)). Push a cell-space circle
+/// `(r cos t, r sin t)` through it and the screen offset is
+///
+/// ```text
+///   x = (tw/2) * r * (cos t - sin t) = (r * tw / sqrt(2)) * cos(t + pi/4)
+///   y = (th/2) * r * (cos t + sin t) = (r * th / sqrt(2)) * sin(t + pi/4)
+/// ```
+///
+/// — the `sqrt(2)` from `cos t -+ sin t = sqrt(2) * cos/sin(t + pi/4)`. So the
+/// image is an ellipse with semi-axes `r*tw/sqrt(2)` and `r*th/sqrt(2)`, and it
+/// is **axis-aligned in screen space**: `M * M^T` is the diagonal
+/// `[[tw^2/2, 0], [0, th^2/2]]`, so the projection has no shear left to tilt
+/// it. An axis-aligned quad is therefore still the right primitive, and T8's
+/// fragment branch — which measures its distance in normalised quad units —
+/// inscribes the ellipse with no shader change at all.
+///
+/// Without the divisor the quad was the circle's *bounding box under a shearing
+/// map*, `sqrt(2)` too large on both axes: two bodies at exactly contact
+/// distance drew overlapping rings instead of tangent ones, which is the single
+/// question the overlay exists to answer. For the tracked scenes (`r = 6`,
+/// `tw = 8`, `th = 4`) that is 67.9 x 33.9 px, not 96 x 48.
 pub fn ring_quad_size_px(tile_w: f32, tile_h: f32, radius_cells: f32) -> [f32; 2] {
-    [2.0 * radius_cells * tile_w, 2.0 * radius_cells * tile_h]
+    // `2 * r * t / sqrt(2)` written as `sqrt(2) * r * t`: one multiply, and it
+    // avoids a division whose rounding would differ from the test's.
+    let axis = std::f32::consts::SQRT_2 * radius_cells;
+    [axis * tile_w, axis * tile_h]
 }
 
 /// Per-frame CPU timings (milliseconds).
@@ -483,10 +511,13 @@ pub fn pack_instance_groups(
 /// Pack one hitbox ring per agent into an existing buffer (clear + push; no
 /// realloc if capacity holds).
 ///
-/// The quad is the body's *diameter* along each projected axis and is centred
-/// **on** the agent's ground point — the same point the sprite stands on — so
-/// the ellipse the shader inscribes in it traces the true contact circle lying
-/// on the isometric floor, never an approximation of it.
+/// The quad is the projected body's *diameter* along each screen axis
+/// ([`ring_quad_size_px`]) and is centred **on** the agent's ground point — the
+/// same point the sprite stands on — so the ellipse the shader inscribes in it
+/// is the exact image of the contact circle lying on the isometric floor, never
+/// an approximation of it. `the_rings_of_two_touching_bodies_are_tangent`
+/// asserts the consequence rather than the formula: two agents at exactly `2r`
+/// cells apart draw rings that touch and do not overlap.
 ///
 /// A bodyless scene (`radius_cells == 0`) yields **no** rings. There is no
 /// body to draw, and a zero-radius ring would state something false rather

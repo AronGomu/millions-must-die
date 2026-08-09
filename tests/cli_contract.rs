@@ -203,11 +203,12 @@ fn invoke(args: &[&str], offscreen: bool) -> Cli {
 
 /// How long a run may take before the test treats it as never-terminating.
 ///
-/// Generous: the largest case here is the 50k gate scene for two frames in a
-/// debug build. The bound exists for the failure mode where a frame budget
-/// stops being honoured — without it the process runs forever and the suite
-/// *hangs* rather than failing, which in CI is indistinguishable from a slow
-/// machine and blocks the gate instead of reporting it.
+/// Generous: the largest case here is the gate scene at the live agent ceiling
+/// for two frames in a debug build. The bound exists for the failure mode
+/// where a frame budget stops being honoured — without it the process runs
+/// forever and the suite *hangs* rather than failing, which in CI is
+/// indistinguishable from a slow machine and blocks the gate instead of
+/// reporting it.
 const RUN_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Run `cmd` to completion or kill it at [`RUN_DEADLINE`].

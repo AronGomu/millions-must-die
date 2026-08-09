@@ -31,7 +31,14 @@ pub const VIEW_WIDTH: u32 = 1920;
 pub const VIEW_HEIGHT: u32 = 1080;
 /// Frames-in-flight for cycled instance uploads.
 pub const FRAMES_IN_FLIGHT: usize = 2;
-/// Max sprites uploaded per frame across all groups (hard 50k; stretch 100k).
+/// Max sprites uploaded per frame across all groups.
+///
+/// A GPU buffer capacity, deliberately far above the live simultaneous-agent
+/// ceiling (`scenario::MAX_LIVE_AGENTS` = 5 000) rather than sized to it: the
+/// buffer is allocated once at renderer construction, a frame can carry both a
+/// sprite and a ring per agent, and re-tuning a device allocation every time
+/// the scene ceiling moves buys nothing. Kept at its historical value; the
+/// figure describes the buffer, never a population the engine will accept.
 pub const MAX_INSTANCES: u32 = 100_000;
 
 /// Depth attachment format for the sprite pass.

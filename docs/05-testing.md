@@ -36,11 +36,14 @@ cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 ```
 
-The last three commands are the interactive smokes: the 50k scene and both
-collision demo scenes must start, tick and exit cleanly. The demo scenes are
-what make agent separation observable — the gate scene's body radius is a
-fraction of its sprite, because 50 000 sprites cannot be laid out on one screen
-without overlapping.
+The last three commands are the interactive smokes: the 5 000-agent gate scene
+and both collision demo scenes must start, tick and exit cleanly. All three
+carry the same body — a radius of exactly half a sprite width, measured in cell
+space, where the contact test lives. What the demo scenes add is the rest of the
+tuning surface, which the gate scene leaves at its identity values:
+`collision_mid_v1` spreads the separation pass over four phases, and
+`collision_sprite_v1` runs a thinner crowd over two push-priority classes, which
+is what makes the asymmetric push observable rather than merely configured.
 
 Hard success is **all tests green**: deterministic simulation and navigation
 behaviour, render correctness on the development host, app and CLI lifecycle,

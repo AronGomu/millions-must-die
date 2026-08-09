@@ -10,7 +10,7 @@ mod common;
 
 use common::Tracker;
 use mmd_engine::nav::flow_field::COST_UNREACHABLE;
-use mmd_engine::scenario::Cell;
+use mmd_engine::scenario::{Cell, MAX_LIVE_AGENTS};
 use mmd_engine::sim::{
     CollisionParams, MAX_SEPARATION_NEIGHBORS, SEPARATION_DIR16, SPEED_CELLS_PER_SEC, SpatialGrid,
     TICK_DT, accumulate_separation,
@@ -151,6 +151,16 @@ fn bin_row_matches_bin_by_bin_order() {
     assert_eq!(grid.agents_in_bin_row(1, 3, 2).to_vec(), expected);
 }
 
+/// A window running past the last column returns everything from `bx0` to the
+/// grid edge — on a row that actually holds agents.
+///
+/// Row 2 rather than row 0 deliberately. This fixture puts every agent on rows
+/// 2 and 5, so querying row 0 compares two *empty* slices and can only catch a
+/// panic: a clamp replaced by `if bx1 >= cols { bx0 }`, which drops every bin
+/// after the first, still returns empty for row 0 and passes. Nothing else in
+/// the tree reaches this branch either — `accumulate_separation_range`
+/// pre-clamps `bx1` against `cols - 1` before it ever calls in — so this test
+/// is the clamp's only cover and it has to be a populated one.
 #[test]
 fn bin_row_clamps_to_the_last_column() {
     let mut grid = SpatialGrid::new(8, 8, 1.0, 16);
@@ -162,9 +172,23 @@ fn bin_row_clamps_to_the_last_column() {
     ];
     grid.rebuild(&xs, &ys);
 
-    let mut expected: Vec<u32> = grid.agents_in_bin(6, 0).to_vec();
-    expected.extend_from_slice(grid.agents_in_bin(7, 0));
-    assert_eq!(grid.agents_in_bin_row(6, 99, 0).to_vec(), expected);
+    let mut expected: Vec<u32> = grid.agents_in_bin(6, 2).to_vec();
+    expected.extend_from_slice(grid.agents_in_bin(7, 2));
+    // The premise of the test, asserted rather than assumed: an empty
+    // expectation would make the comparison below vacuous again.
+    assert_eq!(
+        expected.len(),
+        2,
+        "row 2 must hold an agent in bins 6 and 7, or this test proves nothing"
+    );
+    assert_eq!(grid.agents_in_bin_row(6, 99, 2).to_vec(), expected);
+
+    // The clamp must not silently swallow the trailing bins: asking for the
+    // whole row past its end is the same slice as asking for it exactly.
+    assert_eq!(
+        grid.agents_in_bin_row(0, 99, 2).to_vec(),
+        grid.agents_in_bin_row(0, 7, 2).to_vec()
+    );
 }
 
 #[test]
@@ -206,33 +230,69 @@ fn spatial_reuses_bins_without_clearing_them() {
     assert_eq!(total as usize, grid.len());
 }
 
-#[test]
-fn spatial_survives_a_stamp_wrap() {
-    let mut grid = SpatialGrid::new(8, 8, 1.0, 5);
-    grid.set_stamp_for_test(u32::MAX);
-
-    let xs = [0.5f32, 0.5, 7.5, 3.5, 7.5];
-    let ys = [0.5f32, 0.5, 0.5, 3.5, 7.5];
-    grid.rebuild(&xs, &ys);
+/// Sum of every bin's reported population.
+fn total_binned(grid: &SpatialGrid) -> u32 {
     let mut total = 0u32;
     for by in 0..grid.rows() {
         for bx in 0..grid.cols() {
             total += grid.bin_count(bx, by);
         }
     }
-    assert_eq!(total as usize, grid.len());
+    total
+}
 
-    let xs2 = [1.5f32, 1.5, 1.5, 1.5, 1.5];
-    let ys2 = [1.5f32, 1.5, 1.5, 1.5, 1.5];
+/// A stamp wrap must not resurrect the population a bin held before it.
+///
+/// The hazard needs **two** wraps to exist at all, which is why this test does
+/// not simply wrap a fresh grid. `count_stamp` is zero-initialised, so on a
+/// fresh grid every bin's stamp already equals the wrapped value of `0` and the
+/// "is this bin stale?" test happens to answer correctly by coincidence:
+/// deleting the guard in `rebuild` leaves a single-wrap test passing.
+///
+/// So: drive **two** rebuilds through the wrap branch, the first populating bin
+/// (0,0) and the second populating only bin (7,7). With the guard present both
+/// rebuilds are forced to stamp `1`, and the second correctly reads bin (0,0)
+/// as stale. Without its `count_stamp.fill(0)` the wrapped stamp lands on `0` —
+/// which is exactly what every zero-initialised bin already carries — so bin
+/// (0,0)'s stale count reads as live, its five agents come back from the dead,
+/// and the prefix pass folds them into `starts` and shifts every bucket after
+/// it.
+#[test]
+fn spatial_survives_a_stamp_wrap() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 5);
+
+    // First wrap: five agents into bin (0,0).
+    grid.set_stamp_for_test(u32::MAX);
+    let xs = [0.5f32; 5];
+    let ys = [0.5f32; 5];
+    grid.rebuild(&xs, &ys);
+    assert_eq!(grid.bin_count(0, 0), 5, "the first wrap must still bin");
+    assert_eq!(total_binned(&grid) as usize, grid.len());
+
+    // Second wrap, onto a bin the first population never touched. Bin (0,0) is
+    // now the stale one, and it is stale *at the wrapped stamp*.
+    grid.set_stamp_for_test(u32::MAX);
+    let xs2 = [7.5f32; 5];
+    let ys2 = [7.5f32; 5];
     grid.rebuild(&xs2, &ys2);
-    assert_eq!(grid.bin_count(1, 1), 5);
-    let mut total2 = 0u32;
-    for by in 0..grid.rows() {
-        for bx in 0..grid.cols() {
-            total2 += grid.bin_count(bx, by);
-        }
-    }
-    assert_eq!(total2 as usize, grid.len());
+
+    assert_eq!(
+        grid.bin_count(0, 0),
+        0,
+        "bin (0,0) resurrected its pre-wrap population across a stamp wrap"
+    );
+    assert_eq!(grid.bin_count(7, 7), 5);
+    assert_eq!(
+        grid.agents_in_bin(0, 0),
+        &[] as &[u32],
+        "a resurrected bin also mis-slices `items` through the prefix sum"
+    );
+    assert_eq!(grid.agents_in_bin(7, 7), &[0u32, 1, 2, 3, 4]);
+    assert_eq!(
+        total_binned(&grid) as usize,
+        grid.len(),
+        "the grid reports more agents than it holds"
+    );
 }
 
 // --- the repulsion accumulator -------------------------------------------
@@ -749,6 +809,61 @@ fn a_bodyless_scenario_walks_the_flow_only_path() {
 /// do not update it to make an unexplained move go away.
 const BODIED_STACK_HASH: &str = "81f958301624ff2033e797032d7cff8fd59344036263fdc5c6e13f00b5c80e8b";
 
+/// Ticks the merge gate's interactive smoke walks the gate scene for.
+///
+/// Mirrors `--frames 300` in `cargo run -- run --agents 5000 --frames 300`.
+/// Every unpaused frame owes exactly one tick (`src/run.rs` asserts that), so
+/// the frame count *is* the tick count.
+const GATE_SCENE_TICKS: u64 = 300;
+
+/// State hash of the gate scene after [`GATE_SCENE_TICKS`] ticks at its full
+/// population.
+///
+/// **This is the digest the merge gate reads off stdout.** Until now it lived
+/// only in plan markdown, the manual checklist and ADR 012 — nothing under
+/// `crates/`, `tests/`, `src/` or `tools/` mentioned it, so "digest reproduced"
+/// was a re-typed human observation on every ticket. The two synthetic digests
+/// above walk 32 agents on a 24x24 inline grid; a change that moves the gate
+/// scene's 300-tick walk while leaving those intact shipped green.
+///
+/// Deliberately not `#[ignore]`d and behind no feature: a guard the merge gate
+/// does not run is not a guard. The walk is the real scene at the real tick
+/// count — no GPU, no window, no shortened stride — and costs about a second in
+/// a debug build, which is the same order as the digest tests beside it.
+///
+/// Same rule as its siblings: if a deliberate change moves it, re-measure and
+/// update it in the commit that caused the move. Never to silence one.
+const GATE_SCENE_HASH: &str = "864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881";
+
+#[test]
+fn the_gate_scene_walk_is_pinned_to_its_published_digest() {
+    let mut h = Harness::gate_scene().build().expect("gate scene");
+
+    // The digest is only *the gate's* digest if the run really is the gate's
+    // run: full population, and a body, or this pins a scene nobody ships.
+    assert_eq!(
+        h.alive_count(),
+        MAX_LIVE_AGENTS as usize,
+        "the gate scene must walk at the live agent ceiling"
+    );
+    assert!(
+        h.sim().collision().enabled(),
+        "the gate scene must have a body, or this digest covers a flow-only walk"
+    );
+
+    h.step_exact(GATE_SCENE_TICKS);
+
+    assert_eq!(
+        h.state_hash_hex(),
+        GATE_SCENE_HASH,
+        "the gate scene's {GATE_SCENE_TICKS}-tick walk drifted. This is the \
+         digest `cargo run -- run --agents 5000 --frames 300` prints and every \
+         ticket on this plan quotes. If the change was deliberate, re-measure \
+         it and update the plan, ADR 012 and the manual checklist in the same \
+         commit."
+    );
+}
+
 #[test]
 fn a_bodied_scenario_is_pinned_to_a_golden_digest() {
     // A single spawn cell, so every agent starts coincident and the tie-break
@@ -800,11 +915,28 @@ fn mass_is_assigned_round_robin_by_index() {
     }
 }
 
+/// The push scale is `mass[j] * inv_mass[i]`, and the **ratio** is what says so.
+///
+/// Ordering alone (`|sep0| > |sep1|`) does not pin the model. On a two-class
+/// pair it is satisfied by three different scales that disagree by a factor of
+/// two:
+///
+/// | scale | `|sep0|` | `|sep1|` | ratio |
+/// |---|---|---|---|
+/// | `mass[j] * inv_mass[i]` (shipped) | `2w` | `w/2` | **4** |
+/// | `mass[j]` alone | `2w` | `w` | 2 |
+/// | `inv_mass[i]` alone | `w` | `w/2` | 2 |
+///
+/// `collision_sprite_v1` ships `mass_class_count: 2`, so a scale that is merely
+/// monotone in mass is a shipped scene whose physics is silently wrong. Both
+/// halves of the product are therefore pinned: the ratio, and each magnitude
+/// against a push derived from the falloff rather than from the pass.
 #[test]
 fn a_heavier_neighbour_pushes_a_lighter_one_harder() {
+    const RADIUS_Q8: u32 = 128;
     let mut h = Harness::grid(
         GridSpec::new(32, 32, Cell { x: 31, y: 16 })
-            .with_collision(128, 256)
+            .with_collision(RADIUS_Q8, 256)
             .with_mass_classes(2)
             .with_agents(2),
     )
@@ -813,18 +945,74 @@ fn a_heavier_neighbour_pushes_a_lighter_one_harder() {
     h.sim_mut().set_position(0, 1.5, 1.5);
     h.sim_mut().set_position(1, 1.6, 1.5);
 
+    // Round-robin by index, asserted rather than assumed: the whole test reads
+    // the wrong way round if these two ever swap.
+    assert_eq!(h.sim().mass_of(0), 1, "agent 0 must be the light class");
+    assert_eq!(h.sim().mass_of(1), 2, "agent 1 must be the heavy class");
+
     h.step_exact(1);
 
     let (sx0, sy0) = h.sim().separation_of(0);
     let (sx1, sy1) = h.sim().separation_of(1);
+    let (m0, m1) = (sx0.hypot(sy0), sx1.hypot(sy1));
+
     assert!(
-        sx0.hypot(sy0) > sx1.hypot(sy1),
+        m0 > m1,
         "the lighter agent (0) must be pushed harder than the heavier one (1): \
-         {} vs {}",
-        sx0.hypot(sy0),
-        sx1.hypot(sy1)
+         {m0} vs {m1}"
+    );
+
+    // The unweighted push, recomputed from the scenario's raw fields and the
+    // documented linear falloff — deliberately not routed through the pass
+    // under test. The pair is separated along +x only, so the unit direction
+    // has magnitude 1 and the whole push is the falloff weight.
+    let contact = 2.0 * (RADIUS_Q8 as f32 / 256.0);
+    let d = 1.6f32 - 1.5f32;
+    let unweighted = (contact - d) / contact;
+    assert!(
+        d < contact,
+        "the pair must be inside contact or there is no push to weigh"
+    );
+
+    // `mass[j] * inv_mass[i]`: 2 * 1 for the light agent, 1 * 1/2 for the heavy
+    // one. Each magnitude is pinned, not just their order.
+    let tol = 1e-4 * unweighted;
+    assert!(
+        (m0 - 2.0 * unweighted).abs() < tol,
+        "the light agent's push is {m0}, expected 2 x the unweighted {unweighted} \
+         (scale must be mass[j] * inv_mass[i], not inv_mass[i] alone)"
+    );
+    assert!(
+        (m1 - 0.5 * unweighted).abs() < tol,
+        "the heavy agent's push is {m1}, expected 1/2 x the unweighted \
+         {unweighted} (scale must be mass[j] * inv_mass[i], not mass[j] alone)"
+    );
+
+    // And the ratio itself, which is the one number every wrong scale gets
+    // wrong: 4, not 2.
+    assert!(
+        (m0 / m1 - 4.0).abs() < 1e-4,
+        "a 2:1 mass pair must push in a 4:1 ratio (mass[j] * inv_mass[i]); got \
+         {:.6} from {m0} / {m1}",
+        m0 / m1
     );
 }
+
+/// State hash of the two-class stack below after 200 ticks, measured on this
+/// tree.
+///
+/// The multi-class sibling of [`BODIED_STACK_HASH`], and it exists for the same
+/// reason: `mass_classes_change_the_bodied_digest` is an `assert_ne!`, which
+/// **every** wrong mass scale satisfies — `mass[j]` alone and `inv_mass[i]`
+/// alone both diverge from the one-class digest just as loudly as the correct
+/// product does. Only an `assert_eq!` against a measured value can tell the
+/// three apart over a full walk, and `collision_sprite_v1` ships two classes.
+///
+/// Change detector, not a compatibility claim. If a deliberate change to the
+/// mass model moves it, re-measure and update it in the same commit — but do
+/// not update it to make an unexplained move go away.
+const BODIED_TWO_CLASS_STACK_HASH: &str =
+    "b4ea06566711b2e0ce3bb6141d93c53a698a9da25b130f5ec44fbac8d61ab35b";
 
 #[test]
 fn mass_classes_change_the_bodied_digest() {
@@ -838,6 +1026,15 @@ fn mass_classes_change_the_bodied_digest() {
         h.state_hash_hex(),
         BODIED_STACK_HASH,
         "two mass classes must not be a no-op on the digest"
+    );
+
+    // The guard the `assert_ne!` above cannot be: the one-class walk has a
+    // pinned digest, so the multi-class walk gets one too.
+    assert_eq!(
+        h.state_hash_hex(),
+        BODIED_TWO_CLASS_STACK_HASH,
+        "the two-class separation walk drifted; if the change was deliberate, \
+         re-measure this digest in the same commit that caused it"
     );
 }
 

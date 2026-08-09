@@ -6,7 +6,7 @@ Offline-first PC RTS focused on fortress defense against massive enemy hordes.
 
 Phase 0 technical prototype: **closed on functional scope — the game systems are proven to behave correctly.**
 
-The 50k-agent flow-field scene runs on Linux/Vulkan. Phase 0 closed on automated behavioural tests of every game system, not on speed: **performance is unmeasured and gates nothing**, and no verification exists for any platform other than the development host. Frame-time gating, the cross-platform matrix, and the multi-host validation lab are retired to a later optimization phase on the finished game — the code stays in-tree, frozen and non-gating.
+The 5 000-agent flow-field gate scene runs on Linux/Vulkan (5 000 is the engine's live simultaneous-agent ceiling, `scenario::MAX_LIVE_AGENTS`). Phase 0 closed on automated behavioural tests of every game system, not on speed: **performance is unmeasured and gates nothing**, and no verification exists for any platform other than the development host. Frame-time gating, the cross-platform matrix, and the multi-host validation lab are retired to a later optimization phase on the finished game — the code stays in-tree, frozen and non-gating.
 
 What phase 0 proves, what it does not, and every known gap: [docs/technical-prototype-functional-close.md](docs/technical-prototype-functional-close.md). What gates a merge: [docs/05-testing.md](docs/05-testing.md). Earlier measurements, kept as history and claiming nothing: [docs/technical-prototype-results.md](docs/technical-prototype-results.md) (superseded).
 

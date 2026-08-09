@@ -125,11 +125,13 @@
 
 <header>
   <p class="kicker">Millions Must Die · Phase 0.5 · plan/horde-sim-headroom</p>
-  <h1>Horde sim headroom: the separation pass</h1>
+  <h1>Horde sim headroom: the separation pass and the isometric render</h1>
   <p class="lede">
-    Five changes to one loop. Every capability is scenario data with an identity
-    default, so a scene that does not opt in walks a bit-identical path — and the
-    pinned digests are what prove it.
+    Two halves. Five changes to one simulation loop, every capability scenario
+    data with an identity default, so a scene that does not opt in walks a
+    bit-identical path — and a render path rebuilt from a flat grid into a 2:1
+    isometric floor with a depth-ordered draw. The pinned digests are what prove
+    the first half; the second half is downstream of them and moves none.
   </p>
 </header>
 
@@ -144,8 +146,11 @@
   by a large one.
 </p>
 <p>
-  So the flow field is deliberately untouched here, and so is the renderer.
-  <code>sim::collision::accumulate_separation_phase</code> is the whole subject.
+  So the flow field is deliberately untouched, and
+  <code>sim::collision::accumulate_separation_phase</code> is the whole subject
+  of the first half of this page. The renderer is the second half, and it is a
+  strictly downstream consumer: it reads simulation state and writes none, which
+  is why nothing in it can move a digest.
 </p>
 
 <h2>The tick, after phase 0.5</h2>
@@ -390,6 +395,187 @@
   </p>
 </div>
 
+<h2>The render half: cell space to a depth-ordered draw</h2>
+
+<p>
+  The simulation never learns that the world is drawn isometrically. It keeps
+  positions in <strong>cell space</strong> — a flat grid of <code>f32</code>
+  coordinates — and every contact test in the pass above is Euclidean in that
+  space. The projection lives entirely in <code>render::instance::IsoView</code>,
+  which is derived once per scene, and in the vertex stage that reads its two
+  depth scalars. One value computes the tile, the fixed camera origin and both
+  scalars, and both packers plus the uniform upload read it, so the CPU mirror
+  and the GPU cannot disagree about where an agent is or how deep it is.
+</p>
+
+<ul class="legend">
+  <li><span class="dot" style="background:var(--s1)"></span>simulation state, read-only</li>
+  <li><span class="dot" style="background:var(--s2)"></span>CPU pack</li>
+  <li><span class="dot" style="background:var(--s7)"></span>GPU stage</li>
+  <li><span class="dot" style="background:var(--s3)"></span>invariant</li>
+</ul>
+
+<div class="figure scroll">
+<svg viewBox="0 0 940 300" width="100%" height="300" role="img"
+     aria-label="The render path: cell-space positions, the two-to-one isometric projection, the ground point, the depth key, and the depth-ordered draw with an alpha-test cutout, plus the ring pass.">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g>
+    <rect x="10" y="40" width="150" height="64" rx="8" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.5"/>
+    <text x="85" y="64" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">cell space</text>
+    <text x="85" y="82" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">x[i], y[i]</text>
+    <text x="85" y="97" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">flat grid, no camera</text>
+  </g>
+
+  <g>
+    <rect x="196" y="30" width="196" height="84" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="294" y="52" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">2:1 projection</text>
+    <text x="294" y="72" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="ui-monospace, monospace">sx = ox + (cx − cy)·tw/2</text>
+    <text x="294" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="ui-monospace, monospace">sy = oy + (cx + cy)·th/2</text>
+    <text x="294" y="106" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">tw = 2·cell · th = cell</text>
+  </g>
+
+  <g>
+    <rect x="428" y="30" width="186" height="84" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="521" y="52" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">ground point</text>
+    <text x="521" y="72" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">sprite hangs above it</text>
+    <text x="521" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">ring is centred on it</text>
+    <text x="521" y="106" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">off-view quads rejected</text>
+  </g>
+
+  <g>
+    <rect x="650" y="30" width="180" height="84" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="740" y="52" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">depth key</text>
+    <text x="740" y="72" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="ui-monospace, monospace">sy·scale + bias</text>
+    <text x="740" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">position down the diamond</text>
+    <text x="740" y="106" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">floored, never exactly 0</text>
+  </g>
+
+  <g color="var(--edge)">
+    <line x1="160" y1="72" x2="190" y2="72" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+    <line x1="392" y1="72" x2="422" y2="72" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+    <line x1="614" y1="72" x2="644" y2="72" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+  </g>
+
+  <line x1="8" y1="150" x2="932" y2="150" stroke="var(--rule)" stroke-width="1"/>
+  <text x="8" y="172" fill="var(--muted)" font-size="12" font-family="system-ui, sans-serif">one render pass, in this order</text>
+
+  <g>
+    <rect x="10" y="190" width="290" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="155" y="214" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">4 atlas groups · depth GREATER</text>
+    <text x="155" y="233" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">test on, write on, cleared to 0</text>
+    <text x="155" y="251" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">alpha cutout: discard, never blend</text>
+  </g>
+
+  <g>
+    <rect x="336" y="190" width="286" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="479" y="214" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">hitbox rings · depth off</text>
+    <text x="479" y="233" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="ui-monospace, monospace">uv_rect.x &lt; 0 → ring branch</text>
+    <text x="479" y="251" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">same shader, same pass, emits z = 0</text>
+  </g>
+
+  <g>
+    <rect x="658" y="190" width="272" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.5"/>
+    <text x="794" y="214" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="system-ui, sans-serif">no back-to-front sort</text>
+    <text x="794" y="233" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="system-ui, sans-serif">the cutout is what allows this</text>
+    <text x="794" y="251" text-anchor="middle" fill="var(--muted)" font-size="10.5" font-family="ui-monospace, monospace">SpriteInstance stays 48 bytes</text>
+  </g>
+
+  <g color="var(--edge)">
+    <line x1="300" y1="228" x2="330" y2="228" stroke="currentColor" stroke-width="1.5" marker-end="url(#ar2)"/>
+  </g>
+</svg>
+</div>
+<p class="caption">
+  The camera is a fixed offset that centres the destination cell. Scrolling,
+  edge-pan, zoom and selection are Phase 1, named here so a reader does not
+  mistake the fixed view for an oversight.
+</p>
+
+<h3>Depth is a property of where an agent stands</h3>
+<p>
+  The key is taken from the quad's <em>bottom edge</em> — the ground point the
+  packer anchored it on — not from the interpolated vertex position. Emitting
+  the per-vertex value instead would give one sprite a depth gradient down its
+  own quad and let it slice into the sprites beside it; all four corners of a
+  quad must carry the same key. The key is normalised over the height of the
+  whole map diamond rather than over the view, so it does not change when the
+  camera does.
+</p>
+<p>
+  The attachment is cleared to <code>0</code> and tested with
+  <strong><code>GREATER</code></strong>: an agent one cell nearer walks
+  <em>down</em> the screen, gets the larger key, and wins. Under
+  <code>LESS</code> the horde would draw back to front. A key of exactly
+  <code>0</code> fails <code>0 &gt; 0</code> and is discarded — drawn
+  <em>nowhere</em>, not drawn last — and an agent on the far corner of the
+  diamond normalises to exactly that, so sprite keys are floored at one quantum
+  of the depth attachment. That floor exists three times over (Rust, the
+  canonical HLSL, and the GLSL the shipped SPIR-V is built from) and
+  <code>shader_defines_match_their_rust_mirrors</code> pins all three against
+  each other, because no test can read a depth value back.
+</p>
+
+<h3>The cutout is what lets the horde stay batched</h3>
+<p>
+  Depth-buffered draw order needs a per-fragment opaque/transparent decision: a
+  blended fragment that also wrote depth would occlude whatever it was supposed
+  to show through. Pixel art is effectively 1-bit alpha, so the fragment stage
+  <em>discards</em> below the cutoff instead of blending. That is what keeps all
+  four atlas groups drawing in one batched pass with no back-to-front sort, and
+  it is the reason the depth buffer can be trusted at all.
+</p>
+
+<h3>The ring shares the pass with a sentinel, not a second shader</h3>
+<p>
+  A hitbox ring is a <code>SpriteInstance</code> like any other. There is no
+  second shader file: the vertex stage branches on a negative
+  <code>uv_rect.x</code>, which no atlas rect can ever be, and the fragment
+  stage measures its distance from the quad centre in normalised quad units to
+  inscribe an annulus. Only the pipeline object differs, and only in its depth
+  block — test and write both off — because a debug overlay a unit could stand
+  in front of would stop annotating the thing it exists to annotate. Rings
+  therefore emit an exact <code>z = 0</code>: the far end of the diamond, a
+  value that would fail the sprite pipeline's <code>GREATER</code> test
+  everywhere. That is what makes <em>"the ring pass is not depth-tested"</em> a
+  fact the frame can be asked about rather than an assertion in a comment, and
+  it is asserted by <code>rings_are_never_occluded</code> and
+  <code>a_ring_and_a_sprite_share_a_pass</code>.
+</p>
+<p>
+  The ring traces the body the simulation separates on, so its size is not a
+  free parameter. A circle lying on the isometric floor is an <strong>ellipse
+  on screen</strong>, and the projection above sends a radius-<code>r</code>
+  circle to semi-axes <code>r·tw/√2</code> and <code>r·th/√2</code> — an
+  ellipse that is still axis-aligned in screen space, so an axis-aligned quad
+  remains the right primitive and the shader needs no change. The
+  <code>√2</code> is easy to drop, and was: the ring first shipped at
+  <code>[2r·tw, 2r·th]</code>, the circle's bounding box under the shear rather
+  than its image, so two agents at exactly contact distance drew
+  <em>overlapping</em> rings instead of tangent ones — the one question the
+  overlay exists to answer. The guard is now the geometric property rather than
+  the formula: <code>the_rings_of_two_touching_bodies_are_tangent</code> places
+  a pair at exactly <code>2r</code> cells and asserts the drawn ellipses touch.
+</p>
+
+<div class="panel">
+  <h3 style="margin-top:0">Why none of this can move a digest</h3>
+  <p class="tight">
+    The render path reads <code>x[i]</code>, <code>y[i]</code>,
+    <code>dir[i]</code>, <code>frame[i]</code> and the body radius, and writes
+    instance buffers. It writes no simulation state, so no projection change, no
+    depth convention and no ring size can reach the state hash. That is the
+    reason the gate digest is unchanged across the whole of this branch — and,
+    since T10, it is pinned by
+    <code>the_gate_scene_walk_is_pinned_to_its_published_digest</code> rather
+    than by a number re-typed into a document.
+  </p>
+</div>
+
 <h2>What was rejected, and why it will come up again</h2>
 
 <div class="fence">
@@ -446,7 +632,7 @@
     <li>The coincidence tie-break table, the linear falloff and the 3×3 window are untouched.</li>
     <li>Separation is still <strong>steering, not resolution</strong>. Overlap is bounded, never forbidden, and no code or doc may claim otherwise.</li>
     <li>The movement loop stays serial. <code>recycle_one</code> advances a shared cursor, and that ordering is load-bearing for the cross-process determinism proof.</li>
-    <li>The flow field, the renderer and the shaders are outside this plan entirely.</li>
+    <li>The flow field is outside this plan entirely. The renderer and the shaders are <em>not</em> — see the render half above — but they consume simulation state and produce none, so they are outside the digests.</li>
   </ul>
 </div>
 

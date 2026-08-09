@@ -256,11 +256,21 @@ A/B against the same frame with the overlay hidden showed identical sprites and
 no rings. What is left needs eyes on a real window.
 
 > **Restated by T9.** The ring is unchanged in code, but the projection under it
-> is not: the quad is now `2r·tile_w` by `2r·tile_h`, so the shader's circle
-> becomes an **ellipse twice as wide as it is tall**, centred on the unit's feet
-> instead of on its middle. A circle, or a ring hugging the sprite's outline, is
-> now the failure. The ring also draws on its own depth-free pipeline, so it is
-> never covered by a unit in front of it.
+> is not: the quad is an ellipse **twice as wide as it is tall**, centred on the
+> unit's feet instead of on its middle. A circle, or a ring hugging the sprite's
+> outline, is now the failure. The ring also draws on its own depth-free
+> pipeline, so it is never covered by a unit in front of it.
+>
+> **Corrected by T10 — the ring is now smaller than every entry below described.**
+> T9's quad of `2r·tile_w` by `2r·tile_h` was `√2` too large on **both** axes:
+> that is the circle's bounding box under the shearing projection, not the
+> circle's image. The shipped quad is `√2·r·tile_w` by `√2·r·tile_h` —
+> `67.9 × 33.9 px` on the tracked scenes, where it used to be `96 × 48`. The
+> 2:1 aspect is unchanged, so "twice as wide as tall" still holds. What changed
+> is the absolute size, and with it the one thing the overlay exists for: two
+> units at exactly contact distance now render **tangent** rings instead of
+> overlapping ones. Any entry below that describes the ring in sprite-widths has
+> been rewritten rather than left to be read as still true.
 
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
       every unit carries a hollow ring. Press `H`: the rings disappear and the
@@ -271,9 +281,14 @@ no rings. What is left needs eyes on a real window.
       circle, and not centred on the unit's chest. A circle means the ring quad
       lost the projection's aspect.
 - [ ] Same scene, ring **radius** read: where two units press together, their
-      ellipses meet and do not overlap deeply. T0 tuned the body to exactly half
-      a sprite, so an ellipse should be about one sprite tall in its short
-      (screen-y) axis.
+      ellipses **touch without crossing**. Two rings that intersect mean the
+      quad is oversized again — that was the T8/T9 defect T10 fixed, and it is
+      the one thing this overlay is on screen to answer.
+      Sizes to read against, not the old "one sprite tall": on the tracked
+      scenes the ellipse is about **68 px wide and 34 px tall** against a 48 px
+      sprite, so it is *wider* than the sprite and roughly **two thirds of the
+      sprite's height** in its short (screen-y) axis. An ellipse a full sprite
+      tall (48 px) is the pre-T10 size and a failure.
 - [ ] Same scene, ring **legibility**: the ring is 1–2 px thick and
       semi-transparent, so a dense crowd still reads as separate bodies rather
       than a solid cyan mass. If it reads as a wash, `RING_TINT` /
@@ -359,11 +374,17 @@ ellipses over everything. What is left needs eyes on a real window.
       Confirm a unit walking toward the destination faces roughly the way it is
       moving. If the diagonals read wrong, that is an **art** fix in a later
       ticket — the direction index was deliberately not rotated in code.
-- [ ] Judgement call: the floor ellipse is drawn a factor √2 larger than the
-      geometrically exact projection of the body circle (see this ticket's
-      Outputs). Confirm whether it reads as "the unit's footprint" or as
-      "noticeably too big". If too big, dividing `runtime::ring_quad_size_px` by
-      `√2` is the one-line follow-up.
+- [x] ~~Judgement call: the floor ellipse is drawn a factor √2 larger than the
+      geometrically exact projection of the body circle. Confirm whether it
+      reads as "the unit's footprint" or as "noticeably too big".~~
+      **Closed by T10, not by judgement.** It was not a matter of taste: at
+      `2r·tile` the ellipse was the body circle's bounding box under the shear
+      rather than its image, so two units at exactly contact distance drew
+      *overlapping* rings and the overlay could not be used to judge contact.
+      `runtime::ring_quad_size_px` now divides both axes by `√2` (shipped as
+      `√2·r·tile`), the drawn ellipse is the exact projection, and
+      `the_rings_of_two_touching_bodies_are_tangent` is the standing guard.
+      Verified on an offscreen readback before/after: intersecting → tangent.
 
 ## T7 docs-adr-and-system-map
 
@@ -375,7 +396,9 @@ promoted from `debug_assert!` by T6) and gained the panic-safety and
 release-acquire ordering claims T6 actually shipped. ADR 012 is new, recording
 the StarCraft-scale resize and the render decisions T0/T8/T9 shipped, including
 the `GREATER`/clear-`0` depth convention, the known gaps (`.spv` not bound to
-`sprite.hlsl`, native DXIL/metallib blob debt, the √2 ring-ellipse margin, the
+`sprite.hlsl`, native DXIL/metallib blob debt, the √2 ring-ellipse margin
+*(closed by T10 — see that section; ADR 012 now records the resolution instead
+of the follow-up)*, the
 frozen bench ladder's lost comparability, the pixel-gate tautology on the
 Ubuntu fixture) named as risks rather than fixed. Everything automatable is
 green: `cargo fmt --all -- --check`, `cargo test --workspace --locked` (35
@@ -409,3 +432,66 @@ opening a real browser window is out of scope for a headless worker.
       and confirm each opens the right ADR body, including the two new
       "superseded in part" / "supplemented" notes at the top pointing at
       ADR 010, ADR 011 and ADR 012.
+
+## T10 review-fixes
+
+Closes the two blockers and eight should-fixes from the four-dimension review of
+`main..HEAD`. Adds no capability. One change is visible in a window: **item 3
+made the hitbox ring smaller by a factor of √2 on both axes** — see the
+correction note in the T8 section and the closed judgement call at the end of
+T9, both of which were rewritten in place rather than left to read as still
+true. On the tracked scenes the ellipse is now `67.9 × 33.9 px` where it was
+`96 × 48`; the 2:1 aspect is unchanged.
+
+Everything automatable is green and was run on this tree, not quoted:
+`cargo fmt --all -- --check`; `cargo test --workspace --locked`;
+`MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test render_correctness` (29/29,
+`grep -c '^SKIP '` = 0, so `golden_frame_matches`, `rings_are_never_occluded`
+and `a_ring_and_a_sprite_share_a_pass` really ran);
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+`nix flake check`; all three xtask `--check` commands;
+`cargo test -p mmd-lab --test merge_gate`; and the gate smoke still printing
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte, **before and after** the ring change. `BODIED_STACK_HASH` and
+`BODYLESS_GRID_PRE_SEPARATION_HASH` did not move. No golden image moved — the
+golden scene is `static_demo_groups()` and carries no rings, and
+`git status lab/` stayed clean throughout.
+
+Four tests were mutation-checked rather than merely written: each was observed
+**failing** under the exact mutation the reviewer used to prove its predecessor
+vacuous, then observed passing after the mutation was reverted. The gate digest
+is no longer prose — `the_gate_scene_walk_is_pinned_to_its_published_digest`
+walks the real gate scene for its real 300 ticks, in the default
+`cargo test --workspace`, with no GPU.
+
+The ring was inspected off-screen, which is what makes the one window item below
+a confirmation rather than the only evidence: the contact-pair scene was
+rendered to PNG twice — once with the pre-T10 formula, once with the shipped one
+— and looked at. Before, the two ellipses of a pair at exactly contact distance
+visibly **intersect**. After, they **touch and do not cross**. What is left needs
+eyes on a real window.
+
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      **rings are tangent, not overlapping, for two agents at contact.** Find a
+      pair pressed together and read the boundary: the two floor ellipses should
+      meet at a point and neither should cut into the other. Rings that cross
+      mean the √2 came back; rings with a visible gap mean it was applied twice.
+      This is the item the whole overlay exists for, and it is the only box in
+      this section that a headless worker cannot close.
+- [ ] Same scene, sanity on the new size: the ellipse is noticeably **wider than
+      the sprite and about two thirds of its height**. If it still reads as one
+      full sprite tall, the pre-T10 quad is back.
+- [ ] `cargo run -- run --agents 5000` — the gate scene at full population still
+      starts, ticks and exits cleanly with the smaller rings, and the window
+      title reads `millions_must_die — flow-field horde` with **no population
+      figure** in it (item 1: the old title named a count `--agents 5001` is now
+      refused for).
+- [ ] `python3 tools/scenegen/gen_collision_scenes.py` from the workspace root,
+      then `git status` — clean. The generator was rewritten to emit what the
+      loader actually accepts; before T10 it emitted a `.ron` the loader
+      refuses.
+- [ ] Open `docs/horde-sim-headroom-architecture.html` in a real browser and
+      read the new **render half**: the projection figure and the one-pass draw
+      figure render without clipping, scroll horizontally inside their own
+      containers rather than pushing the page, and the network panel shows no
+      request.

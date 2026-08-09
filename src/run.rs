@@ -1,4 +1,11 @@
-//! Interactive `run` entry: moving 50k flow-field horde (T8).
+//! Interactive `run` entry: a moving flow-field horde (T8).
+//!
+//! Deliberately no population figure here or in the window title below. The
+//! count is a runtime input (`--agents`, bounded by the scenario's stretch cap
+//! and by `scenario::MAX_LIVE_AGENTS`), so any number baked into a string
+//! becomes wrong the moment the cap or the scene moves — which is exactly what
+//! happened to the population figure this line and the window title used to
+//! carry: it named a count the CLI now refuses.
 //!
 //! # stdout contract
 //!
@@ -347,7 +354,7 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
         match renderer
             .ctx
             .video
-            .window("millions_must_die — moving 50k", WINDOW_W, WINDOW_H)
+            .window("millions_must_die — flow-field horde", WINDOW_W, WINDOW_H)
             .position_centered()
             .build()
         {

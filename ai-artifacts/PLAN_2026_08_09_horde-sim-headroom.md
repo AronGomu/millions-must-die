@@ -40,9 +40,13 @@ green after each ticket.
     exactly half a sprite, so contact distance (`2r`) is one full sprite width
     and two touching bodies are edge-to-edge rather than overlapping.
     The `fixture_*` scenes keep their current geometry — see **A17**.
-  - **Hitbox ring.** Every entity draws a ring at its *real* body radius, on a
-    second pipeline (`shaders/debug_ring.hlsl`), procedural, atlas-free,
-    zero-allocation, on by default, toggled with `H`.
+  - **Hitbox ring.** Every entity draws a ring at its *real* body radius,
+    procedural, atlas-free, zero-allocation, on by default, toggled with `H`.
+    *(Shipped shape, corrected in T10: there is **no** `shaders/debug_ring.hlsl`
+    and no second shader file. The ring is a branch inside `shaders/sprite.hlsl`
+    selected by a negative `uv_rect.x` sentinel — same shader modules, same
+    render pass, asserted by `a_ring_and_a_sprite_share_a_pass`. Only the
+    pipeline object differs, and only in its depth block, which is off.)*
   - **Isometric.** A 2:1 world→screen projection at the render layer plus a
     depth-ordered draw (`z` from screen y, alpha-tested cutout) so the 4-atlas
     batching survives. **The simulation stays in Cartesian cell space** — that
@@ -207,7 +211,12 @@ green after each ticket.
   not from sorting — pixel art is effectively 1-bit alpha, so cutout is honest
   and the 4-atlas batching survives.
 - **A20** — The hitbox ring is a **second pipeline over the same quad**, not a
-  new instance format and not a new atlas. Adding a 5th atlas would break the
+  new shader file, not a new instance format and not a new atlas. *(T10: this
+  plan elsewhere named `shaders/debug_ring.hlsl`. No such file exists or was
+  ever intended to — the pipeline object is built from the **same** compiled
+  `sprite` vertex and fragment modules with the depth block disabled, and the
+  ring/sprite choice is a `uv_rect.x < 0` sentinel branch inside those modules,
+  taken in the same render pass.)* Adding a 5th atlas would break the
   scenario contract's `atlas_count: 4` check and `xtask atlases --check`; a new
   field on `SpriteInstance` would break its pinned layout. The ring reuses
   `SpriteInstance` verbatim — `pos`/`size` give the body's bounding box,
@@ -232,6 +241,7 @@ T5 --> T6
 T8 --> T9[T9: isometric projection + depth]
 T6 --> T7[T7: ADRs, architecture doc, system map]
 T9 --> T7
+T7 --> T10[T10: review fixes]
 ```
 
 ## Ticket order
@@ -248,6 +258,7 @@ T9 --> T7
 | T8 | Hitbox ring overlay | T0 | Every entity draws a ring at its real body radius, procedural and zero-alloc, toggled with `H` | `PLAN_2026_08_09_horde-sim-headroom/T8_hitbox-ring-overlay.md` |
 | T9 | Isometric projection and depth | T8 | The render layer projects 2:1 isometric and draws depth-ordered; the sim is untouched and every state hash holds | `PLAN_2026_08_09_horde-sim-headroom/T9_isometric-projection-and-depth.md` |
 | T7 | ADRs, architecture doc, system map | T6, T9 | Phase 0.5 is a written decision with an enforced test map | `PLAN_2026_08_09_horde-sim-headroom/T7_docs-adr-and-system-map.md` |
+| T10 | Review fixes | T0–T9 | The two blockers and eight should-fixes from the four-dimension review are closed; the written record stops claiming things the code does not do | `PLAN_2026_08_09_horde-sim-headroom/T10_review-fixes.md` |
 
 ## Tickets
 
@@ -261,6 +272,7 @@ T9 --> T7
 - [T8: Hitbox ring overlay](PLAN_2026_08_09_horde-sim-headroom/T8_hitbox-ring-overlay.md) — depends: T0
 - [T9: Isometric projection and depth](PLAN_2026_08_09_horde-sim-headroom/T9_isometric-projection-and-depth.md) — depends: T8
 - [T7: ADRs, architecture doc, system map](PLAN_2026_08_09_horde-sim-headroom/T7_docs-adr-and-system-map.md) — depends: T6, T9
+- [T10: Review fixes](PLAN_2026_08_09_horde-sim-headroom/T10_review-fixes.md) — depends: T0–T9
 
 ## The retune, in one table
 
@@ -276,8 +288,29 @@ T9 --> T7
 | `MAX_COLLISION_RADIUS_Q8` | `2_048` | `2_048` | Unchanged; 1 536 leaves headroom. |
 | `bin_size_cells` (derived) | `1.0` | `12.0` | Follows `2 × radius`. This is why T2–T6 still matter. |
 | Gate smoke | `--agents 50000` | `--agents 5000` | AGENT.md, README, `docs/05-testing.md`, HANDOFF, both platform docs, `docs/lab/gpu-profiling.md`. |
-| `SCALE_COUNTS` | `[1_000, 10_000, 50_000, 100_000]` | `[500, 1_000, 2_500, 5_000]` | A frozen policy must not name a population we refuse to run. |
-| `GATE_AGENT_COUNT` / `STRETCH_AGENT_COUNT` | `50_000` / `100_000` | `5_000` / `5_000` | Ceiling collapses stretch onto the gate. |
+| `SCALE_COUNTS` | `[1_000, 10_000, 50_000, 100_000]` | **unchanged** — see note below | Planned as `[500, 1_000, 2_500, 5_000]`; **not shipped.** |
+| `GATE_AGENT_COUNT` / `STRETCH_AGENT_COUNT` | `50_000` / `100_000` | **unchanged** — see note below | Planned as `5_000` / `5_000`; **not shipped.** |
+| `TEST_SHORT_SCALE_COUNTS` (smoke) | `[500, 1_000, 2_500, 5_000]` | `[500, 1_000, 2_500, 5_000]` | The ladder that actually instantiates a simulation; already under the ceiling. |
+| `TEST_SHORT_GATE_AGENT_COUNT` (smoke) | `5_000` | `5_000` | The ceiling is the top tier. |
+
+**Reconciled after T10 (review item 10).** The last two rows of the retune
+originally read as shipped work; they were not. The decision recorded during T0
+(**D1**) kept the frozen phase-0 ladder exactly as measured and added a
+**comment-only** header instead, on the reasoning that `SCALE_COUNTS`,
+`GATE_AGENT_COUNT` and `STRETCH_AGENT_COUNT` are the policy phase-0's committed
+evidence under `lab/fixtures/**` and `lab/releases/evidence/**` was measured
+against — retuning them would retroactively falsify that evidence rather than
+correct it. The reasoning is in the tree, at the top of
+`crates/mmd-engine/src/bench/policy.rs`: *"They record the `production-v1`
+policy that phase 0's evidence was measured under … Read these counts as a
+record of what was once measured, and `MAX_LIVE_AGENTS` as the rule that
+governs what actually executes."* The live rule is enforced separately —
+`TEST_SHORT_SCALE_COUNTS` is the ladder that instantiates a simulation and
+every tier of it is asserted `<= MAX_LIVE_AGENTS` by
+`crates/mmd-engine/tests/benchmark_policy.rs`. Consequence, recorded as accepted
+residual risk rather than fixed: `BenchPolicy::production()` names populations
+the scenario validator now refuses, so that ladder is unrunnable — deliberately,
+being frozen history.
 
 ## Records produced alongside this plan
 

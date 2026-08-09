@@ -69,7 +69,7 @@ pub enum HarnessError {
 /// Where a harness gets its scenario.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScenarioSource {
-    /// The real 50k phase-0 workload. Hash-verified.
+    /// The real phase-0 gate workload, at the live agent ceiling. Hash-verified.
     GateScene,
     /// A tracked fixture under [`FIXTURE_DIR`], by name. Hash-verified.
     Fixture(String),
@@ -313,7 +313,8 @@ impl Harness {
         }
     }
 
-    /// The real 50k phase-0 workload — for slower system-level tests.
+    /// The real phase-0 gate workload, at the live agent ceiling — for slower
+    /// system-level tests.
     pub fn gate_scene() -> HarnessBuilder {
         Self::builder(ScenarioSource::GateScene)
     }

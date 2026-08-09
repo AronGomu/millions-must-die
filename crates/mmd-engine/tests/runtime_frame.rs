@@ -36,12 +36,16 @@ fn visible_count(agents: AgentsView<'_>, iso: &IsoView, sprite: f32) -> usize {
 }
 
 /// [`visible_quads`] for a hitbox ring: a 2:1 ellipse centred on the ground
-/// point, `2r` across each projected axis.
+/// point, `2r / sqrt(2)` across each projected axis.
+///
+/// The `1/sqrt(2)` is the projection, not a fudge: `[[tw/2, -tw/2], [th/2,
+/// th/2]]` sends a radius-`r` circle to an axis-aligned ellipse with semi-axes
+/// `r*tw/sqrt(2)` and `r*th/sqrt(2)`. Re-derived here rather than borrowed from
+/// `runtime::ring_quad_size_px`, so this file's rect test stays an independent
+/// answer to "what should be on screen?".
 fn visible_rings(agents: AgentsView<'_>, iso: &IsoView, radius_cells: f32) -> usize {
-    let size = [
-        2.0 * radius_cells * iso.tile_w,
-        2.0 * radius_cells * iso.tile_h,
-    ];
+    let k = 2.0 * radius_cells * std::f32::consts::FRAC_1_SQRT_2;
+    let size = [k * iso.tile_w, k * iso.tile_h];
     visible_quads(agents, iso, size, [-size[0] * 0.5, -size[1] * 0.5])
 }
 

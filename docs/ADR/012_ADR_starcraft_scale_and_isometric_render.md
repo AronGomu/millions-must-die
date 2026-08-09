@@ -98,11 +98,24 @@ reader does not mistake the fixed view for an oversight.
 
 - No public sim API changed shape; every pinned state-hash test that does not
   touch the render path is untouched by this decision.
-- **Known follow-up.** The ring ellipse ships at `[2r·tile_w, 2r·tile_h]`, the
-  size the ticket specified. That is `√2` larger than the exact isometric
-  projection of a circular body onto the floor plane. Left as shipped; not a
-  correctness bug in what the ring claims to show, but a reader tuning the ring
-  precisely should know the margin is there.
+- **Resolved in T10 (was a known follow-up).** The ring ellipse originally
+  shipped at `[2r·tile_w, 2r·tile_h]`, the size the ticket specified, and this
+  ADR recorded the `√2` gap against the exact projection as an accepted margin.
+  That judgement was wrong: the projection `[[tw/2, -tw/2], [th/2, th/2]]` maps
+  a radius-`r` circle to the **axis-aligned** screen ellipse with semi-axes
+  `r·tw/√2` and `r·th/√2` (`M·Mᵀ` is the diagonal `[[tw²/2, 0], [0, th²/2]]`, so
+  no shear survives to tilt it), and the shipped quad was that ellipse's
+  bounding box under the shear rather than its image. The consequence was not a
+  cosmetic margin: two agents at exactly contact distance rendered with
+  **overlapping** rings instead of tangent ones, so the overlay could not be
+  used to judge contact — the one question it exists to answer. T10 divides both
+  axes by `√2`; for the tracked scenes (`r = 6`, `tw = 8`, `th = 4`) the quad is
+  `67.9 × 33.9 px`, not `96 × 48`. The quad stays axis-aligned and **the shader
+  is unchanged**. The regression guard is
+  `the_rings_of_two_touching_bodies_are_tangent`, which asserts the geometric
+  property rather than re-deriving the formula, so the two cannot drift together
+  again. No state hash moved: the ring is drawn from simulation state and never
+  feeds back into it (`864147ca…1ee881` reproduced).
 - **Known gap, not fixable inside this plan.** Nothing binds the checked-in
   `.spv` blobs to `shaders/sprite.hlsl`. `xtask shaders --check` verifies
   recorded hashes only, so a future edit could re-pin `canonical_sha256`

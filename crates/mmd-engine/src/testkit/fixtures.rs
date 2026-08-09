@@ -43,15 +43,16 @@ pub fn fixture_path(name: &str) -> PathBuf {
         .join(format!("{name}.ron"))
 }
 
-/// Absolute path to the real 50k gate scenario.
+/// Absolute path to the real gate scenario, at the live agent ceiling.
 pub fn gate_scenario_path() -> PathBuf {
     crate::workspace_root().join(GATE_SCENARIO)
 }
 
-/// Full-screen collision demo: 10 000 agents with a 1.25-cell body.
+/// Full-screen collision demo at the live ceiling: 5 000 agents with a 6-cell
+/// body, separation amortised over four phases.
 pub const COLLISION_MID_SCENE: &str = "assets/scenarios/collision_mid_v1.ron";
-/// Full-screen collision demo at sprite scale: 1 200 agents with a 3.75-cell
-/// body, so a 30 px sprite keeps clear of its neighbours.
+/// Full-screen collision demo at sprite scale: 1 200 agents with the same
+/// 6-cell body over two push-priority classes, so the asymmetric push shows.
 pub const COLLISION_SPRITE_SCENE: &str = "assets/scenarios/collision_sprite_v1.ron";
 /// Both collision demo scenes, for suites that assert across the family.
 pub const ALL_COLLISION_SCENES: &[&str] = &[COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE];

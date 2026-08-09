@@ -13,9 +13,10 @@ feel before innovating. Full vision/roadmap: `docs/CONTEXT.md`.
 ## Status
 
 Phase 0 (technical prototype) is closed on functional scope (`9bffc10`):
-every game system has automated behavioural tests, 50k-agent scene runs
-end-to-end on Linux/Vulkan. Performance/benchmarking is explicitly retired
-and frozen for a later optimization phase — no perf number may gate a merge.
+every game system has automated behavioural tests, the 5 000-agent gate scene
+runs end-to-end on Linux/Vulkan (5 000 = `scenario::MAX_LIVE_AGENTS`).
+Performance/benchmarking is explicitly retired and frozen for a later
+optimization phase — no perf number may gate a merge.
 Branch `plan/technical-prototype` is pushed to `origin`; PR to `main` not yet
 opened. Phase 1 not started. Details: `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`.
 Phase 0.5 (`plan/horde-sim-headroom`) adds three scenario-gated simulation

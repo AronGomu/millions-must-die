@@ -160,20 +160,29 @@ struct Shared {
     done: Barrier,
     /// This tick's work. Written only between `done` and the next `gate`.
     job: UnsafeCell<Job>,
-    /// Bumped with `Release` once `job` is written, loaded with `Acquire`
-    /// before it is read. This is the outbound happens-before edge, stated
-    /// explicitly rather than borrowed from `Barrier` — see the `Sync` note.
+    /// Bumped with `Release` once `job` is written; each worker spins on an
+    /// `Acquire` load until it *differs from the epoch that worker last ran*,
+    /// and only then reads the cell. Waiting for the value to change is what
+    /// makes this a real happens-before edge rather than a load that might have
+    /// read a stale value — see the `Sync` note.
     publish: AtomicU64,
     /// The inbound mirror of `publish`: each worker bumps it with `Release`
     /// after writing its chunk, and the ticking thread acquires it after
-    /// `done`, before reading `sep_x` / `sep_y` back. Without it the argument
-    /// would be one-directional — proven on the way out, assumed on the way
-    /// back.
+    /// `done`, before reading `sep_x` / `sep_y` back.
+    ///
+    /// Weaker than its outbound twin, deliberately and knowingly: `completed`
+    /// is monotone and never reset, so the ticking thread cannot tell this
+    /// generation's bumps from an earlier one's, and `done.wait()` is what
+    /// actually orders the reads. See the `Sync` note for why that is still
+    /// sound and why this comment does not claim more.
     completed: AtomicU64,
     /// Set by any participant whose chunk panicked, before it reaches `done`.
     /// The ticking thread turns it back into a panic on its own side.
     poisoned: AtomicBool,
-    /// Set by `Drop` before its single `gate` wait; workers break on it.
+    /// Set with `Release` by `Drop` before its single `gate` wait. A worker
+    /// breaks only on an `Acquire` load that observed it `true`; it never falls
+    /// through to `job` on a stale `false`, because `publish` has not moved and
+    /// the wait loop keeps it out of the cell either way.
     shutdown: AtomicBool,
     /// Re-entrancy check for two threads sharing one pool. A real `assert!`,
     /// not a `debug_assert!`: `Simulation` is `Clone`, public and `Send`, so
@@ -196,11 +205,31 @@ struct Shared {
 // *ordered*. `Barrier` is a mutex and a condvar underneath and so certainly
 // orders these accesses, but std documents reuse, not a happens-before edge,
 // and an `unsafe` read must not rest on an undocumented implementation detail.
-// So both directions carry their own edge, and neither is left to the barrier:
-// `publish` is released by the ticking thread after it writes the cell and
-// acquired by every worker before it reads; `completed` is released by every
-// worker after it writes its chunk and acquired by the ticking thread after
-// `done`, before it reads `sep_x` / `sep_y` back.
+// So the counters carry edges of their own. Be precise about what each one
+// actually proves, because the two directions are **not** equally strong:
+//
+// * **Outbound (`publish`, the `unsafe` read) — independent of the barrier.**
+//   An acquire load only synchronises-with a release store when it *reads that
+//   store's value*, which a single unconditional load cannot promise. So the
+//   worker does not take one: it spins until `publish` differs from the epoch
+//   it last ran, and only that observation lets it reach the cell. Having read
+//   the bump, it has read the store, and the job written before that store
+//   happens-before the read. `shutdown` is on the same footing — the worker
+//   leaves on an `Acquire` load that read `Drop`'s `Release` store, rather than
+//   falling through to the cell when a stale `false` is observed, which was the
+//   one path here that could have been undefined behaviour rather than a hang.
+//
+// * **Inbound (`completed`, reading `sep_x` / `sep_y` back) — corroborating,
+//   not independent.** Each worker bumps `completed` with `Release` after
+//   writing its chunk and the ticking thread acquires it after `done`, but
+//   nothing here forces that load to observe *this* generation's bumps:
+//   `completed` is monotone and never reset, so after the first tick any stale
+//   value still satisfies the assertion below it. What guarantees the ticking
+//   thread sees this tick's writes is `done.wait()` itself — the barrier is the
+//   synchronising primitive on the way back, and the counter documents the
+//   intent rather than discharging it. That is sound (`std::sync::Barrier` is
+//   `Mutex` + `Condvar`), but it is an argument about the implementation, and
+//   this comment says so instead of claiming an edge the code does not build.
 unsafe impl Sync for Shared {}
 
 /// Persistent worker pool, one per [`Simulation`] that asked for `T > 1`.
@@ -326,7 +355,10 @@ impl SeparationPool {
 
         self.shared.done.wait(); // every chunk is written, or was abandoned
         // Acquire every worker's `Release` bump before the caller reads
-        // `sep_x` / `sep_y` back. This closes the loop opened by `publish`.
+        // `sep_x` / `sep_y` back. Corroborating, not load-bearing: `completed`
+        // is monotone, so this load cannot distinguish this generation's bumps
+        // from an earlier tick's, and `done.wait()` above is what actually
+        // orders the reads. See the `Sync` note.
         let completed = self.shared.completed.load(Ordering::Acquire);
         debug_assert!(
             completed >= self.handles.len() as u64,
@@ -355,8 +387,10 @@ impl SeparationPool {
 
 impl Drop for SeparationPool {
     fn drop(&mut self) {
-        // Release before the gate wait, so the `Acquire` load in `worker` that
-        // is ordered after the same barrier generation is guaranteed to see it.
+        // Release before the gate wait. `Drop` deliberately does **not** bump
+        // `publish`: the worker's wait loop distinguishes "a job arrived" from
+        // "the pool is closing" by whether the epoch moved, so leaving it still
+        // is what makes the shutdown wakeup unambiguous.
         self.shared.shutdown.store(true, Ordering::Release);
         // One wait, not one per worker: the barrier releases all of them
         // together. Workers break *above* `done`, so waiting on `done` here
@@ -374,25 +408,59 @@ impl Drop for SeparationPool {
 
 /// One worker's whole life: park at the gate, run a chunk, report done.
 fn worker(shared: &Shared, w: usize) {
+    // The publish epoch this worker has already run. `run` bumps `publish`
+    // exactly once per tick, before its `gate.wait()`, and `Drop` never bumps
+    // it — so "has the epoch moved past `seen`?" distinguishes a real job from
+    // a shutdown wakeup by *value*, without asking the barrier anything.
+    let mut seen = 0u64;
+
     loop {
         shared.gate.wait();
-        if shared.shutdown.load(Ordering::Acquire) {
-            // Do not touch `done` on the way out — the dropping thread is not
-            // waiting on it, and a wait here would never be satisfied.
-            break;
-        }
 
-        // Acquire the counter the ticking thread released after writing the
-        // cell. This is the documented half of the ordering argument; the
-        // barrier supplies the timing, this supplies the edge.
-        let published = shared.publish.load(Ordering::Acquire);
+        // Wait for one of the two things that can have opened the gate, and do
+        // it with loads whose edges stand on their own.
+        //
+        // The previous form read `shutdown` once, immediately after the gate,
+        // and fell through to the job read if it happened to observe `false`.
+        // That fall-through was only safe *because* `Barrier` orders the two
+        // threads — std documents `Barrier` as reusable, not as establishing a
+        // happens-before edge — and its failure mode was not the hang the code
+        // anticipated but undefined behaviour: a pool dropped before its first
+        // tick would build a slice from a null `job`, and one dropped after a
+        // tick would write through a dangling pointer.
+        //
+        // Spinning on the epoch removes that dependency. Either the ticking
+        // thread's `Release` bump becomes visible — and then this `Acquire`
+        // load has read that store, which is exactly the condition the memory
+        // model requires for the two to synchronise, so the job cell written
+        // before it is visible too — or the `Release` store of `shutdown`
+        // becomes visible and this worker leaves without touching the cell at
+        // all. Atomic stores are guaranteed to become visible in finite time,
+        // so neither arm can spin forever; in practice the barrier has already
+        // ordered both and the loop runs zero extra iterations.
+        let epoch = loop {
+            let published = shared.publish.load(Ordering::Acquire);
+            if published != seen {
+                break Some(published);
+            }
+            if shared.shutdown.load(Ordering::Acquire) {
+                // Do not touch `done` on the way out — the dropping thread is
+                // not waiting on it, and a wait here would never be satisfied.
+                break None;
+            }
+            std::hint::spin_loop();
+        };
+        let Some(published) = epoch else { break };
         debug_assert!(published > 0, "a job is read only after it is published");
+        seen = published;
 
-        // SAFETY: the ticking thread wrote the cell before the `gate.wait()`
-        // above returned, and writes it again only after the `done.wait()`
-        // below has released every participant. The `Acquire` load above pairs
-        // with its `Release` bump, so the write is ordered before this read.
-        // See `unsafe impl Sync for Shared`.
+        // SAFETY: the ticking thread wrote the cell before bumping `publish`
+        // with `Release`, and the `Acquire` load above returned a value
+        // *different from the one this worker last ran*, which on this pool can
+        // only be that bump — so this load read that store and the write to the
+        // cell happens-before this read. The cell is written again only after
+        // the `done.wait()` below has released every participant. See
+        // `unsafe impl Sync for Shared`.
         let job = unsafe { *shared.job.get() };
 
         // Arm the counting allocator for exactly this chunk. Unarmed, an
@@ -410,9 +478,13 @@ fn worker(shared: &Shared, w: usize) {
         if outcome.is_err() {
             shared.poisoned.store(true, Ordering::Release);
         }
-        // Release this chunk's writes to the ticking thread's `Acquire` load
-        // after `done`. The barrier almost certainly orders them already; this
-        // is the half of the argument the memory model actually promises.
+        // Release this chunk's writes before `done`. Unlike the outbound
+        // direction, the acquiring load on the other side cannot prove it read
+        // *this* generation's bump — `completed` is monotone and never reset —
+        // so `done.wait()` is the primitive that actually orders the ticking
+        // thread's read-back. This store makes the intent explicit and costs
+        // nothing; it does not, on its own, discharge the edge. See the `Sync`
+        // note.
         shared.completed.fetch_add(1, Ordering::Release);
 
         shared.done.wait();
@@ -505,9 +577,11 @@ mod tests {
 
         // The pool must still be able to shut down. If a worker had abandoned
         // `done`, or unwound out of its loop and stopped being a participant,
-        // this drop would block on `gate` forever — and the test would hang
-        // here rather than fail.
-        drop(pool);
+        // this drop would block on `gate` forever. Bounded rather than left to
+        // hang: an unbounded wait here does not merely stall this test, it
+        // withholds libtest's output for the whole binary, which is what makes
+        // a shutdown regression read as a slow machine instead of a red test.
+        drop_within_5s(pool, "after a panicking chunk");
     }
 
     /// The happy path still rendezvouses, the chunks cover every agent, and
@@ -532,6 +606,119 @@ mod tests {
                 .all(|(a, b)| *a != 0.0 || *b != 0.0),
             "some agent was never written; the chunks do not cover 0..n"
         );
-        drop(pool);
+        drop_within_5s(pool, "after four clean ticks");
+    }
+
+    /// Drop `pool` on a helper thread and fail if it has not finished in five
+    /// seconds.
+    ///
+    /// Load-bearing, not decoration. Every failure mode of the shutdown path is
+    /// a **hang**, not a panic: a worker that never leaves its wait loop leaves
+    /// `Drop`'s `gate.wait()` blocked forever. libtest has no per-test timeout,
+    /// so without this a regression in the wait loop presents as a merge gate
+    /// that never returns — indistinguishable in CI from a slow machine —
+    /// instead of as a red test. (Confirmed: breaking the epoch comparison to
+    /// `published > 0` produces exactly that stall.)
+    ///
+    /// Five seconds is ~4 orders of magnitude over the real cost; it is a
+    /// liveness bound, not a timing assertion, and nothing here measures speed.
+    fn drop_within_5s(pool: SeparationPool, what: &str) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let h = std::thread::spawn(move || {
+            drop(pool);
+            let _ = tx.send(());
+        });
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok(),
+            "{what}: the pool did not shut down within 5s — a worker never left \
+             its wait loop, and `Drop`'s `gate.wait()` is blocked behind it"
+        );
+        h.join().expect("the dropping thread panicked");
+    }
+
+    /// A pool dropped **before its first tick** shuts down, and does so without
+    /// running anything.
+    ///
+    /// This is the path the shutdown arm exists for. `Job` starts with null
+    /// pointers, so a worker that fell through to `unsafe { *shared.job.get() }`
+    /// here would build a slice from a null pointer. The worker's wait loop
+    /// cannot reach the cell because `publish` has never moved off `0`, so the
+    /// only arm left is the `shutdown` one.
+    ///
+    /// **What this test can and cannot prove.** It proves the shutdown path
+    /// *terminates* and does not panic. It does **not** falsify the memory
+    /// ordering: the pre-fix form — a single unconditional `shutdown` load that
+    /// falls through to the cell — passes this test too, because `Barrier` is
+    /// `Mutex` + `Condvar` underneath and does order the two threads on every
+    /// machine this can run on. The ordering claim is unobservable to a plain
+    /// `cargo test` by construction; falsifying it needs Miri or a weakly
+    /// ordered host. That limit is stated here rather than papered over,
+    /// because a test whose docstring claims more than it checks is the exact
+    /// defect this ticket exists to remove.
+    #[test]
+    fn a_pool_dropped_before_its_first_tick_shuts_down() {
+        for participants in [2usize, 3, 8] {
+            let pool = SeparationPool::new(participants);
+            assert_eq!(
+                pool.shared.publish.load(Ordering::Acquire),
+                0,
+                "no job may be published before the first tick"
+            );
+            assert_eq!(
+                pool.shared.completed.load(Ordering::Acquire),
+                0,
+                "a worker ran a chunk before any job was published"
+            );
+            drop_within_5s(pool, "before first tick");
+        }
+    }
+
+    /// …and one dropped **after** a tick shuts down without re-running the job
+    /// it last ran.
+    ///
+    /// The stale `Job` still points at `probe`'s buffers, which outlive the
+    /// pool here — but in `Simulation`'s real drop order they need not, so a
+    /// worker that took the job arm on a shutdown wakeup would write through a
+    /// dangling pointer. `publish` stops at the epoch every worker already ran,
+    /// so the wait loop takes the shutdown arm instead.
+    ///
+    /// The observable that makes this more than a liveness check: `completed`
+    /// must not advance across the drop, and the output buffers must be
+    /// byte-identical afterwards. A shutdown wakeup that re-entered `run_chunk`
+    /// would move both. See the sibling test for what this still cannot prove.
+    #[test]
+    fn a_pool_dropped_after_a_tick_shuts_down() {
+        let mut probe = Probe::coincident(32);
+        let pool = SeparationPool::new(4);
+        pool.run(probe.job(4, 1));
+        assert_eq!(
+            pool.shared.publish.load(Ordering::Acquire),
+            1,
+            "one tick must publish exactly one epoch"
+        );
+
+        let completed_before = pool.shared.completed.load(Ordering::Acquire);
+        let (sep_x_before, sep_y_before) = (probe.sep_x.clone(), probe.sep_y.clone());
+        // The premise: the tick actually wrote something, or "unchanged across
+        // the drop" would be satisfied by two buffers of zeroes.
+        assert!(
+            sep_x_before.iter().any(|v| *v != 0.0),
+            "the tick wrote nothing, so the comparison below would be vacuous"
+        );
+
+        let shared = Arc::clone(&pool.shared);
+        drop_within_5s(pool, "after a tick");
+
+        assert_eq!(
+            shared.completed.load(Ordering::Acquire),
+            completed_before,
+            "a worker ran another chunk on the shutdown wakeup"
+        );
+        assert_eq!(
+            (probe.sep_x, probe.sep_y),
+            (sep_x_before, sep_y_before),
+            "the output buffers moved after the last tick returned; a worker \
+             re-entered the stale job on its way out"
+        );
     }
 }

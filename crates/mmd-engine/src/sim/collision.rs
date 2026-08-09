@@ -18,10 +18,13 @@ use super::spatial::SpatialGrid;
 
 /// Neighbours one agent may accumulate in a tick.
 ///
-/// A cap is required, not an optimisation: 50 000 agents seeded onto 127 spawn
-/// cells start ~394 deep on one coordinate, and an uncapped scan would be
-/// quadratic in that stack. Capping bounds the *contributions* one agent
-/// accumulates and, because the scan order is fixed, keeps them reproducible.
+/// A cap is required, not an optimisation: the gate scene seeds its agents
+/// round-robin onto 127 spawn cells, so at the live ceiling
+/// (`scenario::MAX_LIVE_AGENTS` = 5 000) every cell starts 39 or 40 deep on one
+/// exact coordinate — `5000 / 127 = 39.37`, i.e. 47 cells of 40 and 80 of 39 —
+/// and an uncapped scan would be quadratic in that stack. Capping bounds the
+/// *contributions* one agent accumulates and, because the scan order is fixed,
+/// keeps them reproducible.
 ///
 /// It does not bound the candidates examined: a neighbour outside contact is
 /// skipped without spending a slot, so an agent whose 3x3 window holds a dense
