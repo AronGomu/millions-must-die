@@ -283,7 +283,9 @@ assertion pair is exact and needs no tolerance.
       `a_bodyless_scenario_walks_the_flow_only_path` **unedited**
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo build -p mmd-engine --no-default-features --features gpu`
-- [ ] `cargo run -- run --agents 50000 --frames 300` — exits 0
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
 - [ ] manual check — watch the mid scene; the crowd must still open up, with no
       agent frozen inside a wall

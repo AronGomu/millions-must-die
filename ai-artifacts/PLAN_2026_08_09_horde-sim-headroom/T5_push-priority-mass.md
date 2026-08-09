@@ -252,7 +252,9 @@ commit body. The feature is the deliverable; the demo scene is not.
       `a_collision_tick_allocates_nothing`
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo build -p mmd-engine --no-default-features --features gpu`
-- [ ] `cargo run -- run --agents 50000 --frames 300` — exits 0
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
 - [ ] manual check — watch the sprite scene; the stack must still open, and no
       agent may end up shoved inside a wall

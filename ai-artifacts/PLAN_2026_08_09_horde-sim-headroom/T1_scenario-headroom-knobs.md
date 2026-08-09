@@ -1,7 +1,7 @@
 # T1: Scenario headroom knobs
 
 **Plan:** `./ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
-**Depends:** none
+**Depends:** T0
 **Commit outcome:** Every scenario declares `separation_phases`,
 `mass_class_count` and `separation_threads` at their identity value `1`; the
 engine carries them through to `CollisionParams`; not one state hash moves.
@@ -27,8 +27,10 @@ engine carries them through to `CollisionParams`; not one state hash moves.
     `collision_radius_q8` precedent: a stale scenario must fail loudly, never
     run silently untuned.
   - `.sha256` sidecars are bare lowercase hex, trimmed.
-  - `graphify` is documented in `AGENT.md` but not installed on this host; do
-    not run `graphify update .`.
+  - `graphify` **is** installed. Orient with `graphify query "<question>"`
+    before reading source, and run `graphify update .` as the last validation
+    step. `graphify-out/` is gitignored, so the refresh never appears in the
+    diff.
 
 ## Requirements
 
@@ -65,7 +67,10 @@ engine carries them through to `CollisionParams`; not one state hash moves.
   `assets/scenarios/fixtures/fixture_corridor_v1.ron`,
   `assets/scenarios/fixtures/fixture_dense_v1.ron`,
   `assets/scenarios/fixtures/fixture_walled_v1.ron`.
-- **From Depends:** none — this is the first ticket.
+- **From Depends (T0):** `MAX_LIVE_AGENTS = 5_000`, the retuned locked
+  constants (`V1_HARD_AGENTS`, `V1_STRETCH_AGENTS`, `V1_SPRITE_PX`,
+  `V1_COLLISION_RADIUS_Q8`), the three retuned scenes with fresh sidecars, and
+  the re-pinned gate digest this ticket must reproduce byte for byte.
 
 **Existing signatures this ticket must preserve** (callers exist in
 `crates/mmd-engine/tests/separation.rs` and
@@ -121,9 +126,13 @@ ticket's real acceptance criterion:
 
 ## Impl steps
 
-- [ ] 1. **TODO(user)** — confirm `plan/zombie-collision` (`108230a`) is merged
-      to `main`. Do not start until it is. Then:
-      `git checkout main && git pull && git checkout -b plan/horde-sim-headroom`.
+- [x] 1. **TODO(user) — RESOLVED by the orchestrator, 2026-08-09.**
+      `plan/zombie-collision` (`108230a`) is already an ancestor of `main`
+      (`git merge-base --is-ancestor plan/zombie-collision main` → true) and
+      `origin/main` == local `main` (`5ec9df6`). The branch
+      `plan/horde-sim-headroom` was cut from that `main` in pre-flight and is
+      already checked out. **Do not create or switch branches** — work on the
+      current one.
 - [ ] 2. In `crates/mmd-engine/src/scenario.rs`, below
       `MAX_SEPARATION_STRENGTH_Q8`, add:
       ```rust
@@ -290,7 +299,9 @@ ticket's real acceptance criterion:
       `a_bodied_scenario_is_pinned_to_a_golden_digest` passes **unedited**
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -- run --agents 50000 --frames 300` — exits 0
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
 - [ ] `nix flake check`

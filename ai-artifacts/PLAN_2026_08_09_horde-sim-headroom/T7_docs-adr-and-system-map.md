@@ -1,15 +1,17 @@
 # T7: ADRs, architecture doc, system map
 
 **Plan:** `./ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
-**Depends:** T6
-**Commit outcome:** Phase 0.5 is a written decision — two ADRs, an architecture
+**Depends:** T6, T9
+**Commit outcome:** Phase 0.5 is a written decision — three ADRs, an architecture
 page, an enforced system→test map, and a glossary that names the new vocabulary.
 
 ## Context (self-contained)
 
 - Goal: buy simulation headroom in the per-agent neighbour scan
   (`crates/mmd-engine/src/sim/collision.rs`) without spending a behavioural
-  guarantee. T1–T6 shipped the engine work; this ticket writes it down.
+  guarantee, on a game resized to StarCraft scale. T0 resized it, T1–T6 shipped
+  the simulation work, T8–T9 shipped the render work; this ticket writes it all
+  down.
 - This slice: docs and the contract test that keeps them honest. The repo's own
   rule (`docs/ADR/README.md`) is *"New decision → new ADR. Changed decision →
   superseding ADR; do not rewrite history silently."* Three of this plan's five
@@ -30,19 +32,33 @@ page, an enforced system→test map, and a glossary that names the new vocabular
   - ADRs and the new architecture HTML are outside `LIVE_DOCS`, but this plan
     keeps them free of speed claims too. Nothing in this repo has been measured
     since phase-0 close.
-  - No new system is added: every test written in T1–T6 lives in a file
-    `SCOPE_SYSTEMS` already maps. `SCOPE_SYSTEM_COUNT` stays `12`.
-  - `graphify` is not installed on this host; do not run `graphify update .`.
+  - T1–T6 add **no** new system: every test they write lives in a file
+    `SCOPE_SYSTEMS` already maps. T8 and T9 **do** — `SCOPE_SYSTEM_COUNT` goes
+    `12` → `14`, gaining "Debug hitbox overlay" and "Isometric projection and
+    depth order".
+  - `graphify` **is** installed. Orient with `graphify query "<question>"`;
+    run `graphify update .` as the last validation step. `graphify-out/` is
+    gitignored, so the refresh never appears in the diff.
 
 ## Requirements
 
 - ADR 010 records amortisation, bin stamping and push priority — including the
   two rejections (Ericson's min-corner 2×2; BioDynaMo's O(#agents) rebuild).
 - ADR 011 records the worker pool and what it cost the allocation invariant.
-- `docs/ADR/README.md` lists both and states how they relate to ADR 009.
+- **ADR 012** records the StarCraft-scale decision and the render work it
+  forced: the `MAX_LIVE_AGENTS = 5_000` ceiling, the 48 px sprite with a
+  half-sprite body, retuning `technical_prototype_v1` in place rather than
+  minting a v2, the hitbox ring as a shader branch rather than a new shader
+  family or a fifth atlas, and isometric depth via alpha-tested cutout rather
+  than a per-frame sort. Each rejected alternative is named with its reason —
+  those are the entries the next reader will otherwise retry.
+- `docs/ADR/README.md` lists all three and states how they relate to ADR 009
+  (separation) and ADR 004 (the sprite renderer, whose "no per-frame depth sort"
+  line ADR 012 supersedes in part).
 - `docs/horde-sim-headroom-architecture.html` exists, dark-mode by default,
-  self-contained (no external asset), and shows the tick's pass order and the
-  three knobs.
+  self-contained (no external asset), and shows the tick's pass order, the three
+  knobs, and the render path from cell space through the isometric projection to
+  the depth-ordered draw.
 - `docs/technical-prototype-functional-close.md` names every new test in the
   right system row.
 - `tests/validation_contract.rs` maps the same names, and `MIN_SCANNED_TESTS`
@@ -247,9 +263,14 @@ Docs have no unit test, so the contract test *is* the test.
   `docs/ADR/011_ADR_parallel_separation_and_the_allocation_invariant.md`.
   Verified and corrected: `docs/horde-sim-headroom-architecture.html`. All three
   were authored alongside the plan and are already in the tree.
-- Edited: `docs/ADR/README.md`, `docs/README.md`,
+- **New:** `docs/ADR/012_ADR_starcraft_scale_and_isometric_render.md`, authored
+  in this ticket against the shipped T0/T8/T9 code.
+- Edited: `docs/ADR/README.md`, `docs/README.md`, `docs/DESIGN.md`,
   `docs/technical-prototype-functional-close.md`, `docs/GLOSSARY.md`,
   `AGENT.md`, `tests/validation_contract.rs`.
+- **Regenerated:** `ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.html` from
+  the updated plan markdown — it is stale from the moment T0 lands until this
+  ticket refreshes it.
 - Public API / behaviour change: none.
 
 ## Validation
@@ -263,5 +284,7 @@ Docs have no unit test, so the contract test *is* the test.
       renders dark by default, no layout overflow, no network request
 - [ ] manual check — every link in `docs/ADR/README.md` resolves
 - [ ] `nix flake check`
-- [ ] app functional — no code touched; `cargo run -- run --agents 50000 --frames 300` exits 0
-- [ ] commit msg draft: `docs(sim): record the phase-0.5 separation headroom decisions`
+- [ ] app functional — no code touched; `cargo run -- run --agents 5000 --frames 300` exits 0
+- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
+- [ ] commit msg draft: `docs(sim): record the phase-0.5 scale, headroom and isometric decisions`

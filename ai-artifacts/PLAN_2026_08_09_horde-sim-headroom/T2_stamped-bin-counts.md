@@ -237,7 +237,9 @@ every state hash are bit-identical.
 - [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 - [ ] `cargo build -p mmd-engine --no-default-features --features gpu` — the
       testkit-gated hook must not leak into a shipping build
-- [ ] `cargo run -- run --agents 50000 --frames 300` — exits 0
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
 - [ ] `nix flake check`
 - [ ] app functional — scenes load, tick and exit; nothing observable changed
 - [ ] commit msg draft: `refactor(sim): stamp the neighbour bins instead of clearing them each rebuild`
