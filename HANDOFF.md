@@ -114,7 +114,7 @@ VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked   # no DISPLAY; 34 
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 nix flake check
 cargo run -p xtask -- bootstrap --check ; shaders --check ; atlases --check
-cargo run -- run --agents 50000 --frames 300           # exit 0, mode=window tick=300 frames=300
+cargo run -- run --agents 5000 --frames 300           # exit 0, mode=window tick=300 frames=300
 cargo tree -e features | grep -c testkit               # 0
 ```
 

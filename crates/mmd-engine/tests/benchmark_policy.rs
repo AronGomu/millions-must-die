@@ -5,10 +5,11 @@ use std::time::{Duration, Instant};
 use mmd_engine::bench::{
     BenchOptions, BenchPolicy, FenceQueue, FenceQueueError, GATE_AGENT_COUNT, GATE_P95_MS,
     GATE_P99_MS, MAX_FRAMES_IN_FLIGHT, MockFence, REPORT_SCHEMA_VERSION, ReportManifests,
-    SCALE_COUNTS, STRETCH_AGENT_COUNT, TrialAggregate, TrialPercentiles, VerdictStatus,
-    WorkloadIdentity, build_report, is_noisy, median, normalized_mad, percentile_type7, run_bench,
-    synthetic_scale_from_trial_p99s,
+    SCALE_COUNTS, STRETCH_AGENT_COUNT, TEST_SHORT_GATE_AGENT_COUNT, TEST_SHORT_SCALE_COUNTS,
+    TrialAggregate, TrialPercentiles, VerdictStatus, WorkloadIdentity, build_report, is_noisy,
+    median, normalized_mad, percentile_type7, run_bench, synthetic_scale_from_trial_p99s,
 };
+use mmd_engine::scenario::MAX_LIVE_AGENTS;
 use sha2::{Digest, Sha256};
 
 #[test]
@@ -309,6 +310,15 @@ fn test_short_policy_injectable() {
     assert!(p.warmup < Duration::from_secs(1));
     assert!(p.trial_duration < Duration::from_secs(1));
     assert_eq!(p.trial_count, 7);
-    assert_eq!(p.scale_counts, SCALE_COUNTS);
-    assert_eq!(p.gate_count, 50_000);
+    // Its own ladder, not the frozen historical one: this policy runs the sim,
+    // so every tier must sit at or under the live entity ceiling.
+    assert_eq!(p.scale_counts, TEST_SHORT_SCALE_COUNTS);
+    assert_eq!(p.gate_count, TEST_SHORT_GATE_AGENT_COUNT);
+    assert_eq!(p.gate_count, MAX_LIVE_AGENTS);
+    for c in &p.scale_counts {
+        assert!(
+            *c <= MAX_LIVE_AGENTS,
+            "smoke tier {c} exceeds the live ceiling {MAX_LIVE_AGENTS}"
+        );
+    }
 }

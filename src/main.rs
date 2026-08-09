@@ -30,7 +30,7 @@ struct Cli {
 enum Commands {
     /// Run interactive prototype scene (moving flow-field horde)
     Run {
-        /// Agent count override (default: scenario hard count = 50000)
+        /// Agent count override (default: scenario hard count = 5000)
         #[arg(long)]
         agents: Option<u32>,
         /// Scenario path (default: assets/scenarios/technical_prototype_v1.ron)

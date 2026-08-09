@@ -12,6 +12,7 @@ pub use fence_queue::{
 };
 pub use policy::{
     BenchPolicy, GATE_AGENT_COUNT, SCALE_COUNTS, STRETCH_AGENT_COUNT, TEST_POLICY_ENV,
+    TEST_SHORT_GATE_AGENT_COUNT, TEST_SHORT_SCALE_COUNTS,
 };
 pub use report::{
     AbsoluteGate, BenchExitCode, BenchmarkReport, REPORT_SCHEMA_VERSION, ReportManifests,

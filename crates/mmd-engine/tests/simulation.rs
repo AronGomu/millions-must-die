@@ -9,7 +9,7 @@
 mod common;
 
 use common::Tracker;
-use mmd_engine::scenario::Cell;
+use mmd_engine::scenario::{Cell, MAX_LIVE_AGENTS};
 use mmd_engine::sim::{ARRIVAL_RADIUS, AgentsView, SPEED_CELLS_PER_SEC, TICK_DT, quantize_cell};
 use mmd_engine::testkit::{ALL_FIXTURES, FIXTURE_CORRIDOR_V1, FIXTURE_DENSE_V1, GridSpec, Harness};
 
@@ -28,6 +28,26 @@ fn assert_even(counts: &[u32], n: usize) {
     if rem == 0 {
         assert!(counts.iter().all(|&c| c == base));
     }
+}
+
+/// Same claim as [`assert_even`], but for a field that advances once per full
+/// cycle of another field.
+///
+/// `frame` is assigned `(i / atlas_count) % frame_count`, so its split is
+/// exactly even only when the population divides `atlas_count * frame_count`.
+/// Below that it is even to within one atlas stride, which is what "evenly
+/// distributed" can mean for this field — asserting a perfect split would only
+/// hold for populations that happen to divide 16.
+fn assert_even_within(counts: &[u32], n: usize, stride: u32) {
+    let sum: u32 = counts.iter().sum();
+    assert_eq!(sum, n as u32);
+    let max = *counts.iter().max().expect("non-empty counts");
+    let min = *counts.iter().min().expect("non-empty counts");
+    assert!(
+        max - min <= stride,
+        "spread {} exceeds one stride of {stride}: counts={counts:?}",
+        max - min
+    );
 }
 
 #[test]
@@ -111,13 +131,17 @@ fn arrival_radius_recycles() {
 }
 
 #[test]
-fn population_stays_50000() {
+fn population_stays_at_the_cap() {
     let mut h = Harness::gate_scene().build().expect("gate scene");
-    assert_eq!(h.alive_count(), 50_000);
+    // The gate scene runs at the engine's ceiling, so this is the population
+    // check at its worst case, not at an arbitrary count.
+    let configured = h.scenario().hard_agent_count() as usize;
+    assert_eq!(configured, MAX_LIVE_AGENTS as usize);
+    assert_eq!(h.alive_count(), configured);
 
     h.step_exact(10_000);
-    assert_eq!(h.alive_count(), 50_000);
-    assert_eq!(h.agents().x.len(), 50_000);
+    assert_eq!(h.alive_count(), configured);
+    assert_eq!(h.agents().x.len(), configured);
 }
 
 #[test]
@@ -212,7 +236,7 @@ fn atlas_dir_frame_evenly_distributed() {
     }
     assert_even(&ac, n);
     assert_even(&dc, n);
-    assert_even(&fc, n);
+    assert_even_within(&fc, n, h.scenario().atlas_count());
 }
 
 // --- T30 behaviour ----------------------------------------------------------
@@ -471,7 +495,7 @@ fn no_group_is_starved() {
 #[test]
 fn positions_finite_and_in_bounds() {
     // Every tracked fixture, sampled every tick, plus a bounded sweep of the
-    // real 50k workload.
+    // real gate workload.
     for name in ALL_FIXTURES {
         let mut h = Harness::fixture(*name).build().expect("fixture");
         common::assert_positions_finite_and_in_bounds(&h, name);
@@ -494,8 +518,8 @@ fn positions_finite_and_in_bounds() {
 
 #[test]
 fn alive_count_is_stable() {
-    // 50k agents, 1000 ticks, checked every single tick — a population that
-    // dipped for one frame would be invisible to an end-of-run assertion.
+    // A full-ceiling horde, 1000 ticks, checked every single tick — a population
+    // that dipped for one frame would be invisible to an end-of-run assertion.
     let mut h = Harness::gate_scene().build().expect("gate scene");
     let configured = h.scenario().hard_agent_count() as usize;
     assert_eq!(h.alive_count(), configured);
@@ -527,31 +551,32 @@ fn alive_count_is_stable() {
 }
 
 #[test]
-fn determinism_holds_for_50k_agents() {
-    // Bounded on purpose: 300 ticks is enough for 50k agents to spread out over
-    // the field (they start stacked on 127 spawn cells and diverge immediately),
-    // and keeps the whole-suite cost of this check to a few seconds.
+fn determinism_holds_at_the_cap() {
+    // Bounded on purpose: 300 ticks is enough for a full-ceiling horde to spread
+    // out over the field (they start stacked on 127 spawn cells and diverge
+    // immediately), and keeps the whole-suite cost of this check to a few
+    // seconds.
     const TICKS: u64 = 300;
 
     let mut a = Harness::gate_scene().build().expect("a");
     let mut b = Harness::gate_scene().build().expect("b");
-    assert_eq!(a.alive_count(), 50_000);
+    assert_eq!(a.alive_count(), MAX_LIVE_AGENTS as usize);
     a.step_exact(TICKS);
     b.step_exact(TICKS);
     assert_eq!(
         a.state_hash_hex(),
         b.state_hash_hex(),
-        "two 50k runs of the same scenario diverged"
+        "two runs of the same scenario diverged"
     );
     assert_eq!(a.quantized_state_hash(), b.quantized_state_hash());
 
-    // And the hash actually tracks the run: a differently seeded 50k horde must
-    // not land on the same digest, or the comparison above proves nothing.
+    // And the hash actually tracks the run: a differently seeded horde must not
+    // land on the same digest, or the comparison above proves nothing.
     let mut seeded = Harness::gate_scene().seed(7).build().expect("seeded");
     seeded.step_exact(TICKS);
     assert_ne!(
         seeded.state_hash_hex(),
         a.state_hash_hex(),
-        "a reseeded 50k run must not match the canonical one"
+        "a reseeded run must not match the canonical one"
     );
 }

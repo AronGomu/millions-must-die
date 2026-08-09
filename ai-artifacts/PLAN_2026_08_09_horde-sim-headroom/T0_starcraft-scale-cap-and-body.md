@@ -80,15 +80,46 @@ for every ticket after this one.
   `docs/platform/macos-bootstrap.md`, `docs/lab/gpu-profiling.md`, and the
   `--agents` doc comment in `src/main.rs` (line ~33, "default: scenario hard
   count = 50000").
-- `crates/mmd-engine/src/bench/policy.rs`: `SCALE_COUNTS` →
-  `[500, 1_000, 2_500, 5_000]`, `GATE_AGENT_COUNT` → `5_000`,
-  `STRETCH_AGENT_COUNT` → `5_000`, with a comment recording that the ceiling
-  collapses the stretch tier onto the gate. `crates/mmd-engine/tests/benchmark_policy.rs`
-  (lines ~166, ~167, ~302) follows. **No threshold value changes**;
-  `gate_list_has_no_perf_thresholds` must stay green.
-- `tools/mmd-lab/src/gate.rs` fixture strings that name `100_000` / `100000`
-  (lines ~634, ~681, ~684, ~687) are retuned to `5000` so the frozen lab stops
-  naming a population above the ceiling.
+- **`crates/mmd-engine/src/bench/policy.rs` — AMENDED by the orchestrator,
+  2026-08-09. Do NOT retune the ladder.** The original requirement
+  (`SCALE_COUNTS` → `[500, 1_000, 2_500, 5_000]`, `GATE_AGENT_COUNT` and
+  `STRETCH_AGENT_COUNT` → `5_000`) rested on a false premise. The first T0
+  attempt proved it: `SCALE_COUNTS` / `GATE_AGENT_COUNT` are **load-bearing
+  inputs** to `validate_release_proof`, the merge gate and all three candidate
+  lanes, which validate ~15 committed evidence artifacts under `lab/fixtures/**`
+  and `lab/releases/evidence/**` recorded at 1 000 / 10 000 / 50 000 / 100 000
+  agents. Retuning the constants reds 31 `mmd-lab` tests; isolation was proven
+  (reverting only `policy.rs` turns all 31 green again). Greening it would need
+  either rewriting the committed evidence JSON — which **falsifies frozen
+  phase-0 measurement history** (`d37bfe6` "close phase 0 on honest inconclusive
+  50k evidence") and is forbidden by this plan's own no-perf-claim rule — or a
+  policy-versioning redesign of the lab, which is a separate slice and is not in
+  this plan's Scope In.
+  **Resolution: `bench/policy.rs` and the `mmd-lab` evidence are designated
+  phase-0 history, exactly like `docs/technical-prototype-results.md` and the
+  ADRs.** They record the policy (`policy_id: "production-v1"`) that phase 0's
+  evidence was measured under; that policy cannot retroactively become something
+  else. Therefore:
+  - `SCALE_COUNTS`, `GATE_AGENT_COUNT`, `STRETCH_AGENT_COUNT` keep their
+    historical values. Revert any edit to them.
+  - `crates/mmd-engine/tests/benchmark_policy.rs`, `tools/mmd-lab/src/gate.rs`
+    and `tools/mmd-lab/src/release.rs` are reverted to `HEAD` for the same
+    reason — their fixture strings mirror the frozen ladder.
+  - Instead, add a **comment only** at the head of the ladder constants in
+    `bench/policy.rs` recording that (a) this policy is frozen phase-0 history
+    and the populations it names are historical measurement tiers, not live
+    targets, (b) the engine's live simultaneous-entity ceiling is
+    `scenario::MAX_LIVE_AGENTS = 5_000`, and (c) nothing above that ceiling is
+    run, tested or benchmarked from phase 0.5 onward. The comment must contain
+    **no** performance number and no `PERF_THRESHOLD_TOKENS` /
+    `EXTRA_PERF_CLAIM_TOKENS` token.
+  - No threshold value changes anywhere; `gate_list_has_no_perf_thresholds`
+    stays green, and `cargo test -p mmd-lab` stays green.
+  Residual risk, accepted and logged: the frozen policy still *names* 50 000 and
+  100 000. The plan's Scope-In line "no policy constant names a larger
+  population" is knowingly not met for this one frozen-history surface, because
+  the only ways to meet it are dishonest or out of scope. The live contract —
+  which is what actually governs what runs — does enforce the ceiling.
 - Three tests are renamed so no test identity contains a population we no longer
   run, and `tests/validation_contract.rs` (lines ~360, ~361, ~425) plus the
   close-doc map rows follow:
@@ -103,6 +134,20 @@ for every ticket after this one.
 - `docs/technical-prototype-results.md` and the ADRs are designated history —
   **leave their 50k references alone**; they record what phase 0 did.
   `.tmp/` and `.pi-subagents/` are untracked working notes — leave them.
+- **Designated history, extended (orchestrator, 2026-08-09).** The same rule
+  covers `crates/mmd-engine/src/bench/policy.rs`,
+  `crates/mmd-engine/tests/benchmark_policy.rs`, `tools/mmd-lab/**` and
+  `lab/**` — the frozen `production-v1` policy and the evidence recorded under
+  it. Leave every population they name alone. Also out of the sweep, and NOT
+  defects: `crates/mmd-engine/src/render/renderer.rs` `MAX_INSTANCES` (a GPU
+  instance-buffer capacity, not a declared population — not in this ticket's
+  Inputs, do not touch it), `tests/validation_contract.rs` ~893 (a deliberate
+  bad-doc fixture feeding `perf_claim_scanner_catches_what_it_is_meant_to` —
+  editing it would weaken the scanner's own test),
+  `crates/mmd-engine/src/testkit/rng.rs` ~38 (the FNV prime `0x100_0000_01B3`,
+  a grep false positive), `Cargo.lock`, and this plan's own directory
+  `ai-artifacts/PLAN_2026_08_09_horde-sim-headroom*` plus
+  `ai-artifacts/PLAN_2026_08_08_zombie-collision/`.
 - The gate smoke's `hash=` on the `clean exit` line is captured and written into
   this ticket's Outputs as the new pinned digest.
 
@@ -174,20 +219,42 @@ before deleting (`crates/mmd-engine/tests/scenario_contract.rs` references it).
 
 ## Impl steps
 
-- [ ] 1. `graphify query "scenario agent count validation caps"` and
+- [x] 1. `graphify query "scenario agent count validation caps"` and
       `graphify explain "collision_radius_q8"` to confirm nothing outside the files
-      listed in Inputs reads the constants.
-- [ ] 2. Add `MAX_LIVE_AGENTS` to `scenario.rs`. Write the six new tests. Run — red.
-- [ ] 3. Delete `COLLISION_SCENE_MAX_AGENTS`; route
-      `validate_collision_scene_dims` through `MAX_LIVE_AGENTS`.
-- [ ] 4. Add the ceiling check to `validate_fixture_dims` and to the v1 path. Prefer
+      listed in Inputs reads the constants. — both run; the follow-up
+      `grep -rn "COLLISION_SCENE_MAX_AGENTS\|V1_HARD_AGENTS\|…"` shows the
+      constants are read only by `scenario.rs`, `scenario_contract.rs` and
+      `testkit/mod.rs` (all in Inputs).
+- [x] 2. Add `MAX_LIVE_AGENTS` to `scenario.rs`. Write the six new tests. Run — red.
+      — `cargo test -p mmd-engine --test scenario_contract` → `26 passed; 5 failed`;
+      failures are `a_body_is_half_a_sprite`,
+      `every_tracked_scene_is_within_the_ceiling`,
+      `population_above_the_ceiling_is_refused`,
+      `stretch_above_the_ceiling_is_refused`,
+      `the_ceiling_binds_every_scenario_family`. The sixth,
+      `the_locked_radius_is_under_the_radius_cap`, is a regression guard that
+      must hold before and after (`102 < 2_048`, later `1_536 < 2_048`).
+- [x] 3. Delete `COLLISION_SCENE_MAX_AGENTS`; route
+      `validate_collision_scene_dims` through `MAX_LIVE_AGENTS`. — constant gone
+      from `scenario.rs`; `collision_scene_caps_its_population` now asserts
+      `exceeds MAX_LIVE_AGENTS` and passes.
+- [x] 4. Add the ceiling check to `validate_fixture_dims` and to the v1 path. Prefer
       one shared `fn check_population(hard, stretch) -> Result<(), ScenarioError>`
-      called by all three so a fourth family cannot skip it.
-- [ ] 5. Change `V1_HARD_AGENTS`, `V1_STRETCH_AGENTS`, `V1_SPRITE_PX`,
-      `V1_COLLISION_RADIUS_Q8`.
-- [ ] 6. Edit the three `.ron` scenes. Only the six scalar fields change — spawn
-      lists, obstacle lists, seeds and destinations are untouched.
-- [ ] 7. Regenerate the three sidecars:
+      called by all three so a fourth family cannot skip it. — implemented as a
+      single `check_population(doc)` call at the top of
+      `validate_version_and_dims`, after version recognition and *before* family
+      dispatch. Stronger than three call sites: a fourth family inherits the
+      ceiling instead of having to remember it.
+      `the_ceiling_binds_every_scenario_family` passes.
+- [x] 5. Change `V1_HARD_AGENTS`, `V1_STRETCH_AGENTS`, `V1_SPRITE_PX`,
+      `V1_COLLISION_RADIUS_Q8`. — `5_000 / 5_000 / 48 / 1_536`;
+      `loads_v1_scene` + `gate_scene_locks_its_collision_tuning` pass.
+- [x] 6. Edit the three `.ron` scenes. Only the six scalar fields change — spawn
+      lists, obstacle lists, seeds and destinations are untouched. —
+      `git diff -U0 assets/scenarios/*.ron` shows exactly 11 changed lines, all
+      scalars; no spawn/obstacle/seed/destination line moved.
+- [x] 7. Regenerate the three sidecars — all three scenes load hash-verified
+      (`collision_scenes_load_and_verify`, `loads_v1_scene` pass):
       ```sh
       for f in assets/scenarios/technical_prototype_v1 \
                assets/scenarios/collision_mid_v1 \
@@ -195,22 +262,75 @@ before deleting (`crates/mmd-engine/tests/scenario_contract.rs` references it).
         sha256sum "$f.ron" | cut -d' ' -f1 > "$f.sha256"
       done
       ```
-- [ ] 8. Retune `bench/policy.rs` + `benchmark_policy.rs`. Change counts only; leave
-      `GATE_P95_MS`, `GATE_P99_MS`, `NMAD_LIMIT` and every duration alone.
-- [ ] 9. Retune the `tools/mmd-lab/src/gate.rs` fixture strings.
-- [ ] 10. Rename the three tests; update `tests/validation_contract.rs` and the two
-       close-doc rows.
-- [ ] 11. Sweep the commands: `AGENT.md`, `README.md`, `docs/05-testing.md`,
+- [x] 8. **REWRITTEN by the orchestrator — the defect the first attempt found is
+      resolved in Requirements.** Do NOT retune the ladder. Instead:
+      `git checkout HEAD -- crates/mmd-engine/src/bench/policy.rs
+      crates/mmd-engine/tests/benchmark_policy.rs tools/mmd-lab/src/gate.rs
+      tools/mmd-lab/src/release.rs`, then add the **comment-only** header to the
+      ladder constants in `bench/policy.rs` described in Requirements (frozen
+      phase-0 history / live ceiling is `MAX_LIVE_AGENTS` / nothing above it is
+      run). No constant, threshold or fixture string changes.
+      — validate: `cargo test -p mmd-lab --no-fail-fast` green, and
+      `git diff HEAD --stat -- crates/mmd-engine/src/bench/policy.rs
+      crates/mmd-engine/tests/benchmark_policy.rs tools/mmd-lab/` shows a change
+      to `policy.rs` comments only.
+      — DONE, with ONE necessary deviation, flagged rather than hidden.
+      Revert done: `git diff HEAD --stat -- tools/mmd-lab/` is **empty**, and
+      `cargo test -p mmd-lab --no-fail-fast` → **231 passed / 0 failed**.
+      Comment-only header added at the ladder; no constant, threshold or fixture
+      string changed there.
+      **Deviation — the diff is NOT comments-only.** A fact neither the ticket
+      nor the first attempt had: `BenchPolicy::test_short()` reused the frozen
+      ladder, and it is the one policy that *executes* the simulation. With the
+      ladder reverted, `dry_bench_pins_exact_atlas_manifest_bytes` died on
+      `Runtime(AgentCount { got: 10000, cap: 5000 })` — the frozen ladder cannot
+      be run under the live ceiling. Resolved by splitting the two policies, the
+      smallest change that keeps both truths:
+      `production()` keeps the historical ladder verbatim, so every committed
+      evidence artifact still validates; `test_short()` gains its own
+      `TEST_SHORT_SCALE_COUNTS = [500, 1_000, 2_500, 5_000]` and
+      `TEST_SHORT_GATE_AGENT_COUNT = 5_000`. `test_short` has
+      `policy_id: "test-short-v1"` and writes no committed evidence, so nothing
+      historical depends on the tiers it names. No threshold value changed.
+      Touched: `bench/policy.rs`, `bench/mod.rs` (re-export),
+      `tests/benchmark_policy.rs` (the one assertion that pinned `test_short` to
+      the frozen ladder; it now also asserts every smoke tier is `<= MAX_LIVE_AGENTS`).
+- [x] 9. ~~Retune the `tools/mmd-lab/src/gate.rs` fixture strings.~~ **DROPPED by
+      the orchestrator** — folded into step 8's revert. The frozen lab's fixture
+      strings mirror the frozen ladder; they are phase-0 history, not live text.
+      — validate: `git diff HEAD --stat -- tools/mmd-lab/` empty.
+- [x] 10. Rename the three tests; update `tests/validation_contract.rs` and the two
+       close-doc rows. — `every_system_has_a_test` passes (24/24 in
+       `validation_contract`), so the map, the source scan and the close doc agree.
+- [x] 11. Sweep the commands: `AGENT.md`, `README.md`, `docs/05-testing.md`,
        `HANDOFF.md`, `docs/platform/macos-bootstrap.md`,
        `docs/lab/gpu-profiling.md`, `src/main.rs`.
-       Verify afterwards that
-       `grep -rn "50000\|50_000\|100_000\|100000" --include=*.rs --include=*.md .`
-       returns hits **only** in `docs/technical-prototype-results.md`, `docs/ADR/`,
-       `ai-artifacts/PLAN_2026_08_08_zombie-collision/`, `.tmp/`, `.pi-subagents/`
-       and `Cargo.lock` — all designated history or untracked notes.
-- [ ] 12. Run the gate smoke, capture the new `hash=`, and record it in Outputs.
-- [ ] 13. `graphify install` (clears the 0.9.36/0.9.37 skill warning), then
-       `graphify update .`.
+       **Sweep done. Grep criterion AMENDED by the orchestrator** — the
+       allowlist is the "Designated history, extended" bullet in Requirements.
+       Every residue enumerated below falls inside that allowlist, so this step
+       is satisfied; re-run the grep after step 8's revert and confirm nothing
+       outside the allowlist remains.
+       Swept to `--agents 5000`: the seven listed files, plus
+       `docs/platform/windows-bootstrap.md` and `third_party/README.md` (the
+       ticket lists only the macOS platform doc, but Context says "every doc and
+       command that names 50 000"), plus the comments in `src/run.rs:583` and
+       `tests/cli_contract.rs:59`. `tests/cli_contract.rs` stretch-cap strings
+       became `stretch cap of 5000` / `1..=5000`.
+       Re-run after step 8's revert, excluding exactly the amended allowlist
+       (`docs/technical-prototype-results.md`, `docs/ADR/`, `ai-artifacts/`,
+       `.tmp/`, `.pi-subagents/`, `bench/policy.rs`, `tests/benchmark_policy.rs`,
+       `tools/mmd-lab/**`, `lab/**`, `render/renderer.rs`,
+       `tests/validation_contract.rs`, `testkit/rng.rs`):
+       **0 residual hits.**
+- [x] 12. Run the gate smoke, capture the new `hash=`, and record it in Outputs.
+       — `cargo run -- run --agents 5000 --frames 300` → exit 0,
+       `mode=window backend=vulkan tick=300 frames=300`, groups `[1250 x 4]`,
+       `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+       Captured off a fully green tree (460 passed / 0 failed) and reproduced on
+       three consecutive runs. Written into Outputs.
+- [x] 13. `graphify install` (clears the 0.9.36/0.9.37 skill warning), then
+       `graphify update .`. — both run; `git status` shows no `graphify-out/`
+       entry (gitignored).
 
 ## Outputs
 
@@ -221,29 +341,41 @@ before deleting (`crates/mmd-engine/tests/scenario_contract.rs` references it).
 - Six new contract tests; three renamed tests.
 - **The re-pinned gate digest** — fill in on completion:
   - `cargo run -- run --scenario assets/scenarios/technical_prototype_v1.ron --frames 300` →
-    `hash=________________________________________________________________`
+    `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+  - Reproduced on three consecutive runs, and byte-identical via both
+    `--agents 5000` and the explicit `--scenario …/technical_prototype_v1.ron`.
   - This value is what T1–T9 must reproduce. Previous value (superseded):
     `f647e7f590ed5814e4e61388e23836dfacb980217fb1762542ec3abfe85549b3`.
 - `MIN_SCANNED_TESTS` raised to match the new scanned total.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green, including the six new tests
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -p xtask -- shaders --check`
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0; `hash=` captured
-      into Outputs
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
-- [ ] `cargo run -- run --agents 5001 --frames 1` — exits non-zero, message names the cap
-- [ ] `cargo tree -e features | grep -c testkit` → 0
-- [ ] `git diff --stat assets/scenarios/fixtures/` → empty
-- [ ] `no_perf_claim_in_docs` green after the `LIVE_DOCS` edits
-- [ ] `graphify update .` run; `git status` shows no `graphify-out/` entry
+- [x] `cargo fmt --all -- --check` — clean, no diff
+- [x] `cargo test --workspace --locked` — green, including the six new tests:
+      **460 passed / 0 failed** across the workspace (`--no-fail-fast`)
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — exit 0, no warnings
+- [x] `nix flake check` — `all checks passed!`
+- [x] `cargo run -p xtask -- bootstrap --check` — ok
+- [x] `cargo run -p xtask -- shaders --check` — ok
+- [x] `cargo run -p xtask -- atlases --check` — ok
+- [x] `cargo run -- run --agents 5000 --frames 300` — exits 0; `hash=` captured
+      into Outputs: `864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+      (`mode=window backend=vulkan tick=300 frames=300`, groups `[1250 x 4]`)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
+- [x] `cargo run -- run --agents 5001 --frames 1` — exit 1:
+      `run failed: --agents 5001 exceeds the scenario's stretch cap of 5000: pick a
+      count in 1..=5000, or use a scenario with a larger cap`
+- [x] `cargo tree -e features | grep -c testkit` → `0`
+- [x] `git diff --stat assets/scenarios/fixtures/` → empty (four fixtures byte-identical)
+- [x] `no_perf_claim_in_docs` green after the `LIVE_DOCS` edits — also
+      `perf_claim_scanner_catches_what_it_is_meant_to`, `every_system_has_a_test`
+      and `gate_list_has_no_perf_thresholds` green
+- [x] `graphify update .` run; `git status` shows no `graphify-out/` entry
 - [ ] manual check: `cargo run -- run --agents 5000` — units read as chunky
       StarCraft-scale sprites, and two agents pressed together are edge-to-edge
       rather than overlapping art. Esc to quit.
+      **Intentionally left unchecked — windowed GPU check, needs a human at a
+      display.** Recorded as a human step in `ai-artifacts/manual_test_checklist.md`
+      under `## T0 starcraft-scale-cap-and-body`. Not run headless, and not
+      allowed to gate this ticket.

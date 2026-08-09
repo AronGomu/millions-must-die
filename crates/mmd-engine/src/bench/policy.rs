@@ -4,6 +4,21 @@ use std::time::Duration;
 
 use super::stats::{GATE_P95_MS, GATE_P99_MS, NMAD_LIMIT};
 
+// The three ladder constants below are **frozen phase-0 history**.
+//
+// They record the `production-v1` policy that phase 0's evidence was measured
+// under, and the committed artifacts in `lab/fixtures/**` and
+// `lab/releases/evidence/**` are validated against them. That policy cannot
+// retroactively become something else without falsifying the evidence, so the
+// populations named here are historical measurement tiers — not live targets,
+// and not a statement about what this engine runs today.
+//
+// The live simultaneous-entity ceiling is `scenario::MAX_LIVE_AGENTS` = 5 000.
+// From phase 0.5 onward nothing above that ceiling is run, tested or
+// benchmarked; the scenario contract refuses it in every family. Read these
+// counts as a record of what was once measured, and `MAX_LIVE_AGENTS` as the
+// rule that governs what actually executes.
+
 /// Scale curve agent counts (normative).
 pub const SCALE_COUNTS: [u32; 4] = [1_000, 10_000, 50_000, 100_000];
 
@@ -12,6 +27,17 @@ pub const GATE_AGENT_COUNT: u32 = 50_000;
 
 /// Named stretch (recorded, never blocks alone).
 pub const STRETCH_AGENT_COUNT: u32 = 100_000;
+
+/// Scale curve for the short smoke policy.
+///
+/// Deliberately *not* [`SCALE_COUNTS`]. That ladder is frozen history and names
+/// populations above the live ceiling; this policy is the one that actually
+/// instantiates the simulation, so every tier here must sit at or under
+/// `scenario::MAX_LIVE_AGENTS` or the smoke cannot run at all.
+pub const TEST_SHORT_SCALE_COUNTS: [u32; 4] = [500, 1_000, 2_500, 5_000];
+
+/// Gate count for the short smoke policy; the ceiling is the top tier.
+pub const TEST_SHORT_GATE_AGENT_COUNT: u32 = 5_000;
 
 /// Env var enabling short smoke policy for CLI path.
 pub const TEST_POLICY_ENV: &str = "MMD_BENCH_TEST_POLICY";
@@ -55,13 +81,18 @@ impl BenchPolicy {
 
     /// Injectable short policy for unit/CLI smoke only.
     ///
-    /// Keeps same scale curve + gate semantics; shrinks wall time.
-    /// Min frame floors guarantee samples even when one frame > duration.
+    /// Keeps the same gate semantics; shrinks wall time. Min frame floors
+    /// guarantee samples even when one frame > duration.
+    ///
+    /// Its scale curve is its own ([`TEST_SHORT_SCALE_COUNTS`]) rather than the
+    /// frozen [`SCALE_COUNTS`]: this policy runs the simulation, so it is bound
+    /// by the live entity ceiling. It records no committed evidence, so nothing
+    /// historical depends on the tiers it names.
     pub fn test_short() -> Self {
         Self {
-            scale_counts: SCALE_COUNTS.to_vec(),
-            gate_count: GATE_AGENT_COUNT,
-            stretch_count: STRETCH_AGENT_COUNT,
+            scale_counts: TEST_SHORT_SCALE_COUNTS.to_vec(),
+            gate_count: TEST_SHORT_GATE_AGENT_COUNT,
+            stretch_count: TEST_SHORT_GATE_AGENT_COUNT,
             warmup: Duration::from_millis(1),
             trial_count: 7,
             trial_duration: Duration::from_millis(1),

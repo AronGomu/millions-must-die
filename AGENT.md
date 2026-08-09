@@ -42,7 +42,7 @@ nix flake check
 cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
-cargo run -- run --agents 50000 --frames 300
+cargo run -- run --agents 5000 --frames 300
 ```
 - Toolchain: Rust 1.95.0 pinned via `rust-toolchain.toml`. Linux/NixOS: `nix develop` / `nix flake check`. Windows/macOS: rustup from `rust-toolchain.toml`.
 - On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip.

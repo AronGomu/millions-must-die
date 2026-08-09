@@ -143,7 +143,10 @@ impl Simulation {
             x.push(spawn_x[si]);
             y.push(spawn_y[si]);
 
-            // Independent moduli → exact even counts when n divides 4/8/4.
+            // Independent moduli. `atlas`/`dir` are exactly even when n divides
+            // `ac`/`dc`; `frame` advances once per atlas cycle, so it is exactly
+            // even only when n divides `ac * fc`, and even to within one atlas
+            // stride otherwise.
             let a = (i % ac) as u8;
             let d = (i % dc) as u8;
             let f = ((i / ac) % fc) as u8;

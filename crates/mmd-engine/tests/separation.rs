@@ -746,12 +746,12 @@ fn mid_scene_reports_its_tuning() {
     let h = Harness::builder(ScenarioSource::path(scene_path(COLLISION_MID_SCENE)))
         .build()
         .expect("mid collision scene");
-    assert_eq!(h.alive_count(), 10_000);
+    assert_eq!(h.alive_count(), 5_000);
     let c = h.sim().collision();
     assert!(c.enabled());
     assert!(
-        (c.radius_cells - 1.25).abs() < 1e-6,
-        "expected 1.25-cell radius, got {}",
+        (c.radius_cells - 6.0).abs() < 1e-6,
+        "expected 6-cell radius, got {}",
         c.radius_cells
     );
     assert!(

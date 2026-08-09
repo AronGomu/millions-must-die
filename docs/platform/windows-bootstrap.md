@@ -80,7 +80,7 @@ $env:PATH = "$env:MMD_SDL3_PREFIX\bin;$env:PATH"
 cargo test --workspace --locked
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- bootstrap --check
-cargo run -- run --agents 50000
+cargo run -- run --agents 5000
 
 # Expect stdout: backend=direct3d12
 # Manual: adapter must be RX 6400 (or ref discrete), never "Microsoft Basic Render Driver"

@@ -357,8 +357,8 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
             "obstacles_are_never_entered",
             "no_agent_is_stuck_against_an_obstacle",
             "arrival_radius_recycles",
-            "population_stays_50000",
-            "determinism_holds_for_50k_agents",
+            "population_stays_at_the_cap",
+            "determinism_holds_at_the_cap",
         ],
         gpu_only: &[],
     },
@@ -422,7 +422,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         tests: &[
             "frame_ticks_once",
             "pause_keeps_checksum",
-            "builds_50000_instances",
+            "builds_one_instance_per_agent",
             "partitions_four_groups",
             "input_actions_are_stable",
         ],
@@ -513,7 +513,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
 /// that silently stopped finding tests would otherwise satisfy every
 /// membership check vacuously — every lookup would fail loudly, but a *broken
 /// regex* that matched everything would not. This pins the scanner itself.
-const MIN_SCANNED_TESTS: usize = 168;
+const MIN_SCANNED_TESTS: usize = 174;
 
 /// Number of systems phase 0 claims. Pinned so that deleting a `SystemCoverage`
 /// entry — which shrinks the claim without breaking any lookup — fails loudly.

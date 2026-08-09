@@ -3,9 +3,9 @@
   width: 480,
   height: 270,
   cell_size_px: 4,
-  sprite_size_px: 30,
-  hard_agent_count: 10000,
-  stretch_agent_count: 20000,
+  sprite_size_px: 48,
+  hard_agent_count: 5000,
+  stretch_agent_count: 5000,
   seed: 7355608251463129073,
   destination: (x: 240, y: 135),
   spawn_cells: [
@@ -141,7 +141,7 @@
   atlas_count: 4,
   direction_count: 8,
   frame_count: 4,
-  collision_radius_q8: 320,
+  collision_radius_q8: 1536,
   separation_strength_q8: 256,
   obstacle_cells: [
     4332,4333,4334,4335,4356,4357,4358,4359,4380,4381,4382,4383,4404,4405,4406,4407,4428,4429,4430,4431,

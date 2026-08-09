@@ -55,8 +55,8 @@ const EXIT_NO_GPU: i32 = 3;
 /// failure naming what was not verified.
 const REQUIRE_GPU_ENV: &str = "MMD_REQUIRE_GPU";
 
-/// A small scene: these tests assert lifecycle, not scale. The 50k gate scene
-/// is exercised by the documented `run --agents 50000 --frames 300` smoke.
+/// A small scene: these tests assert lifecycle, not scale. The gate scene
+/// is exercised by the documented `run --agents 5000 --frames 300` smoke.
 const SMALL: &str = "64";
 
 // ---------------------------------------------------------------------------
@@ -585,8 +585,8 @@ fn agent_count_override_is_respected() {
     };
     dflt.assert_success();
     assert!(
-        dflt.stdout.contains("agents=50000"),
-        "{dflt}\nbare `run` must load the locked 50k gate scene"
+        dflt.stdout.contains("agents=5000"),
+        "{dflt}\nbare `run` must load the locked gate scene"
     );
 }
 
@@ -865,12 +865,21 @@ fn absurd_agent_count_rejected() {
         .assert_says(&["--agents 0", "> 0"]);
 
     // The number the user needs is the bound, not the word "cap": the gate
-    // scenario's stretch cap is 100000, and the message must name the range.
+    // scenario's stretch cap is 5000, and the message must name the range.
     let huge = invoke(&["run", "--agents", "4000000000", "--frames", "2"], true);
     huge.assert_actionable_failure().assert_says(&[
         "--agents 4000000000",
-        "stretch cap of 100000",
-        "1..=100000",
+        "stretch cap of 5000",
+        "1..=5000",
+    ]);
+
+    // One over the ceiling is the boundary a user actually hits, and it must be
+    // refused by the same bound rather than sliding through to GPU work.
+    let over = invoke(&["run", "--agents", "5001", "--frames", "1"], true);
+    over.assert_actionable_failure().assert_says(&[
+        "--agents 5001",
+        "stretch cap of 5000",
+        "1..=5000",
     ]);
 }
 

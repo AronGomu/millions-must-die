@@ -31,7 +31,7 @@ nix flake check
 cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
-cargo run -- run --agents 50000 --frames 300
+cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 ```

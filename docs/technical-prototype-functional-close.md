@@ -20,7 +20,7 @@ proves; it does not add to it.
 | Claim | Status |
 | --- | --- |
 | Every game system in scope has at least one behavioural test | proven — see the map below |
-| The 50k-agent scene and both collision demo scenes start, tick and exit cleanly | proven — all three interactive smokes are on the required gate: `cargo run -- run --agents 50000 --frames 300`, and `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` / `…/collision_sprite_v1.ron --frames 300` |
+| The gate scene and both collision demo scenes start, tick and exit cleanly | proven — all three interactive smokes are on the required gate: `cargo run -- run --agents 5000 --frames 300`, and `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` / `…/collision_sprite_v1.ron --frames 300` |
 | The simulation is deterministic on one host and one binary | proven — hash-equality tests, with the narrowing recorded under Known gaps |
 | The development host renders the expected frame | proven — committed golden, compared exactly, on Linux/Vulkan only, on the `MMD_REQUIRE_GPU=1` run recorded below |
 | The app and CLI honour their documented contract | proven — the built binary is driven as a subprocess |
@@ -37,12 +37,12 @@ the claim. This table is therefore checked, not merely written.
 
 | System | Proven by | Where |
 | --- | --- | --- |
-| Simulation — movement, obstacles, recycling | `tick_moves_eight_cells_per_second`, `blocked_step_holds_position`, `obstacles_are_never_entered`, `no_agent_is_stuck_against_an_obstacle`, `arrival_radius_recycles`, `population_stays_50000`, `determinism_holds_for_50k_agents` | `crates/mmd-engine/tests/simulation.rs` |
+| Simulation — movement, obstacles, recycling | `tick_moves_eight_cells_per_second`, `blocked_step_holds_position`, `obstacles_are_never_entered`, `no_agent_is_stuck_against_an_obstacle`, `arrival_radius_recycles`, `population_stays_at_the_cap`, `determinism_holds_at_the_cap` | `crates/mmd-engine/tests/simulation.rs` |
 | Collision — agent separation and neighbour bins | `spatial_bins_hold_every_agent_exactly_once`, `spatial_bucket_order_is_ascending_agent_index`, `spatial_clamps_positions_outside_the_world`, `separation_of_a_pair_is_equal_and_opposite`, `separation_is_capped_at_eight_neighbours`, `coincident_agents_separate_on_the_first_tick`, `separation_keeps_the_step_length`, `a_released_stack_spreads_apart`, `a_bodyless_scenario_walks_the_flow_only_path`, `sprite_scene_pulls_agents_out_of_deep_overlap`, `collision_scene_agents_never_enter_an_obstacle` | `crates/mmd-engine/tests/separation.rs` |
 | Navigation — flow field | `destination_cost_is_zero`, `obstacles_unreachable`, `diagonal_cannot_cut_corner`, `vectors_descend`, `every_reachable_cell_has_a_valid_direction`, `agent_in_an_unreachable_region_is_inert_not_panicking` | `crates/mmd-engine/tests/flow_field.rs` |
 | Scenario loading and hash contract | `loads_v1_scene`, `rejects_wrong_hash`, `rejects_unreachable_spawn`, `v1_geometry_stays_frozen_against_the_fixture_relaxation` | `crates/mmd-engine/tests/scenario_contract.rs` |
 | Deterministic test harness | `same_seed_same_state_hash`, `different_seed_differs`, `tick_count_is_exact`, `no_wall_clock_dependence`, `fixture_scenarios_are_hash_verified` | `crates/mmd-engine/tests/harness.rs` |
-| Runtime frame loop | `frame_ticks_once`, `pause_keeps_checksum`, `builds_50000_instances`, `partitions_four_groups`, `input_actions_are_stable` | `crates/mmd-engine/tests/runtime_frame.rs` |
+| Runtime frame loop | `frame_ticks_once`, `pause_keeps_checksum`, `builds_one_instance_per_agent`, `partitions_four_groups`, `input_actions_are_stable` | `crates/mmd-engine/tests/runtime_frame.rs` |
 | Render correctness — instance data, projection, whole frame | `instance_per_alive_agent`, `instances_carry_agent_position_and_animation_uvs`, `packing_is_a_pure_projection_of_sim_state`, `world_to_clip_transform`, `world_to_clip_matches_gpu_raster`, `golden_frame_matches`, `no_gpu_skips_cleanly` | `crates/mmd-engine/tests/render_correctness.rs` |
 | GPU smoke and tracked asset hashes | `instance_layout_is_stable`, `tracked_atlas_hashes_are_enforced`, `readback_is_1920x1080` (GPU-only), `four_groups_drawn` (GPU-only) | `crates/mmd-engine/tests/gpu_smoke.rs` |
 | Golden-image comparator | `exact_image_passes`, `delta_above_tolerance_fails`, `backend_cannot_use_other_golden`, `placeholder_golden_cannot_pass`, `tampered_golden_image_fails_hash` | `crates/mmd-engine/tests/gpu_golden.rs` |

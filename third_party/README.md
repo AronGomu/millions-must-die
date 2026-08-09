@@ -88,7 +88,7 @@ See [`docs/platform/windows-bootstrap.md`](../docs/platform/windows-bootstrap.md
 $env:MMD_SDL3_PREFIX = "$env:USERPROFILE\.cache\mmd\native\sdl3\3.4.12\prefix-windows"
 $env:PATH = "$env:MMD_SDL3_PREFIX\bin;$env:PATH"
 cargo test --workspace --locked
-cargo run -- run --agents 50000
+cargo run -- run --agents 5000
 # expect backend=direct3d12; reject Basic Render Driver
 ```
 
@@ -101,6 +101,6 @@ export MMD_SDL3_PREFIX="$HOME/.cache/mmd/native/sdl3/3.4.12/prefix-macos"
 export PKG_CONFIG_PATH="$MMD_SDL3_PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 # Apple Silicon only; uname -m → arm64
 cargo test --workspace --locked
-cargo run -- run --agents 50000
+cargo run -- run --agents 5000
 # expect backend=metal; no MoltenVK
 ```

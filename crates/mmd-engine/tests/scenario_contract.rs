@@ -4,10 +4,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    COLLISION_SCENE_MAX_AGENTS, COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS,
-    MAX_COLLISION_RADIUS_Q8, MAX_SEPARATION_STRENGTH_Q8, Scenario, ScenarioError, ScenarioSpec,
+    COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, MAX_COLLISION_RADIUS_Q8,
+    MAX_LIVE_AGENTS, MAX_SEPARATION_STRENGTH_Q8, Scenario, ScenarioError, ScenarioSpec,
 };
-use mmd_engine::testkit::{COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, scene_path};
+use mmd_engine::testkit::{
+    ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, fixture_path,
+    scene_path,
+};
 
 fn workspace_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -47,9 +50,9 @@ fn loads_v1_scene() {
     assert_eq!(scene.width(), 480);
     assert_eq!(scene.height(), 270);
     assert_eq!(scene.cell_size_px(), 4);
-    assert_eq!(scene.sprite_size_px(), 30);
-    assert_eq!(scene.hard_agent_count(), 50_000);
-    assert_eq!(scene.stretch_agent_count(), 100_000);
+    assert_eq!(scene.sprite_size_px(), 48);
+    assert_eq!(scene.hard_agent_count(), 5_000);
+    assert_eq!(scene.stretch_agent_count(), 5_000);
     assert_eq!(scene.atlas_count(), 4);
     assert_eq!(scene.direction_count(), 8);
     assert_eq!(scene.frame_count(), 4);
@@ -69,10 +72,10 @@ fn loads_v1_scene() {
 fn gate_scene_locks_its_collision_tuning() {
     let (ron_path, _) = v1_paths();
     let scene = Scenario::load_verified(&ron_path).expect("v1 scene must load");
-    assert_eq!(scene.collision_radius_q8(), 102);
+    assert_eq!(scene.collision_radius_q8(), 1_536);
     assert_eq!(scene.separation_strength_q8(), 256);
     assert!(
-        (scene.collision_radius_cells() - 0.398_437_5).abs() < f32::EPSILON,
+        (scene.collision_radius_cells() - 6.0).abs() < f32::EPSILON,
         "collision_radius_cells: {}",
         scene.collision_radius_cells()
     );
@@ -87,7 +90,7 @@ fn gate_scene_locks_its_collision_tuning() {
 fn v1_rejects_a_retuned_collision_radius() {
     let (ron_path, _) = v1_paths();
     let text = fs::read_to_string(&ron_path).expect("read v1 ron");
-    let mutated = text.replace("collision_radius_q8: 102,", "collision_radius_q8: 103,");
+    let mutated = text.replace("collision_radius_q8: 1536,", "collision_radius_q8: 1537,");
     assert_ne!(
         text, mutated,
         "collision_radius_q8 anchor not found in v1 ron"
@@ -212,16 +215,16 @@ fn rejects_bad_obstacle_ratio() {
   width: 480,
   height: 270,
   cell_size_px: 4,
-  sprite_size_px: 30,
-  hard_agent_count: 50000,
-  stretch_agent_count: 100000,
+  sprite_size_px: 48,
+  hard_agent_count: 5000,
+  stretch_agent_count: 5000,
   seed: 1,
   destination: (x: 240, y: 135),
   spawn_cells: [(x: 0, y: 0)],
   atlas_count: 4,
   direction_count: 8,
   frame_count: 4,
-  collision_radius_q8: 102,
+  collision_radius_q8: 1536,
   separation_strength_q8: 256,
   obstacle_cells: [{obs_ron}],
 )
@@ -286,16 +289,16 @@ fn rejects_unreachable_spawn() {
   width: 480,
   height: 270,
   cell_size_px: 4,
-  sprite_size_px: 30,
-  hard_agent_count: 50000,
-  stretch_agent_count: 100000,
+  sprite_size_px: 48,
+  hard_agent_count: 5000,
+  stretch_agent_count: 5000,
   seed: 99,
   destination: (x: 240, y: 135),
   spawn_cells: [(x: 0, y: 0), (x: 2, y: 0)],
   atlas_count: 4,
   direction_count: 8,
   frame_count: 4,
-  collision_radius_q8: 102,
+  collision_radius_q8: 1536,
   separation_strength_q8: 256,
   obstacle_cells: [{obs_ron}],
 )
@@ -559,16 +562,16 @@ fn collision_scene_spec() -> ScenarioSpec {
         width: 480,
         height: 270,
         cell_size_px: 4,
-        sprite_size_px: 30,
-        hard_agent_count: 10_000,
-        stretch_agent_count: 20_000,
+        sprite_size_px: 48,
+        hard_agent_count: 1_200,
+        stretch_agent_count: 5_000,
         seed: 7_355_608_251_463_129_073,
         destination: Cell { x: 240, y: 135 },
         spawn_cells: vec![Cell { x: 2, y: 8 }],
         atlas_count: 4,
         direction_count: 8,
         frame_count: 4,
-        collision_radius_q8: 320,
+        collision_radius_q8: 1_536,
         separation_strength_q8: 256,
         obstacle_cells: vec![],
     }
@@ -580,12 +583,12 @@ fn collision_scenes_load_and_verify() {
     let sprite =
         Scenario::load_verified(scene_path(COLLISION_SPRITE_SCENE)).expect("sprite must load");
 
-    assert_eq!(mid.hard_agent_count(), 10_000);
-    assert_eq!(mid.collision_radius_q8(), 320);
+    assert_eq!(mid.hard_agent_count(), 5_000);
+    assert_eq!(mid.collision_radius_q8(), 1_536);
     assert_eq!(mid.version(), COLLISION_SCENE_V1);
 
     assert_eq!(sprite.hard_agent_count(), 1_200);
-    assert_eq!(sprite.collision_radius_q8(), 960);
+    assert_eq!(sprite.collision_radius_q8(), 1_536);
     assert_eq!(sprite.version(), COLLISION_SCENE_V1);
 }
 
@@ -640,18 +643,207 @@ fn collision_scene_refuses_a_body_with_no_separation_weight() {
 
 #[test]
 fn collision_scene_caps_its_population() {
+    // The family has no cap of its own: a second, larger collision-scene cap
+    // would let a demo scene declare a horde the engine refuses to run, so this
+    // family is bound by the engine ceiling like every other.
     let spec = ScenarioSpec {
-        hard_agent_count: COLLISION_SCENE_MAX_AGENTS + 1,
-        stretch_agent_count: COLLISION_SCENE_MAX_AGENTS + 1,
+        hard_agent_count: MAX_LIVE_AGENTS + 1,
+        stretch_agent_count: MAX_LIVE_AGENTS + 1,
         ..collision_scene_spec()
     };
     match Scenario::from_spec(spec) {
         Err(ScenarioError::InvalidDimension(msg)) => assert!(
-            msg.contains("exceeds cap"),
-            "expected msg to mention exceeds cap, got {msg:?}"
+            msg.contains("exceeds MAX_LIVE_AGENTS"),
+            "expected msg to mention exceeds MAX_LIVE_AGENTS, got {msg:?}"
         ),
         other => panic!("expected InvalidDimension, got {other:?}"),
     }
+}
+
+// --- the simultaneous-entity ceiling (T0) -----------------------------------
+//
+// `MAX_LIVE_AGENTS` is the absolute ceiling of the engine, not a per-family
+// tuning knob. These tests pin it from three angles: no family may exceed it,
+// no tracked scene does, and the locked body stays inside the radius cap so a
+// later body bump cannot silently overshoot.
+
+/// The v1 gate scene's own RON with its two population lines rewritten.
+///
+/// Rewriting the real file rather than hand-building a spec keeps the 25 920
+/// obstacles, the exact-20% ratio and the reachability graph honest, so the
+/// only thing under test is the population.
+fn v1_ron_with_population(hard: u32, stretch: u32) -> String {
+    let (ron_path, _) = v1_paths();
+    let text = fs::read_to_string(&ron_path).expect("read v1 ron");
+    let mut saw_hard = false;
+    let mut saw_stretch = false;
+    let mut out = String::with_capacity(text.len());
+    for line in text.lines() {
+        if line.trim_start().starts_with("hard_agent_count:") {
+            saw_hard = true;
+            out.push_str(&format!("  hard_agent_count: {hard},"));
+        } else if line.trim_start().starts_with("stretch_agent_count:") {
+            saw_stretch = true;
+            out.push_str(&format!("  stretch_agent_count: {stretch},"));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    assert!(
+        saw_hard && saw_stretch,
+        "population anchors not found in v1 ron"
+    );
+    out
+}
+
+/// The three scenario families, each validated at the given population.
+///
+/// A fourth family that forgets the ceiling has to be added here to be tested,
+/// which is the point: the list is the enumeration the cap check must cover.
+fn validate_family_at(family: &str, hard: u32, stretch: u32) -> Result<Scenario, ScenarioError> {
+    match family {
+        "technical_prototype_v1" => {
+            Scenario::parse_and_validate(v1_ron_with_population(hard, stretch).as_bytes())
+        }
+        "collision_scene_v1" => Scenario::from_spec(ScenarioSpec {
+            hard_agent_count: hard,
+            stretch_agent_count: stretch,
+            ..collision_scene_spec()
+        }),
+        "fixture_*" => Scenario::from_spec(ScenarioSpec {
+            hard_agent_count: hard,
+            stretch_agent_count: stretch,
+            ..fixture_spec()
+        }),
+        other => panic!("unknown family {other:?}"),
+    }
+}
+
+const SCENARIO_FAMILIES: [&str; 3] = ["technical_prototype_v1", "collision_scene_v1", "fixture_*"];
+
+#[test]
+fn population_above_the_ceiling_is_refused() {
+    // One over the ceiling is refused, and the error names the ceiling so an
+    // author can tell a cap violation from a mistyped locked constant.
+    match validate_family_at(
+        "collision_scene_v1",
+        MAX_LIVE_AGENTS + 1,
+        MAX_LIVE_AGENTS + 1,
+    ) {
+        Err(ScenarioError::InvalidDimension(msg)) => {
+            assert!(
+                msg.contains("hard_agent_count"),
+                "expected the offending field, got {msg:?}"
+            );
+            assert!(
+                msg.contains(&(MAX_LIVE_AGENTS + 1).to_string()),
+                "expected the offending value, got {msg:?}"
+            );
+            assert!(
+                msg.contains("MAX_LIVE_AGENTS"),
+                "expected the cap to be named, got {msg:?}"
+            );
+        }
+        other => panic!("expected InvalidDimension, got {other:?}"),
+    }
+    // The ceiling itself is the largest accepted value, not the first refused.
+    validate_family_at("collision_scene_v1", MAX_LIVE_AGENTS, MAX_LIVE_AGENTS)
+        .expect("the ceiling itself must be accepted");
+}
+
+#[test]
+fn stretch_above_the_ceiling_is_refused() {
+    // Hard stays legal; only the stretch tier breaches. Checked in every
+    // family, because a stretch count is what a scene declares when it wants
+    // headroom it is not allowed to have.
+    for family in SCENARIO_FAMILIES {
+        match validate_family_at(family, 64, MAX_LIVE_AGENTS + 1) {
+            Err(ScenarioError::InvalidDimension(msg)) => {
+                assert!(
+                    msg.contains("stretch_agent_count") && msg.contains("MAX_LIVE_AGENTS"),
+                    "{family}: expected field + cap in {msg:?}"
+                );
+            }
+            other => panic!("{family}: expected InvalidDimension, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn the_ceiling_binds_every_scenario_family() {
+    // Iterating the families is the guard: the cap must not be something one
+    // validator happens to do. A new family that skips it fails here.
+    for family in SCENARIO_FAMILIES {
+        let err = validate_family_at(family, MAX_LIVE_AGENTS + 1, MAX_LIVE_AGENTS + 1).expect_err(
+            &format!("{family} must refuse a population above the ceiling"),
+        );
+        match err {
+            ScenarioError::InvalidDimension(msg) => assert!(
+                msg.contains("MAX_LIVE_AGENTS"),
+                "{family}: every family must refuse with the same cap error, got {msg:?}"
+            ),
+            other => panic!("{family}: expected InvalidDimension, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_body_is_half_a_sprite() {
+    // The "no art overlap at contact" property, stated as arithmetic: two
+    // touching agents are exactly one sprite width apart, so their sprites meet
+    // edge to edge instead of eating into each other.
+    for rel in [
+        "assets/scenarios/technical_prototype_v1.ron",
+        COLLISION_MID_SCENE,
+        COLLISION_SPRITE_SCENE,
+    ] {
+        let scene = Scenario::load_verified(scene_path(rel)).expect("tracked scene must load");
+        let diameter_px = scene.collision_radius_cells() * scene.cell_size_px() as f32 * 2.0;
+        assert!(
+            (diameter_px - scene.sprite_size_px() as f32).abs() < f32::EPSILON,
+            "{rel}: body diameter {diameter_px} px != sprite {} px",
+            scene.sprite_size_px()
+        );
+    }
+}
+
+#[test]
+fn the_locked_radius_is_under_the_radius_cap() {
+    // The locked v1 body must stay strictly inside the declarable maximum, so a
+    // later body bump trips the radius cap instead of silently exceeding it.
+    let scene = Scenario::load_verified(scene_path("assets/scenarios/technical_prototype_v1.ron"))
+        .expect("v1 scene must load");
+    assert!(
+        scene.collision_radius_q8() < MAX_COLLISION_RADIUS_Q8,
+        "locked radius {} must stay under the cap {MAX_COLLISION_RADIUS_Q8}",
+        scene.collision_radius_q8()
+    );
+}
+
+#[test]
+fn every_tracked_scene_is_within_the_ceiling() {
+    // Every scene that ships in the repo, not just the ones a validator test
+    // happens to construct.
+    let mut checked = 0;
+    let tracked = ["assets/scenarios/technical_prototype_v1.ron"]
+        .into_iter()
+        .chain(ALL_COLLISION_SCENES.iter().copied())
+        .map(scene_path)
+        .chain(ALL_FIXTURES.iter().copied().map(fixture_path));
+    for path in tracked {
+        let scene = Scenario::load_verified(&path).expect("tracked scene must load");
+        assert!(
+            scene.hard_agent_count() <= MAX_LIVE_AGENTS
+                && scene.stretch_agent_count() <= MAX_LIVE_AGENTS,
+            "{}: {} / {} above the ceiling {MAX_LIVE_AGENTS}",
+            path.display(),
+            scene.hard_agent_count(),
+            scene.stretch_agent_count()
+        );
+        checked += 1;
+    }
+    assert_eq!(checked, 7, "all seven tracked scenes must be covered");
 }
 
 #[test]

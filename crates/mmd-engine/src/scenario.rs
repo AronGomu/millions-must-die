@@ -17,21 +17,26 @@ pub const TECHNICAL_PROTOTYPE_V1: &str = "technical_prototype_v1";
 /// obstacles, free destination, free and reachable spawns) and the same
 /// tracked-hash contract via [`Scenario::load_verified`]. What it does *not*
 /// inherit are the values frozen for the phase-0 workload specifically: the
-/// 480×270 grid, the 50k/100k agent counts, and the exact-20% obstacle ratio.
+/// 480×270 grid, the locked agent counts, and the exact-20% obstacle ratio.
 /// Those stay locked for [`TECHNICAL_PROTOTYPE_V1`] alone.
 pub const FIXTURE_VERSION_PREFIX: &str = "fixture_";
 
 /// Version id for the collision demo family: the gate scene's screen geometry
 /// and destination, with a free population and a free body radius.
 ///
-/// It exists because [`TECHNICAL_PROTOTYPE_V1`] freezes the 50k/100k workload
-/// and the exact-20% obstacle ratio, and the `fixture_` caps (65 536 cells)
-/// cannot express a full-screen scene.
+/// It exists because [`TECHNICAL_PROTOTYPE_V1`] freezes its workload and the
+/// exact-20% obstacle ratio, and the `fixture_` caps (65 536 cells) cannot
+/// express a full-screen scene.
 pub const COLLISION_SCENE_V1: &str = "collision_scene_v1";
 
-/// A collision scene stays legible: it demonstrates bodies, it is not a second
-/// horde workload.
-pub const COLLISION_SCENE_MAX_AGENTS: u32 = 20_000;
+/// The absolute simultaneous-entity ceiling of this engine.
+///
+/// Nothing above this count is run, tested or benchmarked. It is not a
+/// per-family tuning knob: every scenario family is checked against it in one
+/// place ([`check_population`]), so a family added later inherits the ceiling
+/// instead of having to remember it. The game reads as a horde through body
+/// scale and density, not through population.
+pub const MAX_LIVE_AGENTS: u32 = 5_000;
 
 /// Fixture grids must stay small enough that a full system test is cheap.
 pub const FIXTURE_MAX_CELLS: u32 = 65_536;
@@ -50,13 +55,15 @@ pub const MAX_SEPARATION_STRENGTH_Q8: u32 = 2_560;
 const V1_WIDTH: u32 = 480;
 const V1_HEIGHT: u32 = 270;
 const V1_CELL_PX: u32 = 4;
-const V1_SPRITE_PX: u32 = 30;
-const V1_HARD_AGENTS: u32 = 50_000;
-const V1_STRETCH_AGENTS: u32 = 100_000;
+const V1_SPRITE_PX: u32 = 48;
+const V1_HARD_AGENTS: u32 = 5_000;
+const V1_STRETCH_AGENTS: u32 = 5_000;
 const V1_ATLASES: u32 = 4;
 const V1_DIRS: u32 = 8;
 const V1_FRAMES: u32 = 4;
-const V1_COLLISION_RADIUS_Q8: u32 = 102;
+/// Exactly half [`V1_SPRITE_PX`]: 6 cells of 4 px, so two touching bodies are
+/// one full sprite width apart and their art meets edge to edge.
+const V1_COLLISION_RADIUS_Q8: u32 = 1_536;
 const V1_SEPARATION_STRENGTH_Q8: u32 = 256;
 const V1_DEST_X: u32 = 240;
 const V1_DEST_Y: u32 = 135;
@@ -343,15 +350,38 @@ impl Scenario {
     }
 }
 
+/// The one site that enforces [`MAX_LIVE_AGENTS`].
+///
+/// Deliberately not per-family: it is called once, from the family dispatcher,
+/// *before* the dispatch, so a family added later inherits the ceiling rather
+/// than having to remember it. The message names the field, the value and the
+/// cap so an author can tell a ceiling breach from a mistyped locked constant.
+fn check_population(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
+    for (got, name) in [
+        (doc.hard_agent_count, "hard_agent_count"),
+        (doc.stretch_agent_count, "stretch_agent_count"),
+    ] {
+        if got > MAX_LIVE_AGENTS {
+            return Err(ScenarioError::InvalidDimension(format!(
+                "{name} {got} exceeds MAX_LIVE_AGENTS {MAX_LIVE_AGENTS}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioError> {
-    if doc.version.starts_with(FIXTURE_VERSION_PREFIX) {
+    let is_fixture = doc.version.starts_with(FIXTURE_VERSION_PREFIX);
+    if !is_fixture && doc.version != COLLISION_SCENE_V1 && doc.version != TECHNICAL_PROTOTYPE_V1 {
+        return Err(ScenarioError::UnsupportedVersion(doc.version.clone()));
+    }
+    // The ceiling binds every recognised family, checked once before dispatch.
+    check_population(doc)?;
+    if is_fixture {
         return validate_fixture_dims(doc, cells);
     }
     if doc.version == COLLISION_SCENE_V1 {
         return validate_collision_scene_dims(doc);
-    }
-    if doc.version != TECHNICAL_PROTOTYPE_V1 {
-        return Err(ScenarioError::UnsupportedVersion(doc.version.clone()));
     }
     let checks = [
         (doc.width, V1_WIDTH, "width"),
@@ -444,7 +474,7 @@ fn validate_collision(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
 }
 
 /// Structural bounds for the `fixture_*` family: real geometry, free shape,
-/// but capped so a fixture cannot quietly become another 50k workload.
+/// but capped so a fixture cannot quietly become another full horde workload.
 fn validate_fixture_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioError> {
     let positive = [
         (doc.width, "width"),
@@ -517,16 +547,9 @@ fn validate_collision_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError
             doc.stretch_agent_count, doc.hard_agent_count
         )));
     }
-    for (got, name) in [
-        (doc.hard_agent_count, "hard_agent_count"),
-        (doc.stretch_agent_count, "stretch_agent_count"),
-    ] {
-        if got > COLLISION_SCENE_MAX_AGENTS {
-            return Err(ScenarioError::InvalidDimension(format!(
-                "collision scene {name} {got} exceeds cap {COLLISION_SCENE_MAX_AGENTS}"
-            )));
-        }
-    }
+    // The population ceiling is `MAX_LIVE_AGENTS`, applied to every family by
+    // `check_population`. A second, larger collision-scene cap would let a demo
+    // scene declare a horde the engine refuses to run.
     if doc.collision_radius_q8 == 0 {
         return Err(ScenarioError::InvalidCollision(
             "a collision scene must declare a nonzero collision_radius_q8".into(),

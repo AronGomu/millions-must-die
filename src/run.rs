@@ -580,7 +580,7 @@ fn finish(
     }
 
     // Every unpaused frame owes exactly one tick. This is a self-check for the
-    // *interactive* command (`run --agents 50000 --frames 300`), which no test
+    // *interactive* command (`run --agents 5000 --frames 300`), which no test
     // drives: a frame that quietly stopped advancing the simulation would
     // otherwise still report a clean exit.
     //

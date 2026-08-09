@@ -88,7 +88,7 @@ uname -m   # must print arm64
 cargo test --workspace --locked
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- bootstrap --check
-cargo run -- run --agents 50000
+cargo run -- run --agents 5000
 
 # Expect stdout: backend=metal
 # Manual: adapter is Apple GPU (M4…); never MoltenVK / vulkan

@@ -43,7 +43,7 @@ for golden capture (adapter must match `lab/goldens/linux-vulkan/manifest.json`)
    arguments, and working directory.)
 
    Alternative — interactive horde: `target/debug/millions_must_die run --agents
-   50000` captures the same pipeline/resolution/atlas groups, but the scene is the
+   5000` captures the same pipeline/resolution/atlas groups, but the scene is the
    moving flow-field horde and the frame ends in a swapchain blit instead of the
    transfer-buffer readback; do not use it to reason about the golden scene.
 3. Trigger a capture with `F12` (or `renderdoccmd`'s auto-capture flags). For the
