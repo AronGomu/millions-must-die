@@ -128,7 +128,7 @@ every state hash are bit-identical.
 
 ## Impl steps
 
-- [ ] 1. In `crates/mmd-engine/src/sim/spatial.rs`, add three fields to
+- [x] 1. In `crates/mmd-engine/src/sim/spatial.rs`, add three fields to
       `struct SpatialGrid`, after `cursor`:
       ```rust
       /// Per-bin population for the rebuild identified by `stamp`. A bin whose
@@ -141,9 +141,9 @@ every state hash are bit-identical.
       /// 1 marks every zero-initialised `count_stamp` entry stale.
       stamp: u32,
       ```
-- [ ] 2. Initialise them in `SpatialGrid::new`: `counts: vec![0; n_bins]`,
+- [x] 2. Initialise them in `SpatialGrid::new`: `counts: vec![0; n_bins]`,
       `count_stamp: vec![0; n_bins]`, `stamp: 0`.
-- [ ] 3. Replace the body of `rebuild` after the two `assert!`s and
+- [x] 3. Replace the body of `rebuild` after the two `assert!`s and
       `self.len = x.len();` with exactly:
       ```rust
       // Bump first: a stamp of `self.stamp` on a bin means "written this
@@ -195,7 +195,7 @@ every state hash are bit-identical.
           self.cursor[b] += 1;
       }
       ```
-- [ ] 4. Add the O(1) population query next to `agents_in_bin`:
+- [x] 4. Add the O(1) population query next to `agents_in_bin`:
       ```rust
       /// Agents in one bin, without touching `items`. `0` for an out-of-range
       /// or empty bin.
@@ -211,7 +211,7 @@ every state hash are bit-identical.
           }
       }
       ```
-- [ ] 5. Add the wrap hook, testkit-gated so it cannot be reached from a
+- [x] 5. Add the wrap hook, testkit-gated so it cannot be reached from a
       shipping build:
       ```rust
       /// Force the rebuild counter, so the wrap path is reachable in a test
@@ -221,15 +221,15 @@ every state hash are bit-identical.
           self.stamp = stamp;
       }
       ```
-- [ ] 6. Update the module doc at the top of `spatial.rs`: after the existing
+- [x] 6. Update the module doc at the top of `spatial.rs`: after the existing
       "counting sort over fixed-size bins" sentence, add — *"Bin populations
       carry a rebuild stamp, so a rebuild never clears them; a bin whose stamp
       is stale reads as empty. `starts` is still written for every bin, so an
       empty bin still has a valid, zero-width range."*
-- [ ] 7. Write the three new tests from the test plan in
+- [x] 7. Write the three new tests from the test plan in
       `crates/mmd-engine/tests/separation.rs`, immediately after
       `spatial_rebuild_is_repeatable`.
-- [ ] 8. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
+- [x] 8. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
       fails, the rewrite changed bucket order — do **not** re-measure the
       digest; fix step 3.
 
@@ -245,18 +245,24 @@ every state hash are bit-identical.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green
-- [ ] `cargo test -p mmd-engine --test separation` — green, including
+- [x] `cargo fmt --all -- --check` — clean, no output
+- [x] `cargo test --workspace --locked` — green, all crates pass
+- [x] `cargo test -p mmd-engine --test separation` — green, 24 passed including
       `a_bodied_scenario_is_pinned_to_a_golden_digest` **unedited**
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — green, including
+- [x] `cargo test -p mmd-engine --test frame_allocations` — green, 7 passed including
       `spatial_rebuild_allocates_nothing` **unedited**
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo build -p mmd-engine --no-default-features --features gpu` — the
-      testkit-gated hook must not leak into a shipping build
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] `nix flake check`
-- [ ] app functional — scenes load, tick and exit; nothing observable changed
-- [ ] commit msg draft: `refactor(sim): stamp the neighbour bins instead of clearing them each rebuild`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean
+- [x] `cargo build -p mmd-engine --no-default-features --features gpu` — clean; the
+      testkit-gated hook does not leak into a shipping build
+- [x] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte —
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
+- [x] `nix flake check` — "all checks passed!"
+- [ ] app functional (manual, windowed) — scenes load, tick and exit; nothing
+      observable changed. See `ai-artifacts/manual_test_checklist.md` ## T2.
+      The automated gate smoke above ran the real windowed/GPU path
+      (`backend=vulkan`, offscreen draw ok, window claimed and released) and
+      exited clean, but a human eyeballing the on-screen render is still
+      unchecked.
+- [x] commit msg draft: `refactor(sim): stamp the neighbour bins instead of clearing them each rebuild`

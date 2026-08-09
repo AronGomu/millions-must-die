@@ -114,6 +114,77 @@ fn spatial_rebuild_is_repeatable() {
     assert_eq!(first, second);
 }
 
+#[test]
+fn spatial_bin_counts_match_the_bucket_lengths() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 8);
+    let xs = [0.5f32, 0.5, 7.5, 3.5, 7.5];
+    let ys = [0.5f32, 0.5, 0.5, 3.5, 7.5];
+    grid.rebuild(&xs, &ys);
+
+    for by in 0..grid.rows() {
+        for bx in 0..grid.cols() {
+            assert_eq!(
+                grid.bin_count(bx, by) as usize,
+                grid.agents_in_bin(bx, by).len(),
+                "bin ({bx}, {by}) mismatch"
+            );
+        }
+    }
+}
+
+#[test]
+fn spatial_reuses_bins_without_clearing_them() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 4);
+    let xs = [0.5f32, 0.5, 0.5, 0.5];
+    let ys = [0.5f32, 0.5, 0.5, 0.5];
+    grid.rebuild(&xs, &ys);
+    assert_eq!(grid.bin_count(0, 0), 4);
+
+    let xs2 = [7.5f32, 7.5, 7.5, 7.5];
+    let ys2 = [7.5f32, 7.5, 7.5, 7.5];
+    grid.rebuild(&xs2, &ys2);
+
+    assert_eq!(grid.bin_count(0, 0), 0);
+    assert_eq!(grid.bin_count(7, 7), 4);
+
+    let mut total = 0u32;
+    for by in 0..grid.rows() {
+        for bx in 0..grid.cols() {
+            total += grid.bin_count(bx, by);
+        }
+    }
+    assert_eq!(total as usize, grid.len());
+}
+
+#[test]
+fn spatial_survives_a_stamp_wrap() {
+    let mut grid = SpatialGrid::new(8, 8, 1.0, 5);
+    grid.set_stamp_for_test(u32::MAX);
+
+    let xs = [0.5f32, 0.5, 7.5, 3.5, 7.5];
+    let ys = [0.5f32, 0.5, 0.5, 3.5, 7.5];
+    grid.rebuild(&xs, &ys);
+    let mut total = 0u32;
+    for by in 0..grid.rows() {
+        for bx in 0..grid.cols() {
+            total += grid.bin_count(bx, by);
+        }
+    }
+    assert_eq!(total as usize, grid.len());
+
+    let xs2 = [1.5f32, 1.5, 1.5, 1.5, 1.5];
+    let ys2 = [1.5f32, 1.5, 1.5, 1.5, 1.5];
+    grid.rebuild(&xs2, &ys2);
+    assert_eq!(grid.bin_count(1, 1), 5);
+    let mut total2 = 0u32;
+    for by in 0..grid.rows() {
+        for bx in 0..grid.cols() {
+            total2 += grid.bin_count(bx, by);
+        }
+    }
+    assert_eq!(total2 as usize, grid.len());
+}
+
 // --- the repulsion accumulator -------------------------------------------
 
 #[test]

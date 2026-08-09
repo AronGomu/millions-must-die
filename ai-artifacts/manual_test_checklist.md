@@ -51,3 +51,28 @@ eyes on a real window, same as T0.
       `mass_class_count` or `separation_threads` (or sets one to `0`) and
       confirm it fails to load with a named error instead of running
       silently untuned — the new fields are required, not defaulted.
+
+## T2 stamped-bin-counts
+
+Internal neighbour-index rewrite (`SpatialGrid::rebuild` in
+`crates/mmd-engine/src/sim/spatial.rs` no longer clears `starts` before
+counting; bin population is now an O(1) `bin_count` query via a rebuild
+stamp). Behaviour is bit-identical to before this ticket — a human should
+observe **zero visible change**. Everything automatable is green (`cargo
+fmt`, `cargo test --workspace --locked`, `cargo clippy --workspace
+--all-targets --all-features -- -D warnings`, `nix flake check`, the
+testkit-gated `cargo build -p mmd-engine --no-default-features --features
+gpu`, and the gate smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte). What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
+      exactly as it did before this ticket: same 48 px sprites, same
+      edge-to-edge contact at chokepoints, same separation behaviour at
+      chokepoints and in the corner-pocket case. Press `Esc` to quit and
+      confirm a clean exit.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      starts, spreads, quits cleanly on `Esc`; behaviour indistinguishable
+      from T1.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      same check at the lower-density scale.
