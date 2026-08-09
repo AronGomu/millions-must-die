@@ -136,3 +136,38 @@ byte for byte). What is left needs eyes on a real window.
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
       unaffected by this ticket (stays at `separation_phases: 1`); same check
       as T3 at the lower-density scale.
+
+## T5 push-priority-mass
+
+Repulsion is now weighted by a per-agent push priority (`mass: Vec<u8>` /
+`inv_mass: Vec<f32>` on `Simulation`, `mass[i] = (i % classes) + 1`): a
+heavier neighbour pushes harder and is itself pushed less, so a dense goal
+sink breaks its own symmetry instead of deadlocking. Every scene still at
+`mass_class_count: 1` (`collision_mid_v1`, `technical_prototype_v1`, and the
+`fixture_*` scenes) is bit-identical to before this ticket — a human should
+observe **zero visible change** there. `collision_sprite_v1` alone now opts
+into `mass_class_count: 2`. Everything automatable is green (`cargo fmt --all
+-- --check`, `cargo test --workspace --locked`, `cargo test -p mmd-engine
+--test separation` (36 tests, including `a_bodied_scenario_is_pinned_to_a_
+golden_digest` and `a_bodyless_scenario_walks_the_flow_only_path` unedited,
+plus the four new mass tests), `cargo test -p mmd-engine --test
+frame_allocations`, `cargo clippy --workspace --all-targets --all-features --
+-D warnings`, `cargo build -p mmd-engine --no-default-features --features
+gpu`, `nix flake check`, all three xtask `--check` commands, and the gate
+smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte). What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
+      exactly as it did before this ticket (this scene stays at
+      `mass_class_count: 1`): same 48 px sprites, same edge-to-edge contact at
+      chokepoints. Press `Esc` to quit and confirm a clean exit.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      unaffected by this ticket (stays at `mass_class_count: 1`); starts,
+      spreads, no agent stuck inside the scene's obstacle, quits cleanly on
+      `Esc`; indistinguishable from T4.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      this is the scene the ticket changed: it now runs two push-priority
+      classes. Confirm the stacked spawn column still visibly opens up over
+      the run, and that no agent ends up shoved inside a wall or obstacle.
+      Quit cleanly on `Esc`.

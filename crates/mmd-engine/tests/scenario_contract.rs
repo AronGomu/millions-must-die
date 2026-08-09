@@ -906,10 +906,17 @@ fn tracked_scenes_declare_the_identity_tuning() {
             "{}: separation_phases must stay at its declared tuning",
             path.display()
         );
+        // collision_sprite_v1 is T5's one deliberate opt-in: it runs two push
+        // priority classes. Every other tracked scene still pins the identity.
+        let expected_classes = if path.ends_with(COLLISION_SPRITE_SCENE) {
+            2
+        } else {
+            1
+        };
         assert_eq!(
             scene.mass_class_count(),
-            1,
-            "{}: mass_class_count must stay at identity",
+            expected_classes,
+            "{}: mass_class_count must stay at its declared tuning",
             path.display()
         );
         assert_eq!(

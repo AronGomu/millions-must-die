@@ -145,6 +145,10 @@ impl CollisionParams {
 /// must be the same length, and `radius_cells` must be positive — a bodyless
 /// scenario skips this pass rather than calling it with zero.
 ///
+/// Each contribution is scaled by `mass[j] / mass[i]`. With one class every
+/// mass is 1 and the scale is exactly 1.0, so the pass is bit-identical to
+/// the unweighted one.
+///
 /// # Panics
 /// If `phases == 0` or `phase >= phases`.
 #[allow(clippy::too_many_arguments)]
@@ -153,6 +157,8 @@ pub fn accumulate_separation_phase(
     y: &[f32],
     grid: &SpatialGrid,
     radius_cells: f32,
+    mass: &[u8],
+    inv_mass: &[f32],
     phases: u32,
     phase: u32,
     sep_x: &mut [f32],
@@ -163,6 +169,8 @@ pub fn accumulate_separation_phase(
     debug_assert_eq!(sep_x.len(), n);
     debug_assert_eq!(sep_y.len(), n);
     debug_assert_eq!(grid.len(), n);
+    debug_assert_eq!(mass.len(), n);
+    debug_assert_eq!(inv_mass.len(), n);
     // Contact distance is the divisor below; a zero radius would poison every
     // sum with an infinity.
     debug_assert!(radius_cells > 0.0, "radius must be positive");
@@ -180,6 +188,7 @@ pub fn accumulate_separation_phase(
     while i < n {
         let px = x[i];
         let py = y[i];
+        let inv_mi = inv_mass[i];
         let (bx, by) = grid.bin_of(px, py);
         let bx0 = bx.saturating_sub(1);
         let bx1 = (bx + 1).min(last_col);
@@ -215,22 +224,23 @@ pub fn accumulate_separation_phase(
                 if d2 >= contact2 {
                     continue;
                 }
+                let scale = mass[j] as f32 * inv_mi;
                 if d2 <= COINCIDENT_EPS2 {
                     // No direction exists between two identical points.
                     // The table gives one that is stable across runs and
                     // opposite for the two members of the pair.
                     let (ux, uy) = SEPARATION_DIR16[(i ^ j) & 15];
                     let sign = if i < j { 1.0 } else { -1.0 };
-                    sx += sign * ux;
-                    sy += sign * uy;
+                    sx += sign * ux * scale;
+                    sy += sign * uy * scale;
                 } else {
                     let d = d2.sqrt();
                     // Linear falloff: full push at coincidence, none at
                     // contact distance.
                     let w = (contact - d) * inv_contact;
                     let inv_d = 1.0 / d;
-                    sx += dx * inv_d * w;
-                    sy += dy * inv_d * w;
+                    sx += dx * inv_d * w * scale;
+                    sy += dy * inv_d * w * scale;
                 }
                 taken += 1;
                 if taken == MAX_SEPARATION_NEIGHBORS {
@@ -247,13 +257,16 @@ pub fn accumulate_separation_phase(
 
 /// Write every agent's repulsion sum. Equivalent to
 /// [`accumulate_separation_phase`] with `phases = 1, phase = 0`.
+#[allow(clippy::too_many_arguments)]
 pub fn accumulate_separation(
     x: &[f32],
     y: &[f32],
     grid: &SpatialGrid,
     radius_cells: f32,
+    mass: &[u8],
+    inv_mass: &[f32],
     sep_x: &mut [f32],
     sep_y: &mut [f32],
 ) {
-    accumulate_separation_phase(x, y, grid, radius_cells, 1, 0, sep_x, sep_y);
+    accumulate_separation_phase(x, y, grid, radius_cells, mass, inv_mass, 1, 0, sep_x, sep_y);
 }

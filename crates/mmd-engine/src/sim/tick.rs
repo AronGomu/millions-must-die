@@ -57,6 +57,8 @@ pub fn step(sim: &mut Simulation) {
             &sim.y,
             &sim.grid,
             collision.radius_cells,
+            &sim.mass,
+            &sim.inv_mass,
             phases as u32,
             phase as u32,
             &mut sim.sep_x,

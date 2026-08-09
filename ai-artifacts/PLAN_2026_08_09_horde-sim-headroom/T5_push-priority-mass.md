@@ -153,7 +153,7 @@ commit body. The feature is the deliverable; the demo scene is not.
 
 ## Impl steps
 
-- [ ] 1. In `crates/mmd-engine/src/sim/agents.rs`, add two fields to
+- [x] 1. In `crates/mmd-engine/src/sim/agents.rs`, add two fields to
       `struct Simulation`, after `sep_y`:
       ```rust
       /// Push priority per agent, `1..=mass_class_count`. A heavier neighbour
@@ -168,7 +168,7 @@ commit body. The feature is the deliverable; the demo scene is not.
       /// rather than a divide.
       pub(super) inv_mass: Vec<f32>,
       ```
-- [ ] 2. In `new_custom`, next to `let sep_x = vec![0.0; agent_count];`, build
+- [x] 2. In `new_custom`, next to `let sep_x = vec![0.0; agent_count];`, build
       both:
       ```rust
       let classes = collision.mass_classes.max(1) as usize;
@@ -181,7 +181,7 @@ commit body. The feature is the deliverable; the demo scene is not.
       }
       ```
       and add `mass,` and `inv_mass,` to the returned struct literal.
-- [ ] 3. Add a testkit-gated accessor to `impl Simulation`, beside
+- [x] 3. Add a testkit-gated accessor to `impl Simulation`, beside
       `separation_of`:
       ```rust
       /// This agent's push priority.
@@ -190,15 +190,15 @@ commit body. The feature is the deliverable; the demo scene is not.
           self.mass[index]
       }
       ```
-- [ ] 4. In `crates/mmd-engine/src/sim/collision.rs`, add two parameters to
+- [x] 4. In `crates/mmd-engine/src/sim/collision.rs`, add two parameters to
       `accumulate_separation_phase`, immediately after `radius_cells`:
       `mass: &[u8]`, `inv_mass: &[f32]`. Add
       `debug_assert_eq!(mass.len(), n);` and
       `debug_assert_eq!(inv_mass.len(), n);` beside the existing length
       assertions.
-- [ ] 5. Inside the per-agent loop, after `let py = y[i];`, add
+- [x] 5. Inside the per-agent loop, after `let py = y[i];`, add
       `let inv_mi = inv_mass[i];`.
-- [ ] 6. Inside the neighbour loop, after `if j == i { continue; }` and the
+- [x] 6. Inside the neighbour loop, after `if j == i { continue; }` and the
       `d2 >= contact2` skip, add `let scale = mass[j] as f32 * inv_mi;` and
       apply it to both arms:
       ```rust
@@ -212,18 +212,18 @@ commit body. The feature is the deliverable; the demo scene is not.
       ```
       Append the factor at the **end** of each expression; do not reassociate
       the existing products, or the one-class path stops being bit-exact.
-- [ ] 7. Update the doc comment on `accumulate_separation_phase`: add — *"Each
+- [x] 7. Update the doc comment on `accumulate_separation_phase`: add — *"Each
       contribution is scaled by `mass[j] / mass[i]`. With one class every mass
       is 1 and the scale is exactly 1.0, so the pass is bit-identical to the
       unweighted one."*
-- [ ] 8. Add the same two parameters to the `accumulate_separation` wrapper,
+- [x] 8. Add the same two parameters to the `accumulate_separation` wrapper,
       after `radius_cells`, and forward them.
-- [ ] 9. In `crates/mmd-engine/src/sim/tick.rs`, pass `&sim.mass` and
+- [x] 9. In `crates/mmd-engine/src/sim/tick.rs`, pass `&sim.mass` and
       `&sim.inv_mass` in the `accumulate_separation_phase` call, after
       `collision.radius_cells`. Rust's borrow checker allows this: `mass` and
       `inv_mass` are shared borrows while `sep_x` / `sep_y` are the only
       mutable ones.
-- [ ] 10. Edit `assets/scenarios/collision_sprite_v1.ron`: change
+- [x] 10. Edit `assets/scenarios/collision_sprite_v1.ron`: change
       `mass_class_count: 1,` to `mass_class_count: 2,`. Regenerate its sidecar:
       ```sh
       sha256sum assets/scenarios/collision_sprite_v1.ron | cut -d' ' -f1 \
@@ -231,15 +231,15 @@ commit body. The feature is the deliverable; the demo scene is not.
       ```
       If `sprite_scene_pulls_agents_out_of_deep_overlap` goes red, apply the
       fallback in the risk note above rather than editing the test.
-- [ ] 11. Update the four direct `accumulate_separation` call sites in
+- [x] 11. Update the four direct `accumulate_separation` call sites in
       `crates/mmd-engine/tests/separation.rs` to pass a mass slice of `1`s and a
       reciprocal slice of `1.0`s of the right length. **Change no assertion in
       those four tests** — their expected values must survive untouched, which
       is what proves the one-class path is the identity.
-- [ ] 12. Add the four new tests from the test plan to
+- [x] 12. Add the four new tests from the test plan to
       `crates/mmd-engine/tests/separation.rs`, after
       `a_bodied_scenario_is_pinned_to_a_golden_digest`.
-- [ ] 13. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
+- [x] 13. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
       moves, step 6 reassociated an expression — do **not** re-measure the
       digest.
 
@@ -260,21 +260,26 @@ commit body. The feature is the deliverable; the demo scene is not.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green
-- [ ] `cargo test -p mmd-engine --test separation` — green, with
+- [x] `cargo fmt --all -- --check` — clean, no diff
+- [x] `cargo test --workspace --locked` — green, no failures across the whole workspace
+- [x] `cargo test -p mmd-engine --test separation` — 36 passed, 0 failed;
       `a_bodied_scenario_is_pinned_to_a_golden_digest` and
-      `a_bodyless_scenario_walks_the_flow_only_path` **unedited**
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — green, including
-      `a_collision_tick_allocates_nothing`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo build -p mmd-engine --no-default-features --features gpu`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exits 0
+      `a_bodyless_scenario_walks_the_flow_only_path` **unedited** and green
+- [x] `cargo test -p mmd-engine --test frame_allocations` — 7 passed, 0 failed,
+      including `a_collision_tick_allocates_nothing`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean
+- [x] `cargo build -p mmd-engine --no-default-features --features gpu` — builds clean
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte —
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+      reproduced exactly
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
 - [ ] manual check — watch the sprite scene; the stack must still open, and no
-      agent may end up shoved inside a wall
-- [ ] `nix flake check`
-- [ ] app functional — every scene loads, ticks and exits
-- [ ] commit msg draft: `feat(sim): weight separation by a per-agent push priority`
+      agent may end up shoved inside a wall — windowed/GPU manual box, not
+      run headless; see `ai-artifacts/manual_test_checklist.md` `## T5`
+- [x] `nix flake check` — "all checks passed!"
+- [x] app functional — every scene loads, ticks and exits: ran
+      `collision_mid_v1`, `collision_sprite_v1`, `technical_prototype_v1` at
+      30 frames each, all exited cleanly
+- [x] commit msg draft: `feat(sim): weight separation by a per-agent push priority`

@@ -249,7 +249,11 @@ fn separation_of_a_pair_is_equal_and_opposite() {
 
     let mut sep_x = [0.0f32; 2];
     let mut sep_y = [0.0f32; 2];
-    accumulate_separation(&xs, &ys, &grid, 0.5, &mut sep_x, &mut sep_y);
+    let mass = [1u8; 2];
+    let inv_mass = [1.0f32; 2];
+    accumulate_separation(
+        &xs, &ys, &grid, 0.5, &mass, &inv_mass, &mut sep_x, &mut sep_y,
+    );
 
     assert_eq!(sep_x[0], -sep_x[1], "x push must be exactly opposite");
     assert_eq!(sep_y[0], -sep_y[1], "y push must be exactly opposite");
@@ -275,7 +279,11 @@ fn separation_is_capped_at_eight_neighbours() {
 
     let mut sep_x = [0.0f32; N];
     let mut sep_y = [0.0f32; N];
-    accumulate_separation(&xs, &ys, &grid, 0.5, &mut sep_x, &mut sep_y);
+    let mass = [1u8; N];
+    let inv_mass = [1.0f32; N];
+    accumulate_separation(
+        &xs, &ys, &grid, 0.5, &mass, &inv_mass, &mut sep_x, &mut sep_y,
+    );
 
     let bound = MAX_SEPARATION_NEIGHBORS as f32 + 1e-4;
     for i in 0..N {
@@ -342,7 +350,11 @@ fn separation_ignores_agents_beyond_contact() {
 
     let mut sep_x = [1.0f32; 3];
     let mut sep_y = [1.0f32; 3];
-    accumulate_separation(&xs, &ys, &grid, 0.5, &mut sep_x, &mut sep_y);
+    let mass = [1u8; 3];
+    let inv_mass = [1.0f32; 3];
+    accumulate_separation(
+        &xs, &ys, &grid, 0.5, &mass, &inv_mass, &mut sep_x, &mut sep_y,
+    );
 
     assert_eq!(
         (sep_x[0], sep_y[0]),
@@ -371,7 +383,18 @@ fn a_lone_agent_accumulates_no_repulsion() {
 
     let mut sep_x = [1.0f32; 2];
     let mut sep_y = [1.0f32; 2];
-    accumulate_separation(&xs, &ys, &grid, params.radius_cells, &mut sep_x, &mut sep_y);
+    let mass = [1u8; 2];
+    let inv_mass = [1.0f32; 2];
+    accumulate_separation(
+        &xs,
+        &ys,
+        &grid,
+        params.radius_cells,
+        &mass,
+        &inv_mass,
+        &mut sep_x,
+        &mut sep_y,
+    );
 
     assert_eq!(sep_x, [0.0, 0.0]);
     assert_eq!(sep_y, [0.0, 0.0]);
@@ -743,6 +766,78 @@ fn a_bodied_scenario_is_pinned_to_a_golden_digest() {
         BODIED_STACK_HASH,
         "the bodied separation path drifted; if the change was deliberate, \
          re-measure this digest in the same commit that caused it"
+    );
+}
+
+#[test]
+fn one_mass_class_leaves_every_agent_equal() {
+    let mut h = Harness::grid(stacked_collision_grid(32))
+        .build()
+        .expect("default-class stack");
+
+    for i in 0..32 {
+        assert_eq!(h.sim().mass_of(i), 1, "agent {i} must be class 1");
+    }
+
+    h.step_exact(200);
+
+    assert_eq!(
+        h.state_hash_hex(),
+        BODIED_STACK_HASH,
+        "one mass class must stay bit-identical to the pinned digest"
+    );
+}
+
+#[test]
+fn mass_is_assigned_round_robin_by_index() {
+    let h = Harness::grid(stacked_collision_grid(9).with_mass_classes(3))
+        .build()
+        .expect("3-class stack");
+
+    let expected = [1u8, 2, 3, 1, 2, 3, 1, 2, 3];
+    for (i, want) in expected.into_iter().enumerate() {
+        assert_eq!(h.sim().mass_of(i), want, "agent {i} class mismatch");
+    }
+}
+
+#[test]
+fn a_heavier_neighbour_pushes_a_lighter_one_harder() {
+    let mut h = Harness::grid(
+        GridSpec::new(32, 32, Cell { x: 31, y: 16 })
+            .with_collision(128, 256)
+            .with_mass_classes(2)
+            .with_agents(2),
+    )
+    .build()
+    .expect("2-class pair");
+    h.sim_mut().set_position(0, 1.5, 1.5);
+    h.sim_mut().set_position(1, 1.6, 1.5);
+
+    h.step_exact(1);
+
+    let (sx0, sy0) = h.sim().separation_of(0);
+    let (sx1, sy1) = h.sim().separation_of(1);
+    assert!(
+        sx0.hypot(sy0) > sx1.hypot(sy1),
+        "the lighter agent (0) must be pushed harder than the heavier one (1): \
+         {} vs {}",
+        sx0.hypot(sy0),
+        sx1.hypot(sy1)
+    );
+}
+
+#[test]
+fn mass_classes_change_the_bodied_digest() {
+    let mut h = Harness::grid(stacked_collision_grid(32).with_mass_classes(2))
+        .build()
+        .expect("2-class stack");
+
+    h.step_exact(200);
+
+    assert_ne!(
+        h.state_hash_hex(),
+        BODIED_STACK_HASH,
+        "two mass classes must not be a no-op on the digest"
     );
 }
 

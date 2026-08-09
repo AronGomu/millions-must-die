@@ -66,6 +66,17 @@ pub struct Simulation {
     pub(super) grid: SpatialGrid,
     pub(super) sep_x: Vec<f32>,
     pub(super) sep_y: Vec<f32>,
+    /// Push priority per agent, `1..=mass_class_count`. A heavier neighbour
+    /// pushes harder and is itself pushed less, which is what breaks the
+    /// symmetry of a jam at the goal.
+    ///
+    /// Assignment is `(i % classes) + 1` — a deterministic placeholder.
+    /// Phase 1 replaces it with per-unit-type mass; the storage is what is
+    /// being built here.
+    pub(super) mass: Vec<u8>,
+    /// `1.0 / mass[i]`, precomputed so the scan spends one multiply per pair
+    /// rather than a divide.
+    pub(super) inv_mass: Vec<f32>,
 }
 
 impl Simulation {
@@ -166,6 +177,15 @@ impl Simulation {
         let sep_x = vec![0.0; agent_count];
         let sep_y = vec![0.0; agent_count];
 
+        let classes = collision.mass_classes.max(1) as usize;
+        let mut mass = Vec::with_capacity(agent_count);
+        let mut inv_mass = Vec::with_capacity(agent_count);
+        for i in 0..agent_count {
+            let m = ((i % classes) + 1) as u8;
+            mass.push(m);
+            inv_mass.push(1.0 / m as f32);
+        }
+
         Self {
             width,
             height,
@@ -194,6 +214,8 @@ impl Simulation {
             grid,
             sep_x,
             sep_y,
+            mass,
+            inv_mass,
         }
     }
 
@@ -215,6 +237,12 @@ impl Simulation {
     #[cfg(feature = "testkit")]
     pub fn separation_of(&self, index: usize) -> (f32, f32) {
         (self.sep_x[index], self.sep_y[index])
+    }
+
+    /// This agent's push priority.
+    #[cfg(feature = "testkit")]
+    pub fn mass_of(&self, index: usize) -> u8 {
+        self.mass[index]
     }
 
     /// Grid rebuilds performed since construction.
