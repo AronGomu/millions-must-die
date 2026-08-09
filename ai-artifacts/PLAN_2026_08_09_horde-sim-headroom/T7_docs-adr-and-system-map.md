@@ -67,6 +67,38 @@ page, an enforced system→test map, and a glossary that names the new vocabular
 
 ## Inputs
 
+- **From Depends (T9, `51c73dc`) — what landed and what this ticket must write
+  down:**
+  - The world→screen projection is 2:1 isometric at the **render layer only**.
+    `git diff --stat crates/mmd-engine/src/sim/` is empty across T9 — that is
+    exactly what keeps every pinned state hash alive, and is the decision ADR 012
+    should record as the reason the resize could ship without a sim rewrite.
+  - **The depth test is `GREATER` with a clear of `0`, NOT `LESS`/clear-1.** The
+    T9 ticket's three depth statements were mutually inconsistent; under `LESS`
+    the horde renders back-to-front (observed: 4482 wrong pixels). Any doc that
+    repeats the `LESS` framing is wrong — write the shipped convention.
+  - Depth correctness with alpha comes from an alpha-test `clip()`, not a sort,
+    so the 4-atlas batching survives and `SpriteInstance` stays 48 bytes
+    (`instance_layout_is_stable` green and byte-unmodified). The two
+    normalisation scalars live in `FrameUniforms::_pad`.
+  - A depth key of exactly `0.0` was being discarded rather than sorted last,
+    which would have blanked an entire frame on a degenerate map. Fixed by
+    flooring sprite depth at one D16 quantum. The `GreaterOrEqual` alternative
+    was deliberately rejected: it admits the tie and re-blinds the occlusion
+    test.
+  - The camera is a **fixed** offset centring the destination cell, plus an AABB
+    reject for quads fully outside the view. Scrolling, edge-pan, zoom and
+    selection are Phase 1 — say so, so a reader does not mistake the fixed view
+    for a limitation nobody noticed.
+  - **Known follow-up, record it:** the ring ellipse ships at
+    `[2r·tile_w, 2r·tile_h]` as the ticket specified, which is √2 larger than the
+    exact projection of a circular body onto the isometric floor.
+  - **Two residual risks to state plainly:** (a) the frozen phase-0 bench ladder
+    is **no longer comparable at any rung** — the measured frame changed four
+    ways at once (population, body size, projection, an extra pipeline); (b) the
+    merge gate's *pixel* limb is tautological, because the Ubuntu fixture is a
+    byte-copy of the golden it is compared against.
+
 - **From Depends (T8, `d5c0ba9`) — more to document:**
   - The shader canonical hash is pinned in **five** manifests (three obvious ones
     plus `lab/fixtures/{windows,macos}-candidate/golden/manifest.json`, read live
