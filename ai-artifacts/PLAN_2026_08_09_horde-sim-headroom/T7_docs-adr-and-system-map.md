@@ -67,6 +67,23 @@ page, an enforced system→test map, and a glossary that names the new vocabular
 
 ## Inputs
 
+- **From Depends (T8, `d5c0ba9`) — more to document:**
+  - The shader canonical hash is pinned in **five** manifests (three obvious ones
+    plus `lab/fixtures/{windows,macos}-candidate/golden/manifest.json`, read live
+    by the mmd-lab merge gate). T8 added
+    `every_tracked_manifest_pins_the_live_shader_and_atlas` to enforce all of
+    them on every host.
+  - **Open gap worth recording as a known risk:** nothing binds the `.spv` blobs
+    to `sprite.hlsl`. `xtask` checks recorded hashes only, so a future edit could
+    re-pin `canonical_sha256` against stale blobs and pass every offline gate.
+    The repo also tracks no GLSL mirror despite building the Linux SPIR-V from
+    one. Not fixable inside this plan — write it down.
+  - **Native blob debt:** DXIL and metallib slots are deferred placeholders on
+    this host; the Windows and macOS reference hosts owe a native rebuild.
+  - The ring reuses `SpriteInstance` verbatim via a sentinel in `uv_rect.x`, so
+    the pinned 48-byte layout and `atlas_count: 4` both survive — that is the
+    decision ADR 012 should record.
+
 - **From Depends (T6) — corrections this ticket MUST make, discovered during
   implementation:**
   - **ADR 011 is now factually wrong in one consequence bullet.** It says the
