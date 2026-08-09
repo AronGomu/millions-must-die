@@ -47,6 +47,9 @@ pub struct Simulation {
     pub(super) initial_agent_count: u64,
     pub(super) recycle_cursor: u64,
     pub(super) tick_index: u64,
+    /// Grid rebuilds performed since construction. Amortisation makes this
+    /// diverge from `tick_index`, and a test needs to see that it did.
+    pub(super) grid_rebuilds: u64,
     #[allow(dead_code)]
     pub(super) atlas_count: u8,
     #[allow(dead_code)]
@@ -178,6 +181,7 @@ impl Simulation {
             initial_agent_count: agent_count as u64,
             recycle_cursor: agent_count as u64,
             tick_index: 0,
+            grid_rebuilds: 0,
             atlas_count,
             dir_count,
             frame_count,
@@ -204,6 +208,19 @@ impl Simulation {
 
     pub fn tick_index(&self) -> u64 {
         self.tick_index
+    }
+
+    /// This agent's stored repulsion sum. Amortisation makes it outlive the
+    /// tick that computed it, and a test needs to see that it did.
+    #[cfg(feature = "testkit")]
+    pub fn separation_of(&self, index: usize) -> (f32, f32) {
+        (self.sep_x[index], self.sep_y[index])
+    }
+
+    /// Grid rebuilds performed since construction.
+    #[cfg(feature = "testkit")]
+    pub fn grid_rebuild_count(&self) -> u64 {
+        self.grid_rebuilds
     }
 
     /// Arrivals recycled back to a spawn cell since construction.

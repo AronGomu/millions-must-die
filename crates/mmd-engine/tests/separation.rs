@@ -496,6 +496,98 @@ fn a_released_stack_spreads_apart() {
     );
 }
 
+#[test]
+fn separation_phases_of_one_is_the_identity() {
+    let mut default_h = Harness::grid(stacked_collision_grid(32))
+        .build()
+        .expect("default-phase stack");
+    let mut explicit_h = Harness::grid(stacked_collision_grid(32).with_separation_phases(1))
+        .build()
+        .expect("explicit-phase-1 stack");
+
+    default_h.step_exact(200);
+    explicit_h.step_exact(200);
+
+    assert_eq!(
+        default_h.state_hash(),
+        explicit_h.state_hash(),
+        "declaring separation_phases = 1 explicitly must match the default"
+    );
+    assert_eq!(
+        default_h.state_hash_hex(),
+        BODIED_STACK_HASH,
+        "separation_phases = 1 must stay bit-identical to the pinned digest"
+    );
+}
+
+#[test]
+fn an_amortised_agent_keeps_its_repulsion_between_phases() {
+    let mut h = Harness::grid(stacked_collision_grid(32).with_separation_phases(4))
+        .build()
+        .expect("4-phase stack");
+
+    // Agent 1 is in phase 1 (`i % phases == 1`), so it recomputes on ticks
+    // where `tick_index % 4 == 1` — the second tick, not the first.
+    h.step_exact(1);
+    assert_eq!(
+        h.sim().separation_of(1),
+        (0.0, 0.0),
+        "agent 1 must not have recomputed yet on tick 0"
+    );
+
+    h.step_exact(1);
+    let recomputed = h.sim().separation_of(1);
+    assert!(
+        recomputed.0 != 0.0 || recomputed.1 != 0.0,
+        "agent 1 must have recomputed by its phase tick, got {recomputed:?}"
+    );
+
+    // Tick 2 is phase 2 for a 4-phase spread, so agent 1 (phase 1) sits idle
+    // again. Its stored repulsion must be untouched, not zeroed — the whole
+    // point of amortisation is that a skipped agent keeps exactly what it
+    // last computed.
+    h.step_exact(1);
+    assert_eq!(
+        h.sim().separation_of(1),
+        recomputed,
+        "agent 1's repulsion must be left exactly as it was on a tick outside its phase"
+    );
+}
+
+#[test]
+fn the_grid_rebuilds_once_per_phase_cycle() {
+    let mut h = Harness::grid(stacked_collision_grid(32).with_separation_phases(4))
+        .build()
+        .expect("4-phase stack");
+
+    h.step_exact(8);
+
+    assert_eq!(
+        h.sim().grid_rebuild_count(),
+        2,
+        "8 ticks at 4 phases must rebuild the grid exactly twice"
+    );
+}
+
+#[test]
+fn an_amortised_stack_still_spreads() {
+    let mut h = Harness::grid(stacked_collision_grid(64).with_separation_phases(4))
+        .build()
+        .expect("4-phase stack");
+
+    let before = mean_pairwise_distance(&h);
+    h.step_exact(200);
+    let after = mean_pairwise_distance(&h);
+
+    // `> before` alone would also pass for a crowd 95% still stacked; hold
+    // amortisation to the same bar the unamortised sibling
+    // (`a_released_stack_spreads_apart`) clears in fewer ticks.
+    assert!(
+        after > 0.5,
+        "an amortised stack barely opened: before={before}, after={after}"
+    );
+}
+
 /// State hash of the grid below after 200 ticks, **measured on the commit
 /// before separation existed**. This is the whole content of the "a zero-radius
 /// scenario is bit-identical to the old flow-only path" requirement: comparing
@@ -829,6 +921,11 @@ fn mid_scene_reports_its_tuning() {
         (c.strength - 1.0).abs() < 1e-6,
         "expected strength 1.0, got {}",
         c.strength
+    );
+    assert_eq!(
+        h.scenario().separation_phases(),
+        4,
+        "expected the mid scene amortised over 4 phases"
     );
 }
 

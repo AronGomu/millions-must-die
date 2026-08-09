@@ -142,7 +142,7 @@ assertion pair is exact and needs no tolerance.
 
 ## Impl steps
 
-- [ ] 1. In `crates/mmd-engine/src/sim/collision.rs`, rename the existing
+- [x] 1. In `crates/mmd-engine/src/sim/collision.rs`, rename the existing
       `accumulate_separation` body into a new public function and add the two
       phase parameters:
       ```rust
@@ -170,10 +170,10 @@ assertion pair is exact and needs no tolerance.
           sep_y: &mut [f32],
       ) { /* … */ }
       ```
-- [ ] 2. Inside it, keep every existing `debug_assert!`, then add
+- [x] 2. Inside it, keep every existing `debug_assert!`, then add
       `assert!(phases > 0, "phases must be >= 1");` and
       `assert!(phase < phases, "phase {phase} out of range for {phases}");`.
-- [ ] 3. Replace the loop header `for i in 0..n {` with:
+- [x] 3. Replace the loop header `for i in 0..n {` with:
       ```rust
       let step = phases as usize;
       let mut i = phase as usize;
@@ -186,7 +186,7 @@ assertion pair is exact and needs no tolerance.
       ```
       Change nothing inside the body — not the 3×3 window, not the cap, not the
       tie-break, not the falloff.
-- [ ] 4. Re-add the old entry point as a wrapper, so existing callers compile
+- [x] 4. Re-add the old entry point as a wrapper, so existing callers compile
       unchanged:
       ```rust
       /// Write every agent's repulsion sum. Equivalent to
@@ -202,10 +202,10 @@ assertion pair is exact and needs no tolerance.
           accumulate_separation_phase(x, y, grid, radius_cells, 1, 0, sep_x, sep_y);
       }
       ```
-- [ ] 5. Export the new function wherever `accumulate_separation` is re-exported
+- [x] 5. Export the new function wherever `accumulate_separation` is re-exported
       — check `crates/mmd-engine/src/sim/mod.rs` and add
       `accumulate_separation_phase` beside it.
-- [ ] 6. In `crates/mmd-engine/src/sim/agents.rs`, add a counter field to
+- [x] 6. In `crates/mmd-engine/src/sim/agents.rs`, add a counter field to
       `struct Simulation`, after `tick_index`:
       ```rust
       /// Grid rebuilds performed since construction. Amortisation makes this
@@ -213,7 +213,7 @@ assertion pair is exact and needs no tolerance.
       pub(super) grid_rebuilds: u64,
       ```
       Initialise it to `0` in `new_custom`'s struct literal.
-- [ ] 7. In the same file, add two testkit-gated accessors to `impl Simulation`,
+- [x] 7. In the same file, add two testkit-gated accessors to `impl Simulation`,
       next to `collision()`:
       ```rust
       /// This agent's stored repulsion sum. Amortisation makes it outlive the
@@ -229,7 +229,7 @@ assertion pair is exact and needs no tolerance.
           self.grid_rebuilds
       }
       ```
-- [ ] 8. In `crates/mmd-engine/src/sim/tick.rs`, replace the `if collision_on`
+- [x] 8. In `crates/mmd-engine/src/sim/tick.rs`, replace the `if collision_on`
       block with:
       ```rust
       if collision_on {
@@ -254,25 +254,25 @@ assertion pair is exact and needs no tolerance.
           );
       }
       ```
-- [ ] 9. Update the doc comment on `pub fn step` in `tick.rs`: after the
+- [x] 9. Update the doc comment on `pub fn step` in `tick.rs`: after the
       existing "no neighbour is ever queried" sentence add — *"When the scenario
       spreads the pass over several ticks, an agent outside this tick's phase
       keeps the repulsion it was last given; the grid it was measured against is
       rebuilt once per cycle, so a neighbour position can be up to
       `separation_phases - 1` ticks old."*
-- [ ] 10. Edit `assets/scenarios/collision_mid_v1.ron`: change
+- [x] 10. Edit `assets/scenarios/collision_mid_v1.ron`: change
       `separation_phases: 1,` to `separation_phases: 4,`. Leave
       `mass_class_count` and `separation_threads` at `1`.
-- [ ] 11. Regenerate that one sidecar:
+- [x] 11. Regenerate that one sidecar:
       ```sh
       sha256sum assets/scenarios/collision_mid_v1.ron | cut -d' ' -f1 \
         > assets/scenarios/collision_mid_v1.sha256
       ```
-- [ ] 12. Add the four new tests to `crates/mmd-engine/tests/separation.rs`
+- [x] 12. Add the four new tests to `crates/mmd-engine/tests/separation.rs`
       after `a_released_stack_spreads_apart`, and extend
       `mid_scene_reports_its_tuning` with the `separation_phases() == 4`
       assertion.
-- [ ] 13. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
+- [x] 13. Run validation. If `a_bodied_scenario_is_pinned_to_a_golden_digest`
       moves, the `phases == 1` path is not the identity — do **not** re-measure;
       fix steps 3 and 8.
 
@@ -293,19 +293,24 @@ assertion pair is exact and needs no tolerance.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green
-- [ ] `cargo test -p mmd-engine --test separation` — green, with
+- [x] `cargo fmt --all -- --check` — clean, no output
+- [x] `cargo test --workspace --locked` — green, all `test result: ok`
+- [x] `cargo test -p mmd-engine --test separation` — 28 passed, 0 failed;
       `a_bodied_scenario_is_pinned_to_a_golden_digest` and
       `a_bodyless_scenario_walks_the_flow_only_path` **unedited**
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo build -p mmd-engine --no-default-features --features gpu`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exits 0
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean
+- [x] `cargo build -p mmd-engine --no-default-features --features gpu` — finished, no warnings
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte —
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored) —
+      "Rebuilt: 3743 nodes, 7166 edges, 240 communities"
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
 - [ ] manual check — watch the mid scene; the crowd must still open up, with no
-      agent frozen inside a wall
-- [ ] `nix flake check`
-- [ ] app functional — every scene loads, ticks and exits
-- [ ] commit msg draft: `feat(sim): spread the separation pass over the scenario's phase count`
+      agent frozen inside a wall — **not run**: requires an interactive
+      windowed/GPU session; logged in
+      `ai-artifacts/manual_test_checklist.md` under `## T3` for a human to run
+- [x] `nix flake check` — "all checks passed!"
+- [x] app functional — every scene loads, ticks and exits — ran all three
+      `.ron` scenarios in `assets/scenarios/` for 60 frames each, all exit 0
+- [x] commit msg draft: `feat(sim): spread the separation pass over the scenario's phase count`

@@ -130,16 +130,30 @@ impl CollisionParams {
     }
 }
 
-/// Write each agent's repulsion sum into `sep_x` / `sep_y`. Allocates nothing.
+/// Write the repulsion sum for the agents of `phase` into `sep_x` / `sep_y`,
+/// leaving every other entry exactly as it was.
+///
+/// An agent belongs to `i % phases`. The stride, rather than a contiguous
+/// block, is deliberate: agent index correlates with spawn cell, so a
+/// blocked split would refresh one region of the crowd at a time.
+///
+/// `phases == 1` visits every agent and is bit-identical to the unamortised
+/// pass.
 ///
 /// `grid` must have been rebuilt from the same positions this tick, every slice
 /// must be the same length, and `radius_cells` must be positive — a bodyless
 /// scenario skips this pass rather than calling it with zero.
-pub fn accumulate_separation(
+///
+/// # Panics
+/// If `phases == 0` or `phase >= phases`.
+#[allow(clippy::too_many_arguments)]
+pub fn accumulate_separation_phase(
     x: &[f32],
     y: &[f32],
     grid: &SpatialGrid,
     radius_cells: f32,
+    phases: u32,
+    phase: u32,
     sep_x: &mut [f32],
     sep_y: &mut [f32],
 ) {
@@ -151,6 +165,8 @@ pub fn accumulate_separation(
     // Contact distance is the divisor below; a zero radius would poison every
     // sum with an infinity.
     debug_assert!(radius_cells > 0.0, "radius must be positive");
+    assert!(phases > 0, "phases must be >= 1");
+    assert!(phase < phases, "phase {phase} out of range for {phases}");
 
     let contact = 2.0 * radius_cells;
     let contact2 = contact * contact;
@@ -158,7 +174,9 @@ pub fn accumulate_separation(
     let last_col = grid.cols() - 1;
     let last_row = grid.rows() - 1;
 
-    for i in 0..n {
+    let step = phases as usize;
+    let mut i = phase as usize;
+    while i < n {
         let px = x[i];
         let py = y[i];
         let (bx, by) = grid.bin_of(px, py);
@@ -211,5 +229,19 @@ pub fn accumulate_separation(
 
         sep_x[i] = sx;
         sep_y[i] = sy;
+        i += step;
     }
+}
+
+/// Write every agent's repulsion sum. Equivalent to
+/// [`accumulate_separation_phase`] with `phases = 1, phase = 0`.
+pub fn accumulate_separation(
+    x: &[f32],
+    y: &[f32],
+    grid: &SpatialGrid,
+    radius_cells: f32,
+    sep_x: &mut [f32],
+    sep_y: &mut [f32],
+) {
+    accumulate_separation_phase(x, y, grid, radius_cells, 1, 0, sep_x, sep_y);
 }

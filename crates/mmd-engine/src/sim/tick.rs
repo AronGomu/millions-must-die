@@ -18,7 +18,15 @@ const BLEND_EPS2: f32 = 1e-12;
 /// One move per agent, always. When the scenario declares a body the descent
 /// vector is first bent by the neighbours pressing on the agent (see
 /// [`super::collision`]); when it does not, no neighbour is ever queried and
-/// the walk is pure flow-field descent.
+/// the walk is pure flow-field descent. When the scenario spreads the pass
+/// over several ticks, an agent outside this tick's phase keeps the
+/// repulsion it was last given, and the neighbour scan itself always reads
+/// live positions — but through a spatial grid that is only rebuilt once per
+/// cycle. Bin *membership* can therefore be up to `separation_phases - 1`
+/// ticks stale: a neighbour that has since crossed into or out of an
+/// agent's 3x3 scan window is missed or wrongly included until the next
+/// rebuild. An agent recycled to a spawn cell mid-cycle keeps steering by a
+/// repulsion measured at its old position until its phase comes back around.
 pub fn step(sim: &mut Simulation) {
     let width = sim.width;
     let height = sim.height;
@@ -35,12 +43,22 @@ pub fn step(sim: &mut Simulation) {
     let collision = sim.collision;
     let collision_on = collision.enabled();
     if collision_on {
-        sim.grid.rebuild(&sim.x, &sim.y);
-        super::collision::accumulate_separation(
+        // One cadence for both halves of the pass. Reynolds' `skipThink`
+        // recomputes less, it does not spread the same work thinner — the
+        // scan that is skipped is never run.
+        let phases = collision.phases.max(1) as u64;
+        let phase = sim.tick_index % phases;
+        if phase == 0 {
+            sim.grid.rebuild(&sim.x, &sim.y);
+            sim.grid_rebuilds += 1;
+        }
+        super::collision::accumulate_separation_phase(
             &sim.x,
             &sim.y,
             &sim.grid,
             collision.radius_cells,
+            phases as u32,
+            phase as u32,
             &mut sim.sep_x,
             &mut sim.sep_y,
         );

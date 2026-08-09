@@ -143,7 +143,7 @@
   frame_count: 4,
   collision_radius_q8: 1536,
   separation_strength_q8: 256,
-  separation_phases: 1,
+  separation_phases: 4,
   mass_class_count: 1,
   separation_threads: 1,
   obstacle_cells: [

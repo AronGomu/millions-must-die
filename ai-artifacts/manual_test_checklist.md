@@ -76,3 +76,31 @@ byte for byte). What is left needs eyes on a real window.
       from T1.
 - [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
       same check at the lower-density scale.
+
+## T3 amortised-separation
+
+The separation scan and grid rebuild now spread over the scenario's
+`separation_phases` ticks. Every scene except `collision_mid_v1` still pins
+`separation_phases: 1` and must look and behave exactly as before this
+ticket. `collision_mid_v1` alone now amortises over 4 phases: at most a
+3-tick-stale neighbour position, one grid rebuild per 4 ticks instead of
+every tick. Everything automatable is green (`cargo fmt`, `cargo test
+--workspace --locked`, `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`, `nix flake check`, the testkit-gated `cargo
+build -p mmd-engine --no-default-features --features gpu`, and the gate
+smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte). What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
+      exactly as it did before this ticket (this scene stays at
+      `separation_phases: 1`): same 48 px sprites, same edge-to-edge contact
+      at chokepoints. Press `Esc` to quit and confirm a clean exit.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      starts, the stacked spawn column must still visibly spread apart over
+      the run (now amortised over 4 phases, so the spread may look very
+      slightly slower/chunkier tick to tick, but must not stall or freeze),
+      no agent stuck inside the scene's obstacle, quits cleanly on `Esc`.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      unaffected by this ticket (stays at `separation_phases: 1`); same check
+      as T2 at the lower-density scale.

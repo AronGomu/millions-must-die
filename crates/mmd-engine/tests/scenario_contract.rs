@@ -892,10 +892,18 @@ fn tracked_scenes_declare_the_identity_tuning() {
         .chain(ALL_FIXTURES.iter().copied().map(fixture_path));
     for path in tracked {
         let scene = Scenario::load_verified(&path).expect("tracked scene must load");
+        // collision_mid_v1 is T3's one deliberate opt-in: it amortises its
+        // separation pass over 4 phases. Every other tracked scene, including
+        // the rest of the collision family, still pins the identity.
+        let expected_phases = if path.ends_with(COLLISION_MID_SCENE) {
+            4
+        } else {
+            1
+        };
         assert_eq!(
             scene.separation_phases(),
-            1,
-            "{}: separation_phases must stay at identity",
+            expected_phases,
+            "{}: separation_phases must stay at its declared tuning",
             path.display()
         );
         assert_eq!(
