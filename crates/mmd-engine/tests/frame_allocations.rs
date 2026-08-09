@@ -11,8 +11,9 @@ use std::sync::{Arc, Mutex, OnceLock};
 use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
+use mmd_engine::scenario::Cell;
 use mmd_engine::sim::SpatialGrid;
-use mmd_engine::testkit::{FIXTURE_DENSE_V1, Harness};
+use mmd_engine::testkit::{FIXTURE_DENSE_V1, GridSpec, Harness};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -193,6 +194,58 @@ fn foreign_thread_allocations_do_not_leak_into_a_measure_scope() {
     );
 }
 
+/// The positive control for the test above, and for the whole worker arm.
+///
+/// `foreign_thread_allocations_do_not_leak_into_a_measure_scope` pins that an
+/// *unarmed* thread is invisible. That is exactly why
+/// `a_threaded_collision_tick_allocates_nothing` would pass vacuously if the
+/// pool's workers never armed themselves — an invisible thread allocates zero
+/// by construction. This pins the other half: a thread that *does* arm is
+/// counted into the scope the measuring thread is reading. Without it, the
+/// claim that threading made the guard stronger is untested.
+#[test]
+fn an_armed_thread_allocations_do_reach_a_measure_scope() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let go = Arc::new(AtomicBool::new(false));
+    let done = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let go = Arc::clone(&go);
+        let done = Arc::clone(&done);
+        std::thread::spawn(move || {
+            while !go.load(Ordering::Acquire) {
+                std::hint::spin_loop();
+            }
+            // Arm exactly the way a separation worker arms around its chunk.
+            let _arm = mmd_engine::alloc_guard::arm_worker();
+            let churn: Vec<u8> = Vec::with_capacity(4096);
+            std::hint::black_box(&churn);
+            drop(_arm);
+            done.store(true, Ordering::Release);
+        })
+    };
+
+    let observed = {
+        let guard = MeasureGuard::enter();
+        go.store(true, Ordering::Release);
+        let mut spins = 0u64;
+        while !done.load(Ordering::Acquire) {
+            std::hint::spin_loop();
+            spins += 1;
+            assert!(spins < 5_000_000_000, "the armed thread never finished");
+        }
+        guard.finish()
+    };
+    worker.join().expect("armed thread joins");
+
+    assert!(
+        observed > 0,
+        "an armed worker's allocation was invisible to the measuring thread; \
+         a zero-allocation assertion would then say nothing about the pool"
+    );
+}
+
 #[test]
 fn spatial_rebuild_allocates_nothing() {
     let _lock = lock_alloc_tests();
@@ -222,6 +275,44 @@ fn a_collision_tick_allocates_nothing() {
 
     let mut h = Harness::fixture(FIXTURE_DENSE_V1).build().expect("dense");
     assert!(h.sim().collision().enabled(), "fixture must have a body");
+    h.step_exact(2); // warm-up outside the measured scope
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(10);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0);
+    guard.assert_zero();
+}
+
+/// The pool does not get to weaken the invariant it was allowed to exist under.
+///
+/// A measure scope is armed per-thread, so an *unarmed* worker's allocations
+/// would simply be invisible here and this test would pass without proving
+/// anything. Each worker therefore arms itself with `alloc_guard::arm_worker`
+/// around its chunk: its allocations land in the same process-wide counter this
+/// scope reads, and the zero below covers the workers as well as the ticking
+/// thread. That is why introducing threads makes the guard stronger rather than
+/// weaker.
+#[test]
+fn a_threaded_collision_tick_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let spec = GridSpec::new(32, 32, Cell { x: 31, y: 16 })
+        .with_spawns(vec![Cell { x: 1, y: 16 }])
+        .with_collision(128, 256)
+        .with_agents(256)
+        .with_separation_threads(4);
+    let mut h = Harness::grid(spec)
+        .build()
+        .expect("threaded collision grid");
+    assert!(h.sim().collision().enabled(), "the grid must have a body");
+    assert_eq!(
+        h.sim().worker_thread_count(),
+        3,
+        "the pass must actually be running on workers, or this test measures \
+         the inline path and proves nothing about them"
+    );
     h.step_exact(2); // warm-up outside the measured scope
 
     let guard = MeasureGuard::enter();

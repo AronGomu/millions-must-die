@@ -16,11 +16,16 @@
 //! only when the allocating thread is itself inside a scope. Allocations made
 //! by any other thread while a scope is open are invisible to it.
 //!
-//! The *counter* behind it is still one process-wide number, so two threads
-//! that both hold a scope at the same time would still share it. Nothing does
-//! that today — the only non-test consumer is `bench::runner`, and the tests
-//! serialize on a mutex — but per-thread arming is not per-thread counting,
-//! and the difference matters the moment a second measuring thread exists.
+//! The *counter* behind it is still one process-wide number, so every armed
+//! thread contributes to the same total. That is now deliberate rather than
+//! incidental: the separation pool's workers arm themselves (see below), and
+//! sharing the counter is precisely what makes their allocations visible to
+//! the thread measuring the frame. Per-thread arming is not per-thread
+//! counting, and the difference matters for the case that is still not
+//! supported — two threads reading *deltas* at the same time would interleave
+//! into one number. Nothing does that: the only non-test consumer is
+//! `bench::runner`, which ticks and measures on one thread, and the tests
+//! serialize on a mutex.
 //!
 //! That narrowing is deliberate and load-bearing. The counter is one process-
 //! wide number, so with a process-wide enable flag *any* thread's allocation
@@ -30,11 +35,13 @@
 //! cross-talk without weakening a single assertion.
 //!
 //! The cost of the narrowing, stated plainly: work that a measured frame hands
-//! to another thread would not be counted. Nothing in this project does that —
-//! the simulation, renderer and bench runner are single-threaded, and
-//! `bench::runner` is the only non-test consumer — so no coverage is lost
-//! today. Introducing a worker thread on the frame path means this guard must
-//! be revisited before it can still claim "zero allocations per frame".
+//! to another thread is not counted unless that thread arms itself. The
+//! separation pass does hand work to worker threads (`crate::sim::pool`). Each
+//! worker arms itself with [`arm_worker`] for the duration of its chunk, so an
+//! allocation there is counted into the same process-wide number the measuring
+//! thread reads — the claim still holds, and it now covers the workers. A
+//! thread that never arms is still invisible, which is what
+//! `foreign_thread_allocations_do_not_leak_into_a_measure_scope` pins.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -146,6 +153,43 @@ pub fn end_measure(previous_enabled: bool) {
     set_counting_here(previous_enabled);
 }
 
+/// RAII arm for a worker thread: counts this thread's allocations into the
+/// process-wide counter, without snapshotting or resetting it.
+///
+/// [`MeasureGuard`] is for the thread that *reads* a delta. This is for a
+/// worker thread that must not allocate at all: arming it makes any allocation
+/// it does make land in the same process-wide counter the measuring thread
+/// reads, so a zero-allocation assertion covers the worker too. Unarmed, a
+/// worker's allocations would simply be invisible — and an assertion that
+/// cannot see the thread it is meant to constrain proves nothing about it.
+///
+/// Deliberately **not `Send`**, for the same reason [`MeasureGuard`] is not:
+/// the enable flag lives in the arming thread's TLS, so a guard dropped on
+/// another thread would disarm the wrong one and leave the arming thread
+/// counting forever.
+#[derive(Debug)]
+pub struct WorkerArm {
+    prev: bool,
+    _not_send: PhantomData<*const ()>,
+}
+
+/// Arm allocation counting on the calling thread until the guard drops.
+///
+/// Nests correctly: the previous flag is restored, not cleared, so arming a
+/// thread that is already inside a [`MeasureGuard`] leaves that scope armed.
+pub fn arm_worker() -> WorkerArm {
+    WorkerArm {
+        prev: start_measure(),
+        _not_send: PhantomData,
+    }
+}
+
+impl Drop for WorkerArm {
+    fn drop(&mut self) {
+        end_measure(self.prev);
+    }
+}
+
 /// RAII measure scope: counts Rust global allocations while held.
 ///
 /// Drop restores previous enable flag (including on unwind).
@@ -251,9 +295,37 @@ mod tests {
             "MeasureGuard became Send; a scope could then be dropped on a \
              thread that never entered it, disarming the wrong TLS flag"
         );
+        // A worker arm carries the same hazard: its flag is the arming thread's
+        // TLS, and a pool worker holds one across a chunk.
+        assert!(
+            !SendProbe::<WorkerArm>(PhantomData).is_send(),
+            "WorkerArm became Send; a worker could then disarm a thread that \
+             never armed itself"
+        );
         // Control: the probe does report Send for a type that is Send, so a
         // probe stuck at `false` cannot pass this test vacuously.
         assert!(SendProbe::<u64>(PhantomData).is_send());
+    }
+
+    /// The arm's flag discipline. That an armed thread's allocation actually
+    /// reaches the counter is pinned in `tests/frame_allocations.rs`, which is
+    /// the only binary here that installs [`CountingAllocator`] — this one does
+    /// not, so `alloc_count()` cannot move in a lib test.
+    #[test]
+    fn a_worker_arm_arms_and_restores_the_flag() {
+        assert!(!is_counting());
+        {
+            let _arm = arm_worker();
+            assert!(is_counting(), "the arming thread must be armed");
+            {
+                // Nested: restoring `prev` rather than clearing is what keeps a
+                // surrounding scope armed.
+                let _inner = arm_worker();
+                assert!(is_counting());
+            }
+            assert!(is_counting(), "the outer arm must survive an inner one");
+        }
+        assert!(!is_counting(), "Drop must restore the previous flag");
     }
 
     #[test]

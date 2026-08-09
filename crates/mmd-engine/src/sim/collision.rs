@@ -164,10 +164,59 @@ pub fn accumulate_separation_phase(
     sep_x: &mut [f32],
     sep_y: &mut [f32],
 ) {
+    let hi = x.len();
+    accumulate_separation_range(
+        x,
+        y,
+        grid,
+        radius_cells,
+        mass,
+        inv_mass,
+        phases,
+        phase,
+        0,
+        hi,
+        sep_x,
+        sep_y,
+    );
+}
+
+/// As [`accumulate_separation_phase`], restricted to agent indices in `lo..hi`.
+///
+/// Splitting by index range is what makes this pass safe to run on several
+/// threads: each output element is written by exactly one caller, from
+/// immutable inputs, in the same intra-agent order it would have had serially.
+/// No partial sum crosses a range boundary, so no floating-point reassociation
+/// is possible and the result does not depend on how the range was cut.
+///
+/// The **input** slices are always the whole population: a neighbour scan has
+/// to read agents outside this caller's range, and the grid stores absolute
+/// indices. The **output** slices cover `lo..hi` only, so `sep_x[i - lo]` is
+/// agent `i`'s push. That asymmetry is load-bearing rather than cosmetic —
+/// handing every thread a `&mut [f32]` over the whole buffer would be two
+/// overlapping unique references to the same memory, which is undefined
+/// behaviour even when the elements each thread touches are disjoint. Slicing
+/// the output makes the disjointness a property of the references themselves.
+///
+/// # Panics
+/// If `phases == 0`, `phase >= phases`, or `lo > hi`, or `hi > x.len()`.
+#[allow(clippy::too_many_arguments)]
+pub fn accumulate_separation_range(
+    x: &[f32],
+    y: &[f32],
+    grid: &SpatialGrid,
+    radius_cells: f32,
+    mass: &[u8],
+    inv_mass: &[f32],
+    phases: u32,
+    phase: u32,
+    lo: usize,
+    hi: usize,
+    sep_x: &mut [f32],
+    sep_y: &mut [f32],
+) {
     let n = x.len();
     debug_assert_eq!(y.len(), n);
-    debug_assert_eq!(sep_x.len(), n);
-    debug_assert_eq!(sep_y.len(), n);
     debug_assert_eq!(grid.len(), n);
     debug_assert_eq!(mass.len(), n);
     debug_assert_eq!(inv_mass.len(), n);
@@ -176,6 +225,9 @@ pub fn accumulate_separation_phase(
     debug_assert!(radius_cells > 0.0, "radius must be positive");
     assert!(phases > 0, "phases must be >= 1");
     assert!(phase < phases, "phase {phase} out of range for {phases}");
+    assert!(hi <= n && lo <= hi, "range {lo}..{hi} out of bounds");
+    debug_assert_eq!(sep_x.len(), hi - lo);
+    debug_assert_eq!(sep_y.len(), hi - lo);
 
     let contact = 2.0 * radius_cells;
     let contact2 = contact * contact;
@@ -184,8 +236,13 @@ pub fn accumulate_separation_phase(
     let last_row = grid.rows() - 1;
 
     let step = phases as usize;
-    let mut i = phase as usize;
-    while i < n {
+    // The first index of this phase at or after `lo`, i.e. the smallest
+    // `i >= lo` with `i % step == phase`. Written as
+    // `lo + ((phase - lo) mod step)` with the subtraction kept non-negative,
+    // since `lo % step < step` and `phase < step`. With `lo == 0` this is
+    // exactly `phase`, so the unsplit walk is unchanged.
+    let mut i = lo + ((phase as usize + step - lo % step) % step);
+    while i < hi {
         let px = x[i];
         let py = y[i];
         let inv_mi = inv_mass[i];
@@ -202,8 +259,8 @@ pub fn accumulate_separation_phase(
             window += grid.agents_in_bin_row(bx0, bx1, cy).len();
         }
         if window <= 1 {
-            sep_x[i] = 0.0;
-            sep_y[i] = 0.0;
+            sep_x[i - lo] = 0.0;
+            sep_y[i - lo] = 0.0;
             i += step;
             continue;
         }
@@ -249,8 +306,8 @@ pub fn accumulate_separation_phase(
             }
         }
 
-        sep_x[i] = sx;
-        sep_y[i] = sy;
+        sep_x[i - lo] = sx;
+        sep_y[i - lo] = sy;
         i += step;
     }
 }

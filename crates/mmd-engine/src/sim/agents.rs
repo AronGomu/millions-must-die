@@ -77,6 +77,17 @@ pub struct Simulation {
     /// `1.0 / mass[i]`, precomputed so the scan spends one multiply per pair
     /// rather than a divide.
     pub(super) inv_mass: Vec<f32>,
+    /// Worker pool for the separation pass; `None` when the scenario asked for
+    /// one participant, which is the identity and spawns nothing.
+    ///
+    /// Behind an `Arc` because `Simulation` is `Clone` — clones share one pool,
+    /// and ticking two of them concurrently is rejected rather than made safe.
+    /// That rejection is a real `assert!` in `SeparationPool::run`, not a
+    /// `debug_assert!`: this type is public, `Clone` and `Send`, so two clones
+    /// ticking at once is reachable from entirely safe code, and it would be a
+    /// data race. A check that vanished in release would leave undefined
+    /// behaviour behind a safe API.
+    pub(super) pool: Option<std::sync::Arc<super::pool::SeparationPool>>,
 }
 
 impl Simulation {
@@ -186,6 +197,16 @@ impl Simulation {
             inv_mass.push(1.0 / m as f32);
         }
 
+        // Spawned once, here, and never inside a tick: creating a thread
+        // allocates, and the frame path is held to zero allocations.
+        let pool = if collision.enabled() && collision.threads > 1 {
+            Some(std::sync::Arc::new(super::pool::SeparationPool::new(
+                collision.threads as usize,
+            )))
+        } else {
+            None
+        };
+
         Self {
             width,
             height,
@@ -216,6 +237,7 @@ impl Simulation {
             sep_y,
             mass,
             inv_mass,
+            pool,
         }
     }
 
@@ -243,6 +265,15 @@ impl Simulation {
     #[cfg(feature = "testkit")]
     pub fn mass_of(&self, index: usize) -> u8 {
         self.mass[index]
+    }
+
+    /// Worker threads this simulation spawned. `0` when the pass runs inline.
+    ///
+    /// One fewer than the scenario's `separation_threads`, because the ticking
+    /// thread is itself a participant.
+    #[cfg(feature = "testkit")]
+    pub fn worker_thread_count(&self) -> usize {
+        self.pool.as_ref().map_or(0, |p| p.worker_count())
     }
 
     /// Grid rebuilds performed since construction.

@@ -134,15 +134,20 @@ allocating nothing per tick — on every thread, now provably.
 
 ## TDD
 
-1. **Red** — write `threads_do_not_change_the_walk`,
+- [x] 1. **Red** — write `threads_do_not_change_the_walk`,
    `a_single_thread_spawns_no_workers`, `the_pool_shuts_down_cleanly` and
    `a_threaded_collision_tick_allocates_nothing`. All four fail to compile
    (`worker_thread_count` missing) or fail outright (`with_separation_threads`
    reaching the sim changes nothing yet, so the pool-count assertion fails).
-2. **Green** — add the range-limited pass, the `alloc_guard` worker arm, the
+   *Criterion:* `cargo test -p mmd-engine --test separation` fails with
+   `no method named worker_thread_count`.
+- [x] 2. **Green** — add the range-limited pass, the `alloc_guard` worker arm, the
    pool module, then wire `new_custom` and `tick::step`.
-3. **Refactor** — none. Keep `accumulate_separation_phase` as a thin wrapper
+   *Criterion:* the four new tests pass.
+- [x] 3. **Refactor** — none. Keep `accumulate_separation_phase` as a thin wrapper
    over the range form so T3's and T5's tests keep compiling.
+   *Criterion:* `crates/mmd-engine/tests/separation.rs` calls to
+   `accumulate_separation` are unedited and green.
 
 ## Test plan
 
@@ -160,7 +165,7 @@ allocating nothing per tick — on every thread, now provably.
 
 ## Impl steps
 
-- [ ] 1. In `crates/mmd-engine/src/sim/collision.rs`, add a range-limited form
+- [x] 1. In `crates/mmd-engine/src/sim/collision.rs`, add a range-limited form
       and demote `accumulate_separation_phase` to a wrapper over it:
       ```rust
       /// As [`accumulate_separation_phase`], restricted to agent indices in
@@ -183,7 +188,7 @@ allocating nothing per tick — on every thread, now provably.
           sep_x: &mut [f32], sep_y: &mut [f32],
       ) { /* … */ }
       ```
-- [ ] 2. Inside it, replace the loop seed with the first index of this phase at
+- [x] 2. Inside it, replace the loop seed with the first index of this phase at
       or after `lo`:
       ```rust
       let step = phases as usize;
@@ -195,10 +200,10 @@ allocating nothing per tick — on every thread, now provably.
       ```
       Keep every `debug_assert!` and both new `assert!`s from T3, and add
       `assert!(hi <= x.len() && lo <= hi, "range {lo}..{hi} out of bounds");`.
-- [ ] 3. Make `accumulate_separation_phase` forward with `lo = 0, hi = x.len()`.
+- [x] 3. Make `accumulate_separation_phase` forward with `lo = 0, hi = x.len()`.
       Leave `accumulate_separation` forwarding to it. Re-export
       `accumulate_separation_range` from `crates/mmd-engine/src/sim/mod.rs`.
-- [ ] 4. In `crates/mmd-engine/src/alloc_guard.rs`, add — mirroring however
+- [x] 4. In `crates/mmd-engine/src/alloc_guard.rs`, add — mirroring however
       `MeasureGuard` already saves and restores the flag via
       `counting_here()` / `set_counting_here()`:
       ```rust
@@ -220,7 +225,7 @@ allocating nothing per tick — on every thread, now provably.
 
       impl Drop for WorkerArm { /* restore `prev` */ }
       ```
-- [ ] 5. In the same file, rewrite the last paragraph of the "Thread scope"
+- [x] 5. In the same file, rewrite the last paragraph of the "Thread scope"
       module doc. Replace *"Introducing a worker thread on the frame path means
       this guard must be revisited before it can still claim 'zero allocations
       per frame'."* with:
@@ -231,7 +236,7 @@ allocating nothing per tick — on every thread, now provably.
       and it now covers the workers. A thread that never arms is still
       invisible, which is what `foreign_thread_allocations_do_not_leak_into_a_measure_scope`
       pins."*
-- [ ] 6. Create `crates/mmd-engine/src/sim/pool.rs`. Add `mod pool;` to
+- [x] 6. Create `crates/mmd-engine/src/sim/pool.rs`. Add `mod pool;` to
       `crates/mmd-engine/src/sim/mod.rs` (private — the pool is not public API).
       Contents:
       ```rust
@@ -278,7 +283,7 @@ allocating nothing per tick — on every thread, now provably.
       plus `struct Shared { gate: Barrier, done: Barrier, job: UnsafeCell<Job>, shutdown: AtomicBool, in_use: AtomicBool }`,
       `unsafe impl Sync for Shared {}` with its own SAFETY note, and
       `pub(super) struct SeparationPool { shared: Arc<Shared>, handles: Vec<JoinHandle<()>> }`.
-- [ ] 7. `SeparationPool::new(participants: usize) -> Self`: assert
+- [x] 7. `SeparationPool::new(participants: usize) -> Self`: assert
       `participants >= 2`; build both barriers with `Barrier::new(participants)`;
       spawn `participants - 1` workers, each running:
       ```rust
@@ -294,7 +299,7 @@ allocating nothing per tick — on every thread, now provably.
           shared.done.wait();
       }
       ```
-- [ ] 8. `fn run_chunk(job: &Job, w: usize)` rebuilds safe slices from the raw
+- [x] 8. `fn run_chunk(job: &Job, w: usize)` rebuilds safe slices from the raw
       pointers and calls `accumulate_separation_range`:
       ```rust
       let lo = w * job.n / job.participants;
@@ -315,7 +320,7 @@ allocating nothing per tick — on every thread, now provably.
           );
       }
       ```
-- [ ] 9. `pub(super) fn run(&self, job: Job)` — the ticking thread's entry:
+- [x] 9. `pub(super) fn run(&self, job: Job)` — the ticking thread's entry:
       ```rust
       debug_assert!(
           !self.shared.in_use.swap(true, Ordering::AcqRel),
@@ -327,11 +332,11 @@ allocating nothing per tick — on every thread, now provably.
       self.shared.done.wait();       // every chunk written
       self.shared.in_use.store(false, Ordering::Release);
       ```
-- [ ] 10. `impl Drop for SeparationPool`: set `shutdown` with
+- [x] 10. `impl Drop for SeparationPool`: set `shutdown` with
       `Ordering::Release`, call `self.shared.gate.wait()` once to release the
       parked workers, then `for h in self.handles.drain(..) { let _ = h.join(); }`.
       Do **not** wait on `done` here — the workers break before reaching it.
-- [ ] 11. In `crates/mmd-engine/src/sim/agents.rs`, add to `struct Simulation`:
+- [x] 11. In `crates/mmd-engine/src/sim/agents.rs`, add to `struct Simulation`:
       ```rust
       /// Worker pool for the separation pass; `None` when the scenario asked
       /// for one participant. Behind an `Arc` because `Simulation` is `Clone`
@@ -350,7 +355,7 @@ allocating nothing per tick — on every thread, now provably.
       };
       ```
       and add `pool,` to the struct literal.
-- [ ] 12. Add the testkit accessor beside `mass_of`:
+- [x] 12. Add the testkit accessor beside `mass_of`:
       ```rust
       /// Worker threads this simulation spawned. `0` when the pass runs inline.
       #[cfg(feature = "testkit")]
@@ -360,7 +365,7 @@ allocating nothing per tick — on every thread, now provably.
       ```
       with `pub(super) fn worker_count(&self) -> usize { self.handles.len() }` on
       `SeparationPool`.
-- [ ] 13. In `crates/mmd-engine/src/sim/tick.rs`, replace the
+- [x] 13. In `crates/mmd-engine/src/sim/tick.rs`, replace the
       `accumulate_separation_phase(...)` call with a branch:
       ```rust
       match sim.pool.clone() {
@@ -377,7 +382,7 @@ allocating nothing per tick — on every thread, now provably.
       in `pool.rs` filling the pointers from the sim's vectors. Cloning the
       `Arc` is what releases the borrow on `sim` before the pointers are taken;
       it is a refcount bump, not an allocation.
-- [ ] 14. Add the six new tests: `threads_do_not_change_the_walk`,
+- [x] 14. Add the six new tests: `threads_do_not_change_the_walk`,
       `threads_do_not_change_an_amortised_walk`,
       `a_single_thread_spawns_no_workers`,
       `a_pool_spawns_one_fewer_worker_than_participants` and
@@ -386,7 +391,7 @@ allocating nothing per tick — on every thread, now provably.
       `a_threaded_collision_tick_allocates_nothing` in
       `crates/mmd-engine/tests/frame_allocations.rs`, taking
       `lock_alloc_tests()` first like every other test in that file.
-- [ ] 15. Run validation, then run the determinism test ten times in a row:
+- [x] 15. Run validation, then run the determinism test ten times in a row:
       `for i in $(seq 10); do cargo test -p mmd-engine --test separation threads_do_not_change_the_walk || break; done`.
       A race shows up as an intermittent failure, and one green run does not
       rule it out.
@@ -411,21 +416,28 @@ allocating nothing per tick — on every thread, now provably.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked` — green
-- [ ] `cargo test -p mmd-engine --test separation` — green, with
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test --workspace --locked` — green
+- [x] `cargo test -p mmd-engine --test separation` — green, with
       `a_bodied_scenario_is_pinned_to_a_golden_digest` **unedited**
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — green, with
+- [x] `cargo test -p mmd-engine --test frame_allocations` — green, with
       `a_collision_tick_allocates_nothing` and
       `foreign_thread_allocations_do_not_leak_into_a_measure_scope` **unedited**
-- [ ] `for i in $(seq 10); do cargo test -p mmd-engine --test separation threads_do_not_change_the_walk || break; done` — 10/10 green
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo build -p mmd-engine --no-default-features --features gpu`
-- [ ] `cargo tree -e features | grep -c testkit` — `0` for the shipping build
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0
-- [ ] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
-- [ ] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
-- [ ] `nix flake check`
+- [x] `for i in $(seq 10); do cargo test -p mmd-engine --test separation threads_do_not_change_the_walk || break; done` — 10/10 green
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `cargo build -p mmd-engine --no-default-features --features gpu`
+- [x] `cargo tree -e features | grep -c testkit` — `0` for the shipping build
+- [x] `cargo run -- run --agents 5000 --frames 300` — exits 0
+- [x] the gate smoke `hash=` equals the T0 pinned digest, byte for byte
+- [x] `graphify update .` run (graph refresh; `graphify-out/` is gitignored)
+- [x] `nix flake check`
+- [x] the three xtask `--check` merge gates — green. (`cargo xtask --check` is
+      not a real command in this repo; AGENT.md:42-44 gives the actual form:
+      `cargo run -p xtask -- bootstrap --check`, `... shaders --check`,
+      `... atlases --check`.)
 - [ ] app functional — every scene loads, ticks and exits; no thread outlives the
-      process
+      process. *Criterion:* windowed/GPU box — recorded in
+      `ai-artifacts/manual_test_checklist.md` under `## T6 parallel-separation`,
+      left unchecked here; not run headless, does not gate this ticket
 - [ ] commit msg draft: `feat(sim): run the separation pass on a persistent worker pool`
+      *Criterion:* the commit landing this ticket uses that subject

@@ -52,18 +52,30 @@ pub fn step(sim: &mut Simulation) {
             sim.grid.rebuild(&sim.x, &sim.y);
             sim.grid_rebuilds += 1;
         }
-        super::collision::accumulate_separation_phase(
-            &sim.x,
-            &sim.y,
-            &sim.grid,
-            collision.radius_cells,
-            &sim.mass,
-            &sim.inv_mass,
-            phases as u32,
-            phase as u32,
-            &mut sim.sep_x,
-            &mut sim.sep_y,
-        );
+        // Cloning the `Arc` releases the borrow on `sim` before the job's
+        // pointers are taken; it is a refcount bump, not an allocation. It is
+        // also load-bearing for soundness, not just for borrowck: holding an
+        // owned `Arc` across the whole of `run` is what makes it impossible for
+        // the pool to be dropped — and its workers joined — while a job that
+        // points into this simulation is still live.
+        //
+        // Both arms compute the same thing. The pool exists to spread the pass,
+        // not to change it.
+        match sim.pool.clone() {
+            Some(pool) => pool.run(super::pool::job_for(sim, phases as u32, phase as u32)),
+            None => super::collision::accumulate_separation_phase(
+                &sim.x,
+                &sim.y,
+                &sim.grid,
+                collision.radius_cells,
+                &sim.mass,
+                &sim.inv_mass,
+                phases as u32,
+                phase as u32,
+                &mut sim.sep_x,
+                &mut sim.sep_y,
+            ),
+        }
     }
 
     for i in 0..n {

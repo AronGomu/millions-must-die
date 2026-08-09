@@ -841,6 +841,156 @@ fn mass_classes_change_the_bodied_digest() {
     );
 }
 
+// --- the separation worker pool ---------------------------------------------
+
+/// The load-bearing claim of the whole pool: thread count is not an input.
+///
+/// Every `sep_x[i]` is written by exactly one participant, from immutable
+/// inputs, in the same intra-agent order it would have had serially — so no
+/// partial sum crosses a range boundary and no floating-point reassociation is
+/// possible. That is asserted here rather than argued: four thread counts, one
+/// digest.
+#[test]
+fn threads_do_not_change_the_walk() {
+    let run = |threads: u32| {
+        let mut h = Harness::grid(stacked_collision_grid(512).with_separation_threads(threads))
+            .build()
+            .expect("threaded stack");
+        // Without this the test could pass vacuously against a knob that never
+        // reached the simulation.
+        assert_eq!(
+            h.sim().worker_thread_count(),
+            threads as usize - 1,
+            "separation_threads = {threads} must spawn {} workers",
+            threads - 1
+        );
+        h.step_exact(200);
+        h.state_hash_hex()
+    };
+
+    let serial = run(1);
+    for threads in [2u32, 4, 8] {
+        assert_eq!(
+            run(threads),
+            serial,
+            "{threads} threads produced a different walk than 1; the pass is \
+             not thread-invariant"
+        );
+    }
+    assert_eq!(
+        serial.len(),
+        64,
+        "a state hash must be 32 bytes of hex, or the comparison above is empty"
+    );
+}
+
+/// The same claim with the phase stride in play, at thread counts whose chunk
+/// boundaries are deliberately *not* multiples of the phase count: 512 agents
+/// over 3 participants starts chunks at 0, 170 and 341, so the "first index of
+/// this phase at or after `lo`" arithmetic is exercised at `lo % phases` of
+/// 0, 2 and 1 rather than always 0.
+#[test]
+fn threads_do_not_change_an_amortised_walk() {
+    let run = |threads: u32| {
+        let mut h = Harness::grid(
+            stacked_collision_grid(512)
+                .with_separation_phases(4)
+                .with_separation_threads(threads),
+        )
+        .build()
+        .expect("amortised threaded stack");
+        assert_eq!(h.sim().worker_thread_count(), threads as usize - 1);
+        h.step_exact(200);
+        h.state_hash_hex()
+    };
+
+    let serial = run(1);
+    for threads in [3u32, 4, 7] {
+        assert_eq!(
+            run(threads),
+            serial,
+            "{threads} threads changed an amortised walk"
+        );
+    }
+}
+
+#[test]
+fn a_single_thread_spawns_no_workers() {
+    let h = Harness::grid(stacked_collision_grid(32))
+        .build()
+        .expect("default-thread stack");
+
+    assert_eq!(h.sim().collision().threads, 1, "1 is the identity tuning");
+    assert_eq!(
+        h.sim().worker_thread_count(),
+        0,
+        "a one-participant scenario must run the pass inline and spawn nothing"
+    );
+}
+
+#[test]
+fn a_pool_spawns_one_fewer_worker_than_participants() {
+    // The ticking thread is the T-th participant, so T = 4 buys 3 workers.
+    let h = Harness::grid(stacked_collision_grid(32).with_separation_threads(4))
+        .build()
+        .expect("4-participant stack");
+
+    assert_eq!(h.sim().worker_thread_count(), 3);
+}
+
+/// Fewer agents than participants: `w * n / T` collapses, so most chunks are
+/// empty and `sep_x.add(lo)` lands one past the end of the buffer for the last
+/// of them. Both are legal — a zero-length slice from a one-past-the-end
+/// pointer is well defined — but "legal" is a claim, and this is the only test
+/// that makes the pass walk that shape at all.
+#[test]
+fn a_chunk_may_hold_no_agents_at_all() {
+    let run = |threads: u32| {
+        let mut h = Harness::grid(stacked_collision_grid(3).with_separation_threads(threads))
+            .build()
+            .expect("thin threaded stack");
+        assert_eq!(h.sim().worker_thread_count(), threads as usize - 1);
+        h.step_exact(50);
+        h.state_hash_hex()
+    };
+
+    // 3 agents over 8 participants: chunks are 0..0, 0..0, 0..1, 1..1, 1..2,
+    // 2..2, 2..3, 3..3 — five of the eight empty, and the last starts at `n`.
+    assert_eq!(
+        run(8),
+        run(1),
+        "a walk with more participants than agents must still match the \
+         inline walk"
+    );
+}
+
+#[test]
+fn the_pool_shuts_down_cleanly() {
+    // A pool that was ticked. Dropping it must release the parked workers and
+    // join every one of them; a missed wake-up hangs this test rather than
+    // failing it, which is the point of running it in the merge gate.
+    let mut first = Harness::grid(stacked_collision_grid(64).with_separation_threads(4))
+        .build()
+        .expect("first threaded stack");
+    assert_eq!(first.sim().worker_thread_count(), 3);
+    first.step_exact(10);
+    drop(first);
+
+    // A pool that was never ticked: its workers are parked at the gate having
+    // never seen a job, which is a different wake-up path.
+    let never_ticked = Harness::grid(stacked_collision_grid(64).with_separation_threads(4))
+        .build()
+        .expect("never-ticked threaded stack");
+    drop(never_ticked);
+
+    // And the process is still healthy enough to build and run another.
+    let mut second = Harness::grid(stacked_collision_grid(64).with_separation_threads(4))
+        .build()
+        .expect("second threaded stack");
+    second.step_exact(10);
+    assert_eq!(second.sim().tick_index(), 10);
+}
+
 #[test]
 fn separation_never_wedges_an_agent_against_a_wall() {
     // The requirement the flow-only fallback in `tick::step` exists for. Every

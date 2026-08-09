@@ -171,3 +171,43 @@ byte for byte). What is left needs eyes on a real window.
       classes. Confirm the stacked spawn column still visibly opens up over
       the run, and that no agent ends up shoved inside a wall or obstacle.
       Quit cleanly on `Esc`.
+
+## T6 parallel-separation
+
+The separation pass can now run on a persistent worker pool
+(`crates/mmd-engine/src/sim/pool.rs`), sized by the scenario's
+`separation_threads`. **Every tracked scene stays at `separation_threads: 1`**,
+so nothing below should look different from T5 — the threaded path is
+deliberately shipped switched off and is proven by inline `GridSpec` tests
+only, so the merge gate reproduces on a host with any core count.
+
+Everything automatable is green: `cargo fmt --all -- --check`, `cargo test
+--workspace --locked`, `cargo test -p mmd-engine --test separation` (42 tests
+in both debug and release, with `a_bodied_scenario_is_pinned_to_a_golden_digest`
+and `a_bodyless_scenario_walks_the_flow_only_path` unedited), `cargo test -p
+mmd-engine --test frame_allocations` (9 tests, with
+`a_collision_tick_allocates_nothing` and
+`foreign_thread_allocations_do_not_leak_into_a_measure_scope` unedited),
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`,
+`cargo build -p mmd-engine --no-default-features --features gpu`,
+`cargo tree -e features | grep -c testkit` = 0, `nix flake check`, all three
+xtask `--check` commands, the determinism test 10/10 in a row, and the gate
+smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte. What is left needs eyes on a real window.
+
+- [ ] `cargo run -- run --agents 5000` — a window opens and the horde moves
+      exactly as it did in T5; this scene is at `separation_threads: 1`, so any
+      visible difference at all is a defect. Press `Esc` and confirm a clean
+      exit with no lingering process.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron` —
+      unchanged by this ticket (`separation_threads: 1`, still 4 phases).
+      Starts, spreads, no agent stuck inside the scene's obstacle, quits
+      cleanly on `Esc`.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron` —
+      unchanged by this ticket (`separation_threads: 1`, still 2 mass classes).
+      The stacked spawn column still visibly opens up; quits cleanly on `Esc`.
+- [ ] No thread outlives the process: after each `Esc` quit above, confirm the
+      process is gone (`pgrep -f millions_must_die` returns nothing). A pool
+      worker that failed to join would keep the process alive after the window
+      closed.
