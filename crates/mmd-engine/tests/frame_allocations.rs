@@ -12,7 +12,7 @@ use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
 use mmd_engine::render::Camera;
-use mmd_engine::rts::{EntityKind, Order, UnitKind};
+use mmd_engine::rts::{EntityKind, GatherPhase, Order, ResourceKind, UnitKind};
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::SpatialGrid;
@@ -518,6 +518,62 @@ fn movement_allocates_nothing() {
         h.world().entities().position(slot),
         [162.5, 178.5],
         "the measured ticks moved nobody"
+    );
+}
+
+/// The gather loop is under the same zero-allocation contract as movement.
+///
+/// The pool is warmed *outside* the scope on purpose — the two `nav.acquire`
+/// calls each worker's round trip makes (to the node, then to the drop-off)
+/// are misses the first time and settle the scratch heap then. Once every
+/// destination has been visited once, every further tick is field hits and
+/// bookkeeping, and the same bounded-miss exception `movement_allocates_nothing`
+/// documents is the only thing exempt.
+#[test]
+fn the_gather_loop_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    let crystal_nodes = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal));
+    let (first_three, rest) = workers.split_at(3);
+    assert_eq!(
+        h.world_mut()
+            .order_gather_group(first_three, crystal_nodes[0]),
+        3
+    );
+    assert_eq!(h.world_mut().order_gather_group(rest, crystal_nodes[1]), 3);
+
+    // Warm-up outside the scope: run one full round trip per worker so every
+    // field this test will ever need (to each node, then to the HQ) has
+    // already been built and the scratch heap has already settled.
+    h.step_exact(2_000);
+    assert!(
+        workers.iter().any(|id| matches!(
+            h.world().order_of(*id),
+            Some(Order::Gather {
+                phase: GatherPhase::Returning { .. },
+                ..
+            })
+        )),
+        "warm-up must have driven at least one worker into a return trip, \
+         or this measures a sweep that never exercised the drop-off field"
+    );
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(2_000);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0, "the gather loop allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and the run really did gather: a stalled loop allocates nothing
+    // either.
+    assert!(
+        h.world().resources().crystal > 300,
+        "the measured ticks banked nothing"
     );
 }
 

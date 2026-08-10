@@ -348,19 +348,19 @@ Harness is `RtsHarness::scene()` unless stated. `w0` = the first worker
 
 ## Impl steps
 
-- [ ] 1. Add `CARRY_NONE`, the two carry columns, `carry`, `set_carry` to `crates/mmd-engine/src/rts/entity.rs`; extend `hash_into` and `column_capacities`.
-- [ ] 2. Add the constants and `node_amount` to `crates/mmd-engine/src/rts/economy.rs`; make `RtsWorld::from_scenario` seed node amounts through `node_amount` instead of the two literals.
-- [ ] 3. Add `GatherPhase` and the `Order::Gather` variant to `crates/mmd-engine/src/rts/orders.rs`; extend `Order::tag` and `OrderTable::hash_into`.
-- [ ] 4. Add `dist2`, `rect_distance`, `drop_off_approach_cell`, `node_cell` to `orders.rs`.
-- [ ] 5. Create `crates/mmd-engine/tests/rts_economy.rs` and write every test from the table. Watch them fail.
-- [ ] 6. Implement `RtsWorld::nearest_drop_off`.
-- [ ] 7. Implement `RtsWorld::order_gather` and `order_gather_group`.
-- [ ] 8. Implement the gather system as step 5 of `tick()`, body exactly as quoted.
-- [ ] 9. Extend the movement system's destination derivation to cover both `Gather` phases, and restrict arrival-clearing to `Order::Move`.
-- [ ] 10. Extend `RtsWorld::state_hash` — no change needed if it already delegates to `EntityStore::hash_into` and `OrderTable::hash_into`; confirm by running `state_hash_sees_the_carried_load`.
-- [ ] 11. Add `the_gather_loop_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 12. Update `rts::mod`'s re-exports with `GatherPhase`, `WORKER_CARRY_CAPACITY`, `GATHER_TICKS`, `GATHER_REACH_CELLS`, `DROP_OFF_REACH_CELLS`, `CARRY_NONE`, `node_amount`.
-- [ ] 13. Run the mutation list; record kills in the commit body.
+- [x] 1. Add `CARRY_NONE`, the two carry columns, `carry`, `set_carry` to `crates/mmd-engine/src/rts/entity.rs`; extend `hash_into` and `column_capacities`. Evidence: `cargo test -p mmd-engine --test rts_world` green (`every_column_is_reserved_at_construction`), `cargo test -p mmd-engine --test rts_economy` green (`carry_starts_empty`, `set_carry_round_trips`, `carry_columns_are_reserved`).
+- [x] 2. Add the constants and `node_amount` to `crates/mmd-engine/src/rts/economy.rs`; make `RtsWorld::from_scenario` seed node amounts through `node_amount` instead of the two literals. Evidence: `cargo test -p mmd-engine --test rts_world` green (`nodes_carry_their_starting_amount`).
+- [x] 3. Add `GatherPhase` and the `Order::Gather` variant to `crates/mmd-engine/src/rts/orders.rs`; extend `Order::tag` and `OrderTable::hash_into`. Evidence: `cargo test -p mmd-engine --test rts_economy` green (`state_hash_sees_the_gather_phase`).
+- [x] 4. Add `dist2`, `rect_distance`, `drop_off_approach_cell`, `node_cell` to `orders.rs`. Evidence: builds and used by `order_gather`/gather system/movement; `cargo build -p mmd-engine --lib` clean.
+- [x] 5. Create `crates/mmd-engine/tests/rts_economy.rs` and write every test from the table. Watch them fail. Evidence: 30 tests written (plus mutation-list test #8); observed initial red against pre-impl code (E0432/E0433 unresolved imports for `GatherPhase`/`GATHER_TICKS`/`WORKER_CARRY_CAPACITY`/`order_gather`), then green after impl — `cargo test -p mmd-engine --test rts_economy`: 30 passed.
+- [x] 6. Implement `RtsWorld::nearest_drop_off`. Evidence: `nearest_drop_off_prefers_the_closer_building`, `nearest_drop_off_ignores_non_drop_off_buildings`, `nearest_drop_off_ties_go_to_the_lower_slot` pass.
+- [x] 7. Implement `RtsWorld::order_gather` and `order_gather_group`. Evidence: `order_gather_*` and `order_gather_group_acquires_once` tests pass.
+- [x] 8. Implement the gather system as step 5 of `tick()`, body exactly as quoted. Evidence: full round-trip tests (`a_full_round_trip_banks_crystal`, `a_full_round_trip_banks_gas`, `the_worker_keeps_cycling`, `six_workers_on_one_node_all_deliver`) pass.
+- [x] 9. Extend the movement system's destination derivation to cover both `Gather` phases, and restrict arrival-clearing to `Order::Move`. Evidence: `a_worker_walks_to_its_node`, `a_mining_worker_does_not_move`, `a_worker_that_arrives_starts_mining_the_same_tick` pass; `cargo test -p mmd-engine --test rts_world` still 48/48 green (no Move-order regression).
+- [x] 10. Extend `RtsWorld::state_hash` — no change needed; confirmed by running `state_hash_sees_the_carried_load`. Evidence: test passes without touching `state_hash` (it already delegates to `EntityStore::hash_into`/`OrderTable::hash_into`); doc comment updated to name the new columns.
+- [x] 11. Add `the_gather_loop_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`. Evidence: `cargo test -p mmd-engine --test frame_allocations`: 14 passed, including the new test.
+- [x] 12. Update `rts::mod`'s re-exports with `GatherPhase`, `WORKER_CARRY_CAPACITY`, `GATHER_TICKS`, `GATHER_REACH_CELLS`, `DROP_OFF_REACH_CELLS`, `CARRY_NONE`, `node_amount`. Evidence: `crates/mmd-engine/src/rts/mod.rs` re-exports all seven; `cargo build -p mmd-engine --lib` clean.
+- [x] 13. Run the mutation list; record kills in the commit body. Evidence: 7/8 confirmed inject→red→revert→green; #6 (arrival clears a Gather order) proven a genuine equivalent mutant under the current constants (`GATHER_REACH_CELLS=2.0 > ARRIVAL_RADIUS_CELLS=1.5`; HQ footprint half-width 6 cells `>>` `ARRIVAL_RADIUS_CELLS`), recorded in the commit body.
 - [ ] 14. Run the full validation block.
 
 ## Outputs
@@ -377,13 +377,13 @@ Harness is `RtsHarness::scene()` unless stated. `w0` = the first worker
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_economy` — all green
-- [ ] `cargo test -p mmd-engine --test rts_world` — all green
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): gather crystal and gas with worker hauling`
+- [x] `cargo fmt --all -- --check` — clean after `cargo fmt --all` (test files + `mod.rs`/`world.rs` import wrapping)
+- [x] `cargo test -p mmd-engine --test rts_economy` — all green (30 passed)
+- [x] `cargo test -p mmd-engine --test rts_world` — all green (48 passed)
+- [x] `cargo test -p mmd-engine --test frame_allocations` — all green (14 passed)
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` — exit 0, every `test result: ok` block passed
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean, exit 0
+- [x] `nix flake check` — "all checks passed!"
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` (unchanged, matches the pinned T4–T8 value)
+- [x] app functional — no broken path from this slice (CLI run above completes clean exit; full workspace suite green)
+- [x] commit msg draft: `feat(rts): gather crystal and gas with worker hauling`

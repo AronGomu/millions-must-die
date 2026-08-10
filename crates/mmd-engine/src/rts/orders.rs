@@ -4,7 +4,7 @@ use sha2::{Digest, Sha256};
 
 use crate::scenario::Cell;
 
-use super::entity::{MAX_ENTITIES, UnitKind};
+use super::entity::{EntityId, EntityStore, MAX_ENTITIES, UnitKind};
 
 /// Walk speed in cells per second, per unit kind.
 ///
@@ -32,10 +32,32 @@ pub fn unit_speed(kind: UnitKind) -> f32 {
 /// against a per-unit goal, so the whole group clears its order together.
 pub const ARRIVAL_RADIUS_CELLS: f32 = 1.5;
 
+/// Where a gathering worker is in its round trip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GatherPhase {
+    /// Walking to the node.
+    ToNode { field_slot: u8 },
+    /// Standing at the node, filling up. `ticks_left` counts down to zero.
+    Mining { ticks_left: u32 },
+    /// Walking back to `drop_off` with a full load.
+    Returning { drop_off: EntityId, field_slot: u8 },
+}
+
+impl GatherPhase {
+    /// One stable byte per phase, for the state hash.
+    fn tag(self) -> u8 {
+        match self {
+            Self::ToNode { .. } => 0,
+            Self::Mining { .. } => 1,
+            Self::Returning { .. } => 2,
+        }
+    }
+}
+
 /// What an entity is currently doing.
 ///
-/// Discriminants are appended, never inserted — later tickets add `Gather` and
-/// `Build` after `Move`.
+/// Discriminants are appended, never inserted — later tickets add `Build`
+/// after `Gather`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
     Idle,
@@ -43,6 +65,11 @@ pub enum Order {
     Move {
         dest: Cell,
         field_slot: u8,
+    },
+    /// Mine `node` and haul to the nearest drop-off, forever.
+    Gather {
+        node: EntityId,
+        phase: GatherPhase,
     },
 }
 
@@ -52,6 +79,7 @@ impl Order {
         match self {
             Self::Idle => 0,
             Self::Move { .. } => 1,
+            Self::Gather { .. } => 2,
         }
     }
 }
@@ -106,8 +134,69 @@ impl OrderTable {
                     h.update(dest.y.to_le_bytes());
                     h.update([field_slot]);
                 }
+                Order::Gather { node, phase } => {
+                    h.update(node.index.to_le_bytes());
+                    h.update(node.generation.to_le_bytes());
+                    h.update([phase.tag()]);
+                    match phase {
+                        GatherPhase::ToNode { field_slot } => {
+                            h.update([field_slot]);
+                            h.update(0u32.to_le_bytes());
+                        }
+                        GatherPhase::Mining { ticks_left } => {
+                            h.update([0u8]);
+                            h.update(ticks_left.to_le_bytes());
+                        }
+                        GatherPhase::Returning {
+                            drop_off,
+                            field_slot,
+                        } => {
+                            h.update([field_slot]);
+                            h.update(drop_off.index.to_le_bytes());
+                            h.update(drop_off.generation.to_le_bytes());
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+/// Squared cell-space distance.
+pub(crate) fn dist2(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    dx * dx + dy * dy
+}
+
+/// Distance from a point to a footprint rectangle, `0.0` when inside.
+pub(crate) fn rect_distance(p: [f32; 2], center: [f32; 2], edge: u32) -> f32 {
+    let half = edge as f32 * 0.5;
+    let dx = (p[0] - center[0]).abs() - half;
+    let dy = (p[1] - center[1]).abs() - half;
+    let cx = dx.max(0.0);
+    let cy = dy.max(0.0);
+    (cx * cx + cy * cy).sqrt()
+}
+
+/// The cell a worker should be routed to when heading for a building.
+///
+/// The footprint's **centre cell**. The flow field's destination must be
+/// unblocked, and T10 stamps a finished building's footprint as blocked — so
+/// this returns the centre cell *before* T10 lands and T10 changes it to the
+/// nearest free cell adjacent to the footprint. Recorded here so the change is
+/// a deliberate edit, not a surprise.
+pub(crate) fn drop_off_approach_cell(store: &EntityStore, id: EntityId) -> Cell {
+    let slot = store.slot(id).expect("live drop-off");
+    let pos = store.position(slot);
+    node_cell(pos)
+}
+
+/// The cell a node occupies.
+pub(crate) fn node_cell(pos: [f32; 2]) -> Cell {
+    Cell {
+        x: pos[0].floor() as u32,
+        y: pos[1].floor() as u32,
     }
 }
 

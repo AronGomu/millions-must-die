@@ -1,7 +1,36 @@
 //! Player resource stock and supply accounting.
 
-use super::entity::UnitKind;
+use super::entity::{ResourceKind, UnitKind};
 use crate::scenario::MAX_SUPPLY_CAP;
+
+/// Units of resource a worker carries per trip.
+pub const WORKER_CARRY_CAPACITY: u32 = 8;
+
+/// Ticks a worker spends mining before its load is full. One second at 60 Hz.
+///
+/// The whole round trip is therefore mine-time plus walk-time, and walk-time is
+/// what a player shortens by putting a drop-off closer — which is the macro
+/// decision the economy exists to pose.
+pub const GATHER_TICKS: u32 = 60;
+
+/// How close a worker's centre must come to a node's centre to start mining.
+pub const GATHER_REACH_CELLS: f32 = 2.0;
+
+/// How close a worker's centre must come to a drop-off building's **footprint
+/// rectangle** to bank its load.
+///
+/// Measured to the rectangle, not to the centre: an HQ is 12 cells across, and
+/// a centre-distance rule would make a worker walk into the middle of its own
+/// base to deliver.
+pub const DROP_OFF_REACH_CELLS: f32 = 1.0;
+
+/// Starting amount in a freshly seeded node, by kind.
+pub fn node_amount(kind: ResourceKind) -> u32 {
+    match kind {
+        ResourceKind::Crystal => super::world::NODE_CRYSTAL_AMOUNT,
+        ResourceKind::Gas => super::world::NODE_GAS_AMOUNT,
+    }
+}
 
 /// Player stock of both resources.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -88,6 +88,12 @@ impl BuildingKind {
     }
 }
 
+/// Sentinel in the `carry_kind` column meaning "carrying nothing".
+///
+/// A separate byte rather than `Option<ResourceKind>` so the column stays a
+/// plain `Vec<u8>` the state hash can feed in one `update`.
+pub const CARRY_NONE: u8 = 0xFF;
+
 /// A stable handle into [`EntityStore`].
 ///
 /// The generation is what makes a handle safe to hold across a despawn: a slot
@@ -114,6 +120,8 @@ pub struct EntityStore {
     progress: Vec<u32>,
     progress_target: Vec<u32>,
     amount: Vec<u32>,
+    carry_kind: Vec<u8>,
+    carry_amount: Vec<u32>,
     /// LIFO free list of dead slot indices.
     free: Vec<u32>,
     live: usize,
@@ -139,6 +147,8 @@ impl EntityStore {
             progress: Vec::with_capacity(MAX_ENTITIES),
             progress_target: Vec::with_capacity(MAX_ENTITIES),
             amount: Vec::with_capacity(MAX_ENTITIES),
+            carry_kind: Vec::with_capacity(MAX_ENTITIES),
+            carry_amount: Vec::with_capacity(MAX_ENTITIES),
             free: Vec::with_capacity(MAX_ENTITIES),
             live: 0,
         }
@@ -178,6 +188,8 @@ impl EntityStore {
             self.progress.push(0);
             self.progress_target.push(0);
             self.amount.push(0);
+            self.carry_kind.push(CARRY_NONE);
+            self.carry_amount.push(0);
             i
         } else {
             return None;
@@ -193,6 +205,8 @@ impl EntityStore {
         self.progress[idx] = 0;
         self.progress_target[idx] = 0;
         self.amount[idx] = 0;
+        self.carry_kind[idx] = CARRY_NONE;
+        self.carry_amount[idx] = 0;
         self.live += 1;
 
         Some(EntityId {
@@ -315,6 +329,34 @@ impl EntityStore {
         self.amount[slot] = amount;
     }
 
+    /// What this unit is carrying, and how much. `None` when empty-handed.
+    pub fn carry(&self, slot: usize) -> Option<(ResourceKind, u32)> {
+        self.assert_live(slot);
+        match self.carry_kind[slot] {
+            CARRY_NONE => None,
+            k if k == ResourceKind::Crystal as u8 => {
+                Some((ResourceKind::Crystal, self.carry_amount[slot]))
+            }
+            k if k == ResourceKind::Gas as u8 => Some((ResourceKind::Gas, self.carry_amount[slot])),
+            k => unreachable!("invalid carry_kind byte {k}"),
+        }
+    }
+
+    /// Set the carried cargo. `None` clears both columns.
+    pub fn set_carry(&mut self, slot: usize, cargo: Option<(ResourceKind, u32)>) {
+        self.assert_live(slot);
+        match cargo {
+            None => {
+                self.carry_kind[slot] = CARRY_NONE;
+                self.carry_amount[slot] = 0;
+            }
+            Some((kind, amount)) => {
+                self.carry_kind[slot] = kind as u8;
+                self.carry_amount[slot] = amount;
+            }
+        }
+    }
+
     /// Live slot indices in ascending order, into a caller-owned buffer.
     ///
     /// Takes an `&mut Vec` rather than returning one so a per-tick sweep costs
@@ -343,6 +385,8 @@ impl EntityStore {
             h.update(self.progress[i].to_le_bytes());
             h.update(self.progress_target[i].to_le_bytes());
             h.update(self.amount[i].to_le_bytes());
+            h.update([self.carry_kind[i]]);
+            h.update(self.carry_amount[i].to_le_bytes());
         }
     }
 
@@ -350,7 +394,7 @@ impl EntityStore {
     /// hook only: proves the zero-growth contract without exposing the
     /// storage layout to production code.
     #[cfg(feature = "testkit")]
-    pub fn column_capacities(&self) -> [usize; 11] {
+    pub fn column_capacities(&self) -> [usize; 13] {
         [
             self.alive.capacity(),
             self.generation.capacity(),
@@ -363,6 +407,8 @@ impl EntityStore {
             self.progress.capacity(),
             self.progress_target.capacity(),
             self.amount.capacity(),
+            self.carry_kind.capacity(),
+            self.carry_amount.capacity(),
         ]
     }
 }

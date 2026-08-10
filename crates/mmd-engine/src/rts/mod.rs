@@ -6,13 +6,16 @@ mod orders;
 mod selection;
 mod world;
 
-pub use economy::{Resources, SOLDIER_SUPPLY_COST, Supply, WORKER_SUPPLY_COST, supply_cost};
+pub use economy::{
+    DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply,
+    WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount, supply_cost,
+};
 pub use entity::{
-    BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
-    ResourceKind, UnitKind,
+    BuildingKind, CARRY_NONE, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL,
+    OWNER_PLAYER, ResourceKind, UnitKind,
 };
 pub use orders::{
-    ARRIVAL_RADIUS_CELLS, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
+    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
     WORKER_SPEED_CELLS_PER_SEC, unit_speed,
 };
 pub use selection::{

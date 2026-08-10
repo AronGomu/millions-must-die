@@ -7,12 +7,18 @@ use crate::render::IsoView;
 use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
-use super::economy::{Resources, Supply, WORKER_SUPPLY_COST};
+use super::economy::{
+    DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, Supply,
+    WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
+};
 use super::entity::{
     BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
     ResourceKind, UnitKind,
 };
-use super::orders::{ARRIVAL_RADIUS_CELLS, Order, OrderTable, step_admissible, unit_speed};
+use super::orders::{
+    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, dist2, drop_off_approach_cell, node_cell,
+    rect_distance, step_admissible, unit_speed,
+};
 use super::selection::{Pick, Selection, box_select, pick_at};
 
 /// Starting amount in a freshly seeded Crystal node.
@@ -88,7 +94,7 @@ impl RtsWorld {
                 .ok_or_else(|| RtsWorldError::StoreFull {
                     what: "crystal node".to_string(),
                 })?;
-            entities.set_amount(id.index as usize, NODE_CRYSTAL_AMOUNT);
+            entities.set_amount(id.index as usize, node_amount(ResourceKind::Crystal));
         }
         for c in &rts.gas_nodes {
             let pos = [c.x as f32 + 0.5, c.y as f32 + 0.5];
@@ -97,7 +103,7 @@ impl RtsWorld {
                 .ok_or_else(|| RtsWorldError::StoreFull {
                     what: "gas node".to_string(),
                 })?;
-            entities.set_amount(id.index as usize, NODE_GAS_AMOUNT);
+            entities.set_amount(id.index as usize, node_amount(ResourceKind::Gas));
         }
 
         // 3. One worker per scenario spawn cell.
@@ -281,6 +287,87 @@ impl RtsWorld {
         Some(slot)
     }
 
+    /// Slot of a live player-owned worker — the only unit kind that can gather.
+    fn worker_slot(&self, id: EntityId) -> Option<usize> {
+        let slot = self.entities.slot(id)?;
+        if !matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker)) {
+            return None;
+        }
+        if self.entities.owner(slot) != OWNER_PLAYER {
+            return None;
+        }
+        Some(slot)
+    }
+
+    /// Order one worker to gather from `node`.
+    ///
+    /// `false` when: `id` is stale, is not a `UnitKind::Worker`, is not
+    /// `OWNER_PLAYER`; `node` is stale or is not an `EntityKind::Node`; the
+    /// node is already empty; or no field can be built to the node's cell.
+    /// A Soldier cannot gather — refusing is what makes the HUD's "no valid
+    /// order" state real rather than cosmetic.
+    pub fn order_gather(&mut self, id: EntityId, node: EntityId) -> bool {
+        self.order_gather_group(&[id], node) == 1
+    }
+
+    /// Order several workers onto one node, acquiring the field once.
+    pub fn order_gather_group(&mut self, ids: &[EntityId], node: EntityId) -> usize {
+        let Some(node_slot) = self.entities.slot(node) else {
+            return 0;
+        };
+        if !matches!(self.entities.kind(node_slot), EntityKind::Node(_)) {
+            return 0;
+        }
+        if self.entities.amount(node_slot) == 0 {
+            return 0;
+        }
+        let cell = node_cell(self.entities.position(node_slot));
+        let Ok(field_slot) = self.nav.acquire(cell) else {
+            return 0;
+        };
+        let mut ordered = 0;
+        for &id in ids {
+            if let Some(slot) = self.worker_slot(id) {
+                self.orders.set(
+                    slot,
+                    Order::Gather {
+                        node,
+                        phase: GatherPhase::ToNode { field_slot },
+                    },
+                );
+                ordered += 1;
+            }
+        }
+        ordered
+    }
+
+    /// The nearest live drop-off building owned by the player, by distance
+    /// from `pos` to its footprint rectangle. Ties go to the lower entity
+    /// slot.
+    pub fn nearest_drop_off(&self, pos: [f32; 2]) -> Option<EntityId> {
+        let slot_count = self.entities.slot_count();
+        let mut best: Option<(f32, usize)> = None;
+        for slot in 0..slot_count {
+            if !self.entities.alive(slot) {
+                continue;
+            }
+            let EntityKind::Building(b) = self.entities.kind(slot) else {
+                continue;
+            };
+            if !b.is_drop_off() {
+                continue;
+            }
+            if self.entities.owner(slot) != OWNER_PLAYER {
+                continue;
+            }
+            let d = rect_distance(pos, self.entities.position(slot), b.footprint_cells());
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, slot));
+            }
+        }
+        best.and_then(|(_, slot)| self.entities.id_at(slot))
+    }
+
     /// Advance one fixed 1/60 s step.
     ///
     /// Systems are added by later tickets and each one runs at a fixed point in
@@ -288,17 +375,152 @@ impl RtsWorld {
     /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
     /// 6. movement, 7. supply recount.
     ///
-    /// Today the tick counter and the movement system (6) run, followed by
-    /// pruning the selection of anything that died this tick — last, so a
-    /// unit that died on this tick is out of the selection before anything
-    /// reads it next tick.
+    /// Today the tick counter, the gather system (5) and the movement system
+    /// (6) run, followed by pruning the selection of anything that died this
+    /// tick — last, so a unit that died on this tick is out of the selection
+    /// before anything reads it next tick.
     pub fn tick(&mut self) {
         self.tick_index += 1;
+        self.entities.collect_live(&mut self.live_scratch);
+        self.gather();
         self.movement();
         self.selection.retain_live(&self.entities);
     }
 
-    /// System 6: walk every unit under a move order one step down its field.
+    /// System 5: advance every gathering worker's round trip one step.
+    ///
+    /// Runs before movement, so a phase change decided this tick is walked
+    /// on this same tick — otherwise the round trip would lag its own state
+    /// by one frame.
+    fn gather(&mut self) {
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            let Order::Gather { node, phase } = self.orders.get(slot) else {
+                continue;
+            };
+
+            // The node may have been removed; the order dies with it.
+            let Some(node_slot) = self.entities.slot(node) else {
+                self.orders.clear(slot);
+                continue;
+            };
+            let EntityKind::Node(res) = self.entities.kind(node_slot) else {
+                self.orders.clear(slot);
+                continue;
+            };
+            let node_pos = self.entities.position(node_slot);
+            let p = self.entities.position(slot);
+
+            match phase {
+                GatherPhase::ToNode { .. } => {
+                    if self.entities.amount(node_slot) == 0 {
+                        self.orders.clear(slot);
+                        continue;
+                    }
+                    if dist2(p, node_pos) <= GATHER_REACH_CELLS * GATHER_REACH_CELLS {
+                        self.orders.set(
+                            slot,
+                            Order::Gather {
+                                node,
+                                phase: GatherPhase::Mining {
+                                    ticks_left: GATHER_TICKS,
+                                },
+                            },
+                        );
+                    }
+                    // else: leave it; the movement system walks it down
+                    // field_slot toward the node cell.
+                }
+                GatherPhase::Mining { ticks_left } => {
+                    if ticks_left > 1 {
+                        self.orders.set(
+                            slot,
+                            Order::Gather {
+                                node,
+                                phase: GatherPhase::Mining {
+                                    ticks_left: ticks_left - 1,
+                                },
+                            },
+                        );
+                    } else {
+                        // Load up: take min(capacity, remaining).
+                        let take = WORKER_CARRY_CAPACITY.min(self.entities.amount(node_slot));
+                        if take == 0 {
+                            self.orders.clear(slot);
+                            continue;
+                        }
+                        self.entities
+                            .set_amount(node_slot, self.entities.amount(node_slot) - take);
+                        self.entities.set_carry(slot, Some((res, take)));
+                        match self.nearest_drop_off(p) {
+                            Some(d) => {
+                                let cell = drop_off_approach_cell(&self.entities, d);
+                                match self.nav.acquire(cell) {
+                                    Ok(fs) => self.orders.set(
+                                        slot,
+                                        Order::Gather {
+                                            node,
+                                            phase: GatherPhase::Returning {
+                                                drop_off: d,
+                                                field_slot: fs,
+                                            },
+                                        },
+                                    ),
+                                    Err(_) => self.orders.clear(slot),
+                                }
+                            }
+                            // nowhere to deliver: stop, holding the cargo
+                            None => self.orders.clear(slot),
+                        }
+                    }
+                }
+                GatherPhase::Returning { drop_off, .. } => {
+                    let Some(d_slot) = self.entities.slot(drop_off) else {
+                        self.orders.clear(slot);
+                        continue;
+                    };
+                    let EntityKind::Building(b) = self.entities.kind(d_slot) else {
+                        self.orders.clear(slot);
+                        continue;
+                    };
+                    if rect_distance(p, self.entities.position(d_slot), b.footprint_cells())
+                        <= DROP_OFF_REACH_CELLS
+                    {
+                        if let Some((kind, amount)) = self.entities.carry(slot) {
+                            match kind {
+                                ResourceKind::Crystal => self.resources.credit(Resources {
+                                    crystal: amount,
+                                    gas: 0,
+                                }),
+                                ResourceKind::Gas => self.resources.credit(Resources {
+                                    crystal: 0,
+                                    gas: amount,
+                                }),
+                            }
+                            self.entities.set_carry(slot, None);
+                        }
+                        if self.entities.amount(node_slot) == 0 {
+                            self.orders.clear(slot);
+                            continue;
+                        }
+                        match self.nav.acquire(node_cell(node_pos)) {
+                            Ok(fs) => self.orders.set(
+                                slot,
+                                Order::Gather {
+                                    node,
+                                    phase: GatherPhase::ToNode { field_slot: fs },
+                                },
+                            ),
+                            Err(_) => self.orders.clear(slot),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// System 6: walk every unit under a `Move` order, or a `Gather` order
+    /// mid-transit (`ToNode` or `Returning`), one step down its field.
     ///
     /// The step obeys the same admissibility rule the horde walk obeys
     /// ([`super::orders::step_admissible`]), so a unit can never be placed in a
@@ -307,23 +529,55 @@ impl RtsWorld {
         let width = self.scenario.width();
         let height = self.scenario.height();
 
-        self.entities.collect_live(&mut self.live_scratch);
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
             let EntityKind::Unit(kind) = self.entities.kind(slot) else {
                 continue;
             };
-            let Order::Move { dest, field_slot } = self.orders.get(slot) else {
-                continue;
+            let order = self.orders.get(slot);
+            let (dest, field_slot) = match order {
+                Order::Move { dest, field_slot } => (dest, field_slot),
+                Order::Gather {
+                    node,
+                    phase: GatherPhase::ToNode { field_slot },
+                } => {
+                    let Some(node_slot) = self.entities.slot(node) else {
+                        continue;
+                    };
+                    (node_cell(self.entities.position(node_slot)), field_slot)
+                }
+                Order::Gather {
+                    phase:
+                        GatherPhase::Returning {
+                            drop_off,
+                            field_slot,
+                        },
+                    ..
+                } => {
+                    if self.entities.slot(drop_off).is_none() {
+                        continue;
+                    }
+                    (drop_off_approach_cell(&self.entities, drop_off), field_slot)
+                }
+                // Idle, and Mining (a mining worker stands still).
+                _ => continue,
             };
+            let is_move_order = matches!(order, Order::Move { .. });
 
             let p = self.entities.position(slot);
             // 1. Arrival, against the destination cell centre: a group is sent
             //    to one cell and only one of them can stand on it.
+            //
+            //    Arrival clears the order only for `Order::Move`. A gathering
+            //    worker that reaches its destination is handled by the gather
+            //    system's reach tests, not by the mover — otherwise the round
+            //    trip would cancel itself on arrival.
             let dx = p[0] - (dest.x as f32 + 0.5);
             let dy = p[1] - (dest.y as f32 + 0.5);
             if dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
-                self.orders.clear(slot);
+                if is_move_order {
+                    self.orders.clear(slot);
+                }
                 continue;
             }
 
@@ -336,8 +590,11 @@ impl RtsWorld {
             let (vx, vy) = self.nav.field(field_slot).vector_at(cx as u32, cy as u32);
             if vx == 0.0 && vy == 0.0 {
                 // Unreachable, or already on the destination cell: stop rather
-                // than spin on an order that can never complete.
-                self.orders.clear(slot);
+                // than spin on an order that can never complete. Only for
+                // `Order::Move`, for the same reason arrival above is.
+                if is_move_order {
+                    self.orders.clear(slot);
+                }
                 continue;
             }
 
@@ -358,9 +615,9 @@ impl RtsWorld {
     ///
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
-    /// progress_target, amount), then every live slot's order, then the
-    /// selection, then resources and supply. `f32` goes in as raw bits,
-    /// matching `Simulation::state_hash`.
+    /// progress_target, amount, carry kind, carry amount), then every live
+    /// slot's order, then the selection, then resources and supply. `f32`
+    /// goes in as raw bits, matching `Simulation::state_hash`.
     pub fn state_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(self.tick_index.to_le_bytes());

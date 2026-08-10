@@ -850,3 +850,53 @@ exits on `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
       `docs/DESIGN.md`'s "Unlimited unit selection" decision — the selection
       cap is deliberately the entity store's own ceiling, not a smaller
       RTS-traditional 12.
+
+## T9 gather-loop
+
+Two resources, one worker round trip: mine a load, haul it to the HQ, bank
+it, repeat until the node is empty. New `EntityStore::{carry, set_carry}`
+(two more preallocated columns, `carry_kind`/`carry_amount`); new
+`rts::orders::{GatherPhase, Order::Gather}`; new `RtsWorld::{order_gather,
+order_gather_group, nearest_drop_off}`; a new gather system runs as step 5 of
+`tick()`, before movement, and the movement system now also drives both
+`Gather` phases (arrival only clears an `Order::Move`, never a `Gather`).
+Nothing renders a carried load or a mining animation yet (T12); no HUD (T13);
+no input plumbing to issue a gather order from a click (T14): reaching this
+by hand means driving `RtsWorld` from a test or a scratch binary. The horde,
+existing RTS movement, and selection are untouched — `cargo run -- run
+--agents 5000 --frames 300` still exits on
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+
+- [ ] `cargo test -p mmd-engine --test rts_economy` — 30 passed, 0 ignored.
+      Skim for `a_full_round_trip_banks_crystal`, `a_full_round_trip_banks_gas`,
+      `the_worker_keeps_cycling` and `six_workers_on_one_node_all_deliver`.
+- [ ] `cargo test -p mmd-engine --test rts_world` — 48 passed, 0 ignored (no
+      new tests here; this is the "T9 didn't regress T7/T8's movement and
+      order tests" check).
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 14 passed.
+      `the_gather_loop_allocates_nothing` is the new one: 2 000 RTS ticks
+      with six workers split across two nodes and one HQ drop-off, zero heap
+      allocations after warm-up.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0 and the exit
+      line still reads
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      A different hash means this ticket moved the horde walk or the RTS
+      movement/selection it depends on, which it must not: read it, do not
+      assume it.
+- [ ] `cargo run -- run --frames 300` and watch the window: the horde scene
+      must look exactly as it did before this ticket. There is no worker
+      cargo, mining animation, or resource-counter overlay drawn by any path
+      yet, so a visible change here is a defect.
+- [ ] Open `crates/mmd-engine/src/rts/world.rs` and read the `gather` method
+      against `tick()`'s comment listing the reserved system order (1.
+      commands, 2. camera, 3. construction, 4. production, 5. orders — this
+      is where `gather` sits, 6. movement, 7. supply recount). Confirm
+      `gather()` really is called before `movement()`, not after — the doc
+      comment on `gather` explains why the order matters (a phase change
+      this tick must also govern movement this same tick).
+- [ ] Sanity-check the constants in `crates/mmd-engine/src/rts/economy.rs`
+      against feel, not just correctness: `WORKER_CARRY_CAPACITY = 8`,
+      `GATHER_TICKS = 60` (one second per full load at 60 Hz),
+      `GATHER_REACH_CELLS = 2.0`, `DROP_OFF_REACH_CELLS = 1.0`. If a
+      round trip ever feels too fast or too slow once it renders, these are
+      the knobs.
