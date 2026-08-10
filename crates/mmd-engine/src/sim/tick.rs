@@ -186,7 +186,7 @@ fn nearest_cell(p: f32) -> i32 {
 /// and never recycles — and the wall fallback above cannot rescue it, because
 /// the blended step *was* walkable.
 #[inline]
-fn step_admissible(
+pub(crate) fn step_admissible(
     cx: i32,
     cy: i32,
     nx: f32,
@@ -222,7 +222,7 @@ fn advance_frame(frame: &mut u8, frame_count: u8) {
 
 /// Map velocity to 8-way dir: 0=E,1=NE,2=N,3=NW,4=W,5=SW,6=S,7=SE.
 #[inline]
-fn dir_from_vector(vx: f32, vy: f32) -> u8 {
+pub fn dir_from_vector(vx: f32, vy: f32) -> u8 {
     // Invert y so grid-north (0,-1) maps to math +Y.
     let ang = (-vy).atan2(vx); // -pi..pi, 0 = east
     const TAU: f32 = 2.0 * std::f32::consts::PI;

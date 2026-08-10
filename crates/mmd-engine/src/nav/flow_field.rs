@@ -44,10 +44,40 @@ pub enum FlowFieldError {
     DestinationOutOfBounds,
     DestinationBlocked,
     InvalidObstacleIndex(u32),
+    /// A caller-owned blocked mask that is not `width * height` long.
+    MaskLength {
+        got: usize,
+        expected: usize,
+    },
+}
+
+/// Reusable working memory for [`FlowField::rebuild_in_place`].
+///
+/// Owning the heap outside the field is what lets a pool rebuild without
+/// allocating: `BinaryHeap::clear` keeps capacity, so after the first rebuild at
+/// a given grid size the heap never grows again in practice.
+#[derive(Debug, Default)]
+pub struct FieldScratch {
+    heap: BinaryHeap<HeapEntry>,
+}
+
+impl FieldScratch {
+    /// Reserve for a grid of `cells`. Mirrors [`FlowField::build`]'s own
+    /// `n / 4 + 8` heuristic so a pool warms to the same shape.
+    pub fn with_capacity(cells: usize) -> Self {
+        Self {
+            heap: BinaryHeap::with_capacity(cells / 4 + 8),
+        }
+    }
+
+    /// Heap capacity, for the allocation-invariant test.
+    pub fn capacity(&self) -> usize {
+        self.heap.capacity()
+    }
 }
 
 /// Min-heap entry: lower cost first; ties → lower cell index.
-#[derive(Copy, Clone, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct HeapEntry {
     cost: u32,
     index: u32,
@@ -170,6 +200,131 @@ impl FlowField {
         })
     }
 
+    /// An empty field of the right shape, for preallocating a pool.
+    ///
+    /// Every cost is [`COST_UNREACHABLE`] and every vector is zero, so a slot
+    /// that is somehow read before its first rebuild moves nobody rather than
+    /// moving everybody to cell zero.
+    pub fn blank(width: u32, height: u32) -> Result<Self, FlowFieldError> {
+        if width == 0 || height == 0 {
+            return Err(FlowFieldError::EmptyGrid);
+        }
+        let n = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or(FlowFieldError::EmptyGrid)?;
+        Ok(Self {
+            width,
+            height,
+            costs: vec![COST_UNREACHABLE; n],
+            vx: vec![0.0; n],
+            vy: vec![0.0; n],
+        })
+    }
+
+    /// Recompute this field for a new destination over `blocked`, reusing every
+    /// buffer this field already owns plus `scratch`.
+    ///
+    /// `blocked` must be exactly `width * height` long — a caller-owned mask, so
+    /// a building stamped into the world becomes an obstacle without rebuilding
+    /// the obstacle set from the scenario every time.
+    ///
+    /// Produces bit-identical output to [`FlowField::build`] for the same
+    /// inputs; that equivalence is the test that keeps the two from drifting.
+    ///
+    /// Every rejection is decided before the first write, so a refused rebuild
+    /// leaves the field exactly as it was rather than half-overwritten.
+    pub fn rebuild_in_place(
+        &mut self,
+        destination: Cell,
+        blocked: &[bool],
+        scratch: &mut FieldScratch,
+    ) -> Result<(), FlowFieldError> {
+        let width = self.width;
+        let height = self.height;
+        let n = self.costs.len();
+        if blocked.len() != n {
+            return Err(FlowFieldError::MaskLength {
+                got: blocked.len(),
+                expected: n,
+            });
+        }
+        let dest_idx = cell_index(destination, width, height)
+            .ok_or(FlowFieldError::DestinationOutOfBounds)? as u32;
+        if blocked[dest_idx as usize] {
+            return Err(FlowFieldError::DestinationBlocked);
+        }
+
+        let costs = &mut self.costs;
+        costs.fill(COST_UNREACHABLE);
+        for (i, b) in blocked.iter().enumerate() {
+            if *b {
+                costs[i] = COST_OBSTACLE;
+            }
+        }
+
+        // Reverse Dijkstra from destination, into the caller's heap.
+        //
+        // The clear is defensive rather than load-bearing today: the loop below
+        // drains the heap, and every rejection above returns before the first
+        // push, so a scratch handed to this fn is already empty. It stays
+        // because the heap is caller-owned — a future early exit, or a second
+        // user of the same scratch, would otherwise seed this rebuild with a
+        // stale entry and silently produce a wrong field.
+        let heap = &mut scratch.heap;
+        heap.clear();
+        costs[dest_idx as usize] = 0;
+        heap.push(HeapEntry {
+            cost: 0,
+            index: dest_idx,
+        });
+
+        while let Some(HeapEntry { cost, index: u_idx }) = heap.pop() {
+            if cost != costs[u_idx as usize] {
+                continue; // stale
+            }
+            let ux = (u_idx % width) as i32;
+            let uy = (u_idx / width) as i32;
+
+            for &(dx, dy, step) in &NEIGHBORS {
+                let nx = ux + dx;
+                let ny = uy + dy;
+                if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
+                    continue;
+                }
+                let v_idx = (nx as u32) + (ny as u32) * width;
+                let v = v_idx as usize;
+                if blocked[v] {
+                    continue;
+                }
+                // No diagonal corner-cut when either adjacent cardinal blocked.
+                if dx != 0 && dy != 0 && !diagonal_clear(ux, uy, dx, dy, width, height, blocked) {
+                    continue;
+                }
+                let new_cost = match cost.checked_add(step) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                if new_cost < costs[v] {
+                    costs[v] = new_cost;
+                    heap.push(HeapEntry {
+                        cost: new_cost,
+                        index: v_idx,
+                    });
+                }
+            }
+        }
+
+        derive_vectors_into(
+            width,
+            height,
+            &self.costs,
+            blocked,
+            &mut self.vx,
+            &mut self.vy,
+        );
+        Ok(())
+    }
+
     pub fn width(&self) -> u32 {
         self.width
     }
@@ -251,12 +406,32 @@ fn derive_vectors(
     let n = costs.len();
     let mut vx = vec![0.0f32; n];
     let mut vy = vec![0.0f32; n];
+    derive_vectors_into(width, height, costs, blocked, &mut vx, &mut vy);
+    (vx, vy)
+}
+
+/// Descent vectors for `costs`, into caller-owned buffers.
+///
+/// Both `build` and `rebuild_in_place` go through here: one implementation of
+/// the descent rule, or the pooled path and the one-shot path drift apart.
+/// Every cell is written, including the zero cases, so a reused buffer cannot
+/// keep a stale vector on a cell that no longer has one.
+fn derive_vectors_into(
+    width: u32,
+    height: u32,
+    costs: &[u32],
+    blocked: &[bool],
+    vx: &mut [f32],
+    vy: &mut [f32],
+) {
     let w = width as i32;
     let h = height as i32;
 
     for y in 0..height {
         for x in 0..width {
             let i = (x + y * width) as usize;
+            vx[i] = 0.0;
+            vy[i] = 0.0;
             if blocked[i] {
                 continue;
             }
@@ -310,7 +485,6 @@ fn derive_vectors(
             }
         }
     }
-    (vx, vy)
 }
 
 #[cfg(test)]

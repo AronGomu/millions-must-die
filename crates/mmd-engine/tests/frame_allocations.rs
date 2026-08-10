@@ -11,11 +11,13 @@ use std::sync::{Arc, Mutex, OnceLock};
 use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
+use mmd_engine::rts::{EntityKind, Order, UnitKind};
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::SpatialGrid;
 use mmd_engine::testkit::{
-    COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness, ScenarioSource, scene_path,
+    COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness, RtsHarness, ScenarioSource,
+    scene_path,
 };
 
 #[global_allocator]
@@ -473,4 +475,47 @@ fn a_threaded_collision_tick_allocates_nothing() {
     std::hint::black_box(h.tick_index());
     assert_eq!(guard.allocations(), 0);
     guard.assert_zero();
+}
+
+/// The RTS movement sweep is under the same invariant the horde tick is.
+///
+/// The pool is warmed *outside* the scope on purpose: a flow-field **miss**
+/// rebuilds into reused scratch and may grow that scratch once, and that miss
+/// is the single bounded exception this plan grants. Everything measured below
+/// — the live-slot sweep, the field sample, the admissible step, the animation
+/// advance — is exempt from nothing.
+#[test]
+fn movement_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    let dest = Cell { x: 200, y: 200 };
+    // Warm-up outside the scope: this acquire is the miss that builds the
+    // field and settles the scratch heap.
+    assert_eq!(h.world_mut().order_move_group(&workers, dest), 6);
+    h.step_exact(2);
+    assert!(
+        workers
+            .iter()
+            .all(|id| matches!(h.world().order_of(*id), Some(Order::Move { .. }))),
+        "every worker must still be walking, or this measures an idle sweep"
+    );
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(600);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0, "the RTS movement sweep allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    // …and the run really did walk: a stalled sweep allocates nothing either.
+    let slot = h.world().entities().slot(workers[0]).expect("worker slot");
+    assert_ne!(
+        h.world().entities().position(slot),
+        [162.5, 178.5],
+        "the measured ticks moved nobody"
+    );
 }

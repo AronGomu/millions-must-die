@@ -388,23 +388,63 @@ the two agree on a 5 × 5 exhaustive grid, so the duplication cannot drift.
 
 ## Impl steps
 
-- [ ] 1. Promote `dir_from_vector` to `pub fn` in `crates/mmd-engine/src/sim/tick.rs` and add it to `crates/mmd-engine/src/sim/mod.rs`'s `pub use tick::{...}` list.
-- [ ] 2. Add `FieldScratch` and `derive_vectors_into` to `crates/mmd-engine/src/nav/flow_field.rs`; rewrite `derive_vectors` as a thin caller.
-- [ ] 3. Add `FlowField::rebuild_in_place` and `FlowField::blank`.
-- [ ] 4. Create `crates/mmd-engine/tests/nav_pool.rs` with the flow-field and pool tests. Watch them fail.
-- [ ] 5. Create `crates/mmd-engine/src/nav/field_pool.rs` with `NAV_FIELD_SLOTS`, `FieldPoolError`, `FieldPool`.
-- [ ] 6. Implement `new`, `acquire` with exact LRU, `field`, `key`, `rebuild_count`, `blocked`, `set_blocked`, `scratch_capacity`.
-- [ ] 7. Add `pub mod field_pool;` to `crates/mmd-engine/src/nav/mod.rs`; export `FieldScratch` from `flow_field`.
-- [ ] 8. Create `crates/mmd-engine/src/rts/orders.rs` with the speed constants, `ARRIVAL_RADIUS_CELLS`, `Order`, `OrderTable`, `pub(crate) step_admissible`.
-- [ ] 9. Add `mod orders;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
-- [ ] 10. Add `nav`, `orders`, `live_scratch` fields to `RtsWorld`; build the pool in `from_scenario`.
-- [ ] 11. Add `order_move`, `order_move_group`, `order_of`, `nav` to `RtsWorld`.
-- [ ] 12. Implement the movement system as step 6 of `tick()`, body exactly as quoted.
-- [ ] 13. Extend `RtsWorld::state_hash` with the order table.
-- [ ] 14. Append the movement tests to `crates/mmd-engine/tests/rts_world.rs`.
-- [ ] 15. Add `movement_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 16. Run the mutation list; record kills in the commit body.
-- [ ] 17. Run the full validation block.
+- [x] 1. Promote `dir_from_vector` to `pub fn` in `crates/mmd-engine/src/sim/tick.rs` and add it to `crates/mmd-engine/src/sim/mod.rs`'s `pub use tick::{...}` list.
+  - **Deviation (parent-authorised).** `sim::tick::step_admissible` was also
+    promoted, to `pub(crate)` only. The ticket's mandatory test
+    `rts_step_admissible_agrees_with_the_sim` cannot see a module-private fn
+    from any test site, so mutation 4 would otherwise be unkillable. Visibility
+    keyword only: signature, body and doc semantics untouched, and the phase-0
+    gate hash is unchanged (see Validation).
+- [x] 2. Add `FieldScratch` and `derive_vectors_into` to `crates/mmd-engine/src/nav/flow_field.rs`; rewrite `derive_vectors` as a thin caller.
+- [x] 3. Add `FlowField::rebuild_in_place` and `FlowField::blank`.
+  - **Plan defect (resolved).** `FlowFieldError` had no variant for a
+    wrong-length mask, so `MaskLength { got, expected }` was added to it,
+    matching `FieldPoolError::MaskLength`'s shape.
+- [x] 4. Create `crates/mmd-engine/tests/nav_pool.rs` with the flow-field and pool tests. Watch them fail.
+  - Red confirmed: `error[E0432]: unresolved import mmd_engine::nav::field_pool`.
+- [x] 5. Create `crates/mmd-engine/src/nav/field_pool.rs` with `NAV_FIELD_SLOTS`, `FieldPoolError`, `FieldPool`.
+- [x] 6. Implement `new`, `acquire` with exact LRU, `field`, `key`, `rebuild_count`, `blocked`, `set_blocked`, `scratch_capacity`.
+- [x] 7. Add `pub mod field_pool;` to `crates/mmd-engine/src/nav/mod.rs`; export `FieldScratch` from `flow_field`.
+  - `nav::flow_field` is already a `pub mod`, so `FieldScratch` is public at
+    `nav::flow_field::FieldScratch` with no re-export line needed.
+  - Steps 2–7 green: `cargo test -p mmd-engine --test nav_pool` → 13 passed.
+- [x] 8. Create `crates/mmd-engine/src/rts/orders.rs` with the speed constants, `ARRIVAL_RADIUS_CELLS`, `Order`, `OrderTable`, `pub(crate) step_admissible`.
+  - `rts_step_admissible_agrees_with_the_sim` lives in that file's unit-test
+    module (36 864 cases) — it is the only site that can see both fns.
+- [x] 9. Add `mod orders;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
+- [x] 10. Add `nav`, `orders`, `live_scratch` fields to `RtsWorld`; build the pool in `from_scenario`.
+- [x] 11. Add `order_move`, `order_move_group`, `order_of`, `nav` to `RtsWorld`.
+- [x] 12. Implement the movement system as step 6 of `tick()`, body exactly as quoted.
+- [x] 13. Extend `RtsWorld::state_hash` with the order table.
+- [x] 14. Append the movement tests to `crates/mmd-engine/tests/rts_world.rs`.
+  - **Plan defect (resolved).** `a_unit_walks_around_an_obstacle` /
+    `a_unit_never_enters_a_blocked_cell` cannot use a "32 x 32 inline scene":
+    `scenario::validate_rts_scene_dims` locks the `rts_prototype_v1` family to
+    320 x 320 and the rts block is required exactly on that family, so a 32 x 32
+    RTS scenario cannot validate. Built at 320 x 320 with the ticket's literal
+    geometry — wall `x == 16` with the gap at `y == 8`, unit at `(2, 20)`,
+    destination `(30, 20)` — unscaled, so each case proves what it was written
+    to prove.
+  - Green: `cargo test -p mmd-engine --test rts_world` → 48 passed.
+- [x] 15. Add `movement_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
+  - Green: `cargo test -p mmd-engine --test frame_allocations` → 12 passed.
+- [x] 16. Run the mutation list; record kills in the commit body.
+  - Killed 1, 2, 4, 5, 6, 7, 8 (inject → red, revert → green, real `cargo test`
+    output captured).
+  - **Plan defect — mutation 3 is an equivalent mutant.** Deleting
+    `heap.clear()` from `rebuild_in_place` changes nothing observable:
+    `while let Some(..) = heap.pop()` drains the heap, and every rejection
+    returns before the first push, so the scratch is always empty on entry.
+    `rebuild_in_place_matches_build` passes with the line deleted (real output
+    captured). The clear is kept as a documented defensive restore of that
+    invariant.
+  - **Plan defect — mutation 6 was unkillable as specified.** `acquire` is
+    idempotent for a cached key, so acquiring once per unit and once per group
+    give the *same* `rebuild_count` (1 miss + 5 hits). Fixed by adding
+    `FieldPool::acquire_count()` (the LRU clock, already maintained) and
+    asserting it in `order_move_group_acquires_once`; the mutation then fails
+    with `left: 6, right: 1`.
+- [x] 17. Run the full validation block.
 
 ## Outputs
 
@@ -423,14 +463,19 @@ the two agree on a 5 × 5 exhaustive grid, so the duplication cannot drift.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test nav_pool` — all green
-- [ ] `cargo test -p mmd-engine --test rts_world` — all green
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` **unchanged** (proof the horde walk did not move)
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): move units on pooled flow fields`
+- [x] `cargo fmt --all -- --check` — clean
+- [x] `cargo test -p mmd-engine --test nav_pool` — 13 passed
+- [x] `cargo test -p mmd-engine --test rts_world` — 48 passed
+- [x] `cargo test -p mmd-engine --test frame_allocations` — 12 passed
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` — every binary `0 failed`;
+  `golden_frame_matches` passed without regeneration (`MMD_UPDATE_GOLDEN` unset)
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean
+- [x] `nix flake check` — `all checks passed!`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line
+  `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`,
+  unchanged from T4/T5/T6 (proof the horde walk did not move)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0,
+  `hash=3df604770021490eb416b38bcd9bc4a25bb417638010c458d5563a17578d268a`
+- [x] app functional — both scenes render and exit cleanly; `xtask bootstrap/shaders/atlases --check` all ok;
+  `git diff --stat main` over `lab/goldens/`, `assets/scenarios/fixtures/` and the tracked atlases is empty
+- [x] commit msg draft: `feat(rts): move units on pooled flow fields`

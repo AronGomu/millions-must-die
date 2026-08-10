@@ -2,13 +2,16 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::scenario::{self, Scenario};
+use crate::nav::field_pool::{FieldPool, FieldPoolError};
+use crate::scenario::{self, Cell, Scenario};
+use crate::sim::{TICK_DT, dir_from_vector};
 
 use super::economy::{Resources, Supply, WORKER_SUPPLY_COST};
 use super::entity::{
-    BuildingKind, EntityId, EntityKind, EntityStore, OWNER_NEUTRAL, OWNER_PLAYER, ResourceKind,
-    UnitKind,
+    BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
+    ResourceKind, UnitKind,
 };
+use super::orders::{ARRIVAL_RADIUS_CELLS, Order, OrderTable, step_admissible, unit_speed};
 
 /// Starting amount in a freshly seeded Crystal node.
 pub const NODE_CRYSTAL_AMOUNT: u32 = 1_500;
@@ -24,6 +27,8 @@ pub enum RtsWorldError {
     NotAnRtsScene { version: String },
     #[error("entity store full while seeding: {what}")]
     StoreFull { what: String },
+    #[error("navigation pool: {0}")]
+    Nav(#[from] FieldPoolError),
 }
 
 /// The phase-1 RTS game state.
@@ -35,6 +40,11 @@ pub struct RtsWorld {
     supply: Supply,
     tick_index: u64,
     start_hq: Option<EntityId>,
+    nav: FieldPool,
+    orders: OrderTable,
+    /// Live-slot buffer the per-tick sweeps reuse. Reserved to
+    /// [`MAX_ENTITIES`] so a tick never grows it.
+    live_scratch: Vec<usize>,
 }
 
 impl RtsWorld {
@@ -102,6 +112,12 @@ impl RtsWorld {
         let mut supply = Supply::new(rts.start_supply_cap);
         supply.add_used(WORKER_SUPPLY_COST * worker_count);
 
+        let nav = FieldPool::new(
+            scenario.width(),
+            scenario.height(),
+            scenario.obstacle_cells(),
+        )?;
+
         Ok(Self {
             scenario,
             entities,
@@ -109,6 +125,9 @@ impl RtsWorld {
             supply,
             tick_index: 0,
             start_hq: Some(start_hq),
+            nav,
+            orders: OrderTable::new(),
+            live_scratch: Vec::with_capacity(MAX_ENTITIES),
         })
     }
 
@@ -150,27 +169,147 @@ impl RtsWorld {
         self.start_hq
     }
 
+    /// The navigation pool. Buildings stamp obstacles into it (T10).
+    pub fn nav(&self) -> &FieldPool {
+        &self.nav
+    }
+
+    /// Order one unit to walk to `dest`.
+    ///
+    /// Returns `false` when `id` is stale, is not a unit, is not owned by
+    /// [`OWNER_PLAYER`], or `dest` is out of bounds or blocked — a right-click on
+    /// a rock must be a no-op, not an order nobody can finish.
+    pub fn order_move(&mut self, id: EntityId, dest: Cell) -> bool {
+        let Some(slot) = self.orderable_slot(id) else {
+            return false;
+        };
+        let Ok(field_slot) = self.nav.acquire(dest) else {
+            return false;
+        };
+        self.orders.set(slot, Order::Move { dest, field_slot });
+        true
+    }
+
+    /// Order several units to one destination, acquiring the field **once**.
+    ///
+    /// This is the API the input layer uses. Issuing N single orders would
+    /// acquire N times, and on a full pool that is N rebuilds of the same field.
+    pub fn order_move_group(&mut self, ids: &[EntityId], dest: Cell) -> usize {
+        let Ok(field_slot) = self.nav.acquire(dest) else {
+            return 0;
+        };
+        let mut ordered = 0;
+        for &id in ids {
+            if let Some(slot) = self.orderable_slot(id) {
+                self.orders.set(slot, Order::Move { dest, field_slot });
+                ordered += 1;
+            }
+        }
+        ordered
+    }
+
+    /// The current order of a live entity.
+    pub fn order_of(&self, id: EntityId) -> Option<Order> {
+        self.entities.slot(id).map(|slot| self.orders.get(slot))
+    }
+
+    /// Slot of a live player-owned unit — the only thing an order applies to.
+    fn orderable_slot(&self, id: EntityId) -> Option<usize> {
+        let slot = self.entities.slot(id)?;
+        if !matches!(self.entities.kind(slot), EntityKind::Unit(_)) {
+            return None;
+        }
+        if self.entities.owner(slot) != OWNER_PLAYER {
+            return None;
+        }
+        Some(slot)
+    }
+
     /// Advance one fixed 1/60 s step.
     ///
     /// Systems are added by later tickets and each one runs at a fixed point in
     /// this order, so a reordering is a visible diff rather than an accident:
     /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
-    /// 6. movement, 7. supply recount. Today only the tick counter advances.
+    /// 6. movement, 7. supply recount.
+    ///
+    /// Today the tick counter and the movement system (6) run.
     pub fn tick(&mut self) {
         self.tick_index += 1;
+        self.movement();
+    }
+
+    /// System 6: walk every unit under a move order one step down its field.
+    ///
+    /// The step obeys the same admissibility rule the horde walk obeys
+    /// ([`super::orders::step_admissible`]), so a unit can never be placed in a
+    /// walkable-but-unreachable pocket it could not then leave.
+    fn movement(&mut self) {
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+
+        self.entities.collect_live(&mut self.live_scratch);
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            let EntityKind::Unit(kind) = self.entities.kind(slot) else {
+                continue;
+            };
+            let Order::Move { dest, field_slot } = self.orders.get(slot) else {
+                continue;
+            };
+
+            let p = self.entities.position(slot);
+            // 1. Arrival, against the destination cell centre: a group is sent
+            //    to one cell and only one of them can stand on it.
+            let dx = p[0] - (dest.x as f32 + 0.5);
+            let dy = p[1] - (dest.y as f32 + 0.5);
+            if dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
+                self.orders.clear(slot);
+                continue;
+            }
+
+            // 2. Sample the field at the unit's own cell.
+            let cx = p[0].floor() as i32;
+            let cy = p[1].floor() as i32;
+            if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
+                continue;
+            }
+            let (vx, vy) = self.nav.field(field_slot).vector_at(cx as u32, cy as u32);
+            if vx == 0.0 && vy == 0.0 {
+                // Unreachable, or already on the destination cell: stop rather
+                // than spin on an order that can never complete.
+                self.orders.clear(slot);
+                continue;
+            }
+
+            // 3. Step, with the horde's admissibility rule.
+            let step = unit_speed(kind) * TICK_DT;
+            let nx = p[0] + vx * step;
+            let ny = p[1] + vy * step;
+            if step_admissible(cx, cy, nx, ny, width, height, self.nav.blocked()) {
+                self.entities.set_position(slot, [nx, ny]);
+            }
+            self.entities.set_dir(slot, dir_from_vector(vx, vy));
+            let f = (self.entities.frame(slot) + 1) % 4;
+            self.entities.set_frame(slot, f);
+        }
     }
 
     /// Exact same-host state digest.
     ///
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
-    /// progress_target, amount), then resources and supply. `f32` goes in as
-    /// raw bits, matching `Simulation::state_hash`.
+    /// progress_target, amount), then every live slot's order, then resources
+    /// and supply. `f32` goes in as raw bits, matching `Simulation::state_hash`.
     pub fn state_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(self.tick_index.to_le_bytes());
         h.update((self.entities.len() as u64).to_le_bytes());
         self.entities.hash_into(&mut h);
+        // Not `live_scratch`: hashing is a `&self` read and must not disturb a
+        // buffer the tick owns. This path runs outside the tick, never in it.
+        let mut live = Vec::with_capacity(self.entities.len());
+        self.entities.collect_live(&mut live);
+        self.orders.hash_into(&mut h, &live);
         h.update(self.resources.crystal.to_le_bytes());
         h.update(self.resources.gas.to_le_bytes());
         h.update(self.supply.used().to_le_bytes());

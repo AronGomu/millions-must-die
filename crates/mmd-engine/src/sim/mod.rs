@@ -12,4 +12,11 @@ pub use collision::{
     accumulate_separation, accumulate_separation_phase, accumulate_separation_range,
 };
 pub use spatial::SpatialGrid;
-pub use tick::{ARRIVAL_RADIUS, SPEED_CELLS_PER_SEC, TICK_DT};
+/// The horde's step-admissibility rule, for the RTS mover to be tested
+/// against. Test-only and crate-internal: the two implementations must be
+/// provably equal (`rts::orders`), and that proof needs a name to compare
+/// with. Nothing in a shipping build reaches the horde's rule from outside
+/// [`tick`].
+#[cfg(test)]
+pub(crate) use tick::step_admissible;
+pub use tick::{ARRIVAL_RADIUS, SPEED_CELLS_PER_SEC, TICK_DT, dir_from_vector};

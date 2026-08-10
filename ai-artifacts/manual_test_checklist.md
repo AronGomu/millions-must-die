@@ -731,12 +731,13 @@ no existing command's behaviour changed (`cargo run -- run --agents 5000
 `864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`, verified
 via a before/after `git stash` comparison on this tree).
 
-- [ ] `cargo test -p mmd-engine --test rts_world` — all 32 tests pass. Skim
-      the output for the seeding tests in particular
+- [ ] `cargo test -p mmd-engine --test rts_world` — all tests pass (32 at T6;
+      T7 appended the order/movement cases, so the count is 48 from T7 on).
+      Skim the output for the seeding tests in particular
       (`world_seeds_the_scene`, `world_seeds_the_starting_stock`,
       `the_hq_sits_at_its_footprint_centre`,
       `workers_start_on_the_scenario_spawn_cells`) and confirm none are
-      silently skipped or filtered out (32 passed, 0 ignored).
+      silently skipped or filtered out (0 ignored).
 - [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and
       exits cleanly, and the frame looks **pixel-for-pixel like it did
       before this ticket**: this slice adds a new module tree nothing else
@@ -751,3 +752,57 @@ via a before/after `git stash` comparison on this tree).
       per spawn cell) matches what `RtsWorld::from_scenario` actually does —
       a human sanity check that the "seeding order is part of the contract"
       claim in the source is not stale.
+
+## T7 field-pool-and-movement
+
+RTS units move. New `nav::field_pool::FieldPool` — eight preallocated flow
+fields keyed by destination cell, exact-LRU evicted, rebuilt in place through
+the new `FlowField::rebuild_in_place` + `FieldScratch` (so a rebuild reuses its
+buffers instead of allocating). New `rts::orders` — `Order::{Idle, Move}`, a
+per-slot `OrderTable`, per-kind walk speeds — and system 6 of `RtsWorld::tick`,
+which walks every ordered unit one step down its field under the *same*
+admissibility rule the horde walk uses. `RtsWorld` gains `order_move`,
+`order_move_group`, `order_of` and `nav`. Nothing renders these units yet
+(T12) and nothing issues orders from input yet (T8): reaching them by hand
+means driving `RtsWorld` from a test or a scratch binary. The horde is
+untouched — `sim/tick.rs` changed only two visibility keywords, and
+`cargo run -- run --agents 5000 --frames 300` still exits on
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+
+- [ ] `cargo test -p mmd-engine --test nav_pool` — 13 passed, 0 ignored. Skim
+      for `rebuild_in_place_matches_build` (the pooled rebuild must stay
+      bit-identical to `FlowField::build`) and
+      `a_miss_may_grow_scratch_only_once`.
+- [ ] `cargo test -p mmd-engine --test rts_world` — 48 passed, 0 ignored.
+      Confirm `a_unit_reaches_its_destination`,
+      `a_unit_walks_around_an_obstacle` and
+      `an_unreachable_destination_clears_the_order` are all in the list and
+      none was filtered out.
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 12 passed.
+      `movement_allocates_nothing` is the new one: 600 RTS ticks with six
+      units under orders, zero heap allocations.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0 and the exit
+      line still reads
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      A different hash means this ticket moved the horde walk, which it must
+      not: read it, do not assume it.
+- [ ] `cargo run -- run --frames 300` and watch the window: the horde scene
+      must look exactly as it did before this ticket. RTS units are not drawn
+      by any path yet, so a visible change here is a defect.
+- [ ] `cargo doc -p mmd-engine --no-deps --open` (or browse
+      `target/doc/mmd_engine/nav/field_pool/index.html` and
+      `target/doc/mmd_engine/rts/index.html`) and read `FieldPool`'s docs:
+      the LRU rule, the "invalidate every slot on `set_blocked`" rule, and
+      the allocation note (a **miss** may grow the scratch heap once; a hit
+      allocates nothing) should each read as a deliberate decision, not a
+      leftover.
+- [ ] Open `crates/mmd-engine/src/rts/orders.rs` and
+      `crates/mmd-engine/src/sim/tick.rs` side by side and eyeball the two
+      `step_admissible` bodies: they must be character-for-character the same
+      rule, including the `diagonal_clear` arm. `rts::orders`'s unit test
+      `rts_step_admissible_agrees_with_the_sim` is the automated version of
+      this check — this one is the human confirming the duplication is
+      deliberate and still honest.
+- [ ] Sanity-check the speeds you can feel later: `WORKER_SPEED_CELLS_PER_SEC`
+      is 10.0 and `SOLDIER_SPEED_CELLS_PER_SEC` is 8.0 (the horde's speed).
+      If a phase-2 fight ever feels wrong, this is the constant to revisit.

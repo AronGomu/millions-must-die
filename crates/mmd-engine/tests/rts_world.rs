@@ -6,10 +6,10 @@
 use std::collections::HashSet;
 
 use mmd_engine::rts::{
-    BuildingKind, EntityKind, EntityStore, MAX_ENTITIES, OWNER_PLAYER, ResourceKind, Resources,
-    RtsWorldError, Supply, UnitKind,
+    ARRIVAL_RADIUS_CELLS, BuildingKind, EntityKind, EntityStore, MAX_ENTITIES, OWNER_PLAYER, Order,
+    ResourceKind, Resources, RtsWorldError, Supply, UnitKind,
 };
-use mmd_engine::scenario::MAX_SUPPLY_CAP;
+use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
 
 // --- EntityStore ------------------------------------------------------------
@@ -458,4 +458,371 @@ fn harness_rng_streams_are_independent() {
         (0..8).map(|_| r.next_u64()).collect()
     };
     assert_ne!(a, b);
+}
+
+// --- T7: orders + movement -------------------------------------------------
+
+/// A 320x320 RTS scene with hand-placed obstacles.
+///
+/// The RTS family's geometry is locked to 320x320 by
+/// `scenario::validate_rts_scene_dims`, and the rts block is required exactly
+/// on that family, so a small synthetic RTS grid is not expressible — the
+/// obstacles below are placed at their literal coordinates on the full grid
+/// instead of rescaled, so each case still proves what it was written to prove.
+fn rts_spec(obstacles: Vec<u32>, spawns: Vec<Cell>, destination: Cell) -> ScenarioSpec {
+    ScenarioSpec {
+        version: "rts_prototype_v1".to_string(),
+        width: 320,
+        height: 320,
+        cell_size_px: 4,
+        sprite_size_px: 48,
+        hard_agent_count: 0,
+        stretch_agent_count: 0,
+        seed: 0x5715_1234,
+        destination,
+        spawn_cells: spawns,
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        collision_radius_q8: 0,
+        separation_strength_q8: 0,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
+        obstacle_cells: obstacles,
+        rts: Some(RtsSpec {
+            start_crystal: 300,
+            start_gas: 100,
+            start_supply_cap: 10,
+            hq_cell: Cell { x: 100, y: 100 },
+            crystal_nodes: vec![Cell { x: 100, y: 50 }],
+            gas_nodes: vec![Cell { x: 101, y: 50 }],
+        }),
+    }
+}
+
+/// Full wall at `x == 16` with a single gap at `y == 8`.
+fn wall_with_a_gap() -> Vec<u32> {
+    (0..320u32)
+        .filter(|y| *y != 8)
+        .map(|y| 16 + y * 320)
+        .collect()
+}
+
+/// A sealed 3x3 chamber of free ground at (200..=202, 200..=202).
+fn sealed_chamber() -> Vec<u32> {
+    let mut out = Vec::new();
+    for y in 199..=203u32 {
+        for x in 199..=203u32 {
+            let inside = (200..=202).contains(&x) && (200..=202).contains(&y);
+            if !inside {
+                out.push(x + y * 320);
+            }
+        }
+    }
+    out
+}
+
+fn first_worker(h: &RtsHarness) -> mmd_engine::rts::EntityId {
+    h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0]
+}
+
+fn position_of(h: &RtsHarness, id: mmd_engine::rts::EntityId) -> [f32; 2] {
+    let slot = h.world().entities().slot(id).expect("live entity");
+    h.world().entities().position(slot)
+}
+
+#[test]
+fn order_move_sets_a_move_order() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let dest = Cell { x: 200, y: 200 };
+    assert!(h.world_mut().order_move(worker, dest));
+    assert!(matches!(
+        h.world().order_of(worker),
+        Some(Order::Move { dest: d, .. }) if d == dest
+    ));
+}
+
+#[test]
+fn order_move_rejects_a_stale_id() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    assert!(h.world_mut().entities_mut().despawn(worker));
+    assert!(!h.world_mut().order_move(worker, Cell { x: 200, y: 200 }));
+    assert_eq!(h.world().order_of(worker), None);
+}
+
+#[test]
+fn order_move_rejects_a_building() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("start hq");
+    assert!(!h.world_mut().order_move(hq, Cell { x: 200, y: 200 }));
+    assert_eq!(h.world().order_of(hq), Some(Order::Idle));
+}
+
+#[test]
+fn order_move_rejects_a_neutral_node() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    assert!(!h.world_mut().order_move(node, Cell { x: 200, y: 200 }));
+    assert_eq!(h.world().order_of(node), Some(Order::Idle));
+}
+
+#[test]
+fn order_move_rejects_a_blocked_destination() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    // Cell (0, 0) is the tracked scene's first obstacle.
+    let rock = Cell { x: 0, y: 0 };
+    assert!(
+        h.world()
+            .scenario()
+            .is_obstacle_index(rock.x + rock.y * 320)
+    );
+    assert!(!h.world_mut().order_move(worker, rock));
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+}
+
+#[test]
+fn order_move_group_acquires_once() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    let before = h.world().nav().rebuild_count();
+    let acquires = h.world().nav().acquire_count();
+    let ordered = h
+        .world_mut()
+        .order_move_group(&workers, Cell { x: 200, y: 200 });
+    assert_eq!(ordered, 6);
+    assert_eq!(
+        h.world().nav().rebuild_count(),
+        before + 1,
+        "a group order must rebuild its field exactly once"
+    );
+    // The rebuild count alone cannot see this: six acquires of one cached
+    // destination are five hits and one miss.
+    assert_eq!(
+        h.world().nav().acquire_count(),
+        acquires + 1,
+        "a group order must acquire its field exactly once, not once per unit"
+    );
+}
+
+#[test]
+fn a_group_sharing_a_destination_shares_a_field() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    h.world_mut()
+        .order_move_group(&workers, Cell { x: 200, y: 200 });
+    let slots: HashSet<u8> = workers
+        .iter()
+        .map(|id| match h.world().order_of(*id) {
+            Some(Order::Move { field_slot, .. }) => field_slot,
+            other => panic!("worker is not moving: {other:?}"),
+        })
+        .collect();
+    assert_eq!(slots.len(), 1, "one destination must mean one field");
+}
+
+#[test]
+fn a_unit_reaches_its_destination() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = h
+        .ids_of_kind(EntityKind::Unit(UnitKind::Worker))
+        .into_iter()
+        .find(|id| position_of(&h, *id) == [165.5, 178.5])
+        .expect("the worker spawned at (165, 178)");
+    let dest = Cell { x: 200, y: 200 };
+    assert!(h.world_mut().order_move(worker, dest));
+
+    h.step_exact(1_200);
+
+    let p = position_of(&h, worker);
+    let dx = p[0] - 200.5;
+    let dy = p[1] - 200.5;
+    assert!(
+        dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS,
+        "worker stopped at {p:?}, not within {ARRIVAL_RADIUS_CELLS} of (200.5, 200.5)"
+    );
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+}
+
+#[test]
+fn a_unit_walks_around_an_obstacle() {
+    let spec = rts_spec(
+        wall_with_a_gap(),
+        vec![Cell { x: 2, y: 20 }],
+        Cell { x: 30, y: 20 },
+    );
+    let mut h = RtsHarness::spec(spec).build().expect("walled rts scene");
+    let worker = first_worker(&h);
+    let dest = Cell { x: 30, y: 20 };
+    assert!(h.world_mut().order_move(worker, dest));
+
+    let mut near_the_gap = false;
+    let mut arrived = false;
+    for _ in 0..1_200 {
+        h.step_exact(1);
+        let p = position_of(&h, worker);
+        let cy = p[1].floor() as i32;
+        let cx = p[0].floor() as i32;
+        if cx == 16 && (cy - 8).abs() <= 2 {
+            near_the_gap = true;
+        }
+        if h.world().order_of(worker) == Some(Order::Idle) {
+            arrived = true;
+            break;
+        }
+    }
+    assert!(arrived, "the worker never finished its order");
+    let p = position_of(&h, worker);
+    let dx = p[0] - 30.5;
+    let dy = p[1] - 20.5;
+    assert!(
+        dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS,
+        "worker cleared its order at {p:?}, away from the destination"
+    );
+    assert!(
+        near_the_gap,
+        "the walk never passed the only gap in the wall"
+    );
+}
+
+#[test]
+fn a_unit_never_enters_a_blocked_cell() {
+    let spec = rts_spec(
+        wall_with_a_gap(),
+        vec![Cell { x: 2, y: 20 }],
+        Cell { x: 30, y: 20 },
+    );
+    let mut h = RtsHarness::spec(spec).build().expect("walled rts scene");
+    let worker = first_worker(&h);
+    assert!(h.world_mut().order_move(worker, Cell { x: 30, y: 20 }));
+
+    for _ in 0..1_200 {
+        h.step_exact(1);
+        let p = position_of(&h, worker);
+        let idx = (p[0].floor() as u32) + (p[1].floor() as u32) * 320;
+        assert!(
+            !h.world().scenario().is_obstacle_index(idx),
+            "worker stood inside an obstacle at {p:?}"
+        );
+        if h.world().order_of(worker) == Some(Order::Idle) {
+            break;
+        }
+    }
+}
+
+#[test]
+fn an_unreachable_destination_clears_the_order() {
+    let spec = rts_spec(
+        sealed_chamber(),
+        vec![Cell { x: 2, y: 20 }],
+        Cell { x: 30, y: 20 },
+    );
+    let mut h = RtsHarness::spec(spec).build().expect("sealed rts scene");
+    let worker = first_worker(&h);
+    let before = position_of(&h, worker);
+    // The chamber is free ground, so the order is accepted — and then found
+    // impossible by the field, not by the order check.
+    assert!(h.world_mut().order_move(worker, Cell { x: 201, y: 201 }));
+
+    h.step_exact(2);
+    assert_eq!(
+        h.world().order_of(worker),
+        Some(Order::Idle),
+        "an unreachable destination must clear, not spin"
+    );
+    assert_eq!(position_of(&h, worker), before, "the worker moved anyway");
+}
+
+#[test]
+fn arrival_is_measured_from_the_cell_centre() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let dest = Cell { x: 200, y: 200 };
+    assert!(h.world_mut().order_move(worker, dest));
+
+    // Exactly 1.4 cells east of the destination cell's *centre*: inside the
+    // 1.5 arrival radius, but 1.9 from the cell's min corner.
+    let placed = [dest.x as f32 + 0.5 + 1.4, dest.y as f32 + 0.5];
+    let slot = h.world().entities().slot(worker).expect("worker slot");
+    h.world_mut().entities_mut().set_position(slot, placed);
+
+    h.step_exact(1);
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+    assert_eq!(position_of(&h, worker), placed, "an arrival must not step");
+}
+
+#[test]
+fn worker_outruns_soldier() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let start = position_of(&h, worker);
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Soldier), OWNER_PLAYER, start)
+        .expect("spawn a soldier");
+
+    let dest = Cell { x: 200, y: 200 };
+    assert_eq!(h.world_mut().order_move_group(&[worker, soldier], dest), 2);
+    h.step_exact(60);
+
+    let dist = |p: [f32; 2]| {
+        let dx = p[0] - start[0];
+        let dy = p[1] - start[1];
+        (dx * dx + dy * dy).sqrt()
+    };
+    let walked_worker = dist(position_of(&h, worker));
+    let walked_soldier = dist(position_of(&h, soldier));
+    assert!(
+        walked_worker > walked_soldier,
+        "worker walked {walked_worker}, soldier {walked_soldier}; the kinds \
+         must not share one speed"
+    );
+}
+
+#[test]
+fn an_idle_unit_does_not_move_or_animate() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let slot = h.world().entities().slot(worker).expect("worker slot");
+    let before = (
+        h.world().entities().position(slot),
+        h.world().entities().dir(slot),
+        h.world().entities().frame(slot),
+    );
+
+    h.step_exact(600);
+
+    let after = (
+        h.world().entities().position(slot),
+        h.world().entities().dir(slot),
+        h.world().entities().frame(slot),
+    );
+    assert_eq!(after, before, "an idle unit walked or animated");
+}
+
+#[test]
+fn movement_is_reproducible() {
+    let dest = Cell { x: 200, y: 200 };
+    let mut a = RtsHarness::scene().build().expect("a");
+    let mut b = RtsHarness::scene().build().expect("b");
+    for h in [&mut a, &mut b] {
+        let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+        assert_eq!(h.world_mut().order_move_group(&workers, dest), 6);
+        h.step_exact(600);
+    }
+    assert_eq!(a.state_hash(), b.state_hash());
+}
+
+#[test]
+fn state_hash_sees_an_order() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let before = h.state_hash();
+    assert!(h.world_mut().order_move(worker, Cell { x: 200, y: 200 }));
+    assert_ne!(h.state_hash(), before, "an order must reach the state hash");
 }
