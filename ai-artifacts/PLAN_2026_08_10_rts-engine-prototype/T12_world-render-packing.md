@@ -425,4 +425,4 @@ Harness `RtsHarness::scene()` unless stated; `frame = RtsFrame::new()`;
 - [x] `git diff --stat HEAD -- lab/goldens/` — **empty**
 - [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
 - [x] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): pack the RTS world into draw groups`
+- [x] commit msg draft: `feat(rts): pack the RTS world into draw groups`
