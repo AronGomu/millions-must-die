@@ -34,6 +34,7 @@
 
 mod fixtures;
 mod rng;
+mod rts;
 
 pub use fixtures::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE,
@@ -41,6 +42,7 @@ pub use fixtures::{
     GATE_SCENARIO, RTS_SCENE, fixture_path, gate_scenario_path, rts_scene_path, scene_path,
 };
 pub use rng::SplitMix64;
+pub use rts::{RtsHarness, RtsHarnessBuilder};
 
 use std::path::PathBuf;
 
@@ -64,6 +66,8 @@ pub enum HarnessError {
     Scenario(#[from] ScenarioError),
     #[error(transparent)]
     Runtime(#[from] RuntimeError),
+    #[error(transparent)]
+    Rts(#[from] crate::rts::RtsWorldError),
 }
 
 /// Where a harness gets its scenario.

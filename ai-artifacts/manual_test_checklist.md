@@ -717,3 +717,37 @@ scene file and a real CLI run — this ticket ships no window-visible change.
       generated files are already committed (rerunning is a no-op).
 - [ ] `sha256sum -c <(sed 's|$|  assets/scenarios/rts_prototype_v1.ron|'
       assets/scenarios/rts_prototype_v1.sha256)` — prints `OK`.
+
+## T6 entity-store-and-world
+
+New module `mmd_engine::rts` (`entity.rs`, `economy.rs`, `world.rs`): a
+preallocated SoA entity store with generational ids, and `RtsWorld`, which
+seeds an HQ, six workers and ten resource nodes from `rts_prototype_v1.ron`
+and advances a tick counter deterministically. Also new:
+`testkit::RtsHarness`, the RTS sibling of `Harness`. Nothing renders, nothing
+moves, no order or economy system exists yet — this is data-spine only, and
+no existing command's behaviour changed (`cargo run -- run --agents 5000
+--frames 300` reproduces the exact pre-change exit hash
+`864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`, verified
+via a before/after `git stash` comparison on this tree).
+
+- [ ] `cargo test -p mmd-engine --test rts_world` — all 32 tests pass. Skim
+      the output for the seeding tests in particular
+      (`world_seeds_the_scene`, `world_seeds_the_starting_stock`,
+      `the_hq_sits_at_its_footprint_centre`,
+      `workers_start_on_the_scenario_spawn_cells`) and confirm none are
+      silently skipped or filtered out (32 passed, 0 ignored).
+- [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and
+      exits cleanly, and the frame looks **pixel-for-pixel like it did
+      before this ticket**: this slice adds a new module tree nothing else
+      calls yet, so the gate scene's render path is untouched.
+- [ ] `cargo doc -p mmd-engine --no-deps --open` (or browse
+      `target/doc/mmd_engine/rts/index.html` directly) and skim the `rts`
+      module's rustdoc: `EntityStore`, `EntityId`, `RtsWorld`, `Resources`,
+      `Supply` should each read as a coherent, documented public API — no
+      `TODO`s, no leftover private-looking names exposed by accident.
+- [ ] Open `crates/mmd-engine/src/rts/world.rs` and confirm the seeding
+      order comment (HQ, then crystal nodes, then gas nodes, then one worker
+      per spawn cell) matches what `RtsWorld::from_scenario` actually does —
+      a human sanity check that the "seeding order is part of the contract"
+      claim in the source is not stale.

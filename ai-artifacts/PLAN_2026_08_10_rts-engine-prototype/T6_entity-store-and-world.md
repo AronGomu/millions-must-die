@@ -455,19 +455,19 @@ Export `RtsHarness`, `RtsHarnessBuilder` from `crates/mmd-engine/src/testkit/mod
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/src/rts/mod.rs` with the module list and re-exports above.
-- [ ] 2. Add `pub mod rts;` to `crates/mmd-engine/src/lib.rs`.
-- [ ] 3. Create `crates/mmd-engine/src/rts/entity.rs` with the constants and enums.
-- [ ] 4. Create `crates/mmd-engine/src/rts/economy.rs` with `Resources` and `Supply`.
-- [ ] 5. Create `crates/mmd-engine/tests/rts_world.rs` and write every test from the table. Watch them fail.
-- [ ] 6. Implement `EntityStore` with the eleven columns, free list and `live` counter, all reserved at `MAX_ENTITIES`.
-- [ ] 7. Implement `collect_live` and `hash_into`.
-- [ ] 8. Add `#[cfg(feature = "testkit")] pub fn column_capacities(&self) -> [usize; 11]` to `EntityStore`.
-- [ ] 9. Create `crates/mmd-engine/src/rts/world.rs`: `RtsWorldError`, `RtsWorld`, `load`, `from_scenario`, the seeding order, accessors.
-- [ ] 10. Implement `RtsWorld::tick` (counter only) and `state_hash`.
-- [ ] 11. Create `crates/mmd-engine/src/testkit/rts.rs` with `RtsHarness` + builder; add `mod rts;` and the `pub use` to `testkit/mod.rs`; add the `Rts` variant to `HarnessError`.
-- [ ] 12. Run `cargo test -p mmd-engine --test rts_world` to green.
-- [ ] 13. Run the mutation list; record kills in the commit body.
+- [x] 1. Create `crates/mmd-engine/src/rts/mod.rs` with the module list and re-exports above.
+- [x] 2. Add `pub mod rts;` to `crates/mmd-engine/src/lib.rs`.
+- [x] 3. Create `crates/mmd-engine/src/rts/entity.rs` with the constants and enums.
+- [x] 4. Create `crates/mmd-engine/src/rts/economy.rs` with `Resources` and `Supply`.
+- [x] 5. Create `crates/mmd-engine/tests/rts_world.rs` and write every test from the table. Watch them fail.
+- [x] 6. Implement `EntityStore` with the eleven columns, free list and `live` counter, all reserved at `MAX_ENTITIES`.
+- [x] 7. Implement `collect_live` and `hash_into`.
+- [x] 8. Add `#[cfg(feature = "testkit")] pub fn column_capacities(&self) -> [usize; 11]` to `EntityStore`.
+- [x] 9. Create `crates/mmd-engine/src/rts/world.rs`: `RtsWorldError`, `RtsWorld`, `load`, `from_scenario`, the seeding order, accessors.
+- [x] 10. Implement `RtsWorld::tick` (counter only) and `state_hash`.
+- [x] 11. Create `crates/mmd-engine/src/testkit/rts.rs` with `RtsHarness` + builder; add `mod rts;` and the `pub use` to `testkit/mod.rs`; add the `Rts` variant to `HarnessError`.
+- [x] 12. Run `cargo test -p mmd-engine --test rts_world` to green.
+- [x] 13. Run the mutation list; record kills in the commit body.
 - [ ] 14. Run the full validation block.
 
 ## Outputs
@@ -486,13 +486,13 @@ Export `RtsHarness`, `RtsHarnessBuilder` from `crates/mmd-engine/src/testkit/mod
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_world` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo tree -e features | grep -c testkit` — `0` (the shipping binary must not gain `testkit`)
-- [ ] `cargo build --no-default-features --features gpu -p mmd-engine` — compiles (the `#[cfg(feature = "testkit")]` hooks are genuinely gated)
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): add the entity store and the RTS world tick`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test rts_world` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo tree -e features | grep -c testkit` — `0` (the shipping binary must not gain `testkit`)
+- [x] `cargo build --no-default-features --features gpu -p mmd-engine` — compiles (the `#[cfg(feature = "testkit")]` hooks are genuinely gated)
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(rts): add the entity store and the RTS world tick`

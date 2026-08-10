@@ -4,6 +4,7 @@ pub mod alloc_guard;
 pub mod bench;
 pub mod nav;
 pub mod render;
+pub mod rts;
 pub mod runtime;
 pub mod scenario;
 pub mod sim;
