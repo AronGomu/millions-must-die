@@ -346,22 +346,22 @@ Harness `RtsHarness::scene()`; `hq = world().start_hq().unwrap()`;
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/src/rts/production.rs` with the constants, `ProduceError`, `ProductionQueue`, `ProductionTable`.
-- [ ] 2. Add `mod production;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
-- [ ] 3. Add `pub(crate) fn set_used(&mut self, used: u32)` to `Supply` in `crates/mmd-engine/src/rts/economy.rs`.
-- [ ] 4. Create `crates/mmd-engine/tests/rts_production.rs` and write every test from the table. Watch them fail.
-- [ ] 5. Implement `ProductionQueue` (`push`, `push_front`, `cancel`, `advance`, `head`, `entries`, `hash_into`).
-- [ ] 6. Implement `ProductionTable` with `MAX_ENTITIES` entries, reserved at construction.
-- [ ] 7. Add a `production: ProductionTable` field to `RtsWorld`.
-- [ ] 8. Implement `enqueue_unit` with the nine steps in the exact order given.
-- [ ] 9. Implement `cancel_queued`, `production_queue`, `rally`, `set_rally`, `reserved_supply`.
-- [ ] 10. Implement the production system as step 4 of `tick()`, body exactly as quoted.
-- [ ] 11. Implement the supply recount as step 7 of `tick()`.
-- [ ] 12. Call `production.clear(slot)` in `cancel_construction`.
-- [ ] 13. Extend `RtsWorld::state_hash` with the production table.
-- [ ] 14. Add `production_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 15. Run the mutation list; record kills in the commit body.
-- [ ] 16. Run the full validation block.
+- [x] 1. Create `crates/mmd-engine/src/rts/production.rs` with the constants, `ProduceError`, `ProductionQueue`, `ProductionTable`.
+- [x] 2. Add `mod production;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
+- [x] 3. Add `pub(crate) fn set_used(&mut self, used: u32)` to `Supply` in `crates/mmd-engine/src/rts/economy.rs`.
+- [x] 4. Create `crates/mmd-engine/tests/rts_production.rs` and write every test from the table. Watch them fail.
+- [x] 5. Implement `ProductionQueue` (`push`, `push_front`, `cancel`, `advance`, `head`, `entries`, `hash_into`).
+- [x] 6. Implement `ProductionTable` with `MAX_ENTITIES` entries, reserved at construction.
+- [x] 7. Add a `production: ProductionTable` field to `RtsWorld`.
+- [x] 8. Implement `enqueue_unit` with the nine steps in the exact order given.
+- [x] 9. Implement `cancel_queued`, `production_queue`, `rally`, `set_rally`, `reserved_supply`.
+- [x] 10. Implement the production system as step 4 of `tick()`, body exactly as quoted.
+- [x] 11. Implement the supply recount as step 7 of `tick()`.
+- [x] 12. Call `production.clear(slot)` in `cancel_construction`.
+- [x] 13. Extend `RtsWorld::state_hash` with the production table.
+- [x] 14. Add `production_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
+- [x] 15. Run the mutation list; record kills in the commit body.
+- [x] 16. Run the full validation block.
 
 ## Outputs
 
@@ -377,14 +377,14 @@ Harness `RtsHarness::scene()`; `hq = world().start_hq().unwrap()`;
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_production` — all green
-- [ ] `cargo test -p mmd-engine --test rts_build` — all green
-- [ ] `cargo test -p mmd-engine --test rts_economy` — all green
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): produce units from queues bounded by supply`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test rts_production` — all green
+- [x] `cargo test -p mmd-engine --test rts_build` — all green
+- [x] `cargo test -p mmd-engine --test rts_economy` — all green
+- [x] `cargo test -p mmd-engine --test frame_allocations` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(rts): produce units from queues bounded by supply`

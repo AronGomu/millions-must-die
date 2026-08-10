@@ -970,3 +970,39 @@ ring-scan) — `cargo run -- run --agents 5000 --frames 300` still exits on
       attending the same site does **not** speed it up
       (`EXTRA_BUILDERS_SPEED_UP = false`) — that is a deliberate, documented
       deferral, not an oversight.
+
+## T11 production-and-supply
+
+Finished HQs queue Workers; finished Barracks queue Soldiers. Enqueue debits
+resources and reserves supply immediately, cancellation refunds both, queues
+hold at most five entries, completed units spawn beside their producer and walk
+to an optional rally point. Supply usage is recounted every tick from live
+units plus queued reservations. Nothing renders these RTS units or exposes
+production input yet (T12–T14), so manual checks use tests/source; existing
+horde window output must remain unchanged.
+
+- [ ] `cargo test -p mmd-engine --test rts_production` — 39 passed, 0 ignored.
+      Skim for `queueing_cannot_exceed_the_cap`,
+      `a_supply_blocked_enqueue_does_not_charge`,
+      `a_barracks_can_be_queued_the_tick_it_finishes`,
+      `production_stops_when_the_store_is_full`, and
+      `production_is_reproducible`.
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 16 passed.
+      `production_allocates_nothing` measures 600 ticks with HQ and Barracks
+      queues active, including Worker and Soldier completions, at zero heap
+      allocations.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0; final line reads
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      Window remains phase-0 horde output; no RTS production UI renders yet.
+- [ ] Open `crates/mmd-engine/src/rts/production.rs`: confirm queue cap `5`,
+      Worker cost/time `50 crystal / 300 ticks`, Soldier cost/time
+      `50 crystal + 25 gas / 360 ticks`, plus legal pairs HQ→Worker and
+      Barracks→Soldier only.
+- [ ] Open `crates/mmd-engine/src/rts/world.rs`: confirm `tick()` order remains
+      construction → production → gather/orders → movement → supply recount,
+      then selection self-heal. Production before construction or recount
+      before movement violates reserved system order.
+- [ ] Run production flow through `RtsHarness`: enqueue four Workers at starting
+      supply 6/10, confirm fifth returns `SupplyBlocked`; cancel one, confirm
+      crystal and one supply return; set rally `(200, 200)`, produce one Worker,
+      confirm it ends within `ARRIVAL_RADIUS_CELLS` of rally.

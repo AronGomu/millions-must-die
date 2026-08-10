@@ -12,7 +12,9 @@ use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
 use mmd_engine::render::Camera;
-use mmd_engine::rts::{BuildingKind, EntityKind, GatherPhase, Order, ResourceKind, UnitKind};
+use mmd_engine::rts::{
+    BuildingKind, EntityKind, GatherPhase, OWNER_PLAYER, Order, ResourceKind, UnitKind,
+};
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::SpatialGrid;
@@ -686,5 +688,52 @@ fn construction_allocates_nothing() {
     assert!(
         sites.iter().any(|&s| !h.world().is_site(s)),
         "the measured ticks finished nothing"
+    );
+}
+
+/// Production queues, completion spawns and supply recount reuse preallocated
+/// storage. Two active producers ensure both unit kinds traverse the hot path.
+#[test]
+fn production_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    h.world_mut().resources_mut().crystal = 10_000;
+    h.world_mut().resources_mut().gas = 10_000;
+    let barracks = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Barracks),
+            OWNER_PLAYER,
+            [203.0, 181.0],
+        )
+        .expect("spawn finished Barracks");
+    let hq = h.world().start_hq().expect("hq");
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    assert!(
+        h.world_mut()
+            .enqueue_unit(barracks, UnitKind::Soldier)
+            .is_ok()
+    );
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(600);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0, "the production sweep allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
+        8,
+        "both queued Workers must complete"
+    );
+    assert_eq!(
+        h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier)).len(),
+        1,
+        "queued Soldier must complete"
     );
 }

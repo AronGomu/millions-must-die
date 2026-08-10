@@ -13,7 +13,7 @@ use super::build::{
 };
 use super::economy::{
     DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, Supply,
-    WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
+    WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount, supply_cost,
 };
 use super::entity::{
     BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
@@ -23,6 +23,7 @@ use super::orders::{
     ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, building_approach_cell, dist2,
     drop_off_approach_cell, node_cell, rect_distance, step_admissible, unit_speed,
 };
+use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
 use super::selection::{Pick, Selection, box_select, pick_at};
 
 /// Starting amount in a freshly seeded Crystal node.
@@ -70,6 +71,8 @@ pub struct RtsWorld {
     /// Sites that finished this tick, reused every tick. Reserved to
     /// [`MAX_ENTITIES`] so construction never allocates.
     finished: Vec<EntityId>,
+    /// One production queue and rally point per entity slot.
+    production: ProductionTable,
 }
 
 impl RtsWorld {
@@ -158,6 +161,7 @@ impl RtsWorld {
             placement: Placement::None,
             build_attend: vec![false; MAX_ENTITIES],
             finished: Vec::with_capacity(MAX_ENTITIES),
+            production: ProductionTable::new(),
         })
     }
 
@@ -490,6 +494,7 @@ impl RtsWorld {
 
         self.resources.credit(building_cost(kind));
         self.entities.despawn(site);
+        self.production.clear(site_slot);
 
         for slot in 0..self.entities.slot_count() {
             if !self.entities.alive(slot) {
@@ -537,6 +542,125 @@ impl RtsWorld {
         true
     }
 
+    /// Queue a unit at a building.
+    ///
+    /// Charges the **resources and the supply at enqueue time**, not at
+    /// completion. Reserving supply up front is what makes the cap a real
+    /// bound: charging on completion would let a player queue five Soldiers
+    /// into two free supply and get all five.
+    ///
+    /// Checked in this exact order, first failure wins: the building must be
+    /// live and player-owned, finished (not a site), able to produce `unit`,
+    /// have queue room, have free supply, then have the resources — the
+    /// supply check precedes the debit, so a supply-blocked enqueue never
+    /// takes the player's money.
+    pub fn enqueue_unit(&mut self, building: EntityId, unit: UnitKind) -> Result<(), ProduceError> {
+        let Some(slot) = self.entities.slot(building) else {
+            return Err(ProduceError::NoBuilding);
+        };
+        let EntityKind::Building(b) = self.entities.kind(slot) else {
+            return Err(ProduceError::NoBuilding);
+        };
+        if self.entities.owner(slot) != OWNER_PLAYER {
+            return Err(ProduceError::NoBuilding);
+        }
+        if self.entities.progress_target(slot) != 0 {
+            return Err(ProduceError::UnderConstruction);
+        }
+        if !can_produce(b, unit) {
+            return Err(ProduceError::WrongBuilding);
+        }
+        if self.production.queue(slot).is_full() {
+            return Err(ProduceError::QueueFull);
+        }
+        if !self.supply.fits(supply_cost(unit)) {
+            return Err(ProduceError::SupplyBlocked);
+        }
+        if !self.resources.try_debit(unit_cost(unit)) {
+            return Err(ProduceError::Unaffordable);
+        }
+        self.production.queue_mut(slot).push(unit);
+        self.supply.add_used(supply_cost(unit));
+        Ok(())
+    }
+
+    /// Cancel queue entry `index` at `building`, refunding its cost and
+    /// releasing its supply reservation. `false` when there is no such entry.
+    pub fn cancel_queued(&mut self, building: EntityId, index: usize) -> bool {
+        let Some(slot) = self.entities.slot(building) else {
+            return false;
+        };
+        if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
+            return false;
+        }
+        let Some(kind) = self.production.queue_mut(slot).cancel(index) else {
+            return false;
+        };
+        self.resources.credit(unit_cost(kind));
+        self.supply.remove_used(supply_cost(kind));
+        true
+    }
+
+    /// The production queue of a live building. `None` for a stale id or a
+    /// non-building.
+    pub fn production_queue(&self, building: EntityId) -> Option<&ProductionQueue> {
+        let slot = self.entities.slot(building)?;
+        if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
+            return None;
+        }
+        Some(self.production.queue(slot))
+    }
+
+    /// Where units produced here walk after they appear. `None` leaves them
+    /// idle.
+    pub fn rally(&self, building: EntityId) -> Option<Cell> {
+        let slot = self.entities.slot(building)?;
+        if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
+            return None;
+        }
+        self.production.rally(slot)
+    }
+
+    /// Set or clear a rally point. `false` for a stale id or a non-building. A
+    /// rally cell that is out of bounds or blocked is rejected.
+    pub fn set_rally(&mut self, building: EntityId, cell: Option<Cell>) -> bool {
+        let Some(slot) = self.entities.slot(building) else {
+            return false;
+        };
+        if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
+            return false;
+        }
+        if let Some(c) = cell {
+            let width = self.scenario.width();
+            let height = self.scenario.height();
+            if c.x >= width || c.y >= height {
+                return false;
+            }
+            if self.nav.blocked()[(c.x + c.y * width) as usize] {
+                return false;
+            }
+        }
+        self.production.set_rally(slot, cell);
+        true
+    }
+
+    /// Supply reserved by every live production queue.
+    pub fn reserved_supply(&self) -> u32 {
+        let mut total = 0;
+        for slot in 0..self.entities.slot_count() {
+            if !self.entities.alive(slot) {
+                continue;
+            }
+            if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
+                continue;
+            }
+            for &k in self.production.queue(slot).entries() {
+                total += supply_cost(k);
+            }
+        }
+        total
+    }
+
     /// Advance one fixed 1/60 s step.
     ///
     /// Systems are added by later tickets and each one runs at a fixed point in
@@ -544,16 +668,19 @@ impl RtsWorld {
     /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
     /// 6. movement, 7. supply recount.
     ///
-    /// Today the tick counter, the construction system (3), the gather system
-    /// (5) and the movement system (6) run, followed by pruning the selection
-    /// of anything that died this tick — last, so a unit that died on this
-    /// tick is out of the selection before anything reads it next tick.
+    /// Today the tick counter, the construction system (3), the production
+    /// system (4), the gather system (5), the movement system (6) and the
+    /// supply recount (7) run, followed by pruning the selection of anything
+    /// that died this tick — last, so a unit that died on this tick is out of
+    /// the selection before anything reads it next tick.
     pub fn tick(&mut self) {
         self.tick_index += 1;
         self.entities.collect_live(&mut self.live_scratch);
         self.construction();
+        self.production_system();
         self.gather();
         self.movement();
+        self.supply_recount();
         self.selection.retain_live(&self.entities);
     }
 
@@ -635,6 +762,75 @@ impl RtsWorld {
                 self.orders.clear(slot);
             }
         }
+    }
+
+    /// System 4: advance every finished building's production queue by one
+    /// tick, spawning the unit beside the building and giving it its rally
+    /// order when its head completes.
+    ///
+    /// Runs after construction, so a Barracks that finished this tick can
+    /// already hold a queue, and before orders, so a unit produced this tick
+    /// can be given its rally order in the same tick.
+    fn production_system(&mut self) {
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
+                continue;
+            }
+            if self.entities.progress_target(slot) != 0 {
+                continue; // still a site
+            }
+            let Some(_head) = self.production.queue(slot).head() else {
+                continue;
+            };
+            let Some(done) = self.production.queue_mut(slot).advance() else {
+                continue;
+            };
+
+            let building_id = self.entities.id_at(slot).expect("live");
+            let cell = building_approach_cell(
+                &self.entities,
+                self.nav.blocked(),
+                width,
+                height,
+                building_id,
+            );
+            let pos = [cell.x as f32 + 0.5, cell.y as f32 + 0.5];
+            let Some(id) = self
+                .entities
+                .spawn(EntityKind::Unit(done), OWNER_PLAYER, pos)
+            else {
+                // Store full: put the entry back at the front and stop. The
+                // player keeps what they paid for rather than losing it to a
+                // silent drop.
+                self.production.queue_mut(slot).push_front(done);
+                continue;
+            };
+            // `live_scratch` was collected before production. Include this unit
+            // in later systems and the same tick's supply recount.
+            self.live_scratch.push(id.index as usize);
+            if let Some(rally) = self.production.rally(slot) {
+                // Ignores its own return; a blocked rally is a no-op.
+                self.order_move(id, rally);
+            }
+        }
+    }
+
+    /// System 7: recompute `Supply::used` from scratch — live units plus every
+    /// live production queue's reservations — rather than maintaining it
+    /// incrementally, so it can never drift.
+    fn supply_recount(&mut self) {
+        let mut used = 0u32;
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            if let EntityKind::Unit(k) = self.entities.kind(slot) {
+                used += supply_cost(k);
+            }
+        }
+        used += self.reserved_supply();
+        self.supply.set_used(used);
     }
 
     /// System 5: advance every gathering worker's round trip one step.
@@ -916,8 +1112,9 @@ impl RtsWorld {
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
     /// progress_target, amount, carry kind, carry amount), then every live
-    /// slot's order, then the selection, then the pending placement ghost (one
-    /// tag byte plus the kind byte), then resources and supply. `f32` goes in
+    /// slot's order, then the selection, production queues and rally points,
+    /// then the pending placement ghost (one tag byte plus the kind byte), then
+    /// resources and supply. `f32` goes in
     /// as raw bits, matching `Simulation::state_hash`.
     pub fn state_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
@@ -930,6 +1127,7 @@ impl RtsWorld {
         self.entities.collect_live(&mut live);
         self.orders.hash_into(&mut h, &live);
         self.selection.hash_into(&mut h);
+        self.production.hash_into(&mut h, &live);
         match self.placement {
             Placement::None => h.update([0u8, 0u8]),
             Placement::Pending { kind } => h.update([1u8, kind as u8]),

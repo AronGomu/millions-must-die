@@ -107,6 +107,13 @@ impl Supply {
         self.used = self.used.saturating_sub(cost);
     }
 
+    /// Overwrite `used` directly — the supply recount system's write path.
+    /// Not a public API: `used` must only ever be *recomputed*, never nudged
+    /// by a caller that thinks it knows the delta.
+    pub(crate) fn set_used(&mut self, used: u32) {
+        self.used = used;
+    }
+
     /// Clamps to `MAX_SUPPLY_CAP`.
     pub fn grant_cap(&mut self, amount: u32) {
         self.cap = self.cap.saturating_add(amount).min(MAX_SUPPLY_CAP);

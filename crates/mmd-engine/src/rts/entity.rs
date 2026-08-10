@@ -216,6 +216,10 @@ impl EntityStore {
     }
 
     /// Free a slot. Returns `false` for a stale or already-dead id.
+    ///
+    /// Callers own per-slot side tables and must clear them before this slot is
+    /// reused. In particular, despawning a building must clear its production
+    /// queue and rally point.
     pub fn despawn(&mut self, id: EntityId) -> bool {
         if !self.contains(id) {
             return false;

@@ -4,6 +4,7 @@ mod build;
 mod economy;
 mod entity;
 mod orders;
+mod production;
 mod selection;
 mod world;
 
@@ -24,6 +25,11 @@ pub use entity::{
 pub use orders::{
     ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
     WORKER_SPEED_CELLS_PER_SEC, unit_speed,
+};
+pub use production::{
+    PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,
+    SOLDIER_PRODUCE_TICKS, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce, produce_ticks,
+    unit_cost,
 };
 pub use selection::{
     DRAG_MIN_PX, MAX_SELECTION, Pick, Selection, UNIT_PICK_RADIUS_SCALE, box_select,
