@@ -14,6 +14,23 @@ use super::flow_field::{FieldScratch, FlowField, FlowFieldError};
 /// destinations, and each field costs `width * height * 12` bytes.
 pub const NAV_FIELD_SLOTS: usize = 8;
 
+/// A handle to a pooled field: the slot, plus the epoch that slot carried when
+/// the handle was issued.
+///
+/// A bare slot number is **not** a handle. A slot is rebuilt for a new
+/// destination on an LRU miss, and every key is dropped when the obstacle mask
+/// changes, so the field behind a slot is only the field a caller asked for
+/// until someone else asks for something else. The epoch is what lets
+/// [`FieldPool::is_current`] answer "is this still my field?" instead of the
+/// caller assuming it is and walking a unit into a wall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct FieldRef {
+    /// Slot index, `0..NAV_FIELD_SLOTS`.
+    pub slot: u8,
+    /// The slot's epoch when this handle was issued. `0` is never issued.
+    pub epoch: u64,
+}
+
 /// Pool errors.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum FieldPoolError {
@@ -42,6 +59,10 @@ pub struct FieldPool {
     keys: [Option<Cell>; NAV_FIELD_SLOTS],
     /// Clock reading of each slot's last use. `0` means never used.
     last_used: [u64; NAV_FIELD_SLOTS],
+    /// Epoch stamped into each slot by its last rebuild. `0` means never built.
+    epochs: [u64; NAV_FIELD_SLOTS],
+    /// Epoch issued to the last rebuild — the source of [`Self::epochs`].
+    epoch_clock: u64,
     clock: u64,
     rebuilds: u64,
     scratch: FieldScratch,
@@ -83,6 +104,8 @@ impl FieldPool {
             fields,
             keys: [None; NAV_FIELD_SLOTS],
             last_used: [0; NAV_FIELD_SLOTS],
+            epochs: [0; NAV_FIELD_SLOTS],
+            epoch_clock: 0,
             clock: 0,
             rebuilds: 0,
             scratch: FieldScratch::with_capacity(n),
@@ -92,11 +115,14 @@ impl FieldPool {
     /// Slot holding a field to `dest`, rebuilding into the least-recently-used
     /// slot on a miss. Every call counts as a use, so a destination in constant
     /// use is never evicted.
-    pub fn acquire(&mut self, dest: Cell) -> Result<u8, FieldPoolError> {
+    pub fn acquire(&mut self, dest: Cell) -> Result<FieldRef, FieldPoolError> {
         self.clock += 1;
         if let Some(slot) = self.keys.iter().position(|k| *k == Some(dest)) {
             self.last_used[slot] = self.clock;
-            return Ok(slot as u8);
+            return Ok(FieldRef {
+                slot: slot as u8,
+                epoch: self.epochs[slot],
+            });
         }
 
         // Miss: the least recently used slot, ties broken by lowest index. An
@@ -122,8 +148,24 @@ impl FieldPool {
             })?;
         self.keys[victim] = Some(dest);
         self.last_used[victim] = self.clock;
+        self.epoch_clock = next_epoch(self.epoch_clock);
+        self.epochs[victim] = self.epoch_clock;
         self.rebuilds += 1;
-        Ok(victim as u8)
+        Ok(FieldRef {
+            slot: victim as u8,
+            epoch: self.epoch_clock,
+        })
+    }
+
+    /// Whether `handle` still names a field built to `dest`.
+    ///
+    /// Both halves are load-bearing. The key catches a slot rebuilt for some
+    /// other destination; the epoch catches a slot rebuilt for the *same*
+    /// destination over a changed mask — a different field answering the same
+    /// question, which the holder must re-acquire to be walking the live one.
+    pub fn is_current(&self, handle: FieldRef, dest: Cell) -> bool {
+        let slot = handle.slot as usize;
+        slot < NAV_FIELD_SLOTS && self.keys[slot] == Some(dest) && self.epochs[slot] == handle.epoch
     }
 
     /// Read a slot's field. Panics on an out-of-range slot — slots come from
@@ -160,6 +202,12 @@ impl FieldPool {
 
     /// Mark a cell blocked or free and invalidate **every** cached field.
     ///
+    /// Invalidation is on the *keys*: a handle issued before this call stops
+    /// being current ([`Self::is_current`]) and its holder must re-acquire.
+    /// Nothing is rebuilt here — the rebuild happens when someone asks for the
+    /// destination again, so a mask change costs nothing for a field nobody
+    /// is using any more.
+    ///
     /// Invalidating all of them rather than the ones that "look affected" is
     /// deliberate: a single new obstacle can change the descent vector anywhere
     /// downstream of it, and a partial invalidation is a bug that only shows up
@@ -179,5 +227,25 @@ impl FieldPool {
     /// Scratch heap capacity, for the allocation-invariant test.
     pub fn scratch_capacity(&self) -> usize {
         self.scratch.capacity()
+    }
+}
+
+/// Advance the field epoch without ever issuing the reserved value zero.
+///
+/// Wrapping is deliberate: rebuilding must remain total even after the clock
+/// reaches its integer limit. Skipping zero preserves the handle invariant.
+#[inline]
+fn next_epoch(epoch: u64) -> u64 {
+    let next = epoch.wrapping_add(1);
+    if next == 0 { 1 } else { next }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::next_epoch;
+
+    #[test]
+    fn epoch_wrap_skips_the_reserved_zero() {
+        assert_eq!(next_epoch(u64::MAX), 1);
     }
 }

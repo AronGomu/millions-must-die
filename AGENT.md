@@ -75,7 +75,7 @@ cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptan
 - Supply is **reserved at enqueue**, never charged at completion, and `Supply::used` is **recomputed** every tick from live units plus queue reservations — never incremented at a call site.
 - Render layers: `ScenePass::overlay` is depth-off and binds texture slot 0, so it is honest **only for procedural rings**. Every textured depth-off element — placement tiles, drag box, rally flag, icons, panel fill, glyphs — must be a `ui` draw group, or it samples the zombie atlas.
 - `sim/` is frozen for phase 1. Its entire phase-1 diff is two visibility keywords (`dir_from_vector` → `pub`, `step_admissible` → `pub(crate)`) plus one `#[cfg(test)]` re-export; the 5 000-agent exit-line hash must not move.
-- `mmd_engine::testkit::Harness` is the single seeded, clock-free headless entry point; `testkit` is feature-gated out of the shipping binary (`cargo tree -e features | grep -c testkit` must be 0).
+- Seeded, clock-free headless entry points: `mmd_engine::testkit::Harness` for the horde sim and `mmd_engine::testkit::RtsHarness` for the RTS world — those two and no others. `testkit` is feature-gated out of the shipping binary (`cargo tree -e features | grep -c testkit` must be 0).
 - Determinism: cross-process determinism proven (test binary re-execs itself, compares hashes); seed 0 is canonical.
 - Render goldens are host-scoped (`lab/goldens/<family>/`), exact-match comparison; never a cross-platform/cross-backend claim.
 - Performance/benchmarking is retired for phase 0 — no perf number may gate a merge; a doc claiming a live speed number is a bug (`no_perf_claim_in_docs` test enforces this).

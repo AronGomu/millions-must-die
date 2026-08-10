@@ -126,9 +126,13 @@ fn pool_hit_does_not_rebuild() {
     let dest = Cell { x: 5, y: 5 };
     let a = pool.acquire(dest).expect("first acquire");
     let b = pool.acquire(dest).expect("second acquire");
-    assert_eq!(a, b, "the same destination must reuse its slot");
+    assert_eq!(a, b, "the same destination must reuse its slot and epoch");
     assert_eq!(pool.rebuild_count(), 1, "a hit must not rebuild");
-    assert_eq!(pool.key(a), Some(dest));
+    assert_eq!(pool.key(a.slot), Some(dest));
+    assert!(
+        pool.is_current(a, dest),
+        "a hit's handle must still be current"
+    );
 }
 
 #[test]
@@ -136,7 +140,7 @@ fn pool_holds_eight_distinct_destinations() {
     let mut pool = open_pool(64);
     let mut slots = Vec::new();
     for d in dests(64, NAV_FIELD_SLOTS as u32) {
-        slots.push(pool.acquire(d).expect("acquire"));
+        slots.push(pool.acquire(d).expect("acquire").slot);
     }
     slots.sort_unstable();
     slots.dedup();
@@ -150,23 +154,23 @@ fn pool_evicts_the_least_recently_used() {
     let keys = dests(64, NAV_FIELD_SLOTS as u32 + 1);
     let mut slots = Vec::new();
     for d in &keys[..NAV_FIELD_SLOTS] {
-        slots.push(pool.acquire(*d).expect("acquire"));
+        slots.push(pool.acquire(*d).expect("acquire").slot);
     }
     // Touch A: B is now the least recently used.
-    let a_slot = pool.acquire(keys[0]).expect("re-acquire a");
-    assert_eq!(a_slot, slots[0]);
+    let a = pool.acquire(keys[0]).expect("re-acquire a");
+    assert_eq!(a.slot, slots[0]);
 
-    let i_slot = pool.acquire(keys[NAV_FIELD_SLOTS]).expect("acquire i");
-    assert_eq!(i_slot, slots[1], "the new key must land in B's slot");
+    let i = pool.acquire(keys[NAV_FIELD_SLOTS]).expect("acquire i");
+    assert_eq!(i.slot, slots[1], "the new key must land in B's slot");
     assert_eq!(pool.key(slots[0]), Some(keys[0]), "A must survive");
-    assert_eq!(pool.key(i_slot), Some(keys[NAV_FIELD_SLOTS]));
+    assert_eq!(pool.key(i.slot), Some(keys[NAV_FIELD_SLOTS]));
 }
 
 #[test]
 fn eviction_ties_prefer_the_lowest_slot() {
     let mut pool = open_pool(64);
-    let slot = pool.acquire(Cell { x: 9, y: 9 }).expect("acquire");
-    assert_eq!(slot, 0, "an all-empty pool must fill slot 0 first");
+    let handle = pool.acquire(Cell { x: 9, y: 9 }).expect("acquire");
+    assert_eq!(handle.slot, 0, "an all-empty pool must fill slot 0 first");
 }
 
 #[test]
@@ -201,6 +205,32 @@ fn pool_rejects_a_blocked_destination() {
 }
 
 #[test]
+fn a_refused_acquire_preserves_every_cached_handle() {
+    let mut pool = open_pool(64);
+    let keys = dests(64, NAV_FIELD_SLOTS as u32);
+    let handles: Vec<_> = keys
+        .iter()
+        .map(|&dest| pool.acquire(dest).expect("warm acquire"))
+        .collect();
+    let rebuilds = pool.rebuild_count();
+
+    let err = pool
+        .acquire(Cell { x: 64, y: 0 })
+        .expect_err("off-grid acquire");
+    assert!(matches!(
+        err,
+        FieldPoolError::Field(FlowFieldError::DestinationOutOfBounds)
+    ));
+    assert_eq!(pool.rebuild_count(), rebuilds);
+    for (&dest, &handle) in keys.iter().zip(&handles) {
+        assert!(
+            pool.is_current(handle, dest),
+            "refused acquire corrupted cached field for {dest:?}"
+        );
+    }
+}
+
+#[test]
 fn set_blocked_invalidates_every_slot() {
     let mut pool = open_pool(64);
     let keys = dests(64, NAV_FIELD_SLOTS as u32);
@@ -224,13 +254,62 @@ fn set_blocked_invalidates_every_slot() {
     );
 }
 
+/// A handle is a claim on a *field*, not on a slot number. Once the slot has
+/// been rebuilt for somebody else, the claim is void.
+#[test]
+fn an_evicted_slot_stops_being_current() {
+    let mut pool = open_pool(64);
+    let keys = dests(64, NAV_FIELD_SLOTS as u32 + 1);
+    let first = pool.acquire(keys[0]).expect("acquire the first key");
+    assert!(pool.is_current(first, keys[0]));
+
+    // Eight further destinations: the first key's slot is the LRU victim.
+    for d in &keys[1..] {
+        pool.acquire(*d).expect("acquire");
+    }
+    assert!(
+        !pool.is_current(first, keys[0]),
+        "an evicted handle still claims to be current"
+    );
+
+    // ...and the same handle never passes for a different destination either.
+    let again = pool.acquire(keys[0]).expect("re-acquire the first key");
+    assert!(
+        !pool.is_current(again, keys[1]),
+        "a handle must be current only for the destination it was built for"
+    );
+}
+
+/// The mask changing is the case that matters most: the slot may well be
+/// rebuilt for the *same* destination, and it is still a different field.
+#[test]
+fn set_blocked_stops_every_handle_being_current() {
+    let mut pool = open_pool(64);
+    let dest = Cell { x: 60, y: 60 };
+    let before = pool.acquire(dest).expect("acquire");
+    assert!(pool.is_current(before, dest));
+
+    pool.set_blocked(Cell { x: 30, y: 30 }, true);
+    assert!(
+        !pool.is_current(before, dest),
+        "a handle survived the mask changing under it"
+    );
+
+    let after = pool.acquire(dest).expect("re-acquire");
+    assert_ne!(
+        after, before,
+        "the rebuilt field must be a new handle, even at the same slot"
+    );
+    assert!(pool.is_current(after, dest));
+}
+
 #[test]
 fn set_blocked_changes_the_walk() {
     // 8x8 open grid, then a full wall at x == 4 with one gap at y == 1.
     let mut pool = FieldPool::new(8, 8, &[]).expect("open grid");
     let dest = Cell { x: 7, y: 7 };
-    let slot = pool.acquire(dest).expect("open field");
-    let open_path = descent_path(pool.field(slot), Cell { x: 0, y: 0 }, dest);
+    let handle = pool.acquire(dest).expect("open field");
+    let open_path = descent_path(pool.field(handle.slot), Cell { x: 0, y: 0 }, dest);
     let gap = Cell { x: 4, y: 1 };
     assert!(
         !open_path.contains(&gap),
@@ -242,8 +321,8 @@ fn set_blocked_changes_the_walk() {
             pool.set_blocked(Cell { x: 4, y }, true);
         }
     }
-    let slot = pool.acquire(dest).expect("walled field");
-    let walled_path = descent_path(pool.field(slot), Cell { x: 0, y: 0 }, dest);
+    let handle = pool.acquire(dest).expect("walled field");
+    let walled_path = descent_path(pool.field(handle.slot), Cell { x: 0, y: 0 }, dest);
     assert!(
         walled_path.contains(&gap),
         "the walk must go through the only gap, got {walled_path:?}"

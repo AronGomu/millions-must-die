@@ -96,13 +96,18 @@ fn placement_rejects_terrain() {
     );
 }
 
+/// The seeded HQ is stamped into the mask like any other finished building,
+/// so rule 2 (terrain, which carries every finished building) refuses this
+/// before rule 3 (overlap) ever looks — exactly the ordering
+/// `placement_valid` documents. Rule 3 still owns *sites*, which are not
+/// stamped: see `placement_rejects_overlap_with_a_site`.
 #[test]
 fn placement_rejects_overlap_with_the_hq() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
     let min = Cell { x: 165, y: 165 };
     assert_eq!(
         placement_valid(h.world(), BuildingKind::Depot, min),
-        Err(PlacementError::OverlapsBuilding)
+        Err(PlacementError::BlockedTerrain { x: 165, y: 165 })
     );
 }
 

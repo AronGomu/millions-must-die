@@ -284,6 +284,33 @@ fn the_hq_sits_at_its_footprint_centre() {
     assert_eq!(h.world().entities().position(slot), [166.0, 166.0]);
 }
 
+/// The seeded HQ is a *finished* building, and a finished building blocks
+/// navigation. Stamped at seed time, not by whoever remembers to.
+#[test]
+fn the_seeded_hq_is_stamped_into_navigation() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let width = h.world().scenario().width();
+    let blocked = h.world().nav().blocked();
+    // The tracked scene's HQ footprint is [160, 172) x [160, 172).
+    for y in 160..172u32 {
+        for x in 160..172u32 {
+            assert!(
+                blocked[(x + y * width) as usize],
+                "HQ footprint cell ({x}, {y}) is walkable: a field routes straight \
+                 through the base"
+            );
+        }
+    }
+    // ...and only the footprint: the ring around it must stay walkable, or a
+    // worker could never reach the drop-off.
+    for x in 159..173u32 {
+        assert!(
+            !blocked[(x + 159 * width) as usize],
+            "cell ({x}, 159) is blocked; the stamp spilled past the footprint"
+        );
+    }
+}
+
 #[test]
 fn nodes_carry_their_starting_amount() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
@@ -580,8 +607,16 @@ fn order_move_rejects_a_blocked_destination() {
             .scenario()
             .is_obstacle_index(rock.x + rock.y * 320)
     );
+    let live_dest = Cell { x: 200, y: 200 };
+    assert!(h.world_mut().order_move(worker, live_dest));
+    let before = h.world().order_of(worker);
+
     assert!(!h.world_mut().order_move(worker, rock));
-    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+    assert_eq!(
+        h.world().order_of(worker),
+        before,
+        "a refused destination must not corrupt the live order"
+    );
 }
 
 #[test]
@@ -618,7 +653,7 @@ fn a_group_sharing_a_destination_shares_a_field() {
     let slots: HashSet<u8> = workers
         .iter()
         .map(|id| match h.world().order_of(*id) {
-            Some(Order::Move { field_slot, .. }) => field_slot,
+            Some(Order::Move { field, .. }) => field.slot,
             other => panic!("worker is not moving: {other:?}"),
         })
         .collect();

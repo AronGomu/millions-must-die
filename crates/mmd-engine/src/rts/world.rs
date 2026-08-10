@@ -21,7 +21,8 @@ use super::entity::{
 };
 use super::orders::{
     ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, building_approach_cell, dist2,
-    drop_off_approach_cell, node_cell, rect_distance, step_admissible, unit_speed,
+    drop_off_approach_cell, nearest_unblocked_cell, node_cell, rect_distance, step_admissible,
+    unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
 use super::selection::{Pick, Selection, box_select, pick_at};
@@ -146,11 +147,20 @@ impl RtsWorld {
         let mut supply = Supply::new(rts.start_supply_cap);
         supply.add_used(WORKER_SUPPLY_COST * worker_count);
 
-        let nav = FieldPool::new(
+        let mut nav = FieldPool::new(
             scenario.width(),
             scenario.height(),
             scenario.obstacle_cells(),
         )?;
+
+        // The seeded HQ is a *finished* building, and a finished building
+        // blocks navigation — the rule `construction` applies to every
+        // building the player finishes. Stamping it here is what makes that
+        // rule true of the one building that exists at t=0, instead of leaving
+        // fields routing straight through the base.
+        for cell in footprint_cells(hq_pos, BuildingKind::Hq.footprint_cells()) {
+            nav.set_blocked(cell, true);
+        }
 
         // Opens on the base: the HQ's footprint centre is what a player wants
         // to see on frame 1, not the map's geometric middle.
@@ -316,10 +326,10 @@ impl RtsWorld {
         let Some(slot) = self.orderable_slot(id) else {
             return false;
         };
-        let Ok(field_slot) = self.nav.acquire(dest) else {
+        let Ok(field) = self.nav.acquire(dest) else {
             return false;
         };
-        self.orders.set(slot, Order::Move { dest, field_slot });
+        self.orders.set(slot, Order::Move { dest, field });
         true
     }
 
@@ -328,13 +338,13 @@ impl RtsWorld {
     /// This is the API the input layer uses. Issuing N single orders would
     /// acquire N times, and on a full pool that is N rebuilds of the same field.
     pub fn order_move_group(&mut self, ids: &[EntityId], dest: Cell) -> usize {
-        let Ok(field_slot) = self.nav.acquire(dest) else {
+        let Ok(field) = self.nav.acquire(dest) else {
             return 0;
         };
         let mut ordered = 0;
         for &id in ids {
             if let Some(slot) = self.orderable_slot(id) {
-                self.orders.set(slot, Order::Move { dest, field_slot });
+                self.orders.set(slot, Order::Move { dest, field });
                 ordered += 1;
             }
         }
@@ -393,7 +403,7 @@ impl RtsWorld {
             return 0;
         }
         let cell = node_cell(self.entities.position(node_slot));
-        let Ok(field_slot) = self.nav.acquire(cell) else {
+        let Ok(field) = self.nav.acquire(cell) else {
             return 0;
         };
         let mut ordered = 0;
@@ -403,7 +413,7 @@ impl RtsWorld {
                     slot,
                     Order::Gather {
                         node,
-                        phase: GatherPhase::ToNode { field_slot },
+                        phase: GatherPhase::ToNode { field },
                     },
                 );
                 ordered += 1;
@@ -464,7 +474,7 @@ impl RtsWorld {
     ///
     /// On success: debits the cost, spawns the site with
     /// `set_progress(0, build_ticks(kind))`, orders `builder` to
-    /// `Order::Build { site, field_slot }`, clears the ghost, and returns the
+    /// `Order::Build { site, field }`, clears the ghost, and returns the
     /// site's id. The footprint is **not** stamped into navigation yet — a site
     /// is walkable until it finishes, which is what lets the builder stand in it.
     pub fn confirm_placement(
@@ -579,10 +589,10 @@ impl RtsWorld {
         let width = self.scenario.width();
         let height = self.scenario.height();
         let cell = building_approach_cell(&self.entities, self.nav.blocked(), width, height, site);
-        let Ok(field_slot) = self.nav.acquire(cell) else {
+        let Ok(field) = self.nav.acquire(cell) else {
             return false;
         };
-        self.orders.set(slot, Order::Build { site, field_slot });
+        self.orders.set(slot, Order::Build { site, field });
         true
     }
 
@@ -819,6 +829,40 @@ impl RtsWorld {
                 self.orders.clear(slot);
             }
         }
+
+        if !self.finished.is_empty() {
+            self.push_units_off_blocked_cells();
+        }
+    }
+
+    /// Move every unit standing in a blocked cell to the nearest open one.
+    ///
+    /// Runs only when a building finished this tick, which is the only thing
+    /// that blocks a cell during play. A unit is not an obstruction to
+    /// placement (see [`super::build::placement_valid`]), so a building may
+    /// well finish on top of one — and a unit left inside the footprint is
+    /// bricked: every field's descent vector at a blocked cell is zero, so it
+    /// could never walk out, and no order given to it could ever be honoured.
+    fn push_units_off_blocked_cells(&mut self) {
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            if !matches!(self.entities.kind(slot), EntityKind::Unit(_)) {
+                continue;
+            }
+            let cell = node_cell(self.entities.position(slot));
+            if cell.x >= width || cell.y >= height {
+                continue;
+            }
+            if !self.nav.blocked()[(cell.x + cell.y * width) as usize] {
+                continue;
+            }
+            if let Some(open) = nearest_unblocked_cell(self.nav.blocked(), width, height, cell) {
+                self.entities
+                    .set_position(slot, [open.x as f32 + 0.5, open.y as f32 + 0.5]);
+            }
+        }
     }
 
     /// System 4: advance every finished building's production queue by one
@@ -968,14 +1012,11 @@ impl RtsWorld {
                                     d,
                                 );
                                 match self.nav.acquire(cell) {
-                                    Ok(fs) => self.orders.set(
+                                    Ok(field) => self.orders.set(
                                         slot,
                                         Order::Gather {
                                             node,
-                                            phase: GatherPhase::Returning {
-                                                drop_off: d,
-                                                field_slot: fs,
-                                            },
+                                            phase: GatherPhase::Returning { drop_off: d, field },
                                         },
                                     ),
                                     Err(_) => self.orders.clear(slot),
@@ -1016,11 +1057,11 @@ impl RtsWorld {
                             continue;
                         }
                         match self.nav.acquire(node_cell(node_pos)) {
-                            Ok(fs) => self.orders.set(
+                            Ok(field) => self.orders.set(
                                 slot,
                                 Order::Gather {
                                     node,
-                                    phase: GatherPhase::ToNode { field_slot: fs },
+                                    phase: GatherPhase::ToNode { field },
                                 },
                             ),
                             Err(_) => self.orders.clear(slot),
@@ -1037,6 +1078,9 @@ impl RtsWorld {
     /// The step obeys the same admissibility rule the horde walk obeys
     /// ([`super::orders::step_admissible`]), so a unit can never be placed in a
     /// walkable-but-unreachable pocket it could not then leave.
+    ///
+    /// Every order re-checks that the field it cached is still the field it
+    /// asked for, and re-acquires when it is not — see step 2 below.
     fn movement(&mut self) {
         let width = self.scenario.width();
         let height = self.scenario.height();
@@ -1047,23 +1091,19 @@ impl RtsWorld {
                 continue;
             };
             let order = self.orders.get(slot);
-            let (dest, field_slot) = match order {
-                Order::Move { dest, field_slot } => (dest, field_slot),
+            let (dest, field) = match order {
+                Order::Move { dest, field } => (dest, field),
                 Order::Gather {
                     node,
-                    phase: GatherPhase::ToNode { field_slot },
+                    phase: GatherPhase::ToNode { field },
                 } => {
                     let Some(node_slot) = self.entities.slot(node) else {
                         continue;
                     };
-                    (node_cell(self.entities.position(node_slot)), field_slot)
+                    (node_cell(self.entities.position(node_slot)), field)
                 }
                 Order::Gather {
-                    phase:
-                        GatherPhase::Returning {
-                            drop_off,
-                            field_slot,
-                        },
+                    phase: GatherPhase::Returning { drop_off, field },
                     ..
                 } => {
                     if self.entities.slot(drop_off).is_none() {
@@ -1077,10 +1117,10 @@ impl RtsWorld {
                             height,
                             drop_off,
                         ),
-                        field_slot,
+                        field,
                     )
                 }
-                Order::Build { site, field_slot } => {
+                Order::Build { site, field } => {
                     let Some(site_slot) = self.entities.slot(site) else {
                         continue;
                     };
@@ -1106,7 +1146,7 @@ impl RtsWorld {
                             height,
                             site,
                         ),
-                        field_slot,
+                        field,
                     )
                 }
                 // Idle, and Mining (a mining worker stands still).
@@ -1134,24 +1174,54 @@ impl RtsWorld {
                 continue;
             }
 
-            // 2. Sample the field at the unit's own cell.
+            // 2. Re-path if the cached field is no longer the field this order
+            //    asked for.
+            //
+            //    A slot is rebuilt for someone else's destination on an LRU
+            //    miss, and a building finishing drops every key, so the handle
+            //    an order cached may now name a field to somewhere else — or
+            //    the same place across a wall that did not exist when it was
+            //    built. Riding one is how a unit walks into a building that
+            //    went up ten seconds ago, and how an order that is not
+            //    `Order::Move` (which at least stops) hangs forever.
+            let field = if self.nav.is_current(field, dest) {
+                field
+            } else {
+                match self.nav.acquire(dest) {
+                    Ok(fresh) => {
+                        self.orders.set(slot, order.with_field(fresh));
+                        fresh
+                    }
+                    // No field can be built to `dest` any more — it is off the
+                    // grid or has been built over. Stop, rather than keep an
+                    // order alive that nothing can finish.
+                    Err(_) => {
+                        self.orders.clear(slot);
+                        continue;
+                    }
+                }
+            };
+
+            // 3. Sample the field at the unit's own cell.
             let cx = p[0].floor() as i32;
             let cy = p[1].floor() as i32;
             if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
                 continue;
             }
-            let (vx, vy) = self.nav.field(field_slot).vector_at(cx as u32, cy as u32);
+            let (vx, vy) = self.nav.field(field.slot).vector_at(cx as u32, cy as u32);
             if vx == 0.0 && vy == 0.0 {
-                // Unreachable, or already on the destination cell: stop rather
-                // than spin on an order that can never complete. Only for
-                // `Order::Move`, for the same reason arrival above is.
-                if is_move_order {
-                    self.orders.clear(slot);
-                }
+                // The field is the live one and it still bottoms out here, so
+                // `dest` is genuinely unreachable from this cell. Stop rather
+                // than spin on an order that can never complete — for every
+                // order kind, not just `Order::Move`: the reach tests above
+                // (the gather system's, and `BUILD_REACH_CELLS`) have already
+                // taken the "standing on it" case out, so what is left here is
+                // no route.
+                self.orders.clear(slot);
                 continue;
             }
 
-            // 3. Step, with the horde's admissibility rule.
+            // 4. Step, with the horde's admissibility rule.
             let step = unit_speed(kind) * TICK_DT;
             let nx = p[0] + vx * step;
             let ny = p[1] + vy * step;

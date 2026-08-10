@@ -4,6 +4,8 @@
 1:move:960,540
 5:drag:860,530,950,600         # box-select the six starting workers
 10:rclick:920,458              # send them all to the crystal node
+12:lclick:916,568              # re-select one of them (spawn cell 167,178)
+16:rclick:1072,606             # put that one on the gas node (196,168) instead
 
 # --- Depot ---
 60:lclick:896,558              # select one worker (spawn cell 162,178)
@@ -24,6 +26,10 @@
 # --- a Soldier from the Barracks ---
 900:lclick:840,542             # select the finished Barracks
 905:key:s                      # queue a Soldier
+
+# --- look away from the base ---
+1000:pan:right                 # hold the right arrow
+1300:panup:right               # release it
 
 1400:key:f1                    # overlay on for the final frames
 1450:key:esc

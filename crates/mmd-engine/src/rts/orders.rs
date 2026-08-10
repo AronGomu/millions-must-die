@@ -2,6 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::nav::field_pool::FieldRef;
 use crate::scenario::Cell;
 
 use super::entity::{EntityId, EntityStore, MAX_ENTITIES, UnitKind};
@@ -36,11 +37,11 @@ pub const ARRIVAL_RADIUS_CELLS: f32 = 1.5;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatherPhase {
     /// Walking to the node.
-    ToNode { field_slot: u8 },
+    ToNode { field: FieldRef },
     /// Standing at the node, filling up. `ticks_left` counts down to zero.
     Mining { ticks_left: u32 },
     /// Walking back to `drop_off` with a full load.
-    Returning { drop_off: EntityId, field_slot: u8 },
+    Returning { drop_off: EntityId, field: FieldRef },
 }
 
 impl GatherPhase {
@@ -60,10 +61,10 @@ impl GatherPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
     Idle,
-    /// Walk to `dest` down the field in `field_slot`.
+    /// Walk to `dest` down the field `field` names.
     Move {
         dest: Cell,
-        field_slot: u8,
+        field: FieldRef,
     },
     /// Mine `node` and haul to the nearest drop-off, forever.
     Gather {
@@ -73,7 +74,7 @@ pub enum Order {
     /// Walk to `site` and attend it until it finishes.
     Build {
         site: EntityId,
-        field_slot: u8,
+        field: FieldRef,
     },
 }
 
@@ -85,6 +86,34 @@ impl Order {
             Self::Move { .. } => 1,
             Self::Gather { .. } => 2,
             Self::Build { .. } => 3,
+        }
+    }
+
+    /// The same order with its cached field handle replaced.
+    ///
+    /// [`Self::Idle`] and [`GatherPhase::Mining`] hold no handle — nothing is
+    /// walking — and come back unchanged. This is how the mover writes a
+    /// re-acquired field back into a live order without having to restate the
+    /// order's own payload at each of the four places that carry one.
+    pub fn with_field(self, field: FieldRef) -> Self {
+        match self {
+            Self::Move { dest, .. } => Self::Move { dest, field },
+            Self::Build { site, .. } => Self::Build { site, field },
+            Self::Gather {
+                node,
+                phase: GatherPhase::ToNode { .. },
+            } => Self::Gather {
+                node,
+                phase: GatherPhase::ToNode { field },
+            },
+            Self::Gather {
+                node,
+                phase: GatherPhase::Returning { drop_off, .. },
+            } => Self::Gather {
+                node,
+                phase: GatherPhase::Returning { drop_off, field },
+            },
+            other => other,
         }
     }
 }
@@ -133,43 +162,52 @@ impl OrderTable {
                     h.update(0u32.to_le_bytes());
                     h.update(0u32.to_le_bytes());
                     h.update([0u8]);
+                    h.update(0u64.to_le_bytes());
                 }
-                Order::Move { dest, field_slot } => {
+                Order::Move { dest, field } => {
                     h.update(dest.x.to_le_bytes());
                     h.update(dest.y.to_le_bytes());
-                    h.update([field_slot]);
+                    hash_field(h, field);
                 }
                 Order::Gather { node, phase } => {
                     h.update(node.index.to_le_bytes());
                     h.update(node.generation.to_le_bytes());
                     h.update([phase.tag()]);
                     match phase {
-                        GatherPhase::ToNode { field_slot } => {
-                            h.update([field_slot]);
+                        GatherPhase::ToNode { field } => {
+                            hash_field(h, field);
                             h.update(0u32.to_le_bytes());
                         }
                         GatherPhase::Mining { ticks_left } => {
                             h.update([0u8]);
+                            h.update(0u64.to_le_bytes());
                             h.update(ticks_left.to_le_bytes());
                         }
-                        GatherPhase::Returning {
-                            drop_off,
-                            field_slot,
-                        } => {
-                            h.update([field_slot]);
+                        GatherPhase::Returning { drop_off, field } => {
+                            hash_field(h, field);
                             h.update(drop_off.index.to_le_bytes());
                             h.update(drop_off.generation.to_le_bytes());
                         }
                     }
                 }
-                Order::Build { site, field_slot } => {
+                Order::Build { site, field } => {
                     h.update(site.index.to_le_bytes());
                     h.update(site.generation.to_le_bytes());
-                    h.update([field_slot]);
+                    hash_field(h, field);
                 }
             }
         }
     }
+}
+
+/// A cached field handle's contribution to the state hash: slot then epoch.
+///
+/// The epoch is in there because it is state — two orders on the same slot,
+/// one of which has noticed the slot was rebuilt under it and one of which has
+/// not, are not the same world.
+fn hash_field(h: &mut Sha256, field: FieldRef) {
+    h.update([field.slot]);
+    h.update(field.epoch.to_le_bytes());
 }
 
 /// Squared cell-space distance.
@@ -277,6 +315,58 @@ pub(crate) fn drop_off_approach_cell(
     id: EntityId,
 ) -> Cell {
     building_approach_cell(store, blocked, width, height, id)
+}
+
+/// The nearest unblocked, in-bounds cell to `from`, or `None` when the grid
+/// has no unblocked cell.
+///
+/// Scanned as squares of growing Chebyshev radius, and inside a ring in a
+/// fixed row-major order — "nearest" by float distance would make the choice
+/// depend on a float comparison and stop the state hash reproducing across a
+/// refactor, exactly as [`building_approach_cell`] argues.
+///
+/// This is how a unit gets out of a cell that was stamped blocked underneath
+/// it: every field's descent vector at a blocked cell is zero, so a unit left
+/// standing in one could never walk out again.
+pub(crate) fn nearest_unblocked_cell(
+    blocked: &[bool],
+    width: u32,
+    height: u32,
+    from: Cell,
+) -> Option<Cell> {
+    // Every in-bounds cell is within this Chebyshev radius. Each ring is
+    // visited in row-major order: top row, left/right sides, bottom row.
+    let max_radius = width.max(height);
+    for r in 0..=max_radius {
+        let min_x = from.x as i64 - r as i64;
+        let max_x = from.x as i64 + r as i64;
+        let min_y = from.y as i64 - r as i64;
+        let max_y = from.y as i64 + r as i64;
+
+        for x in min_x..=max_x {
+            if let Some(c) = ring_try(x, min_y, width, height, blocked) {
+                return Some(c);
+            }
+        }
+        for y in (min_y + 1)..max_y {
+            if let Some(c) = ring_try(min_x, y, width, height, blocked) {
+                return Some(c);
+            }
+            if max_x != min_x
+                && let Some(c) = ring_try(max_x, y, width, height, blocked)
+            {
+                return Some(c);
+            }
+        }
+        if max_y != min_y {
+            for x in min_x..=max_x {
+                if let Some(c) = ring_try(x, max_y, width, height, blocked) {
+                    return Some(c);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The cell a node occupies.
@@ -437,6 +527,30 @@ mod tests {
             "approach cell {a:?} must lie outside the footprint"
         );
         assert!(!blocked[(a.x + a.y * W) as usize]);
+    }
+
+    #[test]
+    fn the_nearest_open_cell_uses_a_deterministic_row_major_tie_break() {
+        let mut blocked = vec![true; 7 * 7];
+        let first = Cell { x: 2, y: 2 };
+        let tied_later = Cell { x: 4, y: 2 };
+        blocked[(first.x + first.y * 7) as usize] = false;
+        blocked[(tied_later.x + tied_later.y * 7) as usize] = false;
+
+        assert_eq!(
+            nearest_unblocked_cell(&blocked, 7, 7, Cell { x: 3, y: 3 }),
+            Some(first)
+        );
+    }
+
+    #[test]
+    fn the_nearest_open_cell_searches_the_whole_grid() {
+        let mut blocked = vec![true; 7 * 7];
+        blocked[6 + 6 * 7] = false;
+        assert_eq!(
+            nearest_unblocked_cell(&blocked, 7, 7, Cell { x: 0, y: 0 }),
+            Some(Cell { x: 6, y: 6 })
+        );
     }
 
     #[test]

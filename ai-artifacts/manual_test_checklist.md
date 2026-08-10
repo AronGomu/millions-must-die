@@ -1206,10 +1206,11 @@ directly; everything below the app layer (T6-T13) is unchanged.
 ## T15 end-to-end-acceptance
 
 The ticket that makes "the phase-1 slice works" falsifiable. One tracked
-script, `assets/scenarios/rts_acceptance_v1.script`, drives select → gather →
-build → produce, and is asserted twice: `crates/mmd-engine/tests/rts_acceptance.rs`
-walks the same sequence through `RtsWorld` and checks fourteen milestones by
-world state, and `tests/rts_acceptance.rs` runs the shipped binary on the
+script, `assets/scenarios/rts_acceptance_v1.script`, drives select → gather
+crystal and gas → build → produce → pan, and is asserted twice:
+`crates/mmd-engine/tests/rts_acceptance.rs` walks the same sequence through
+`RtsWorld` and checks sixteen milestones by world state, and
+`tests/rts_acceptance.rs` runs the shipped binary on the
 script and reads the milestones off the exit line. New CLI surface:
 `--inject-input-file <PATH>` (same grammar as `--inject-input`, plus newline
 separators and `#` comments; the two flags are mutually exclusive at the clap
@@ -1218,7 +1219,7 @@ command as its last line.
 
 Everything automatable is green and was run on this tree, not quoted:
 `cargo fmt --all -- --check`; `cargo test -p mmd-engine --test rts_acceptance`
-(3/3); `cargo test --test rts_acceptance` (10/10);
+(3/3); `cargo test --test rts_acceptance` (12/12);
 `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` (every block ok, 0 failed —
 so the GPU cases really ran rather than skipping, including `gpu_smoke`'s 13);
 `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` (also green;
@@ -1230,8 +1231,8 @@ run, so treat this variable as unreliable rather than as a contract);
 --agents 5000 --frames 300` still exiting on
 `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
 byte for byte, plus both collision scenes at exit 0; the acceptance run itself
-exiting 0 on `tick=1449 frames=1449 quit=true crystal=86 gas=50 supply=9/20
-units=8 buildings=3 nodes=10`; an empty
+exiting 0 on `tick=1449 frames=1449 quit=true crystal=54 gas=74 supply=9/20
+units=8 buildings=3 nodes=10 camera=181.00092,150.99908`; an empty
 `git diff --stat main -- lab/goldens/ assets/scenarios/fixtures/
 assets/sprites/generated/atlas_*.png assets/sprites/generated/manifest.json`;
 `host_offscreen_matches_tracked_golden` passing **without**
@@ -1259,18 +1260,20 @@ on a real window.
 - [ ] `cargo run -- rts --frames 1600 --inject-input-file
       assets/scenarios/rts_acceptance_v1.script` — watch the whole run in a
       real window without touching the mouse or keyboard: six workers get
-      box-selected, walk to the crystal node north-west of the base and start
-      cycling loads back to the HQ; a Depot goes up south-east of the base; a
-      new Worker walks out of the HQ; a Barracks goes up west of the base; a
-      Soldier walks out of the Barracks. The run quits itself and exits `0`
-      (`echo $?`).
+      box-selected, five walk to the crystal node north-west of the base and
+      one walks to the gas node east of the base; both resource types bank; a
+      Depot goes up south-east of the base; a new Worker walks out of the HQ;
+      a Barracks goes up west of the base; a Soldier walks out of the Barracks;
+      finally the camera pans right, away from the base. The run quits itself
+      and exits `0` (`echo $?`).
 - [ ] Same run, the last ~50 frames: one `rts: hud tick=… crystal=… gas=…
       supply=…/… sel=… ghost=none` line per frame appears in the terminal (the
       script presses `F1` at frame 1400). The final `rts: clean exit …` line
-      reads `units=8 buildings=3 supply=9/20` and a positive `crystal=`.
+      reads `units=8 buildings=3 supply=9/20`, a positive `crystal=`,
+      `gas=74`, and a `camera=` centre displaced from `166,166`.
 - [ ] Open `assets/scenarios/rts_acceptance_v1.script` in an editor: every
       entry is `FRAME:KIND[:ARGS]`, the comments explain what each block is
-      for, and every coordinate in it is one of the eight documented in
+      for, and every coordinate in it is one of the ten documented in
       `crates/mmd-engine/tests/rts_acceptance.rs`'s `SCRIPT_COORDS` table.
       Change one coordinate by hand and re-run `cargo test -p mmd-engine
       --test rts_acceptance` — `the_script_coordinates_hit_what_they_name`
@@ -1331,7 +1334,8 @@ commands (`4 zombie + 4 rts + 1 ui`); `cargo run -- run --agents 5000 --frames
 300` still exiting on
 `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`;
 both collision scenes at exit 0; the acceptance run exiting 0 on `tick=1449
-frames=1449 crystal=86 gas=50 supply=9/20 units=8 buildings=3 nodes=10`;
+frames=1449 crystal=54 gas=74 supply=9/20 units=8 buildings=3 nodes=10
+camera=181.00092,150.99908`;
 `golden_frame_matches` passing **without** `MMD_UPDATE_GOLDEN`; an empty
 `git diff --stat main -- lab/goldens/ assets/scenarios/fixtures/
 assets/sprites/generated/atlas_*.png assets/sprites/generated/manifest.json`;
@@ -1391,3 +1395,28 @@ What is left needs eyes, a browser, or a judgement no test can make.
       side by side. They must agree with each other and with the close doc on
       what phase 1 claims — especially that performance is unmeasured and that
       nothing cross-platform was verified.
+
+## Post-review fixes
+
+Review found cached flow-field slots surviving obstacle-mask invalidation and
+LRU reuse, units stranded inside newly finished footprints, an unstamped
+starting HQ, and headline acceptance coverage that did not prove gas income or
+camera movement. Automated regressions now cover all five failures; the tracked
+script gathers both resource kinds and pans before exit.
+
+- [ ] Run `cargo run -- rts --frames 1600 --inject-input-file
+      assets/scenarios/rts_acceptance_v1.script` in a window. Confirm five
+      workers cycle crystal, one cycles gas, both balances rise before their
+      purchases, and the camera pans right from the base during frames
+      1000–1300. Final exit line must report `gas` above `50` and a `camera`
+      centre different from `166,166`.
+- [ ] During that run, watch finished HQ and Depot footprints. Workers must
+      route around finished buildings while gathering or moving; none may park
+      against a wall with a live order.
+- [ ] In an interactive run, place a Depot over a worker, let construction
+      finish, then order that worker onto open ground. Worker must appear on
+      nearest open cell and obey the order instead of remaining inside the
+      blocked footprint.
+- [ ] Select workers on opposite sides of starting HQ and send them through the
+      base. Paths must go around its 12×12 footprint while gatherers still reach
+      its drop-off ring.

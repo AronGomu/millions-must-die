@@ -75,6 +75,20 @@ impl Cli {
             .unwrap_or_else(|e| panic!("{self}\n`{key}={raw}` is not a number: {e}"))
     }
 
+    /// A `key=<x>,<y>` field of the exit line, parsed as a pair of floats.
+    fn exit_pair(&self, key: &str) -> [f32; 2] {
+        let raw = self.exit_field(key);
+        let mut parts = raw.split(',').map(|n| {
+            n.parse::<f32>()
+                .unwrap_or_else(|e| panic!("{self}\n`{key}={raw}` is not a pair of numbers: {e}"))
+        });
+        let (x, y) = (parts.next(), parts.next());
+        match (x, y) {
+            (Some(x), Some(y)) => [x, y],
+            _ => panic!("{self}\n`{key}={raw}` is not a pair"),
+        }
+    }
+
     fn final_hash(&self) -> String {
         let hash = self.exit_field("hash").to_string();
         assert_eq!(hash.len(), 64, "{self}\nstate hash is not 32 bytes of hex");
@@ -346,6 +360,52 @@ fn the_acceptance_run_earns_crystal() {
     assert!(
         cli.exit_u32("crystal") > 0,
         "{cli}\ncrystal is 0 after spending 350 of a starting 300 — that cannot happen"
+    );
+}
+
+/// The scene starts with 100 gas and this run spends 25 on the Barracks and
+/// 25 on the Soldier. Ending above 50 is therefore only possible if a worker
+/// actually worked a gas node: an engine where gas gathering is broken lands
+/// exactly on 50.
+#[test]
+fn the_acceptance_run_earns_gas() {
+    let Some(cli) = shared_acceptance_run("the_acceptance_run_earns_gas") else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_u32("buildings"),
+        3,
+        "{cli}\nthe run did not buy the Barracks, so its gas balance proves no income"
+    );
+    assert!(
+        cli.exit_u32("units") >= 8,
+        "{cli}\nthe run did not buy the Soldier, so its gas balance proves no income"
+    );
+    let gas = cli.exit_u32("gas");
+    assert!(
+        gas > 50,
+        "{cli}\ngas is {gas} after spending 50 of a starting 100 — nothing was \
+         ever gathered from a gas node"
+    );
+}
+
+/// The script holds an arrow key for 300 frames. The camera must be somewhere
+/// else at the end of the run than the base it opened on.
+#[test]
+fn the_acceptance_run_pans_the_camera() {
+    let Some(cli) = shared_acceptance_run("the_acceptance_run_pans_the_camera") else {
+        return;
+    };
+    cli.assert_success();
+    let camera = cli.exit_pair("camera");
+    // The scene opens centred on the HQ's footprint centre, (166, 166), and
+    // the script's held `right` is a *screen*-space direction: on this
+    // projection it moves the centre toward a larger `cell.x - cell.y`.
+    assert!(
+        camera[0] > 166.0 && camera[1] < 166.0,
+        "{cli}\nthe camera centre is {camera:?}; the run opened on (166, 166) and \
+         held the right arrow for 300 frames without moving"
     );
 }
 

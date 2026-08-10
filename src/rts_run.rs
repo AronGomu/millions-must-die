@@ -16,7 +16,8 @@
 //! rts: released window                                                              (b)
 //! rts: clean exit mode=<offscreen|window> backend=<b> tick=<t> frames=<n> \
 //!      hash=<64 hex> quit=<bool> paused=<bool> crystal=<n> gas=<n> \
-//!      supply=<used>/<cap> units=<n> buildings=<n> nodes=<n> selected=<n>
+//!      supply=<used>/<cap> units=<n> buildings=<n> nodes=<n> selected=<n> \
+//!      camera=<cx>,<cy>
 //! ```
 //!
 //! - (a) absent when a scripted quit lands on frame 1.
@@ -714,10 +715,15 @@ fn finish(
     let res = world.resources();
     let supply = world.supply();
     let (units, buildings, nodes) = count_entities(world);
+    // Cell-space camera centre, `x,y`. In the exit line because it is the only
+    // way a scripted run can prove it panned: the camera is world state, and a
+    // run that never looked away from its own base did not exercise it.
+    let center = world.camera().center();
 
     println!(
         "rts: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} \
-         paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={}",
+         paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
+         camera={},{}",
         world.tick_index(),
         state.frames,
         hex::encode(state.last_hash),
@@ -731,6 +737,8 @@ fn finish(
         buildings,
         nodes,
         world.selection().len(),
+        center[0],
+        center[1],
     );
     Ok(())
 }

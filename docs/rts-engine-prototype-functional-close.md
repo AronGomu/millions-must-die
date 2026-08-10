@@ -8,7 +8,8 @@ units you produce — all on a horde-free scene, without disturbing anything
 phase 0 froze. It can: every entry in the
 [system → test map](#system--test-map) below is backed by named automated tests
 that run on the merge gate, and one tracked script drives the whole loop end to
-end through both the engine and the shipped binary.
+end through both the engine and the shipped binary, including crystal and gas
+income plus a held camera pan away from the starting base.
 
 Phase 1 did **not** ask how fast any of it runs, and this document claims
 nothing about that. Performance stays retired to a later optimization phase,
@@ -42,7 +43,7 @@ representative names are in the map below.
 | A node pays out exactly what is carried, empties, and stays as depleted scenery | proven — `crates/mmd-engine/tests/rts_economy.rs` |
 | A building is placed on validated ground, is walkable as a site, advances only while attended, blocks navigation when finished, and refunds in full when cancelled | proven — `crates/mmd-engine/tests/rts_build.rs` |
 | Production charges resources and *reserves* supply at enqueue, completes at its documented tick, spawns beside its building and walks to a rally point | proven — `crates/mmd-engine/tests/rts_production.rs` |
-| The whole loop — select, gather, build, produce — runs from one tracked script, through the engine and through the shipped binary | proven — `crates/mmd-engine/tests/rts_acceptance.rs`, `tests/rts_acceptance.rs`, both on the merge gate |
+| The whole loop — select, gather both resources, build, produce and pan — runs from one tracked script, through the engine and through the shipped binary | proven — `crates/mmd-engine/tests/rts_acceptance.rs`, `tests/rts_acceptance.rs`, both on the merge gate |
 | An RTS tick allocates nothing after warmup | proven — `crates/mmd-engine/tests/frame_allocations.rs`, one documented exception below |
 | The RTS world reproduces itself on one host and one binary | proven — hash-equality tests, with the narrowing recorded under Known gaps |
 | Phase 0 is undisturbed: the horde's exit-line hash, the render golden, `SpriteInstance`'s 48 bytes, `shaders/sprite.hlsl` and the `atlas_count/direction_count/frame_count` contract | proven — no phase-0 test was renamed or removed, the phase-0 suites gained phase-1 cases only, and `tests/cli_contract.rs` is byte-identical to its phase-0 self |
@@ -86,15 +87,16 @@ checked, not merely written.
 | economy — nodes, cargo, drop-offs | `crates/mmd-engine/tests/rts_economy.rs` | `the_node_loses_exactly_the_carried_amount`, `a_partial_node_pays_out_what_is_left`, `an_emptied_node_ends_the_order`, `cargo_is_cleared_on_delivery`, `nearest_drop_off_prefers_the_closer_building`, `nearest_drop_off_ties_go_to_the_lower_slot`, `no_drop_off_stops_the_worker_holding_cargo`, `the_economy_is_reproducible` |
 | building — placement, attended construction, cancel | `crates/mmd-engine/tests/rts_build.rs` | `costs_and_times_are_the_published_constants`, `placement_rejects_terrain`, `placement_rejects_overlap_with_a_site`, `a_unit_standing_there_does_not_block_placement`, `confirm_debits_the_cost`, `a_site_is_walkable`, `construction_does_not_advance_without_a_worker`, `construction_advances_one_tick_per_tick`, `a_second_worker_does_not_speed_it_up`, `a_depot_finishes_in_its_documented_time`, `a_finished_depot_blocks_navigation`, `finishing_invalidates_the_cached_fields`, `a_finished_depot_raises_the_supply_cap`, `the_supply_cap_is_clamped_at_the_pillar`, `cancel_refunds_the_full_cost`, `a_gatherer_still_delivers_after_the_hq_is_stamped` |
 | unit production — queue, supply, rally | `crates/mmd-engine/tests/rts_production.rs` | `the_build_tree_is_hq_worker_and_barracks_soldier`, `queue_advance_completes_at_the_documented_tick`, `queueing_cannot_exceed_the_cap`, `enqueue_debits_immediately`, `enqueue_reserves_supply_immediately`, `enqueue_rejects_over_supply`, `a_supply_blocked_enqueue_does_not_charge`, `supply_used_is_recomputed_not_incremented`, `supply_used_counts_reservations`, `a_worker_appears_after_its_build_time`, `a_produced_unit_spawns_beside_its_building`, `a_produced_unit_walks_to_the_rally`, `production_stops_when_the_store_is_full`, `cancel_queued_refunds_and_releases`, `a_barracks_can_be_queued_the_tick_it_finishes` |
-| entity store, orders and movement | `crates/mmd-engine/tests/rts_world.rs` | `a_stale_id_does_not_resolve_to_its_replacement`, `the_free_list_is_lifo`, `the_store_refuses_to_overfill`, `every_column_is_reserved_at_construction`, `world_seeds_the_scene`, `a_phase0_scenario_is_refused`, `a_unit_reaches_its_destination`, `a_unit_walks_around_an_obstacle`, `a_unit_never_enters_a_blocked_cell`, `an_unreachable_destination_clears_the_order`, `arrival_is_measured_from_the_cell_centre`, `a_group_sharing_a_destination_shares_a_field`, `movement_is_reproducible`, `state_hash_is_reproducible_across_worlds` |
-| navigation — the flow-field pool | `crates/mmd-engine/tests/nav_pool.rs` | `rebuild_in_place_matches_build`, `pool_hit_does_not_rebuild`, `pool_holds_eight_distinct_destinations`, `pool_evicts_the_least_recently_used`, `eviction_ties_prefer_the_lowest_slot`, `pool_rejects_a_blocked_destination`, `set_blocked_invalidates_every_slot`, `set_blocked_changes_the_walk`, `a_cached_acquire_allocates_nothing`, `a_miss_may_grow_scratch_only_once` |
+| entity store, orders and movement | `crates/mmd-engine/tests/rts_world.rs` | `a_stale_id_does_not_resolve_to_its_replacement`, `the_free_list_is_lifo`, `the_store_refuses_to_overfill`, `every_column_is_reserved_at_construction`, `world_seeds_the_scene`, `the_seeded_hq_is_stamped_into_navigation`, `a_phase0_scenario_is_refused`, `a_unit_reaches_its_destination`, `a_unit_walks_around_an_obstacle`, `a_unit_never_enters_a_blocked_cell`, `an_unreachable_destination_clears_the_order`, `arrival_is_measured_from_the_cell_centre`, `a_group_sharing_a_destination_shares_a_field`, `movement_is_reproducible`, `state_hash_is_reproducible_across_worlds` |
+| navigation — the flow-field pool | `crates/mmd-engine/tests/nav_pool.rs` | `rebuild_in_place_matches_build`, `pool_hit_does_not_rebuild`, `pool_holds_eight_distinct_destinations`, `pool_evicts_the_least_recently_used`, `eviction_ties_prefer_the_lowest_slot`, `pool_rejects_a_blocked_destination`, `a_refused_acquire_preserves_every_cached_handle`, `set_blocked_invalidates_every_slot`, `set_blocked_stops_every_handle_being_current`, `set_blocked_changes_the_walk`, `an_evicted_slot_stops_being_current`, `a_cached_acquire_allocates_nothing`, `a_miss_may_grow_scratch_only_once` |
+| navigation staleness — live RTS orders | `crates/mmd-engine/tests/rts_nav_staleness.rs` | `a_walking_unit_re_paths_when_a_building_blocks_its_route`, `an_evicted_field_does_not_hang_a_gather`, `an_evicted_field_does_not_hang_a_build`, `a_unit_caught_in_a_finished_footprint_escapes`, `a_unit_caught_in_a_finished_footprint_can_still_gather` |
 | scenario family — the horde-free RTS scene | `crates/mmd-engine/tests/scenario_contract.rs` | `rts_scene_loads_verified`, `rts_scene_is_horde_free`, `rts_scene_geometry_is_locked`, `rts_scene_carries_its_block`, `a_nonzero_population_is_rejected_for_the_rts_family`, `a_nonzero_stretch_is_rejected_for_the_rts_family`, `an_rts_scene_without_a_block_is_rejected`, `a_phase0_family_with_an_rts_block_is_rejected`, `every_phase0_scene_has_no_rts_block`, `the_renderer_contract_still_binds_the_rts_family` |
 | UI text — the bitmap font | `crates/mmd-engine/tests/ui_text.rs` | `glyph_rect_tiles_the_sheet_without_gaps`, `glyph_rects_are_unique_per_code_point`, `no_glyph_can_be_mistaken_for_a_ring`, `push_text_emits_one_instance_per_visible_glyph`, `space_advances_without_an_instance`, `lowercase_is_uppercased_not_boxed`, `lowercase_cell_is_the_fallback_box`, `begin_text_group_sets_the_font_slot`, `push_text_does_not_allocate_when_reserved` |
 | world render packing | `crates/mmd-engine/tests/rts_pack.rs` | `frame_new_reserves_the_documented_groups`, `every_entity_packs_exactly_once`, `nodes_and_buildings_share_the_building_slot`, `workers_land_in_the_worker_slot`, `a_units_uv_is_its_dir_and_frame`, `sprites_stand_on_their_ground_point`, `culling_uses_the_same_rect_as_the_horde`, `packing_follows_the_camera`, `selection_rings_are_procedural`, `the_ghost_covers_the_whole_footprint`, `the_drag_box_is_four_edges`, `pack_frame_does_not_mutate_the_world` |
 | HUD — stock, selection, production, build menu | `crates/mmd-engine/tests/rts_hud.rs` | `hud_uses_only_the_two_ui_groups`, `the_panels_are_drawn_before_the_text`, `the_top_bar_shows_the_stock`, `the_top_bar_shows_supply_as_a_ratio`, `supply_turns_red_at_the_cap`, `a_selected_worker_names_itself`, `a_selected_site_reports_its_percentage`, `a_selected_soldier_is_idle`, `the_production_block_reports_the_head`, `the_build_menu_shows_costs`, `an_unaffordable_row_is_red`, `the_hud_never_panics_on_a_stale_primary`, `pack_hud_does_not_mutate_the_world` |
 | app and CLI — the `rts` subcommand | `tests/rts_cli_contract.rs` | `rts_runs_headless_and_exits_clean`, `frame0_line_reports_three_world_groups`, `the_run_is_deterministic`, `a_phase0_scenario_is_refused`, `an_unfired_entry_fails_the_run`, `a_click_selects_a_worker`, `a_drag_selects_the_group`, `a_right_click_on_a_node_starts_gathering`, `arrow_keys_pan_the_camera`, `w_opens_the_depot_ghost`, `a_left_click_places_the_ghost`, `a_produces_a_worker_at_the_hq`, `the_exit_line_reports_every_counter`, `no_gpu_exits_with_code_three`, `the_window_is_released_before_it_drops` |
 | acceptance — through the engine | `crates/mmd-engine/tests/rts_acceptance.rs` | `the_full_economy_loop_runs_end_to_end`, `the_acceptance_run_is_reproducible`, `the_script_coordinates_hit_what_they_name` |
-| acceptance — through the shipped binary | `tests/rts_acceptance.rs` | `the_tracked_script_runs_clean`, `the_acceptance_run_builds_two_buildings`, `the_acceptance_run_produces_a_soldier`, `the_acceptance_run_earns_crystal`, `the_acceptance_run_raises_the_supply_cap`, `the_acceptance_run_is_deterministic`, `the_acceptance_run_fires_every_entry` |
+| acceptance — through the shipped binary | `tests/rts_acceptance.rs` | `the_tracked_script_runs_clean`, `the_acceptance_run_builds_two_buildings`, `the_acceptance_run_produces_a_soldier`, `the_acceptance_run_earns_crystal`, `the_acceptance_run_earns_gas`, `the_acceptance_run_pans_the_camera`, `the_acceptance_run_raises_the_supply_cap`, `the_acceptance_run_is_deterministic`, `the_acceptance_run_fires_every_entry` |
 | allocation invariant — the RTS tick | `crates/mmd-engine/tests/frame_allocations.rs` | `pack_frame_allocates_nothing`, `pack_hud_allocates_nothing`, `movement_allocates_nothing`, `the_gather_loop_allocates_nothing`, `selection_operations_allocate_nothing`, `construction_allocates_nothing`, `production_allocates_nothing` |
 | phase-0 render contracts, unmoved | `crates/mmd-engine/tests/render_correctness.rs` | `golden_frame_matches`, `every_tracked_manifest_pins_the_live_shader_and_atlas`, `packing_is_a_pure_projection_of_sim_state`, `a_ring_and_a_sprite_share_a_pass` |
 | docs and gate contract | `tests/validation_contract.rs` | `every_system_has_a_test`, `phase1_close_doc_names_only_real_tests`, `no_perf_claim_in_docs`, `gate_list_has_no_perf_thresholds`, `adr_index_lists_every_adr_file`, `every_doc_link_resolves` |
@@ -110,12 +112,13 @@ table rather than letting one pass as everyday proof.
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
 
-One tracked script selects the starting workers, puts them on a crystal node,
-places and finishes a Depot and a Barracks, and produces a Worker and a
-Soldier. It is asserted twice — once through the engine by world state,
-milestone by milestone, and once through the shipped binary by its exit line —
-and it is on the required merge gate. It consumes no measurement number, and a
-scripted event that never fires fails the run.
+One tracked script selects the starting workers, puts five on a crystal node
+and one on a gas node, places and finishes a Depot and a Barracks, produces a
+Worker and a Soldier, then holds a camera pan away from the base. It is asserted
+twice — once through the engine by world state, milestone by milestone, and once
+through the shipped binary by its exit line — and it is on the required merge
+gate. It consumes no measurement number, and a scripted event that never fires
+fails the run.
 
 ## Deviations from the plan, as built
 
@@ -148,6 +151,31 @@ Recorded here because the decision records were written before the code:
    applies to `Order::Move` only, and the other two complete on their own reach
    tests. See
    [ADR 015](ADR/015_ADR_economy_construction_and_production_determinism.md).
+
+## Post-review findings and fixes
+
+Post-close review found three navigation failures with one structural cause.
+Orders cached only a pool slot, but an LRU eviction or obstacle-mask change
+could rebuild that slot for another field while the order stayed live. A
+`FieldRef` now carries slot plus nonzero epoch; every moving `Move`, `Gather`
+and `Build` order checks destination, slot and epoch, then re-acquires and
+stores the replacement handle coherently before sampling it. Pool hits still
+refresh LRU use, failed rebuilds preserve cached handles, and mask changes
+invalidate every key.
+
+Review also found units stranded when a site finished over their current cell.
+Construction now relocates such units to the nearest in-bounds open cell using
+a deterministic, allocation-free ring scan before movement resumes. The
+starting HQ is stamped into the navigation mask during scenario seeding; its
+approach ring remains open for gathering and production.
+
+Finally, the headline acceptance path previously proved crystal income but not
+gas income, and input entries for camera movement did not prove that the camera
+moved. The tracked script now assigns one worker to gas and holds a right pan.
+Engine milestones assert both resource banks and camera displacement; shipped
+binary assertions read gas and camera centre from the exit line. Mutations that
+disabled gas credit or camera pan failed both acceptance layers before being
+restored.
 
 ## Known gaps — all non-blocking
 
@@ -192,10 +220,9 @@ anyway — the arithmetic that underflows is the arithmetic nobody looked at.
 ### 6. The flow-field pool is eight slots
 
 A player holding more than eight distinct live destinations will thrash it.
-Thrashing stays *correct* — every miss rebuilds, and
-`a_miss_may_grow_scratch_only_once` shows the scratch heap does not keep
-growing — but no test asserts a thrash is cheap, and none can: no performance
-number may gate a merge in this repo.
+Thrashing stays *correct* — every order detects an evicted handle and every
+miss rebuilds, while `a_miss_may_grow_scratch_only_once` shows the scratch heap
+does not keep growing. No performance number gates this phase.
 
 ### 7. The camera is pan-only
 
@@ -257,9 +284,10 @@ phase-0 close addressed the cross-talk that made it so.
 
 ### 14. The acceptance script is one path, not a matrix
 
-It proves that the documented loop works. It does not explore alternative
-orders, cancellations mid-flight, or contention between many players' worth of
-commands. Every one of those has unit coverage; none has an end-to-end run.
+It proves that the documented loop works, including both resource kinds and a
+camera pan. It does not explore alternative orders, cancellations mid-flight,
+or contention between many players' worth of commands. Every one of those has
+unit coverage; none has an end-to-end run.
 
 ## Phase-2 backlog
 

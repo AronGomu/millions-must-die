@@ -1,8 +1,8 @@
 //! T15 — the phase-1 acceptance run, asserted milestone by milestone.
 //!
-//! This file owns the *meaning* of the run: select six workers, put them on a
-//! crystal node, build a Depot, produce a Worker, build a Barracks, produce a
-//! Soldier. `tests/rts_acceptance.rs` in the app crate owns the separate fact
+//! This file owns the *meaning* of the run: select six workers, put five of
+//! them on a crystal node and one on a gas node, build a Depot, produce a
+//! Worker, build a Barracks, produce a Soldier, and pan the camera. `tests/rts_acceptance.rs` in the app crate owns the separate fact
 //! that the shipped binary, driven by the tracked script, reproduces it. Two
 //! failures in different places mean different things, which is the whole
 //! reason both exist.
@@ -46,6 +46,13 @@ const TICKS_WORKER_PRODUCE: u64 = 300;
 const TICKS_BARRACKS_BUILD: u64 = 900;
 /// `SOLDIER_PRODUCE_TICKS` at the Barracks.
 const TICKS_SOLDIER_PRODUCE: u64 = 400;
+/// Held-pan ticks at the end of the run, mirroring the tracked script's held
+/// arrow key.
+const TICKS_PAN: u64 = 120;
+
+/// The scene's starting stock, from `assets/scenarios/rts_prototype_v1.ron`.
+const START_CRYSTAL: u32 = 300;
+const START_GAS: u32 = 100;
 
 // --- the run's geometry, shared with the tracked script ---------------------
 
@@ -81,6 +88,16 @@ const SCRIPT_COORDS: &[([f32; 2], Cell, &str)] = &[
         "crystal node (140,150)",
     ),
     (
+        [916.0, 568.0],
+        Cell { x: 167, y: 178 },
+        "worker spawn cell (167,178)",
+    ),
+    (
+        [1072.0, 606.0],
+        Cell { x: 196, y: 168 },
+        "gas node (196,168)",
+    ),
+    (
         [896.0, 558.0],
         Cell { x: 162, y: 178 },
         "worker spawn cell (162,178)",
@@ -109,7 +126,12 @@ fn script_path() -> PathBuf {
 struct Run {
     selected: usize,
     gather_orders: usize,
+    gas_gather_orders: usize,
     crystal_after_gather: u32,
+    gas_after_gather: u32,
+    gas_end: u32,
+    camera_before_pan: [f32; 2],
+    camera_after_pan: [f32; 2],
     crystal_spent_on_depot: i64,
     depot_is_site_at_placement: bool,
     depot_is_site_after_build: bool,
@@ -156,10 +178,20 @@ fn drive() -> Run {
         .filter(|&&id| matches!(h.world().order_of(id), Some(Order::Gather { .. })))
         .count();
 
+    // --- 2b. ...except the last of them, which works the gas node ---------
+    //
+    // Both resources or the economy is only half proven: an engine where gas
+    // gathering is entirely broken still buys everything this run buys, from
+    // the 100 gas the scene starts with.
+    let gas_node = h.ids_of_kind(EntityKind::Node(ResourceKind::Gas))[1];
+    let gas_worker = *group.last().expect("the box selected nobody");
+    let gas_gather_orders = h.world_mut().order_gather_group(&[gas_worker], gas_node);
+
     // --- 3. gather ---------------------------------------------------------
     h.step_exact(TICKS_GATHER);
     ticks += TICKS_GATHER;
     let crystal_after_gather = h.world().resources().crystal;
+    let gas_after_gather = h.world().resources().gas;
 
     // --- 4. place the Depot ------------------------------------------------
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
@@ -237,10 +269,27 @@ fn drive() -> Run {
     ticks += TICKS_SOLDIER_PRODUCE;
     let soldiers_at_end = h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier)).len();
 
+    // --- 13. pan the camera off the base ------------------------------------
+    //
+    // The direction is what the tracked script's held `right` arrow produces:
+    // screen space, converted through the live projection by the camera
+    // system. A player who cannot look away from their own base cannot play.
+    let camera_before_pan = h.world().camera().center();
+    h.world_mut().set_pan_dir([1.0, 0.0]);
+    h.step_exact(TICKS_PAN);
+    ticks += TICKS_PAN;
+    h.world_mut().set_pan_dir([0.0, 0.0]);
+    let camera_after_pan = h.world().camera().center();
+
     Run {
         selected,
         gather_orders,
+        gas_gather_orders,
         crystal_after_gather,
+        gas_after_gather,
+        gas_end: h.world().resources().gas,
+        camera_before_pan,
+        camera_after_pan,
         crystal_spent_on_depot,
         depot_is_site_at_placement,
         depot_is_site_after_build,
@@ -281,10 +330,20 @@ fn the_full_economy_loop_runs_end_to_end() {
     );
     // 3
     assert!(
-        r.crystal_after_gather > 300,
+        r.crystal_after_gather > START_CRYSTAL,
         "milestone 3: crystal is {} after {TICKS_GATHER} ticks of gathering — \
-         the round trip banked nothing over the starting 300",
+         the round trip banked nothing over the starting {START_CRYSTAL}",
         r.crystal_after_gather
+    );
+    assert_eq!(
+        r.gas_gather_orders, 1,
+        "milestone 3: no worker took the gas order, so the gas below proves nothing"
+    );
+    assert!(
+        r.gas_after_gather > START_GAS,
+        "milestone 3: gas is {} after {TICKS_GATHER} ticks — the gas round trip \
+         banked nothing over the starting {START_GAS}",
+        r.gas_after_gather
     );
     // 4
     assert_eq!(
@@ -376,10 +435,33 @@ fn the_full_economy_loop_runs_end_to_end() {
         r.supply_used_end,
         r.supply_cap_end
     );
-    // 14
+    // 14: the run ends with more gas than it started with, having also *spent*
+    // 25 of it on the Barracks — only gathering can do that.
+    assert!(
+        r.gas_end > START_GAS,
+        "milestone 14: gas is {} at the end of a run that spent 25 on the \
+         Barracks and started with {START_GAS}",
+        r.gas_end
+    );
+    // 15: and the camera actually moved when it was panned.
+    assert!(
+        r.camera_after_pan[0] > r.camera_before_pan[0],
+        "milestone 15: the camera centre went {:?} -> {:?} under {TICKS_PAN} \
+         ticks of held right-pan; the view never left the base",
+        r.camera_before_pan,
+        r.camera_after_pan
+    );
+    assert!(
+        r.camera_after_pan[1] < r.camera_before_pan[1],
+        "milestone 15: a screen-right pan must move the centre toward a larger \
+         `cell.x - cell.y`, got {:?} -> {:?}",
+        r.camera_before_pan,
+        r.camera_after_pan
+    );
+    // 16
     assert_eq!(
         r.tick_index_end, r.ticks_stepped,
-        "milestone 14: the world is at tick {} after {} stepped ticks — something \
+        "milestone 16: the world is at tick {} after {} stepped ticks — something \
          silently did not advance",
         r.tick_index_end, r.ticks_stepped
     );
