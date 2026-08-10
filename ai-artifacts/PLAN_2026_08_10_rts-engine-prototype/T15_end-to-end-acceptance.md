@@ -314,4 +314,4 @@ Both tables above are the test plan. In addition:
 - [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
 - [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — exit 0
 - [x] app functional — no broken path from this slice
-- [ ] commit msg draft: `test(rts): prove the full economy loop end to end`
+- [x] commit msg draft: `test(rts): prove the full economy loop end to end`
