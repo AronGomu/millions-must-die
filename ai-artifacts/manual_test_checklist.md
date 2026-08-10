@@ -650,3 +650,70 @@ passed without regenerating anything.
       byte moved in this slice.
 - [ ] `git status --porcelain` after all of the above — clean (no drift from
       running the checks).
+
+## T5 rts-scenario-family
+
+Fifth ticket of the phase-1 RTS engine prototype plan. Extends the scenario
+contract with a new optional `rts:` block (`RtsSpec`: starting Crystal/Gas,
+starting supply cap, an HQ footprint site, and Crystal/Gas resource node
+cells) and a fourth scenario family, `rts_prototype_v1` — a 320x320,
+horde-free (`hard_agent_count`/`stretch_agent_count` locked to `0`)
+base-building map. The tracked scene `assets/scenarios/rts_prototype_v1.ron`
+is committed with its `.sha256` sidecar and a deterministic generator,
+`tools/scenegen/gen_rts_scene.py`. Nothing consumes the new block yet — no
+entity store, no render layer, no CLI — so a human should observe **zero
+visible change** to any existing scene. Everything automatable is green:
+`cargo fmt --all -- --check`; `cargo test -p mmd-engine --test
+scenario_contract` (64/64, including the full RTS validator negative-test
+suite and `phase0_scene_bytes_are_unchanged`, which hashes every tracked
+phase-0 `.ron` against its committed `.sha256` sidecar to prove the new
+`#[serde(default)]` field did not force a regeneration); `MMD_REQUIRE_GPU=1
+cargo test --workspace --locked` (all green, including
+`render::instance::tests::the_tracked_scene_list_is_complete` and
+`the_destination_is_centred`, both updated to include the new tracked file);
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+`nix flake check`; all three xtask `--check` commands; both scene generators
+rerun with an empty `git status --porcelain` delta (verified via stable
+sha256 across reruns); `sha256sum -c` on the new sidecar — `OK`; and the gate
+smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` byte
+for byte, confirmed via a before/after `git stash` comparison on this exact
+tree. Six mandatory mutations (dropped `#[serde(default)]`, RTS family added
+to `free_workload` without its own zero-population lock, inverted
+presence/absence xor, `<=`→`<` on the supply cap, skipped node reachability,
+shifted obstacle-formula modulus) were each injected, confirmed red, and
+reverted to confirmed green — see the commit body for the individual kills.
+The standing regression guard
+(`git diff --stat main -- lab/goldens/ assets/scenarios/fixtures/
+assets/sprites/generated/atlas_0.png assets/sprites/generated/atlas_1.png
+assets/sprites/generated/atlas_2.png assets/sprites/generated/atlas_3.png
+assets/sprites/generated/manifest.json`) is empty and `golden_frame_matches`
+passed without regenerating anything. What is left needs eyes on a real
+scene file and a real CLI run — this ticket ships no window-visible change.
+
+- [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and
+      exits cleanly, and the frame looks **pixel-for-pixel like it did
+      before this ticket**: same gate scene, same sprites, same hitbox rings
+      when `H` is on. This ticket only adds a new scenario file and a
+      validator branch; nothing on the gate scene's code path changed.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron
+      --frames 300` — exits 0 and the collision demo scene renders exactly
+      as before.
+- [ ] `cargo run -- run --scenario assets/scenarios/rts_prototype_v1.ron
+      --frames 3` — **fails**, printing `run failed: --agents 0 is not a
+      runnable scene: the agent count must be > 0` and exiting nonzero. This
+      is expected: the RTS scene is horde-free by design and nothing consumes
+      it as a runnable population yet (a later ticket adds an `rts`
+      subcommand for it). A window opening or a crash with a different
+      message would both be a defect.
+- [ ] Open `assets/scenarios/rts_prototype_v1.ron` in a text editor: confirm
+      it parses as valid RON at a glance (balanced parens, trailing commas)
+      and that the `rts: Some((...))` block sits last, just before the
+      closing `)`, with `start_crystal: 300`, `start_gas: 100`,
+      `start_supply_cap: 10`, `hq_cell: (x: 160, y: 160)`, 8 `crystal_nodes`
+      and 2 `gas_nodes`.
+- [ ] `python3 tools/scenegen/gen_rts_scene.py` from the workspace root,
+      then `git status` — no change to the working tree once the two
+      generated files are already committed (rerunning is a no-op).
+- [ ] `sha256sum -c <(sed 's|$|  assets/scenarios/rts_prototype_v1.ron|'
+      assets/scenarios/rts_prototype_v1.sha256)` — prints `OK`.

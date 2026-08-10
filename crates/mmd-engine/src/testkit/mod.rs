@@ -38,7 +38,7 @@ mod rng;
 pub use fixtures::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE,
     FIXTURE_CORRIDOR_V1, FIXTURE_DENSE_V1, FIXTURE_DIR, FIXTURE_SMALL_V1, FIXTURE_WALLED_V1,
-    GATE_SCENARIO, fixture_path, gate_scenario_path, scene_path,
+    GATE_SCENARIO, RTS_SCENE, fixture_path, gate_scenario_path, rts_scene_path, scene_path,
 };
 pub use rng::SplitMix64;
 
@@ -224,6 +224,7 @@ impl From<GridSpec> for ScenarioSpec {
             mass_class_count: g.mass_class_count,
             separation_threads: g.separation_threads,
             obstacle_cells: g.obstacle_cells,
+            rts: None,
         }
     }
 }

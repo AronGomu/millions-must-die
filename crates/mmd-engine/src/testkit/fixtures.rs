@@ -57,6 +57,20 @@ pub const COLLISION_SPRITE_SCENE: &str = "assets/scenarios/collision_sprite_v1.r
 /// Both collision demo scenes, for suites that assert across the family.
 pub const ALL_COLLISION_SCENES: &[&str] = &[COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE];
 
+/// The phase-1 RTS prototype scene, relative to `assets/scenarios/`.
+pub const RTS_SCENE: &str = "rts_prototype_v1.ron";
+
+/// Absolute path of the tracked RTS prototype scene.
+///
+/// `RTS_SCENE` is a bare filename (relative to `assets/scenarios/`, unlike
+/// `scene_path`'s other callers which pass a full workspace-relative path),
+/// so this joins the directory itself rather than delegating to `scene_path`.
+pub fn rts_scene_path() -> PathBuf {
+    crate::workspace_root()
+        .join("assets/scenarios")
+        .join(RTS_SCENE)
+}
+
 /// Absolute path to a scenario given workspace-relative.
 pub fn scene_path(rel: &str) -> PathBuf {
     crate::workspace_root().join(rel)

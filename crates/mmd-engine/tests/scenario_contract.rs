@@ -4,12 +4,13 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, MAX_COLLISION_RADIUS_Q8,
-    MAX_LIVE_AGENTS, MAX_SEPARATION_STRENGTH_Q8, Scenario, ScenarioError, ScenarioSpec,
+    COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, HQ_FOOTPRINT_CELLS,
+    MAX_COLLISION_RADIUS_Q8, MAX_LIVE_AGENTS, MAX_SEPARATION_STRENGTH_Q8, MAX_START_RESOURCE,
+    MAX_SUPPLY_CAP, RTS_PROTOTYPE_V1, RtsSpec, Scenario, ScenarioError, ScenarioSpec,
 };
 use mmd_engine::testkit::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, fixture_path,
-    scene_path,
+    rts_scene_path, scene_path,
 };
 
 fn workspace_root() -> PathBuf {
@@ -347,6 +348,7 @@ fn fixture_spec() -> ScenarioSpec {
         mass_class_count: 1,
         separation_threads: 1,
         obstacle_cells: vec![],
+        rts: None,
     }
 }
 
@@ -586,6 +588,7 @@ fn collision_scene_spec() -> ScenarioSpec {
         mass_class_count: 1,
         separation_threads: 1,
         obstacle_cells: vec![],
+        rts: None,
     }
 }
 
@@ -1007,4 +1010,388 @@ fn the_gate_scene_pins_the_identity_tuning() {
         ScenarioError::InvalidDimension(_) => {}
         other => panic!("expected InvalidDimension, got {other:?}"),
     }
+}
+
+// --- rts_prototype_v1 family (T5) -------------------------------------------
+//
+// The RTS family carries an optional `rts:` block, present exactly on this
+// family. `phase0_scene_bytes_are_unchanged` is the load-bearing test: it
+// proves `#[serde(default)]` did not force a regeneration of any tracked
+// phase-0 scene.
+
+/// A minimal, valid RTS spec: locked geometry, a free HQ site, one node of
+/// each kind, no obstacles (so every cell is reachable by construction).
+fn rts_spec() -> ScenarioSpec {
+    ScenarioSpec {
+        version: RTS_PROTOTYPE_V1.to_string(),
+        width: 320,
+        height: 320,
+        cell_size_px: 4,
+        sprite_size_px: 48,
+        hard_agent_count: 0,
+        stretch_agent_count: 0,
+        seed: 1,
+        destination: Cell { x: 10, y: 10 },
+        spawn_cells: vec![Cell { x: 0, y: 0 }],
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        collision_radius_q8: 1_536,
+        separation_strength_q8: 256,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
+        obstacle_cells: vec![],
+        rts: Some(RtsSpec {
+            start_crystal: 300,
+            start_gas: 100,
+            start_supply_cap: 10,
+            hq_cell: Cell { x: 200, y: 200 },
+            crystal_nodes: vec![Cell { x: 5, y: 5 }],
+            gas_nodes: vec![Cell { x: 6, y: 6 }],
+        }),
+    }
+}
+
+fn expect_invalid_rts(spec: ScenarioSpec, needle: &str) {
+    match Scenario::from_spec(spec) {
+        Err(ScenarioError::InvalidRts(msg)) => assert!(
+            msg.contains(needle),
+            "expected InvalidRts containing {needle:?}, got {msg:?}"
+        ),
+        other => panic!("expected InvalidRts containing {needle:?}, got {other:?}"),
+    }
+}
+
+fn sha256_hex_of(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(bytes);
+    hex::encode(h.finalize())
+}
+
+#[test]
+fn rts_baseline_spec_is_valid() {
+    // Guards the negative tests below: each mutates exactly one field, so the
+    // baseline must pass or they would prove nothing.
+    let scene = Scenario::from_spec(rts_spec()).expect("baseline rts spec must validate");
+    assert_eq!(scene.version(), RTS_PROTOTYPE_V1);
+    assert!(scene.rts().is_some());
+}
+
+#[test]
+fn rts_scene_loads_verified() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    assert_eq!(scene.version(), RTS_PROTOTYPE_V1);
+}
+
+#[test]
+fn rts_scene_is_horde_free() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    assert_eq!(scene.hard_agent_count(), 0);
+    assert_eq!(scene.stretch_agent_count(), 0);
+}
+
+#[test]
+fn rts_scene_geometry_is_locked() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    assert_eq!(scene.width(), 320);
+    assert_eq!(scene.height(), 320);
+    assert_eq!(scene.cell_size_px(), 4);
+    assert_eq!(scene.sprite_size_px(), 48);
+}
+
+#[test]
+fn rts_scene_carries_its_block() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    let rts = scene.rts().expect("rts block must be present");
+    assert_eq!(rts.start_crystal, 300);
+    assert_eq!(rts.start_gas, 100);
+    assert_eq!(rts.start_supply_cap, 10);
+    assert_eq!(rts.hq_cell, Cell { x: 160, y: 160 });
+    assert_eq!(rts.crystal_nodes.len(), 8);
+    assert_eq!(rts.gas_nodes.len(), 2);
+}
+
+#[test]
+fn rts_obstacles_match_the_published_formula() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    let rts = scene.rts().expect("rts block must be present");
+    let width = scene.width();
+    let height = scene.height();
+    let hq_center = (165i64, 165i64);
+    let all_nodes: Vec<(i64, i64)> = rts
+        .crystal_nodes
+        .iter()
+        .chain(rts.gas_nodes.iter())
+        .map(|c| (c.x as i64, c.y as i64))
+        .collect();
+    let spawns: std::collections::HashSet<(u32, u32)> =
+        scene.spawn_cells().iter().map(|c| (c.x, c.y)).collect();
+    let dest = (scene.destination().x, scene.destination().y);
+
+    let chebyshev = |a: (i64, i64), b: (i64, i64)| (a.0 - b.0).abs().max((a.1 - b.1).abs());
+
+    let mut expected = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            if (x as i64 * 7 + y as i64 * 13) % 97 != 0 {
+                continue;
+            }
+            if chebyshev((x as i64, y as i64), hq_center) <= 28 {
+                continue;
+            }
+            if all_nodes
+                .iter()
+                .any(|&n| chebyshev((x as i64, y as i64), n) <= 6)
+            {
+                continue;
+            }
+            if spawns.contains(&(x, y)) {
+                continue;
+            }
+            if (x, y) == dest {
+                continue;
+            }
+            expected.push(x + y * width);
+        }
+    }
+    expected.sort_unstable();
+    assert_eq!(expected, scene.obstacle_cells());
+}
+
+#[test]
+fn hq_footprint_is_free_in_the_tracked_scene() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    let rts = scene.rts().expect("rts block must be present");
+    let mut checked = 0;
+    for dy in 0..HQ_FOOTPRINT_CELLS {
+        for dx in 0..HQ_FOOTPRINT_CELLS {
+            let x = rts.hq_cell.x + dx;
+            let y = rts.hq_cell.y + dy;
+            let idx = x + y * scene.width();
+            assert!(
+                !scene.is_obstacle_index(idx),
+                "hq footprint cell ({x}, {y}) must be free"
+            );
+            checked += 1;
+        }
+    }
+    assert_eq!(checked, HQ_FOOTPRINT_CELLS * HQ_FOOTPRINT_CELLS);
+}
+
+#[test]
+fn every_phase0_scene_has_no_rts_block() {
+    let mut checked = 0;
+    let tracked = ["assets/scenarios/technical_prototype_v1.ron"]
+        .into_iter()
+        .chain(ALL_COLLISION_SCENES.iter().copied())
+        .map(scene_path)
+        .chain(ALL_FIXTURES.iter().copied().map(fixture_path));
+    for path in tracked {
+        let scene = Scenario::load_verified(&path).expect("tracked scene must load");
+        assert!(
+            scene.rts().is_none(),
+            "{}: phase-0 scene must carry rts: None",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked, 7,
+        "all seven tracked phase-0 scenes must be covered"
+    );
+}
+
+#[test]
+fn phase0_scene_bytes_are_unchanged() {
+    // Proves the `#[serde(default)]` on `rts` did not force a regeneration of
+    // any tracked phase-0 `.ron`: every one still matches its committed
+    // `.sha256` sidecar byte for byte.
+    let mut checked = 0;
+    let tracked = ["assets/scenarios/technical_prototype_v1.ron"]
+        .into_iter()
+        .chain(ALL_COLLISION_SCENES.iter().copied())
+        .map(scene_path)
+        .chain(ALL_FIXTURES.iter().copied().map(fixture_path));
+    for path in tracked {
+        let bytes = fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let sha_path = path.with_extension("sha256");
+        let expected =
+            fs::read_to_string(&sha_path).unwrap_or_else(|e| panic!("{}: {e}", sha_path.display()));
+        let actual = sha256_hex_of(&bytes);
+        assert_eq!(
+            actual,
+            expected.trim(),
+            "{}: bytes drifted from its committed .sha256 sidecar",
+            path.display()
+        );
+        checked += 1;
+    }
+    assert_eq!(
+        checked, 7,
+        "all seven tracked phase-0 scenes must be covered"
+    );
+}
+
+#[test]
+fn an_rts_scene_without_a_block_is_rejected() {
+    let spec = ScenarioSpec {
+        rts: None,
+        ..rts_spec()
+    };
+    expect_invalid_rts(spec, "rts block must be present");
+}
+
+#[test]
+fn a_phase0_family_with_an_rts_block_is_rejected() {
+    let spec = ScenarioSpec {
+        rts: Some(RtsSpec {
+            start_crystal: 300,
+            start_gas: 100,
+            start_supply_cap: 10,
+            hq_cell: Cell { x: 0, y: 0 },
+            crystal_nodes: vec![Cell { x: 4, y: 4 }],
+            gas_nodes: vec![Cell { x: 5, y: 5 }],
+        }),
+        ..fixture_spec()
+    };
+    expect_invalid_rts(spec, "rts block must be present");
+}
+
+#[test]
+fn a_nonzero_population_is_rejected_for_the_rts_family() {
+    let spec = ScenarioSpec {
+        hard_agent_count: 1,
+        ..rts_spec()
+    };
+    expect_invalid_dimension(spec, "hard_agent_count");
+}
+
+#[test]
+fn a_nonzero_stretch_is_rejected_for_the_rts_family() {
+    let spec = ScenarioSpec {
+        stretch_agent_count: 1,
+        ..rts_spec()
+    };
+    expect_invalid_dimension(spec, "stretch_agent_count");
+}
+
+#[test]
+fn an_empty_node_list_is_rejected() {
+    let mut base = rts_spec();
+    base.rts.as_mut().unwrap().crystal_nodes = vec![];
+    expect_invalid_rts(base, "crystal_nodes must not be empty");
+}
+
+#[test]
+fn a_blocked_node_is_rejected() {
+    let mut base = rts_spec();
+    let node = base.rts.as_ref().unwrap().crystal_nodes[0];
+    base.obstacle_cells = vec![node.x + node.y * base.width];
+    expect_invalid_rts(base, "is blocked");
+}
+
+#[test]
+fn an_unreachable_node_is_rejected() {
+    let mut base = rts_spec();
+    // Wall a full obstacle ring around the crystal node at (5, 5), sealing it
+    // off from the destination.
+    let node = base.rts.as_ref().unwrap().crystal_nodes[0];
+    let mut ring = Vec::new();
+    for dy in -1i32..=1 {
+        for dx in -1i32..=1 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let x = (node.x as i32 + dx) as u32;
+            let y = (node.y as i32 + dy) as u32;
+            ring.push(x + y * base.width);
+        }
+    }
+    base.obstacle_cells = ring;
+    expect_invalid_rts(base, "unreachable");
+}
+
+#[test]
+fn a_duplicate_node_across_kinds_is_rejected() {
+    let mut base = rts_spec();
+    let dup = base.rts.as_ref().unwrap().crystal_nodes[0];
+    base.rts.as_mut().unwrap().gas_nodes = vec![dup];
+    expect_invalid_rts(base, "appears in both crystal_nodes and gas_nodes");
+}
+
+#[test]
+fn a_blocked_hq_footprint_is_rejected() {
+    let mut base = rts_spec();
+    let hq = base.rts.as_ref().unwrap().hq_cell;
+    base.obstacle_cells = vec![hq.x + hq.y * base.width];
+    expect_invalid_rts(base, "hq footprint cell");
+}
+
+#[test]
+fn an_out_of_bounds_hq_footprint_is_rejected() {
+    let mut base = rts_spec();
+    base.rts.as_mut().unwrap().hq_cell = Cell { x: 315, y: 315 };
+    expect_invalid_rts(base, "out of bounds");
+}
+
+#[test]
+fn a_node_inside_the_hq_footprint_is_rejected() {
+    let mut base = rts_spec();
+    let hq = base.rts.as_ref().unwrap().hq_cell;
+    base.rts.as_mut().unwrap().crystal_nodes = vec![Cell {
+        x: hq.x + 3,
+        y: hq.y + 3,
+    }];
+    expect_invalid_rts(base, "inside the HQ footprint");
+}
+
+#[test]
+fn a_spawn_inside_the_hq_footprint_is_rejected() {
+    let mut base = rts_spec();
+    let hq = base.rts.as_ref().unwrap().hq_cell;
+    base.spawn_cells = vec![Cell {
+        x: hq.x + 3,
+        y: hq.y + 3,
+    }];
+    expect_invalid_rts(base, "lies inside the HQ footprint");
+}
+
+#[test]
+fn a_supply_cap_over_the_pillar_is_rejected() {
+    let mut base = rts_spec();
+    base.rts.as_mut().unwrap().start_supply_cap = MAX_SUPPLY_CAP + 1;
+    expect_invalid_rts(base, "start_supply_cap");
+}
+
+#[test]
+fn the_supply_cap_ceiling_is_an_inclusive_bound() {
+    // The cap is the largest *accepted* value, not the first rejected one.
+    let mut base = rts_spec();
+    base.rts.as_mut().unwrap().start_supply_cap = MAX_SUPPLY_CAP;
+    Scenario::from_spec(base).expect("the ceiling itself must be accepted");
+}
+
+#[test]
+fn a_zero_supply_cap_is_rejected() {
+    let mut base = rts_spec();
+    base.rts.as_mut().unwrap().start_supply_cap = 0;
+    expect_invalid_rts(base, "start_supply_cap");
+}
+
+#[test]
+fn an_over_generous_start_stock_is_rejected() {
+    let mut base = rts_spec();
+    base.rts.as_mut().unwrap().start_crystal = MAX_START_RESOURCE + 1;
+    expect_invalid_rts(base, "start_crystal");
+}
+
+#[test]
+fn the_renderer_contract_still_binds_the_rts_family() {
+    let spec = ScenarioSpec {
+        atlas_count: 5,
+        ..rts_spec()
+    };
+    expect_invalid_dimension(spec, "atlas_count");
 }

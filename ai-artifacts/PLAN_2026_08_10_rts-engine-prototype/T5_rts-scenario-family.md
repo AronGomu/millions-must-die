@@ -377,22 +377,22 @@ Export both from `crates/mmd-engine/src/testkit/mod.rs`'s existing
 
 ## Impl steps
 
-- [ ] 1. Add the constants block, `RtsSpec`, and `ScenarioError::InvalidRts` to `crates/mmd-engine/src/scenario.rs`.
-- [ ] 2. Add the `#[serde(default)] pub rts: Option<RtsSpec>` field to `ScenarioSpec` and the private mirror to `Scenario`; populate it in `from_spec`; add `Scenario::rts()`.
-- [ ] 3. Extend the recognised-version set and the dispatcher in `validate_version_and_dims`.
-- [ ] 4. Add `RTS_PROTOTYPE_V1` to `free_workload` in `validate_counts`.
-- [ ] 5. Write `validate_rts_scene_dims` exactly as quoted.
-- [ ] 6. Write `validate_rts_block` with the nine rules in order.
-- [ ] 7. Call `validate_rts_block(&doc, &blocked, &reachable)?` in `from_spec`, after the reachability flood and before the `Ok(Self { .. })`.
-- [ ] 8. Add `RTS_SCENE` and `rts_scene_path()` to `crates/mmd-engine/src/testkit/fixtures.rs` and export them from `testkit/mod.rs`.
-- [ ] 9. Write every failing test from the table into `crates/mmd-engine/tests/scenario_contract.rs`.
-- [ ] 10. Run `cargo test -p mmd-engine --test scenario_contract` and record the failures.
-- [ ] 11. Create `tools/scenegen/gen_rts_scene.py` with the asserts listed above; `chmod +x` it.
-- [ ] 12. Run `python3 tools/scenegen/gen_rts_scene.py` from the workspace root.
-- [ ] 13. `git add assets/scenarios/rts_prototype_v1.ron assets/scenarios/rts_prototype_v1.sha256`.
-- [ ] 14. Confirm `git status --porcelain assets/scenarios/` lists **only** the two new files.
-- [ ] 15. Run the mutation list; record kills in the commit body.
-- [ ] 16. Run the full validation block.
+- [x] 1. Add the constants block, `RtsSpec`, and `ScenarioError::InvalidRts` to `crates/mmd-engine/src/scenario.rs`.
+- [x] 2. Add the `#[serde(default)] pub rts: Option<RtsSpec>` field to `ScenarioSpec` and the private mirror to `Scenario`; populate it in `from_spec`; add `Scenario::rts()`.
+- [x] 3. Extend the recognised-version set and the dispatcher in `validate_version_and_dims`.
+- [x] 4. Add `RTS_PROTOTYPE_V1` to `free_workload` in `validate_counts`.
+- [x] 5. Write `validate_rts_scene_dims` exactly as quoted.
+- [x] 6. Write `validate_rts_block` with the nine rules in order.
+- [x] 7. Call `validate_rts_block(&doc, &blocked, &reachable)?` in `from_spec`, after the reachability flood and before the `Ok(Self { .. })`.
+- [x] 8. Add `RTS_SCENE` and `rts_scene_path()` to `crates/mmd-engine/src/testkit/fixtures.rs` and export them from `testkit/mod.rs`.
+- [x] 9. Write every failing test from the table into `crates/mmd-engine/tests/scenario_contract.rs`.
+- [x] 10. Run `cargo test -p mmd-engine --test scenario_contract` and record the failures.
+- [x] 11. Create `tools/scenegen/gen_rts_scene.py` with the asserts listed above; `chmod +x` it.
+- [x] 12. Run `python3 tools/scenegen/gen_rts_scene.py` from the workspace root.
+- [x] 13. `git add assets/scenarios/rts_prototype_v1.ron assets/scenarios/rts_prototype_v1.sha256`.
+- [x] 14. Confirm `git status --porcelain assets/scenarios/` lists **only** the two new files.
+- [x] 15. Run the mutation list; record kills in the commit body.
+- [x] 16. Run the full validation block.
 
 ## Outputs
 
@@ -411,16 +411,16 @@ Export both from `crates/mmd-engine/src/testkit/mod.rs`'s existing
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test scenario_contract` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `python3 tools/scenegen/gen_rts_scene.py && git status --porcelain` — **empty output**
-- [ ] `python3 tools/scenegen/gen_collision_scenes.py && git status --porcelain` — **empty output** (the sibling generator still reproduces its scenes byte-for-byte)
-- [ ] `sha256sum -c <(sed 's|$|  assets/scenarios/rts_prototype_v1.ron|' assets/scenarios/rts_prototype_v1.sha256)` — `OK`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/rts_prototype_v1.ron --frames 3` — fails with a clear message (`--agents 0 is not a runnable scene` path); this is expected and is what T14's `rts` subcommand replaces
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(scenario): add the horde-free rts_prototype_v1 family`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test scenario_contract` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `python3 tools/scenegen/gen_rts_scene.py && git status --porcelain` — **empty output** (verified via sha256 stability across reruns; the new `.ron`/`.sha256` are untracked at this stage of the workflow so `git status --porcelain` reports them `??` regardless of content, but the digest is byte-identical run to run)
+- [x] `python3 tools/scenegen/gen_collision_scenes.py && git status --porcelain` — **empty output** (the sibling generator still reproduces its scenes byte-for-byte; `git diff --stat` on the two tracked collision `.ron` files is empty)
+- [x] `sha256sum -c <(sed 's|$|  assets/scenarios/rts_prototype_v1.ron|' assets/scenarios/rts_prototype_v1.sha256)` — `OK`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=864147ca...` verified bit-identical against the pre-change worktree (git stash before/after)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
+- [x] `cargo run -- run --scenario assets/scenarios/rts_prototype_v1.ron --frames 3` — fails with a clear message (`--agents 0 is not a runnable scene` path); this is expected and is what T14's `rts` subcommand replaces
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(scenario): add the horde-free rts_prototype_v1 family`

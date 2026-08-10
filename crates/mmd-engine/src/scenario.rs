@@ -80,11 +80,56 @@ const V1_SEPARATION_THREADS: u32 = 1;
 const V1_DEST_X: u32 = 240;
 const V1_DEST_Y: u32 = 135;
 
+/// The phase-1 RTS prototype scene family: a horde-free base-building map.
+pub const RTS_PROTOTYPE_V1: &str = "rts_prototype_v1";
+
+/// Locked geometry for [`RTS_PROTOTYPE_V1`].
+const RTS_WIDTH: u32 = 320;
+const RTS_HEIGHT: u32 = 320;
+const RTS_CELL_PX: u32 = 4;
+const RTS_SPRITE_PX: u32 = 48;
+
+/// Footprint edge of the HQ, in cells. The validator needs it to prove the HQ
+/// site is buildable; the build system reuses the same constant.
+pub const HQ_FOOTPRINT_CELLS: u32 = 12;
+/// Footprint edge of the Depot, in cells.
+pub const DEPOT_FOOTPRINT_CELLS: u32 = 8;
+/// Footprint edge of the Barracks, in cells.
+pub const BARRACKS_FOOTPRINT_CELLS: u32 = 10;
+
+/// Largest starting stock a scene may grant, per resource. Generous, but not
+/// "the whole slice is already paid for".
+pub const MAX_START_RESOURCE: u32 = 2_000;
+/// Absolute supply ceiling — the 500-population design pillar.
+pub const MAX_SUPPLY_CAP: u32 = 500;
+/// Most resource nodes a scene may declare, per kind.
+pub const MAX_RESOURCE_NODES: usize = 64;
+
 /// Grid cell coordinate (cell space, not pixels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct Cell {
     pub x: u32,
     pub y: u32,
+}
+
+/// The RTS block of a scenario. Present exactly on [`RTS_PROTOTYPE_V1`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RtsSpec {
+    /// Starting Crystal stock.
+    pub start_crystal: u32,
+    /// Starting Gas stock.
+    pub start_gas: u32,
+    /// Starting supply ceiling, before any Depot is built.
+    pub start_supply_cap: u32,
+    /// **Minimum corner** (smallest x, smallest y) of the starting HQ's
+    /// `HQ_FOOTPRINT_CELLS` x `HQ_FOOTPRINT_CELLS` footprint. Not its centre:
+    /// a footprint anchored on a centre has no integer answer for an even edge,
+    /// and the build system stamps obstacles from the min corner.
+    pub hq_cell: Cell,
+    /// Crystal node cells. At least one.
+    pub crystal_nodes: Vec<Cell>,
+    /// Gas node cells. At least one.
+    pub gas_nodes: Vec<Cell>,
 }
 
 /// Immutable validated scenario.
@@ -115,6 +160,13 @@ pub struct Scenario {
     separation_threads: u32,
     /// Sorted unique obstacle cell indices (`x + y * width`).
     obstacle_cells: Vec<u32>,
+    /// The RTS block, absent on every phase-0 family.
+    ///
+    /// `#[serde(default)]` is load-bearing: it is what lets every tracked phase-0
+    /// `.ron` keep its exact bytes, and therefore its `.sha256` sidecar, across
+    /// this change. A required field would invalidate five committed scenes and
+    /// four fixtures at once.
+    rts: Option<RtsSpec>,
 }
 
 /// Unvalidated scenario description — the wire/in-memory form of a scene.
@@ -149,6 +201,14 @@ pub struct ScenarioSpec {
     /// Worker threads for the separation pass. 1 = inline, no pool.
     pub separation_threads: u32,
     pub obstacle_cells: Vec<u32>,
+    /// The RTS block, absent on every phase-0 family.
+    ///
+    /// `#[serde(default)]` is load-bearing: it is what lets every tracked phase-0
+    /// `.ron` keep its exact bytes, and therefore its `.sha256` sidecar, across
+    /// this change. A required field would invalidate five committed scenes and
+    /// four fixtures at once.
+    #[serde(default)]
+    pub rts: Option<RtsSpec>,
 }
 
 /// Scenario load / validation failures.
@@ -182,6 +242,8 @@ pub enum ScenarioError {
     InvalidSeed,
     #[error("invalid collision config: {0}")]
     InvalidCollision(String),
+    #[error("invalid rts block: {0}")]
+    InvalidRts(String),
 }
 
 impl Scenario {
@@ -283,6 +345,8 @@ impl Scenario {
             }
         }
 
+        validate_rts_block(&doc, &blocked, &reachable)?;
+
         Ok(Self {
             version: doc.version,
             width: doc.width,
@@ -303,6 +367,7 @@ impl Scenario {
             mass_class_count: doc.mass_class_count,
             separation_threads: doc.separation_threads,
             obstacle_cells: obstacles,
+            rts: doc.rts,
         })
     }
 
@@ -385,6 +450,11 @@ impl Scenario {
     pub fn is_obstacle_index(&self, index: u32) -> bool {
         self.obstacle_cells.binary_search(&index).is_ok()
     }
+
+    /// The RTS block, or `None` on every phase-0 family.
+    pub fn rts(&self) -> Option<&RtsSpec> {
+        self.rts.as_ref()
+    }
 }
 
 /// The one site that enforces [`MAX_LIVE_AGENTS`].
@@ -409,7 +479,11 @@ fn check_population(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
 
 fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), ScenarioError> {
     let is_fixture = doc.version.starts_with(FIXTURE_VERSION_PREFIX);
-    if !is_fixture && doc.version != COLLISION_SCENE_V1 && doc.version != TECHNICAL_PROTOTYPE_V1 {
+    if !is_fixture
+        && doc.version != COLLISION_SCENE_V1
+        && doc.version != TECHNICAL_PROTOTYPE_V1
+        && doc.version != RTS_PROTOTYPE_V1
+    {
         return Err(ScenarioError::UnsupportedVersion(doc.version.clone()));
     }
     // The ceiling binds every recognised family, checked once before dispatch.
@@ -419,6 +493,9 @@ fn validate_version_and_dims(doc: &ScenarioSpec, cells: u32) -> Result<(), Scena
     }
     if doc.version == COLLISION_SCENE_V1 {
         return validate_collision_scene_dims(doc);
+    }
+    if doc.version == RTS_PROTOTYPE_V1 {
+        return validate_rts_scene_dims(doc);
     }
     let checks = [
         (doc.width, V1_WIDTH, "width"),
@@ -479,10 +556,13 @@ fn validate_counts(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
         ),
     ];
 
-    // Families that pick their own population: the small fixtures, and the
-    // collision demo scenes whose whole purpose is a different agent count.
-    let free_workload =
-        doc.version.starts_with(FIXTURE_VERSION_PREFIX) || doc.version == COLLISION_SCENE_V1;
+    // Families that pick their own population: the small fixtures, the
+    // collision demo scenes whose whole purpose is a different agent count,
+    // and the RTS family, which is horde-free by construction and enforces
+    // its own (zero) population lock in `validate_rts_scene_dims`.
+    let free_workload = doc.version.starts_with(FIXTURE_VERSION_PREFIX)
+        || doc.version == COLLISION_SCENE_V1
+        || doc.version == RTS_PROTOTYPE_V1;
     let checks = renderer
         .iter()
         .chain(workload.iter().filter(|_| !free_workload));
@@ -658,6 +738,174 @@ fn validate_collision_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError
                 .into(),
         ));
     }
+    Ok(())
+}
+
+/// Geometry lock for the RTS prototype family.
+///
+/// The population fields are required to be **exactly zero**: this family is
+/// horde-free by construction, and a nonzero count would silently seed a
+/// flow-field crowd into a base-building scene. `validate_counts` skips the
+/// phase-0 workload lock for this family precisely so this stricter rule can
+/// replace it.
+fn validate_rts_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
+    for (got, want, name) in [
+        (doc.width, RTS_WIDTH, "width"),
+        (doc.height, RTS_HEIGHT, "height"),
+        (doc.cell_size_px, RTS_CELL_PX, "cell_size_px"),
+        (doc.sprite_size_px, RTS_SPRITE_PX, "sprite_size_px"),
+        (doc.hard_agent_count, 0, "hard_agent_count"),
+        (doc.stretch_agent_count, 0, "stretch_agent_count"),
+    ] {
+        if got != want {
+            return Err(ScenarioError::InvalidDimension(format!(
+                "{name}: got {got}, want {want}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The RTS block is present exactly on the RTS family, and every cell it names
+/// is a cell a base could actually use.
+fn validate_rts_block(
+    doc: &ScenarioSpec,
+    blocked: &[bool],
+    reachable: &[bool],
+) -> Result<(), ScenarioError> {
+    let is_rts = doc.version == RTS_PROTOTYPE_V1;
+    if is_rts != doc.rts.is_some() {
+        return Err(ScenarioError::InvalidRts(format!(
+            "version {:?}: rts block must be present iff version == {RTS_PROTOTYPE_V1:?}",
+            doc.version
+        )));
+    }
+    let Some(rts) = doc.rts.as_ref() else {
+        return Ok(());
+    };
+
+    if rts.start_crystal > MAX_START_RESOURCE {
+        return Err(ScenarioError::InvalidRts(format!(
+            "start_crystal: got {}, max {MAX_START_RESOURCE}",
+            rts.start_crystal
+        )));
+    }
+    if rts.start_gas > MAX_START_RESOURCE {
+        return Err(ScenarioError::InvalidRts(format!(
+            "start_gas: got {}, max {MAX_START_RESOURCE}",
+            rts.start_gas
+        )));
+    }
+
+    if rts.start_supply_cap == 0 || rts.start_supply_cap > MAX_SUPPLY_CAP {
+        return Err(ScenarioError::InvalidRts(format!(
+            "start_supply_cap: got {}, want 1..={MAX_SUPPLY_CAP}",
+            rts.start_supply_cap
+        )));
+    }
+
+    if rts.crystal_nodes.is_empty() {
+        return Err(ScenarioError::InvalidRts(
+            "crystal_nodes must not be empty".into(),
+        ));
+    }
+    if rts.crystal_nodes.len() > MAX_RESOURCE_NODES {
+        return Err(ScenarioError::InvalidRts(format!(
+            "crystal_nodes: {} exceeds cap {MAX_RESOURCE_NODES}",
+            rts.crystal_nodes.len()
+        )));
+    }
+    if rts.gas_nodes.is_empty() {
+        return Err(ScenarioError::InvalidRts(
+            "gas_nodes must not be empty".into(),
+        ));
+    }
+    if rts.gas_nodes.len() > MAX_RESOURCE_NODES {
+        return Err(ScenarioError::InvalidRts(format!(
+            "gas_nodes: {} exceeds cap {MAX_RESOURCE_NODES}",
+            rts.gas_nodes.len()
+        )));
+    }
+
+    let all_nodes: Vec<&Cell> = rts
+        .crystal_nodes
+        .iter()
+        .chain(rts.gas_nodes.iter())
+        .collect();
+    for cell in &all_nodes {
+        let idx = cell_index(**cell, doc.width, doc.height).ok_or_else(|| {
+            ScenarioError::InvalidRts(format!("node ({}, {}) is out of bounds", cell.x, cell.y))
+        })?;
+        if blocked[idx] {
+            return Err(ScenarioError::InvalidRts(format!(
+                "node ({}, {}) is blocked",
+                cell.x, cell.y
+            )));
+        }
+        if !reachable[idx] {
+            return Err(ScenarioError::InvalidRts(format!(
+                "node ({}, {}) is unreachable from the destination",
+                cell.x, cell.y
+            )));
+        }
+    }
+
+    let mut seen: Vec<Cell> = Vec::with_capacity(all_nodes.len());
+    for cell in &all_nodes {
+        if seen.contains(*cell) {
+            return Err(ScenarioError::InvalidRts(format!(
+                "cell ({}, {}) appears in both crystal_nodes and gas_nodes",
+                cell.x, cell.y
+            )));
+        }
+        seen.push(**cell);
+    }
+
+    let hq_min_x = rts.hq_cell.x;
+    let hq_min_y = rts.hq_cell.y;
+    let hq_max_x = hq_min_x.checked_add(HQ_FOOTPRINT_CELLS);
+    let hq_max_y = hq_min_y.checked_add(HQ_FOOTPRINT_CELLS);
+    let (Some(hq_max_x), Some(hq_max_y)) = (hq_max_x, hq_max_y) else {
+        return Err(ScenarioError::InvalidRts(format!(
+            "hq_cell ({hq_min_x}, {hq_min_y}): footprint overflows"
+        )));
+    };
+    if hq_max_x > doc.width || hq_max_y > doc.height {
+        return Err(ScenarioError::InvalidRts(format!(
+            "hq_cell ({hq_min_x}, {hq_min_y}): {HQ_FOOTPRINT_CELLS}x{HQ_FOOTPRINT_CELLS} footprint is out of bounds on a {}x{} grid",
+            doc.width, doc.height
+        )));
+    }
+    for y in hq_min_y..hq_max_y {
+        for x in hq_min_x..hq_max_x {
+            let idx = (x + y * doc.width) as usize;
+            if blocked[idx] {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "hq footprint cell ({x}, {y}) is blocked"
+                )));
+            }
+        }
+    }
+
+    let in_hq_footprint =
+        |c: Cell| c.x >= hq_min_x && c.x < hq_max_x && c.y >= hq_min_y && c.y < hq_max_y;
+    for cell in &all_nodes {
+        if in_hq_footprint(**cell) {
+            return Err(ScenarioError::InvalidRts(format!(
+                "node ({}, {}) lies inside the HQ footprint",
+                cell.x, cell.y
+            )));
+        }
+    }
+    for sp in &doc.spawn_cells {
+        if in_hq_footprint(*sp) {
+            return Err(ScenarioError::InvalidRts(format!(
+                "spawn ({}, {}) lies inside the HQ footprint",
+                sp.x, sp.y
+            )));
+        }
+    }
+
     Ok(())
 }
 

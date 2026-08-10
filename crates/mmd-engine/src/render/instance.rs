@@ -425,10 +425,11 @@ mod tests {
     /// or removed under `assets/scenarios/` trips
     /// [`the_tracked_scene_list_is_complete`] rather than silently narrowing
     /// [`the_destination_is_centred`].
-    const TRACKED_SCENES: [&str; 3] = [
+    const TRACKED_SCENES: [&str; 4] = [
         "assets/scenarios/technical_prototype_v1.ron",
         "assets/scenarios/collision_mid_v1.ron",
         "assets/scenarios/collision_sprite_v1.ron",
+        "assets/scenarios/rts_prototype_v1.ron",
     ];
 
     #[test]
