@@ -7,6 +7,7 @@ mod error;
 mod golden;
 mod instance;
 mod renderer;
+mod text;
 mod unsafe_sys;
 
 pub use atlas::{
@@ -40,5 +41,9 @@ pub use instance::{
 pub use renderer::{
     DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, ScenePass, SpriteRenderer, VIEW_HEIGHT,
     VIEW_WIDTH,
+};
+pub use text::{
+    FONT_COLS, FONT_FIRST_CHAR, FONT_LAST_CHAR, FONT_REPLACEMENT, FONT_ROWS, GLYPH_H_PX,
+    GLYPH_TRACKING_PX, GLYPH_W_PX, begin_text_group, glyph_uv_rect, push_text, text_width,
 };
 pub use unsafe_sys::RawFrameFence;

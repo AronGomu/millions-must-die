@@ -222,18 +222,18 @@ Implementation rules, exactly:
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/src/render/text.rs` with the constants block verbatim.
-- [ ] 2. Add `mod text;` and the `pub use text::{...}` line to `crates/mmd-engine/src/render/mod.rs`, exporting every public item listed above.
-- [ ] 3. Create `crates/mmd-engine/tests/ui_text.rs` and write every headless test from the table. Watch them fail.
-- [ ] 4. Add the two GPU tests to `crates/mmd-engine/tests/gpu_smoke.rs`, using the existing device auto-skip helper from `crates/mmd-engine/tests/common/mod.rs`.
-- [ ] 5. Implement `glyph_uv_rect` exactly as quoted.
-- [ ] 6. Implement `text_width`.
-- [ ] 7. Implement `push_text` (uppercase, skip space, advance, size, tint).
-- [ ] 8. Implement `begin_text_group`.
-- [ ] 9. Run `cargo test -p mmd-engine --test ui_text` to green.
-- [ ] 10. Run `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test gpu_smoke` to green.
-- [ ] 11. Run the mutation list; record kills in the commit body.
-- [ ] 12. Run the full validation block.
+- [x] 1. Create `crates/mmd-engine/src/render/text.rs` with the constants block verbatim.
+- [x] 2. Add `mod text;` and the `pub use text::{...}` line to `crates/mmd-engine/src/render/mod.rs`, exporting every public item listed above.
+- [x] 3. Create `crates/mmd-engine/tests/ui_text.rs` and write every headless test from the table. Watch them fail.
+- [x] 4. Add the two GPU tests to `crates/mmd-engine/tests/gpu_smoke.rs`, using the existing device auto-skip helper from `crates/mmd-engine/tests/common/mod.rs`. (Plan defect: no such helper exists in `tests/common/mod.rs`; the actual auto-skip pattern the repo uses for the merge gate lives as private fns in `tests/render_correctness.rs`. Replicated that pattern locally in `gpu_smoke.rs` — see Assumptions in the worker report.)
+- [x] 5. Implement `glyph_uv_rect` exactly as quoted.
+- [x] 6. Implement `text_width`.
+- [x] 7. Implement `push_text` (uppercase, skip space, advance, size, tint).
+- [x] 8. Implement `begin_text_group`.
+- [x] 9. Run `cargo test -p mmd-engine --test ui_text` to green.
+- [x] 10. Run `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test gpu_smoke` to green.
+- [x] 11. Run the mutation list; record kills in the commit body.
+- [x] 12. Run the full validation block.
 
 ## Outputs
 
@@ -249,13 +249,13 @@ Implementation rules, exactly:
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `git diff --stat HEAD -- lab/goldens/` — **empty**
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(render): pack bitmap-font text into UI draw groups`
+- [x] `cargo fmt --all -- --check`
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -p xtask -- atlases --check`
+- [x] `git diff --stat HEAD -- lab/goldens/` — **empty**
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(render): pack bitmap-font text into UI draw groups`

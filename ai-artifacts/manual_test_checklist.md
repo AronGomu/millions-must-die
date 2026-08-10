@@ -575,3 +575,32 @@ checks, and the three app smoke runs).
 - [ ] `git status --porcelain` after all of the above — clean (no drift from
       running the checks; the golden-diff artifacts only appear under
       `target/` on a genuine failure).
+
+## T3 bitmap-text-packer
+
+Third ticket of the phase-1 RTS engine prototype plan. Adds the pure, headless,
+GPU-free half of text rendering: `render::text::push_text` turns a `&str` into
+UI sprite instances addressing the UI font slot (`SLOT_UI_FONT`). It draws
+nothing on its own and nothing in `src/` calls it yet — the HUD that composes
+it is a later ticket — so a human should again observe **zero visible change**
+in the running scene. Everything automatable is green (`cargo fmt`,
+`MMD_REQUIRE_GPU=1 cargo test --workspace --locked`, the headless
+`VK_DRIVER_FILES=/nonexistent` run with the two new GPU text cases confirmed to
+skip cleanly via `--nocapture`, clippy, `nix flake check`, all three xtask
+checks, and the 5000-agent/300-frame smoke).
+
+- [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and exits
+      cleanly, and the frame looks **pixel-for-pixel like it did before this
+      ticket**: same sprites, same hitbox rings when `H` is on, no text or
+      panel anywhere. The packer exists but nothing feeds it from `src/` yet.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron
+      --frames 300` — exits 0 and the sprite-collision scene renders as before.
+- [ ] `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test render_correctness
+      golden_frame_matches` from the workspace root — passes. This ticket adds
+      no new draw call to any existing path, so the byte-exact phase-0 frame
+      gate must still pass **without** anyone setting `MMD_UPDATE_GOLDEN=1`.
+- [ ] `git diff --stat main -- lab/goldens/` — empty. No golden byte moved in
+      this slice.
+- [ ] `git status --porcelain` after all of the above — clean (no drift from
+      running the checks; the golden-diff artifacts only appear under
+      `target/` on a genuine failure).

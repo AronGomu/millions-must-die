@@ -13,11 +13,55 @@
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use mmd_engine::render::validate_device_props;
 use mmd_engine::render::{
-    ATLAS_COUNT, DrawGroup, REQUIRED_BACKEND, SPRITE_SIZE_PX, SpriteRenderer, VIEW_HEIGHT,
-    VIEW_WIDTH, load_atlases, required_backend, validate_adapter_name, validate_backend_name,
+    ATLAS_COUNT, DrawGroup, REQUIRED_BACKEND, SLOT_UI_FONT, SPRITE_SIZE_PX, ScenePass,
+    SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, frame_uv_rect, load_atlases,
+    push_text, required_backend, validate_adapter_name, validate_backend_name,
     validate_macos_host_arch,
 };
 use mmd_engine::workspace_root;
+use std::sync::{Mutex, MutexGuard};
+
+/// SDL GPU state is process-global; the two text GPU cases in this file share
+/// this lock the same way `render_correctness.rs` shares its own, so they
+/// never overlap a device with each other regardless of `cargo test`'s thread
+/// fan-out.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
+fn gpu_guard() -> MutexGuard<'static, ()> {
+    GPU_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Env var that turns a device-unavailable skip into a hard failure — mirrors
+/// `render_correctness.rs::REQUIRE_GPU_ENV`, duplicated here rather than
+/// shared because the two files are separate test binaries.
+const REQUIRE_GPU_ENV: &str = "MMD_REQUIRE_GPU";
+
+fn gpu_is_required() -> bool {
+    std::env::var_os(REQUIRE_GPU_ENV).is_some_and(|v| v != "0" && !v.is_empty())
+}
+
+fn skip(case: &str, reason: &str) {
+    assert!(
+        !gpu_is_required(),
+        "{case}: skipped ({reason}) but {REQUIRE_GPU_ENV} is set — this host is \
+         declared to have a GPU, so a skip is a missed verification"
+    );
+    eprintln!("SKIP {case}: {reason}");
+}
+
+/// A live renderer, or `None` when this host genuinely has no GPU device.
+fn renderer_or_skip(case: &str) -> Option<SpriteRenderer> {
+    match SpriteRenderer::new(&workspace_root(), true) {
+        Ok(r) => Some(r),
+        Err(e) if e.is_device_unavailable() => {
+            skip(case, &format!("no GPU device on this host ({e})"));
+            None
+        }
+        Err(e) => panic!("{case}: renderer failed for a non-device reason: {e}"),
+    }
+}
 
 #[test]
 fn instance_layout_is_stable() {
@@ -197,4 +241,101 @@ fn static_instance_covers_sprite_size() {
             assert_eq!(inst.size, [SPRITE_SIZE_PX as f32, SPRITE_SIZE_PX as f32]);
         }
     }
+}
+
+/// `push_text` output actually rasterises: packed into a UI group on
+/// [`SLOT_UI_FONT`] and drawn, `"A"` at scale 4.0 (an 8px cell scaled to a
+/// 32px quad, landing exactly on the probed 64..96 x 64..96 rect) must leave
+/// real opaque pixels behind, not merely a well-formed instance.
+#[test]
+fn text_renders_visible_pixels() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("text_renders_visible_pixels") else {
+        return;
+    };
+    let mut instances = Vec::new();
+    push_text(
+        &mut instances,
+        "A",
+        [64.0, 64.0],
+        4.0,
+        SpriteInstance::WHITE,
+    );
+    let ui = [DrawGroup {
+        atlas_id: SLOT_UI_FONT,
+        instances,
+    }];
+    let rb = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &[],
+            overlay: &[],
+            ui: &ui,
+        })
+        .expect("readback");
+
+    let mut opaque = 0u32;
+    for y in 64..96 {
+        for x in 64..96 {
+            if rb.pixel(x, y)[3] == 255 {
+                opaque += 1;
+            }
+        }
+    }
+    assert!(
+        opaque >= 8,
+        "expected at least 8 opaque glyph pixels in 64..96 x 64..96, got {opaque}"
+    );
+}
+
+/// The UI layer draws after the world and with depth off, so a glyph over an
+/// opaque world sprite still lands as pure white — the same claim
+/// `render_correctness.rs::ui_layer_draws_over_the_world` makes for a panel,
+/// here for text.
+#[test]
+fn text_is_drawn_over_the_world() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("text_is_drawn_over_the_world") else {
+        return;
+    };
+    let world = [DrawGroup {
+        atlas_id: 0,
+        instances: vec![SpriteInstance::new(
+            [64.0, 64.0],
+            [32.0, 32.0],
+            frame_uv_rect(0, 0),
+            SpriteInstance::WHITE,
+        )],
+    }];
+    let mut instances = Vec::new();
+    push_text(
+        &mut instances,
+        "A",
+        [64.0, 64.0],
+        4.0,
+        SpriteInstance::WHITE,
+    );
+    let ui = [DrawGroup {
+        atlas_id: SLOT_UI_FONT,
+        instances,
+    }];
+    let rb = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            overlay: &[],
+            ui: &ui,
+        })
+        .expect("readback");
+
+    let mut white = 0u32;
+    for y in 64..96 {
+        for x in 64..96 {
+            if rb.pixel(x, y) == [255, 255, 255, 255] {
+                white += 1;
+            }
+        }
+    }
+    assert!(
+        white >= 1,
+        "expected at least one pixel white [255,255,255,255] over the world sprite"
+    );
 }
