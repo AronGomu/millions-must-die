@@ -14,7 +14,7 @@ use mmd_engine::alloc_guard::{
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
     BuildingKind, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order, ResourceKind, RtsFrame,
-    UnitKind, pack_frame,
+    UnitKind, pack_frame, pack_hud,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -450,6 +450,58 @@ fn pack_frame_allocates_nothing() {
         std::hint::black_box(frame.instance_count());
     }
     assert_eq!(guard.allocations(), 0, "packing an RTS frame allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        frame.instance_count(),
+        packed,
+        "re-packing an unchanged world changed the frame"
+    );
+}
+
+/// The HUD is under the same zero-allocation contract as the rest of the
+/// frame: it runs every frame, and `fmt_u32` / `fmt_ratio` write into stack
+/// buffers rather than a `String`.
+///
+/// Measured with a selection, a rally point and a non-empty production queue
+/// live — those are the three paths that push extra text beyond the top bar
+/// and the always-drawn build menu, so a measurement of the empty-selection
+/// case alone would leave them untested.
+///
+/// This lives here, not in `rts_hud.rs`, because the counting allocator is
+/// installed in *this* test binary — a `MeasureGuard` anywhere else records
+/// nothing and the assertion would pass vacuously.
+#[test]
+fn pack_hud_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    h.world_mut().selection_mut().insert(hq);
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    let cursor = [960.0, 540.0];
+
+    // Warm-up outside the scope: whatever the first pack would grow, it grows
+    // now.
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), cursor, None, &mut frame);
+    pack_hud(h.world(), &mut frame);
+    let packed = frame.instance_count();
+    assert!(
+        packed > 17,
+        "the warm-up must have packed more than the bare world"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        pack_frame(h.world(), cursor, None, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(guard.allocations(), 0, "packing the HUD allocated");
     guard.assert_zero();
     drop(guard);
 

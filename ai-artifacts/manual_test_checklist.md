@@ -1051,3 +1051,42 @@ packed frame, the two device probes, and the unchanged horde output.
       `ring_quad_size_px(8, 4, 6)`; `begin_placement(Depot)` and confirm 64 red
       tiles plus one silhouette, then move the cursor one cell `+x` and confirm
       every ghost quad shifted by `(+4, +2)` px.
+
+## T13 hud
+
+The HUD is pure layout: `rts::pack_hud` reads world state and appends a
+top resource bar and a bottom command panel (selection, production, build
+menu) to an already-packed frame's UI groups. No input, no CLI, no device
+wiring yet (T14), so there is still no interactive RTS window — manual checks
+read the packed frame, the two device probes, and the unchanged horde output.
+
+- [ ] `cargo test -p mmd-engine --test rts_hud` — 30 passed. Skim for
+      `hud_appends_and_does_not_clear`, `the_top_bar_shows_the_stock`,
+      `a_selected_worker_names_itself`, `the_build_menu_shows_costs` and
+      `the_hud_never_panics_on_a_stale_primary`.
+- [ ] `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test gpu_smoke` — 13
+      passed, 3 ignored (the pre-existing `#[ignore]` device cases). The two
+      new cases must **run**, not skip: `the_hud_renders_legible_pixels`
+      rasterises the top bar's icons and digits (more than 200 differing
+      pixels against the bare panel), and `the_hud_draws_over_the_world`
+      proves a world sprite placed under the bottom panel is overwritten.
+- [ ] `VK_DRIVER_FILES=/nonexistent cargo test -p mmd-engine --test gpu_smoke
+      -- --nocapture` — the run still exits 0 (this host's GPU discovery is
+      not gated by that variable; see the T13 report for detail).
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 18 passed.
+      `pack_hud_allocates_nothing` measures 600 `pack_frame` + `pack_hud`
+      pairs with a selection, a rally point and a live production queue, at
+      zero heap allocations.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0; final line
+      reads `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      The window is still phase-0 horde output: this slice adds no app path.
+- [ ] Open `crates/mmd-engine/src/rts/hud.rs`: confirm every push into
+      `frame.ui[0]` is a `Prop::PanelFill` quad or an icon, and every glyph
+      goes to `frame.ui[1]` via `push_text` — a textured panel pushed into the
+      font group would draw with the wrong texture bound.
+- [ ] Read a packed HUD through `RtsHarness`: pack the tracked scene fresh
+      (no selection), confirm the top bar reads `300` crystal, `100` gas and
+      `6/10` supply; select the HQ, confirm the selection block reads
+      `SELECTED 1` / `HQ` / `READY`; confirm the build menu always lists three
+      rows (`[Q] HQ 400C`, `[W] DEPOT 100C`, `[E] BARRACKS 150C 25G`) with the
+      HQ row red (300 crystal on hand, cost 400).

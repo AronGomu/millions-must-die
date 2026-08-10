@@ -288,19 +288,19 @@ the HUD drew**, not a pixel it hoped for. Spaces read back as `' '` from the gap
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/src/rts/hud.rs` with the constants block verbatim.
-- [ ] 2. Add `mod hud;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
-- [ ] 3. Create `crates/mmd-engine/tests/rts_hud.rs`, write the `glyphs` / `text_at` helpers, then every test from the table. Watch them fail.
-- [ ] 4. Implement `fmt_u32`, `fmt_ratio`, `kind_label`, `push_panel`.
-- [ ] 5. Implement `pack_hud` section A (top bar).
-- [ ] 6. Implement section B (bottom panel).
-- [ ] 7. Implement section C (selection block), all five primary-kind branches.
-- [ ] 8. Implement section D (production block).
-- [ ] 9. Implement section E (build menu) with the three tints and the pending marker.
-- [ ] 10. Append the two GPU tests to `crates/mmd-engine/tests/gpu_smoke.rs`.
-- [ ] 11. Add `pack_hud_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 12. Run the mutation list; record kills in the commit body.
-- [ ] 13. Run the full validation block.
+- [x] 1. Create `crates/mmd-engine/src/rts/hud.rs` with the constants block verbatim.
+- [x] 2. Add `mod hud;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
+- [x] 3. Create `crates/mmd-engine/tests/rts_hud.rs`, write the `glyphs` / `text_at` helpers, then every test from the table. Watch them fail.
+- [x] 4. Implement `fmt_u32`, `fmt_ratio`, `kind_label`, `push_panel`.
+- [x] 5. Implement `pack_hud` section A (top bar).
+- [x] 6. Implement section B (bottom panel).
+- [x] 7. Implement section C (selection block), all five primary-kind branches.
+- [x] 8. Implement section D (production block).
+- [x] 9. Implement section E (build menu) with the three tints and the pending marker.
+- [x] 10. Append the two GPU tests to `crates/mmd-engine/tests/gpu_smoke.rs`.
+- [x] 11. Add `pack_hud_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
+- [x] 12. Run the mutation list; record kills in the commit body.
+- [x] 13. Run the full validation block.
 
 ## Outputs
 
@@ -316,15 +316,15 @@ the HUD drew**, not a pixel it hoped for. Spaces read back as `' '` from the gap
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_hud` — all green
-- [ ] `cargo test -p mmd-engine --test rts_pack` — all green
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `git diff --stat HEAD -- lab/goldens/` — **empty**
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test rts_hud` — all green
+- [x] `cargo test -p mmd-engine --test rts_pack` — all green
+- [x] `cargo test -p mmd-engine --test frame_allocations` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `git diff --stat HEAD -- lab/goldens/` — **empty**
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] app functional — no broken path from this slice
 - [ ] commit msg draft: `feat(rts): draw the on-screen resource and command HUD`

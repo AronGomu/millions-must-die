@@ -3,6 +3,7 @@
 mod build;
 mod economy;
 mod entity;
+mod hud;
 mod orders;
 mod pack;
 mod production;
@@ -22,6 +23,11 @@ pub use economy::{
 pub use entity::{
     BuildingKind, CARRY_NONE, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL,
     OWNER_PLAYER, ResourceKind, UnitKind,
+};
+pub use hud::{
+    BOTTOM_PANEL_RECT, BUILD_MENU, BUILD_MENU_RECT, ICON_PX, NUM_BUF, PANEL_LINE_PX,
+    PANEL_TEXT_SCALE, PANEL_TINT, PRODUCTION_RECT, SELECTION_RECT, TEXT_TINT, TEXT_TINT_BLOCKED,
+    TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, fmt_ratio, fmt_u32, kind_label, pack_hud,
 };
 pub use orders::{
     ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,

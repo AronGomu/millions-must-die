@@ -18,7 +18,9 @@ use mmd_engine::render::{
     frame_uv_rect, load_atlases, push_text, required_backend, validate_adapter_name,
     validate_backend_name, validate_macos_host_arch,
 };
-use mmd_engine::rts::{BuildingKind, RtsFrame, pack_frame};
+use mmd_engine::rts::{
+    BOTTOM_PANEL_RECT, BuildingKind, RtsFrame, TOP_BAR_RECT, pack_frame, pack_hud,
+};
 use mmd_engine::testkit::RtsHarness;
 use mmd_engine::workspace_root;
 use std::sync::{Mutex, MutexGuard};
@@ -456,4 +458,109 @@ fn the_ghost_draws_over_the_world() {
         "no pixel inside the HQ's screen rect ({x0}..{x1} x {y0}..{y1}) carries \
          the placement-BAD colour"
     );
+}
+
+/// The HUD's top bar really rasterises text, not just well-formed instances.
+///
+/// Every headless case in `rts_hud.rs` asserts about instances; none of them
+/// can tell a well-formed glyph instance from a visible one. Compared against
+/// a same-frame reference pixel (the panel's own colour, sampled where no
+/// glyph reaches) rather than a literal colour, since the panel art's exact
+/// RGB is not this ticket's concern.
+#[test]
+fn the_hud_renders_legible_pixels() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("the_hud_renders_legible_pixels") else {
+        return;
+    };
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), [960.0, 540.0], None, &mut frame);
+    pack_hud(h.world(), &mut frame);
+
+    let rb = r
+        .draw_offscreen_readback_scene(frame.scene())
+        .expect("readback");
+
+    // Far right of the top bar: past every icon and every digit the tracked
+    // scene's stock ever draws, so this is bare panel.
+    let panel_ref = rb.pixel(1900, 20);
+    let mut differing = 0u32;
+    for y in (TOP_BAR_RECT[1] as u32)..(TOP_BAR_RECT[1] + TOP_BAR_RECT[3]) as u32 {
+        for x in (TOP_BAR_RECT[0] as u32)..(TOP_BAR_RECT[0] + TOP_BAR_RECT[2]) as u32 {
+            if rb.pixel(x, y) != panel_ref {
+                differing += 1;
+            }
+        }
+    }
+    assert!(
+        differing > 200,
+        "expected more than 200 pixels inside the top bar to differ from the \
+         panel colour (glyphs visible), got {differing}"
+    );
+}
+
+/// The bottom panel draws over the world: a world sprite placed under it must
+/// have its pixels overwritten by the panel — the same claim
+/// `the_ghost_draws_over_the_world` makes for the placement ghost, here for
+/// the HUD's command panel.
+///
+/// Compared before/after at the *same* screen pixel, not across two panel
+/// positions: the panel art is a textured, semi-transparent cell stretched
+/// over a large quad, so two arbitrary points inside it are neither the same
+/// colour nor fully opaque — only the same pixel is guaranteed to change once
+/// the world sprite under it is drawn over.
+#[test]
+fn the_hud_draws_over_the_world() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("the_hud_draws_over_the_world") else {
+        return;
+    };
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame); // frame.world stays empty
+
+    // A patch inside the bottom panel with no glyph on it: nothing is
+    // selected, so the production block is empty, and this x sits past the
+    // build menu's own text.
+    let probe = [700u32, 950];
+    let world = [DrawGroup {
+        atlas_id: 0,
+        instances: vec![SpriteInstance::new(
+            [probe[0] as f32, probe[1] as f32],
+            [32.0, 32.0],
+            frame_uv_rect(0, 0),
+            SpriteInstance::WHITE,
+        )],
+    }];
+
+    let under = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            overlay: &[],
+            ui: &[],
+        })
+        .expect("world-only readback");
+    let over = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            overlay: &[],
+            ui: &frame.ui,
+        })
+        .expect("world + HUD readback");
+
+    assert!(
+        (BOTTOM_PANEL_RECT[1] as u32..(BOTTOM_PANEL_RECT[1] + BOTTOM_PANEL_RECT[3]) as u32)
+            .contains(&probe[1]),
+        "the probe must itself be inside the bottom panel"
+    );
+    for y in probe[1]..probe[1] + 32 {
+        for x in probe[0]..probe[0] + 32 {
+            assert_ne!(
+                over.pixel(x, y),
+                under.pixel(x, y),
+                "pixel ({x}, {y}) must change once the HUD panel covers it"
+            );
+        }
+    }
 }
