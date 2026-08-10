@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RTS Engine Prototype — Architecture (Phase 1)</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --plane:      #0d0d0d;
+    --surface:    #1a1a19;
+    --surface-2:  #232321;
+    --ink:        #ffffff;
+    --ink-2:      #c3c2b7;
+    --muted:      #898781;
+    --rule:       #2c2c2a;
+    --edge:       #383835;
+    --s1: #3987e5;  /* scenario / world data */
+    --s2: #d95926;  /* per-tick system       */
+    --s3: #199e70;  /* invariant / proof     */
+    --s4: #c98500;  /* deferred / rejected   */
+    --s5: #d24f8f;  /* render layer          */
+    --s7: #9085e9;  /* navigation            */
+    --ring: rgba(255,255,255,0.10);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) {
+      color-scheme: light;
+      --plane: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ee;
+      --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+      --rule: #e1e0d9; --edge: #c3c2b7;
+      --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+      --s5: #c23b7d; --s7: #4a3aa7;
+      --ring: rgba(11,11,11,0.10);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --plane: #f9f9f7; --surface: #fcfcfb; --surface-2: #f2f1ee;
+    --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --rule: #e1e0d9; --edge: #c3c2b7;
+    --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100;
+    --s5: #c23b7d; --s7: #4a3aa7;
+    --ring: rgba(11,11,11,0.10);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0;
+    background: var(--plane); color: var(--ink);
+    font: 16px/1.62 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 62rem; margin: 0 auto; padding: 3rem 1.25rem 5rem; }
+
+  header { border-bottom: 1px solid var(--rule); padding-bottom: 1.5rem; margin-bottom: 2.5rem; }
+  .kicker {
+    font-size: .75rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin: 0 0 .6rem;
+  }
+  h1 { font-size: clamp(1.6rem, 4vw, 2.3rem); line-height: 1.18; margin: 0 0 .7rem; font-weight: 650; }
+  .lede { color: var(--ink-2); font-size: 1.05rem; margin: 0; max-width: 46rem; }
+
+  h2 {
+    font-size: 1.22rem; margin: 3rem 0 .9rem; font-weight: 640;
+    padding-bottom: .45rem; border-bottom: 1px solid var(--rule);
+  }
+  h3 { font-size: .98rem; margin: 1.8rem 0 .5rem; font-weight: 640; color: var(--ink); }
+  p  { margin: 0 0 1rem; color: var(--ink-2); }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .875em; background: var(--surface-2);
+    border: 1px solid var(--ring); border-radius: 4px; padding: .08em .35em;
+    color: var(--ink);
+  }
+  pre {
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 8px;
+    padding: .9rem 1.1rem; overflow-x: auto; margin: 1.1rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: .82rem; line-height: 1.55; color: var(--ink-2);
+  }
+  pre code { background: none; border: none; padding: 0; }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--ring);
+    border-radius: 10px; padding: 1.25rem 1.4rem; margin: 1.2rem 0;
+  }
+  .panel > :last-child { margin-bottom: 0; }
+
+  .figure { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 1rem; margin: 1.4rem 0; }
+  .scroll { overflow-x: auto; }
+  .figure svg { display: block; min-width: 640px; }
+  .caption { color: var(--muted); font-size: .82rem; margin: .8rem .2rem 0; }
+
+  table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+  .scroll table { min-width: 40rem; }
+  th, td { text-align: left; padding: .6rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .74rem; letter-spacing: .07em; text-transform: uppercase; }
+  td { color: var(--ink-2); }
+  td strong { color: var(--ink); font-weight: 620; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.num { font-variant-numeric: tabular-nums; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: .4rem 1.3rem; margin: 0 0 1rem; padding: 0; list-style: none; font-size: .82rem; color: var(--ink-2); }
+  .legend li { display: flex; align-items: center; gap: .45rem; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+
+  .tag {
+    display: inline-block; font-size: .68rem; letter-spacing: .06em; text-transform: uppercase;
+    padding: .16em .5em; border-radius: 4px; border: 1px solid currentColor; font-weight: 640;
+  }
+  .tag.keep { color: var(--s3); }
+  .tag.no   { color: var(--s4); }
+
+  ul.plain { margin: 0 0 1rem; padding-left: 1.15rem; color: var(--ink-2); }
+  ul.plain li { margin-bottom: .4rem; }
+
+  .fence {
+    border-left: 3px solid var(--s4); background: var(--surface);
+    border-radius: 0 8px 8px 0; padding: 1rem 1.2rem; margin: 1.2rem 0;
+  }
+  .fence h3 { margin-top: 0; }
+  .fence > :last-child { margin-bottom: 0; }
+
+  .claimbox { border: 1px dashed var(--edge); border-radius: 10px; padding: 1.2rem 1.4rem; margin: 2rem 0 0; }
+  .claimbox h2 { border: none; margin-top: 0; padding-bottom: 0; }
+
+  footer { margin-top: 3.5rem; padding-top: 1.2rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: .82rem; }
+  footer a { color: var(--s1); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="kicker">Millions Must Die · Phase 1 · RTS Engine Prototype</p>
+  <h1>An RTS on top of a horde engine, without disturbing the horde</h1>
+  <p class="lede">
+    Six systems — camera, selection, workers, economy, building, unit production —
+    cut thin and vertical, on a horde-free scene. The constraint that shaped every
+    decision here: phase 0's contracts stay frozen. The 5&nbsp;000-agent gate scene's
+    state hash does not move, the render golden is byte-identical, and the scenario
+    contract's <code>atlas_count: 4</code> still binds every family.
+  </p>
+</header>
+
+<h2>Two worlds, one binary</h2>
+
+<p>
+  The phase-0 <code>Simulation</code> is a fixed-population horde walker: one
+  destination, one flow field, a recycle cursor. Player units need per-unit
+  orders, cargo, construction progress and production queues. Putting those into
+  <code>Simulation</code> would push RTS state inside the type every pinned
+  phase-0 hash digests.
+</p>
+<p>
+  So there are two entity models, side by side, and two commands to drive them.
+  <code>run</code> is unchanged — same 24 CLI contract cases, same stdout, same
+  hash. <code>rts</code> is new.
+</p>
+
+<div class="figure scroll">
+<svg viewBox="0 0 940 250" width="100%" height="250" role="img"
+     aria-label="Two worlds sharing one renderer: the phase-0 horde Runtime and the phase-1 RtsWorld, both feeding the same SpriteRenderer through a scene pass.">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g>
+    <rect x="24" y="30" width="230" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.5"/>
+    <text x="139" y="56" text-anchor="middle" fill="var(--ink)" font-size="13" font-family="ui-monospace, monospace">runtime::Runtime</text>
+    <text x="139" y="76" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">horde · 5 000 agents · frozen</text>
+    <text x="139" y="93" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">cargo run -- run</text>
+  </g>
+
+  <g>
+    <rect x="24" y="140" width="230" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="139" y="166" text-anchor="middle" fill="var(--ink)" font-size="13" font-family="ui-monospace, monospace">rts::RtsWorld</text>
+    <text x="139" y="186" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">entities · orders · economy</text>
+    <text x="139" y="203" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">cargo run -- rts</text>
+  </g>
+
+  <g>
+    <rect x="330" y="30" width="222" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s5)" stroke-width="1.5"/>
+    <text x="441" y="56" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">pack_instance_groups</text>
+    <text x="441" y="76" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">4 groups + rings</text>
+    <text x="441" y="93" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">slots 0–3</text>
+  </g>
+
+  <g>
+    <rect x="330" y="140" width="222" height="76" rx="8" fill="var(--surface-2)" stroke="var(--s5)" stroke-width="1.5"/>
+    <text x="441" y="166" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">pack_frame + pack_hud</text>
+    <text x="441" y="186" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">3 world groups + rings + UI</text>
+    <text x="441" y="203" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">slots 4–8</text>
+  </g>
+
+  <g>
+    <rect x="628" y="82" width="288" height="82" rx="8" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.5"/>
+    <text x="772" y="110" text-anchor="middle" fill="var(--ink)" font-size="13" font-family="ui-monospace, monospace">SpriteRenderer</text>
+    <text x="772" y="130" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">one shader, two pipelines</text>
+    <text x="772" y="147" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="ui-monospace, monospace">ScenePass { world, overlay, ui }</text>
+  </g>
+
+  <g color="var(--edge)">
+    <line x1="254" y1="68"  x2="324" y2="68"  stroke="currentColor" stroke-width="1.5" marker-end="url(#a1)"/>
+    <line x1="254" y1="178" x2="324" y2="178" stroke="currentColor" stroke-width="1.5" marker-end="url(#a1)"/>
+    <path d="M552 68 L590 68 L590 118 L622 118"  fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#a1)"/>
+    <path d="M552 178 L590 178 L590 128 L622 128" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#a1)"/>
+  </g>
+</svg>
+<p class="caption">
+  The renderer is the only shared piece, and it was generalised rather than
+  forked: <code>DrawGroup.atlas_id</code> stopped meaning "atlas index" and
+  started meaning "texture slot". With an empty UI layer the emitted bind-and-draw
+  sequence is byte-for-byte what phase 0 emitted, which is why the golden survives.
+</p>
+</div>
+
+<h2>The RTS tick</h2>
+
+<p>
+  Seven systems, fixed order, written into <code>RtsWorld::tick</code>'s doc
+  comment so a reordering is a visible diff rather than an accident. Two of the
+  orderings are load-bearing.
+</p>
+
+<ul class="legend">
+  <li><span class="dot" style="background:var(--s1)"></span>reads input state</li>
+  <li><span class="dot" style="background:var(--s2)"></span>mutates entities</li>
+  <li><span class="dot" style="background:var(--s7)"></span>touches navigation</li>
+  <li><span class="dot" style="background:var(--s3)"></span>derived, never incremented</li>
+</ul>
+
+<div class="figure scroll">
+<svg viewBox="0 0 940 220" width="100%" height="220" role="img"
+     aria-label="The seven systems of an RTS tick in order: commands, camera, construction, production, orders, movement, supply recount, then selection self-heal.">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g font-family="system-ui, sans-serif">
+    <rect x="14"  y="46" width="104" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.5"/>
+    <text x="66"  y="70" text-anchor="middle" fill="var(--ink)" font-size="12">1 commands</text>
+    <text x="66"  y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">click · order · queue</text>
+
+    <rect x="140" y="46" width="96" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s1)" stroke-width="1.5"/>
+    <text x="188" y="70" text-anchor="middle" fill="var(--ink)" font-size="12">2 camera</text>
+    <text x="188" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">pan · clamp</text>
+
+    <rect x="258" y="46" width="126" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="321" y="70" text-anchor="middle" fill="var(--ink)" font-size="12">3 construction</text>
+    <text x="321" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">attend · finish · stamp</text>
+
+    <rect x="406" y="46" width="120" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="466" y="70" text-anchor="middle" fill="var(--ink)" font-size="12">4 production</text>
+    <text x="466" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">advance · spawn</text>
+
+    <rect x="548" y="46" width="106" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="601" y="70" text-anchor="middle" fill="var(--ink)" font-size="12">5 orders</text>
+    <text x="601" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">gather phases</text>
+
+    <rect x="676" y="46" width="112" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="732" y="70" text-anchor="middle" fill="var(--ink)" font-size="12">6 movement</text>
+    <text x="732" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">field descent</text>
+
+    <rect x="810" y="46" width="116" height="58" rx="7" fill="var(--surface-2)" stroke="var(--s3)" stroke-width="1.5"/>
+    <text x="868" y="70" text-anchor="middle" fill="var(--ink)" font-size="12">7 supply</text>
+    <text x="868" y="88" text-anchor="middle" fill="var(--muted)" font-size="10.5">recount</text>
+  </g>
+
+  <g color="var(--edge)">
+    <line x1="118" y1="75" x2="134" y2="75" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)"/>
+    <line x1="236" y1="75" x2="252" y2="75" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)"/>
+    <line x1="384" y1="75" x2="400" y2="75" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)"/>
+    <line x1="526" y1="75" x2="542" y2="75" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)"/>
+    <line x1="654" y1="75" x2="670" y2="75" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)"/>
+    <line x1="788" y1="75" x2="804" y2="75" stroke="currentColor" stroke-width="1.4" marker-end="url(#a2)"/>
+  </g>
+
+  <g color="var(--s4)" font-family="system-ui, sans-serif">
+    <path d="M321 108 L321 140 L466 140 L466 110" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="4 4" marker-end="url(#a2)"/>
+    <text x="393" y="156" text-anchor="middle" fill="var(--muted)" font-size="10.5">a Barracks that finishes this tick can already hold a queue</text>
+    <path d="M601 108 L601 178 L732 178 L732 110" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="4 4" marker-end="url(#a2)"/>
+    <text x="666" y="196" text-anchor="middle" fill="var(--muted)" font-size="10.5">a worker that arrives starts mining the same tick</text>
+  </g>
+</svg>
+<p class="caption">
+  Selection self-heal runs after step 7: an entity that died this tick leaves the
+  selection before anything reads it next tick. The whole tick is
+  allocation-free, enforced by <code>crates/mmd-engine/tests/frame_allocations.rs</code>.
+</p>
+</div>
+
+<h2>Navigation: eight fields, LRU</h2>
+
+<p>
+  The engine rule is flow fields, never per-entity pathfinding. A player issues
+  orders to arbitrary destinations, so the answer is a small pool keyed by
+  destination cell. Units sharing a destination share a field — group cohesion
+  for free, and one rebuild instead of <em>N</em>.
+</p>
+
+<div class="panel">
+<p><strong>Why not per-unit A*.</strong> It breaks the stated rule, it needs a
+per-tick path-request budget nobody has tuned, and it allocates unless a path
+arena is built first. Three new problems, to solve a problem the existing tech
+already solves.</p>
+<p><strong>Cost of a miss.</strong> <code>FlowField::rebuild_in_place</code>
+reuses the field's own <code>costs</code>/<code>vx</code>/<code>vy</code> buffers
+plus a caller-owned <code>FieldScratch</code> heap. After warmup a miss allocates
+nothing; the one documented exception in this phase is that the very first
+rebuild at a given grid size may grow that heap once.</p>
+<p><strong>Invalidation is total.</strong> A finished building stamps its
+footprint blocked and every cached field is invalidated — not the ones that
+"look affected". One new obstacle can change the descent vector anywhere
+downstream of it, and a partial invalidation surfaces as units walking into a
+wall built ten seconds ago.</p>
+</div>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Knob</th><th>Value</th><th>Why that one</th></tr></thead>
+  <tbody>
+    <tr><td><code>NAV_FIELD_SLOTS</code></td><td class="num">8</td><td>the live working set a player actually holds; eviction is exact LRU, ties to the lowest slot</td></tr>
+    <tr><td><code>MAX_ENTITIES</code></td><td class="num">2 048</td><td>derived: 500 supply / 1 supply per worker = 500 units max, plus buildings and nodes</td></tr>
+    <tr><td><code>WORKER_SPEED_CELLS_PER_SEC</code></td><td class="num">10.0</td><td>outruns the horde's 8.0, so a base can be re-tasked faster than it can be walked across</td></tr>
+    <tr><td><code>SOLDIER_SPEED_CELLS_PER_SEC</code></td><td class="num">8.0</td><td>matches the horde exactly — a phase-2 fight must not be decided by a speed nobody chose</td></tr>
+    <tr><td><code>ARRIVAL_RADIUS_CELLS</code></td><td class="num">1.5</td><td>a group is sent to one cell and only one of them can stand on it; the rest stop adjacent and the order still completes</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>The worker round trip</h2>
+
+<p>
+  One order value, three phases, hashed. The loop's length is dominated by
+  <em>walking</em>, not by mining — which is exactly the macro decision the
+  economy exists to pose.
+</p>
+
+<div class="figure scroll">
+<svg viewBox="0 0 940 200" width="100%" height="200" role="img"
+     aria-label="The gather state machine: ToNode, Mining, Returning, and back, with the exits that end the order.">
+  <defs>
+    <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+
+  <g font-family="system-ui, sans-serif">
+    <rect x="60"  y="40" width="180" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="150" y="64" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">ToNode</text>
+    <text x="150" y="84" text-anchor="middle" fill="var(--muted)" font-size="11">walk · reach 2.0 cells</text>
+
+    <rect x="380" y="40" width="180" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s2)" stroke-width="1.5"/>
+    <text x="470" y="64" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">Mining</text>
+    <text x="470" y="84" text-anchor="middle" fill="var(--muted)" font-size="11">60 ticks · take min(8, left)</text>
+
+    <rect x="700" y="40" width="180" height="62" rx="8" fill="var(--surface-2)" stroke="var(--s7)" stroke-width="1.5"/>
+    <text x="790" y="64" text-anchor="middle" fill="var(--ink)" font-size="12.5" font-family="ui-monospace, monospace">Returning</text>
+    <text x="790" y="84" text-anchor="middle" fill="var(--muted)" font-size="11">reach 1.0 from the footprint</text>
+  </g>
+
+  <g color="var(--edge)">
+    <line x1="240" y1="71" x2="374" y2="71" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+    <line x1="560" y1="71" x2="694" y2="71" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+    <path d="M790 102 L790 148 L150 148 L150 106" fill="none" stroke="currentColor" stroke-width="1.5" marker-end="url(#a3)"/>
+    <text x="470" y="166" text-anchor="middle" fill="var(--muted)" font-size="11" font-family="system-ui, sans-serif">bank · clear cargo · re-acquire the node's field</text>
+  </g>
+
+  <g color="var(--s4)" font-family="system-ui, sans-serif">
+    <text x="150" y="26" text-anchor="middle" fill="var(--s4)" font-size="10.5">node empty → Idle</text>
+    <text x="790" y="26" text-anchor="middle" fill="var(--s4)" font-size="10.5">no drop-off → Idle, cargo kept</text>
+  </g>
+</svg>
+<p class="caption">
+  Two different reach rules, on purpose. A node is one cell, so distance is
+  measured centre-to-centre. An HQ is twelve cells across, so distance is measured
+  to its <em>footprint rectangle</em> — a centre rule would make a worker walk
+  into the middle of its own base to deliver.
+</p>
+</div>
+
+<h2>Supply is reserved, and usage is derived</h2>
+
+<div class="panel">
+<p><strong>Reserved at enqueue.</strong> Charging supply when a unit pops would
+let a player queue five Soldiers into two free supply and get all five. The cap
+would be decoration. The check order in <code>enqueue_unit</code> is: supply
+first, <em>then</em> the resource debit — so a supply-blocked enqueue never takes
+the player's money.</p>
+<p><strong>Recomputed, never incremented.</strong> Step 7 sums
+<code>supply_cost</code> over every live unit and adds the queues' reservations.
+An incremental counter needs adjusting at five call sites — spawn, despawn,
+enqueue, cancel, store-full recovery — and one missed site is a slow drift the
+player only notices when production mysteriously stops.</p>
+</div>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Thing</th><th>Cost</th><th>Time (ticks)</th><th>Supply</th></tr></thead>
+  <tbody>
+    <tr><td><strong>Worker</strong></td><td class="num">50 C</td><td class="num">300</td><td class="num">costs 1</td></tr>
+    <tr><td><strong>Soldier</strong></td><td class="num">50 C · 25 G</td><td class="num">360</td><td class="num">costs 2</td></tr>
+    <tr><td><strong>HQ</strong></td><td class="num">400 C</td><td class="num">600</td><td class="num">grants 10</td></tr>
+    <tr><td><strong>Depot</strong></td><td class="num">100 C</td><td class="num">180</td><td class="num">grants 10</td></tr>
+    <tr><td><strong>Barracks</strong></td><td class="num">150 C · 25 G</td><td class="num">300</td><td class="num">grants 0</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  <span class="tag no">not balanced</span> These are placeholders chosen so every
+  system is observable inside a ~1 600-frame acceptance run. Phase 5 is the
+  economy tuning pass.
+</p>
+
+<h2>The render layers</h2>
+
+<p>
+  A frame is three layers. No third pipeline and no new shader module — the UI
+  rides the same depth-off pipeline the hitbox rings already proved.
+</p>
+
+<pre><code>pub struct ScenePass&lt;'a&gt; {
+    pub world:   &amp;'a [DrawGroup],       // depth-tested, slots 0..=6
+    pub overlay: &amp;'a [SpriteInstance],  // depth off, PROCEDURAL RINGS ONLY
+    pub ui:      &amp;'a [DrawGroup],       // depth off, textured, drawn last
+}</code></pre>
+
+<div class="fence">
+<h3>The rule a contributor can get wrong</h3>
+<p>
+  <code>overlay</code> binds texture slot 0 and is honest <em>only</em> for
+  procedural ring instances — the shader's ring branch samples no texture, and
+  slot 0 is bound merely because a draw must not leave the pipeline's one
+  declared sampler unbound. A <em>textured</em> instance pushed into
+  <code>overlay</code> will sample the zombie atlas. Textured depth-off content
+  belongs in <code>ui</code>.
+</p>
+</div>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>Slot</th><th>Sheet</th><th>Geometry</th><th>Read as</th></tr></thead>
+  <tbody>
+    <tr><td class="num">0–3</td><td><strong>zombie atlases</strong></td><td>128 × 256, 4 × 8 of 32 px</td><td><code>(dir, frame)</code> — phase 0, byte-unchanged</td></tr>
+    <tr><td class="num">4</td><td><code>rts/worker.png</code></td><td>128 × 256</td><td><code>(dir, frame)</code></td></tr>
+    <tr><td class="num">5</td><td><code>rts/soldier.png</code></td><td>128 × 256</td><td><code>(dir, frame)</code></td></tr>
+    <tr><td class="num">6</td><td><code>rts/buildings.png</code></td><td>128 × 256</td><td>static <code>(row, col)</code> table: finished, site, node, depleted</td></tr>
+    <tr><td class="num">7</td><td><code>rts/props.png</code></td><td>128 × 256</td><td>static table: placement tiles, rally flag, icons, panel fill</td></tr>
+    <tr><td class="num">8</td><td><code>ui/font.png</code></td><td>128 × 48, 16 × 6 of 8 px</td><td>ASCII 32–127</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p>
+  Every phase-1 sheet keeps the phase-0 frame geometry, so
+  <code>frame_uv_rect</code> addresses all of them unchanged. All of them are
+  generated from code — no source image, no third-party licence — and
+  <code>xtask atlases --check</code> regenerates and byte-compares all three
+  families.
+</p>
+
+<h3>The camera and the depth key</h3>
+
+<p>
+  <code>IsoView::with_center_cell</code> re-derives <code>origin</code>
+  <strong>and</strong> <code>depth_bias</code> together. That pairing is the whole
+  decision: the depth key is
+  <code>ground_y · depth_scale + depth_bias</code>, and <code>depth_bias</code>
+  carries <code>−origin.y</code>, so the key is a unit's position down the
+  <em>map</em> diamond and does not move when the camera does. Recomputing one
+  without the other makes the crowd re-sort itself as the view scrolls.
+</p>
+
+<p>
+  <span class="tag no">deferred</span> Zoom. It multiplies through the tile size,
+  the depth normalisation, the AABB cull and every render golden, and
+  non-integer tile scales shimmer on pixel art. Pan and edge-pan answer the
+  phase's question.
+</p>
+
+<h2>What this phase does not do</h2>
+
+<ul class="plain">
+  <li>No combat. The Soldier has no weapon, no health, no behaviour — its
+      selection panel reads <code>IDLE</code>, because anything else would be a
+      claim the code cannot support.</li>
+  <li>No enemy AI, no second faction, no waves.</li>
+  <li>No zoom, no minimap, no fog of war, no save/load, no menus, no sound.</li>
+  <li>No balance pass. Every number above is a placeholder.</li>
+  <li>No real art. Every phase-1 sprite is a generated placeholder, and a real
+      art pass will change every tracked hash — which is the intended failure
+      mode, not a problem.</li>
+  <li>No cross-platform verification. Linux/Vulkan development host only, as in
+      phase 0.</li>
+  <li><strong>No performance number of any kind.</strong> Nothing here is
+      measured, published, or gated on. <code>no_perf_claim_in_docs</code>
+      covers this page.</li>
+</ul>
+
+<div class="claimbox">
+<h2>What is actually proven</h2>
+<p>
+  One tracked script — <code>assets/scenarios/rts_acceptance_v1.script</code> —
+  drives select → gather → build → produce end to end, and it is asserted twice:
+  once through the engine by world state, milestone by milestone, and once
+  through the shipped binary by its exit line. It is in the merge gate.
+</p>
+<p>
+  Alongside it: the horde's <code>run --agents 5000 --frames 300</code> exit-line
+  hash is unchanged, the host render golden under <code>lab/goldens/</code> is
+  byte-identical, <code>SpriteInstance</code> is still 48 bytes,
+  <code>shaders/sprite.hlsl</code> is byte-unmodified, and
+  <code>cargo tree -e features | grep -c testkit</code> is still <code>0</code>.
+</p>
+</div>
+
+<footer>
+  Decisions: <a href="ADR/013_ADR_phase1_scope_and_rts_entity_model.md">ADR 013</a> ·
+  <a href="ADR/014_ADR_movable_camera_texture_table_and_ui_layer.md">ADR 014</a> ·
+  <a href="ADR/015_ADR_economy_construction_and_production_determinism.md">ADR 015</a>.
+  Plan: <code>ai-artifacts/PLAN_2026_08_10_rts-engine-prototype.md</code>.
+  Gate: <a href="05-testing.md">testing strategy</a>.
+</footer>
+
+</div>
+</body>
+</html>
