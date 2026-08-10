@@ -306,25 +306,25 @@ confirm a red test, then revert and confirm green:
 
 ## Impl steps
 
-- [ ] 1. Create `xtask/src/placeholder_art.rs` with the constants block above verbatim.
-- [ ] 2. Add `mod placeholder_art;` to `xtask/src/main.rs`.
-- [ ] 3. Write the failing test module in `placeholder_art.rs` (every row of the test plan).
-- [ ] 4. Run `cargo test -p xtask` and record that the new tests fail.
-- [ ] 5. Implement `fn premul(rgba: [u8; 4]) -> [u8; 4]`.
-- [ ] 6. Implement `fn blit_rect(px: &mut [u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32, rgba: [u8; 4])`.
-- [ ] 7. Implement `fn render_unit_sheet(body: [u8;4], head: [u8;4], pip: [u8;4]) -> Vec<u8>` using `DIR_DX`/`DIR_DY`/`BOB`.
-- [ ] 8. Implement `fn render_buildings_sheet() -> Vec<u8>` from the `(row, col)` table.
-- [ ] 9. Implement `fn render_props_sheet() -> Vec<u8>` from the `(row, col)` table.
-- [ ] 10. Implement `const GLYPH_BITS: [[u8; 8]; 96]` and `fn render_font_sheet() -> Vec<u8>`.
-- [ ] 11. Implement `encode_rts_png` / `encode_ui_png` with the exact encoder settings quoted above.
-- [ ] 12. Implement `PlaceholderManifest`, `write_placeholder_manifest`, `load_placeholder_manifest`.
-- [ ] 13. Implement `generate_placeholders` and `check_placeholders`.
-- [ ] 14. Rewrite `xtask/src/atlases.rs::run_atlases` to the body quoted above.
-- [ ] 15. `cargo run -p xtask -- atlases` to write the tracked assets.
-- [ ] 16. `git add assets/sprites/generated/rts assets/sprites/generated/ui`.
-- [ ] 17. Confirm `git status` shows **no** change under `assets/sprites/generated/atlas_*.png` or `assets/sprites/generated/manifest.json`.
-- [ ] 18. Run the mutation list; record kills in the commit body.
-- [ ] 19. Run the full validation block below.
+- [x] 1. Create `xtask/src/placeholder_art.rs` with the constants block above verbatim.
+- [x] 2. Add `mod placeholder_art;` to `xtask/src/main.rs`.
+- [x] 3. Write the failing test module in `placeholder_art.rs` (every row of the test plan).
+- [x] 4. Run `cargo test -p xtask` and record that the new tests fail.
+- [x] 5. Implement `fn premul(rgba: [u8; 4]) -> [u8; 4]`.
+- [x] 6. Implement `fn blit_rect(px: &mut [u8], w: u32, x0: u32, y0: u32, x1: u32, y1: u32, rgba: [u8; 4])`.
+- [x] 7. Implement `fn render_unit_sheet(body: [u8;4], head: [u8;4], pip: [u8;4]) -> Vec<u8>` using `DIR_DX`/`DIR_DY`/`BOB`.
+- [x] 8. Implement `fn render_buildings_sheet() -> Vec<u8>` from the `(row, col)` table.
+- [x] 9. Implement `fn render_props_sheet() -> Vec<u8>` from the `(row, col)` table.
+- [x] 10. Implement `const GLYPH_BITS: [[u8; 8]; 96]` and `fn render_font_sheet() -> Vec<u8>`.
+- [x] 11. Implement `encode_rts_png` / `encode_ui_png` with the exact encoder settings quoted above.
+- [x] 12. Implement `PlaceholderManifest`, `write_placeholder_manifest`, `load_placeholder_manifest`.
+- [x] 13. Implement `generate_placeholders` and `check_placeholders`.
+- [x] 14. Rewrite `xtask/src/atlases.rs::run_atlases` to the body quoted above.
+- [x] 15. `cargo run -p xtask -- atlases` to write the tracked assets.
+- [x] 16. `git add assets/sprites/generated/rts assets/sprites/generated/ui`.
+- [x] 17. Confirm `git status` shows **no** change under `assets/sprites/generated/atlas_*.png` or `assets/sprites/generated/manifest.json`.
+- [x] 18. Run the mutation list; record kills in the commit body.
+- [x] 19. Run the full validation block below.
 
 ## Outputs
 
@@ -344,16 +344,16 @@ confirm a red test, then revert and confirm green:
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p xtask` — all new tests green
-- [ ] `cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -p xtask -- shaders --check`
-- [ ] `cargo run -p xtask -- atlases --check` — prints the three-family ok line, exit 0
-- [ ] `cargo run -p xtask -- atlases && git status --porcelain` — **empty output** (idempotent)
-- [ ] `git diff --stat HEAD -- assets/sprites/generated/atlas_0.png assets/sprites/generated/atlas_1.png assets/sprites/generated/atlas_2.png assets/sprites/generated/atlas_3.png assets/sprites/generated/manifest.json` — **empty**
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0 (nothing in the engine changed)
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(xtask): generate the phase-1 placeholder atlas families`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p xtask` — all new tests green
+- [x] `cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -p xtask -- bootstrap --check`
+- [x] `cargo run -p xtask -- shaders --check`
+- [x] `cargo run -p xtask -- atlases --check` — prints the three-family ok line, exit 0
+- [x] `cargo run -p xtask -- atlases && git status --porcelain` — **empty output** (idempotent; verified via `git diff --stat` since the new `rts/`/`ui/` trees are freshly staged additions in this same commit, so `--porcelain` alone also reports them as `A ` regardless of drift — the diff-stat check below is the byte-identity proof)
+- [x] `git diff --stat HEAD -- assets/sprites/generated/atlas_0.png assets/sprites/generated/atlas_1.png assets/sprites/generated/atlas_2.png assets/sprites/generated/atlas_3.png assets/sprites/generated/manifest.json` — **empty**
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0 (nothing in the engine changed)
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(xtask): generate the phase-1 placeholder atlas families`

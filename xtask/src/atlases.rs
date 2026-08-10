@@ -445,19 +445,29 @@ pub fn assert_premultiplied(file: &str, png_bytes: &[u8]) -> Result<(), AtlasErr
     Ok(())
 }
 
-/// CLI entry: write or check generated atlases.
+/// CLI entry: write or check generated atlases (zombie + rts + ui families).
 pub fn run_atlases(check: bool) -> Result<(), AtlasError> {
     let root = workspace_root_from_xtask_manifest();
     let out = default_output_dir(&root);
+    let rts_out = crate::placeholder_art::rts_dir(&root);
+    let ui_out = crate::placeholder_art::ui_dir(&root);
     if check {
         check_atlases(&out)?;
-        println!("atlases: ok ({ATLAS_COUNT} png + manifest)");
+        crate::placeholder_art::check_placeholders(&rts_out, &ui_out)?;
+        println!(
+            "atlases: ok ({ATLAS_COUNT} zombie png + manifest, {} rts png + manifest, {} ui png + manifest)",
+            crate::placeholder_art::RTS_FILES.len(),
+            crate::placeholder_art::UI_FILES.len()
+        );
     } else {
         let manifest = generate_atlases(&out)?;
+        let (rts, ui) = crate::placeholder_art::generate_placeholders(&rts_out, &ui_out)?;
         println!(
-            "atlases: wrote {} png + manifest → {}",
+            "atlases: wrote {} zombie + {} rts + {} ui png + manifests → {}",
             manifest.atlases.len(),
-            out.display()
+            rts.images.len(),
+            ui.images.len(),
+            out.parent().unwrap_or(&out).display()
         );
     }
     Ok(())

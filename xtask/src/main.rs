@@ -3,6 +3,7 @@
 mod atlases;
 mod bootstrap;
 mod digest;
+mod placeholder_art;
 mod shaders;
 
 use clap::{Parser, Subcommand};

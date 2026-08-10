@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "generator": "mmd-rts-placeholder-v1",
+  "frame_width_px": 32,
+  "frame_height_px": 32,
+  "cols": 4,
+  "rows": 8,
+  "images": [
+    {
+      "id": 0,
+      "file": "worker.png",
+      "sha256": "cb7d98c4c46c8ace2e3a3b26fdda75068c154e90d42cac7e03c1d2c35cc39ba3"
+    },
+    {
+      "id": 1,
+      "file": "soldier.png",
+      "sha256": "f01a231587ea0ef62be74ea05495b5ee91123154e72930b21979b387e0d6c875"
+    },
+    {
+      "id": 2,
+      "file": "buildings.png",
+      "sha256": "8722f3b0041980a39e7f9d2546649f27346cceea207abb12143cbeecd0f23a23"
+    },
+    {
+      "id": 3,
+      "file": "props.png",
+      "sha256": "779cbaf64bcf6175181a6e617fb7b2ad1aec1f3997d0468f139e342cf8fcab0f"
+    }
+  ]
+}

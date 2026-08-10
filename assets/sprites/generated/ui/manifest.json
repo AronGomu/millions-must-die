@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "generator": "mmd-ui-font-v1",
+  "frame_width_px": 8,
+  "frame_height_px": 8,
+  "cols": 16,
+  "rows": 6,
+  "images": [
+    {
+      "id": 0,
+      "file": "font.png",
+      "sha256": "a1f8ec82f892a33bb3f36422b40ed4aadeb3d24a2617c907c591163d92ef211b"
+    }
+  ]
+}

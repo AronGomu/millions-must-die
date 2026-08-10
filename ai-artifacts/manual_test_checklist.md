@@ -495,3 +495,47 @@ eyes on a real window.
       figure render without clipping, scroll horizontally inside their own
       containers rather than pushing the page, and the network panel shows no
       request.
+
+## T1 placeholder-atlas-families
+
+First ticket of the phase-1 RTS engine prototype plan. Frontloads all
+phase-1 placeholder art generation (`rts/` unit+building+prop sheets, `ui/`
+bitmap font) into `xtask atlases`. Nothing in the engine or renderer reads
+these new families yet, so a human should observe **zero visible change**
+from the current horde-sim scene. Everything automatable is green (`cargo
+fmt`, `cargo test --workspace --locked`, clippy, `nix flake check`, all
+three xtask checks including the new three-family `atlases --check`, and the
+5000-agent/300-frame smoke).
+
+- [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and exits
+      cleanly exactly as before this ticket; nothing on screen changed (this
+      slice only adds generated PNGs on disk, wires nothing into the render
+      path).
+- [ ] Open `assets/sprites/generated/rts/worker.png` and
+      `assets/sprites/generated/rts/soldier.png` in an image viewer: each is
+      128x256px, a 4x8 grid of 32px placeholder humanoid sprites (flat blue
+      body/light head for worker, flat red body for soldier), with a small
+      yellow "facing pip" square that visibly moves around the body as you
+      scan down the 8 direction rows.
+- [ ] Open `assets/sprites/generated/rts/buildings.png`: rows 0-2 show three
+      building silhouettes (HQ/Depot/Barracks) in columns 0-2, each with a
+      lighter border; row 1 (under-construction) has a visible dotted/hatched
+      look compared to row 0 (finished); row 2 columns 0-1 are resource nodes
+      (blue crystal, purple gas) and columns 2-3 are visibly dimmer "depleted"
+      variants of the same nodes. Rows 3-7 and row 0-1 column 3 are blank
+      (transparent, checkerboard in most viewers).
+- [ ] Open `assets/sprites/generated/rts/props.png`: row 0 has a green
+      selection ring (col 0), a translucent green square (col 1), a
+      translucent red square (col 2), and a white rally flag with a yellow
+      pennant (col 3); row 1 has a blue diamond, a purple diamond, a yellow
+      square, and a dark translucent panel fill. Rows 2-7 are blank.
+- [ ] Open `assets/sprites/generated/ui/font.png`: 128x48px, a 16x6 grid of
+      8x8 white-on-transparent glyphs. Spot-check: digits 0-9 and uppercase
+      A-Z are legible letterforms; any lowercase letter cell (e.g. where `a`
+      sits, column 1 row 2 counting from 0) renders as a plain hollow box, not
+      a letter — that box is intentional, not a bug.
+- [ ] `cargo run -p xtask -- atlases --check` from the workspace root prints
+      an `atlases: ok (4 zombie png + manifest, 4 rts png + manifest, 1 ui
+      png + manifest)` line and exits 0.
+- [ ] `git status --porcelain` after the above — clean (no drift from running
+      the check).
