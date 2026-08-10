@@ -3,6 +3,10 @@
 mod bench;
 mod input;
 mod overlay;
+mod rts_input;
+mod rts_overlay;
+mod rts_run;
+mod rts_script;
 mod run;
 
 use std::path::PathBuf;
@@ -42,6 +46,19 @@ enum Commands {
         /// Scripted key presses for runs with no keyboard: `FRAME:KEY[,...]`,
         /// 1-based frames, keys `esc`/`f1`/`space` (e.g. `4:space,20:esc`).
         #[arg(long, value_name = "FRAME:KEY,...")]
+        inject_input: Option<String>,
+    },
+    /// Run the phase-1 RTS engine prototype scene.
+    Rts {
+        /// Scenario path (default: assets/scenarios/rts_prototype_v1.ron)
+        #[arg(long)]
+        scenario: Option<PathBuf>,
+        /// Auto-exit after N frames (CI/smoke). Omit for interactive.
+        #[arg(long)]
+        frames: Option<u64>,
+        /// Scripted input for runs with no keyboard or mouse:
+        /// `FRAME:KIND[:ARGS]` entries separated by `;`.
+        #[arg(long, value_name = "FRAME:KIND[:ARGS];...")]
         inject_input: Option<String>,
     },
     /// Developer benchmark harness — not a gate; optimization phase.
@@ -88,6 +105,22 @@ fn main() -> ExitCode {
                 // The message is the UX: it names the file or the flag at
                 // fault. The code distinguishes "no GPU here" from a defect.
                 eprintln!("run failed: {e}");
+                return ExitCode::from(e.exit_code());
+            }
+            ExitCode::SUCCESS
+        }
+        Commands::Rts {
+            scenario,
+            frames,
+            inject_input,
+        } => {
+            let opts = rts_run::RtsOptions {
+                scenario,
+                frames,
+                inject_input,
+            };
+            if let Err(e) = rts_run::run(opts) {
+                eprintln!("rts failed: {e}");
                 return ExitCode::from(e.exit_code());
             }
             ExitCode::SUCCESS

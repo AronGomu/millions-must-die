@@ -1,0 +1,907 @@
+//! T14: the `rts` subcommand's stdout contract, CLI-level bindings, and
+//! command semantics — mouse and keyboard, driven from `--inject-input`.
+//!
+//! Same discipline as `tests/cli_contract.rs`: drives the real binary as a
+//! subprocess, forcing `SDL_VIDEODRIVER=offscreen` unless a case specifically
+//! wants a window. `run` and `bench` are untouched by this file.
+//!
+//! # Geometry
+//!
+//! `assets/scenarios/rts_prototype_v1.ron` fixes the scene these tests click
+//! on: `hq_cell: (160, 160)`, `HQ_FOOTPRINT_CELLS = 12` so the HQ's centre —
+//! and the camera's start position, per `RtsWorld::from_scenario` — is cell
+//! `(166, 166)`. `cell_size_px: 4` makes `tile_w = 8`, `tile_h = 4`. Camera
+//! start centres that cell on screen, so the projection's `origin` is fixed
+//! at `(960, -124)` for every run that never pans. [`screen_of`] reproduces
+//! `mmd_engine::render::iso_project` against that fixed origin so a test can
+//! name a *cell* and get the *pixel* `click_select`/`pick_at` actually read
+//! (they unproject the click, not the sprite's drawn position).
+
+use std::fs::File;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+
+/// Serializes every subprocess this file spawns against the real GPU.
+///
+/// Several cases here run thousands of frames (`a_right_click_on_a_node_starts_gathering`,
+/// `a_left_click_places_the_ghost`), far more sustained GPU work per process
+/// than `tests/cli_contract.rs`'s small-scene cases. Run fully parallel (the
+/// default `cargo test` behaviour), enough of those overlap on one physical
+/// device to trip `VK_ERROR_DEVICE_LOST` — observed directly on this host.
+/// One process on the device at a time trades this file's own wall time for
+/// determinism; it does not reach across test binaries.
+static GPU_LOCK: Mutex<()> = Mutex::new(());
+
+fn gpu_guard() -> MutexGuard<'static, ()> {
+    GPU_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Exit code for a failure the user can act on.
+const EXIT_ERROR: i32 = 1;
+/// Exit code clap uses for a usage error.
+const EXIT_USAGE: i32 = 2;
+/// Exit code the app reserves for "this host has no usable GPU device".
+const EXIT_NO_GPU: i32 = 3;
+
+/// Env var that turns every GPU skip in this file into a hard failure.
+const REQUIRE_GPU_ENV: &str = "MMD_REQUIRE_GPU";
+
+// ---------------------------------------------------------------------------
+// Scene geometry — derived from assets/scenarios/rts_prototype_v1.ron
+// ---------------------------------------------------------------------------
+
+/// Camera projection origin at the scene's start (HQ-centred, no pan).
+const ORIGIN: [f32; 2] = [960.0, -124.0];
+const TILE_W: f32 = 8.0;
+const TILE_H: f32 = 4.0;
+
+/// The screen pixel `iso_project(cx, cy, ..)` produces at the fixed start
+/// origin — and so the pixel a plain (unpanned) `click`/`drag` must name to
+/// land on cell-space point `(cx, cy)`.
+fn screen_of(cx: f32, cy: f32) -> [f32; 2] {
+    [
+        ORIGIN[0] + (cx - cy) * TILE_W * 0.5,
+        ORIGIN[1] + (cx + cy) * TILE_H * 0.5,
+    ]
+}
+
+fn fmt_xy(p: [f32; 2]) -> String {
+    format!("{},{}", p[0], p[1])
+}
+
+/// One worker's spawn point (`spawn_cells` entry `162..167 @ y=178`, worker
+/// position `cell + 0.5`).
+fn worker_screen() -> [f32; 2] {
+    screen_of(162.5, 178.5)
+}
+
+/// A drag rectangle in screen space covering every one of the six spawn
+/// cells' projected worker positions.
+fn spawn_group_drag() -> (String, String) {
+    (fmt_xy([880.0, 540.0]), fmt_xy([940.0, 590.0]))
+}
+
+/// The HQ's centre — also the camera's start focus, so this is screen centre.
+fn hq_screen() -> [f32; 2] {
+    screen_of(166.0, 166.0)
+}
+
+/// The nearest crystal node (`crystal_nodes[0] = (140, 150)`).
+fn crystal_node_screen() -> [f32; 2] {
+    screen_of(140.5, 150.5)
+}
+
+/// A cell well clear of the HQ footprint (`160..172`), both resource nodes,
+/// and — empirically, see `a_left_click_places_the_ghost` — the scenario's
+/// obstacle mask: `(180, 150)`, a Depot-sized (8-cell) footprint centred
+/// there.
+fn clear_build_site_screen() -> [f32; 2] {
+    screen_of(180.5, 150.5)
+}
+
+/// 30 cells south of the HQ: far enough that a move order visibly changes
+/// the state hash inside the frame budgets these tests use.
+fn far_move_target_screen() -> [f32; 2] {
+    screen_of(166.0, 196.0)
+}
+
+// ---------------------------------------------------------------------------
+// Invocation helper — mirrors tests/cli_contract.rs
+// ---------------------------------------------------------------------------
+
+struct Cli {
+    args: Vec<String>,
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+impl Cli {
+    fn combined(&self) -> String {
+        format!("{}{}", self.stdout, self.stderr)
+    }
+
+    fn exit_line(&self) -> &str {
+        self.stdout
+            .lines()
+            .find(|l| l.starts_with("rts: clean exit"))
+            .unwrap_or_else(|| panic!("{self}\nno `rts: clean exit` line"))
+    }
+
+    fn frame0_line(&self) -> &str {
+        self.stdout
+            .lines()
+            .find(|l| l.starts_with("rts: frame0"))
+            .unwrap_or_else(|| panic!("{self}\nno `rts: frame0` line"))
+    }
+
+    fn field<'a>(&self, line: &'a str, key: &str) -> &'a str {
+        line.split_whitespace()
+            .find_map(|tok| tok.strip_prefix(&format!("{key}=")))
+            .unwrap_or_else(|| panic!("{self}\nline `{line}` has no `{key}=`"))
+    }
+
+    fn exit_field(&self, key: &str) -> &str {
+        self.field(self.exit_line(), key)
+    }
+
+    fn final_hash(&self) -> String {
+        let hash = self.exit_field("hash").to_string();
+        assert_eq!(hash.len(), 64, "{self}\nstate hash is not 32 bytes of hex");
+        assert!(
+            hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "{self}\nstate hash is not hex"
+        );
+        hash
+    }
+
+    fn assert_success(&self) -> &Self {
+        assert_eq!(
+            self.code,
+            Some(0),
+            "{self}\nexpected a clean exit 0 (a `None` code means the process died on a signal)"
+        );
+        self
+    }
+
+    fn assert_actionable_failure(&self) -> &Self {
+        assert_eq!(
+            self.code,
+            Some(EXIT_ERROR),
+            "{self}\nactionable failures exit {EXIT_ERROR}; {EXIT_NO_GPU} is reserved for a \
+             missing GPU device"
+        );
+        let combined = self.combined();
+        for crash in ["panicked at", "stack backtrace", "RUST_BACKTRACE"] {
+            assert!(
+                !combined.contains(crash),
+                "{self}\nfailure surfaced `{crash}` — a stack trace is not UX"
+            );
+        }
+        self
+    }
+
+    fn assert_says(&self, needles: &[&str]) -> &Self {
+        let combined = self.combined();
+        for needle in needles {
+            assert!(
+                combined.contains(needle),
+                "{self}\nmessage does not name `{needle}`"
+            );
+        }
+        self
+    }
+
+    fn hud_lines(&self) -> usize {
+        self.stdout
+            .lines()
+            .filter(|l| l.starts_with("rts: hud "))
+            .count()
+    }
+}
+
+impl std::fmt::Display for Cli {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "--- millions_must_die {}\n--- exit {:?}\n--- stdout\n{}--- stderr\n{}---",
+            self.args.join(" "),
+            self.code,
+            self.stdout,
+            self.stderr
+        )
+    }
+}
+
+fn app_bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_millions_must_die"))
+}
+
+/// Invoke the app with `args`. `offscreen` forces SDL's offscreen video
+/// driver so a test never opens a window on the developer's desktop.
+fn invoke(args: &[&str], offscreen: bool) -> Cli {
+    let mut cmd = app_bin();
+    cmd.args(args);
+    if offscreen {
+        cmd.env("SDL_VIDEODRIVER", "offscreen");
+    }
+    // The app also reads these; a developer's shell must not steer a test.
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    run_to_completion(cmd, args.join(" "))
+}
+
+const RUN_DEADLINE: Duration = Duration::from_secs(120);
+
+fn run_to_completion(mut cmd: Command, label: String) -> Cli {
+    let _guard = gpu_guard();
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let dir = tmp_dir("proc");
+    let out_path = dir.join(format!("{id}.out"));
+    let err_path = dir.join(format!("{id}.err"));
+    let out_file = File::create(&out_path).expect("create stdout capture");
+    let err_file = File::create(&err_path).expect("create stderr capture");
+    let mut child = cmd
+        .stdout(out_file)
+        .stderr(err_file)
+        .spawn()
+        .expect("spawn millions_must_die");
+
+    let started = Instant::now();
+    let status = loop {
+        match child.try_wait().expect("poll millions_must_die") {
+            Some(status) => break Some(status),
+            None if started.elapsed() >= RUN_DEADLINE => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            None => std::thread::sleep(Duration::from_millis(20)),
+        }
+    };
+
+    let read = |p: &std::path::Path| std::fs::read_to_string(p).unwrap_or_default();
+    let cli = Cli {
+        args: vec![label],
+        code: status.and_then(|s| s.code()),
+        stdout: read(&out_path),
+        stderr: read(&err_path),
+    };
+    assert!(
+        status.is_some(),
+        "{cli}\nthe run did not terminate within {RUN_DEADLINE:?} and was killed — \
+         a frame budget stopped being honoured"
+    );
+    cli
+}
+
+/// Run `rts` with `extra` args, offscreen.
+fn rts(extra: &[&str]) -> Cli {
+    let mut args = vec!["rts"];
+    args.extend_from_slice(extra);
+    invoke(&args, true)
+}
+
+fn gpu_is_required() -> bool {
+    std::env::var_os(REQUIRE_GPU_ENV).is_some_and(|v| v != "0" && !v.is_empty())
+}
+
+/// Classify a completed run: `None` when this host simply has no GPU device.
+fn or_skip(case: &str, cli: Cli) -> Option<Cli> {
+    if cli.code == Some(EXIT_NO_GPU) {
+        assert!(
+            !gpu_is_required(),
+            "{cli}\n{case}: skipped (no GPU device) but {REQUIRE_GPU_ENV} is set — \
+             this host is declared to have a GPU, so a skip is a missed verification"
+        );
+        assert!(
+            cli.combined()
+                .contains("GPU device unavailable on this host"),
+            "{cli}\n{case}: exit {EXIT_NO_GPU} must explain itself"
+        );
+        eprintln!("SKIP {case}: no GPU device on this host");
+        return None;
+    }
+    Some(cli)
+}
+
+fn tmp_dir(case: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(case);
+    std::fs::create_dir_all(&dir).expect("create temp dir");
+    dir
+}
+
+// ---------------------------------------------------------------------------
+// 1. Lifecycle — start, tick, exit
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rts_runs_headless_and_exits_clean() {
+    let Some(cli) = or_skip(
+        "rts_runs_headless_and_exits_clean",
+        rts(&["--frames", "30"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("mode"), "offscreen", "{cli}");
+    assert_eq!(
+        cli.stdout
+            .lines()
+            .filter(|l| l.starts_with("rts: clean exit"))
+            .count(),
+        1,
+        "{cli}\nexpected exactly one clean-exit line"
+    );
+}
+
+#[test]
+fn frame0_line_reports_three_world_groups() {
+    let Some(cli) = or_skip(
+        "frame0_line_reports_three_world_groups",
+        rts(&["--frames", "1"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    let line = cli.frame0_line();
+    let world = cli.field(line, "world");
+    let ui = cli.field(line, "ui");
+    assert_eq!(
+        world
+            .trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .count(),
+        3,
+        "{cli}\n`world=` must carry exactly 3 numbers: {world}"
+    );
+    assert_eq!(
+        ui.trim_start_matches('[')
+            .trim_end_matches(']')
+            .split(',')
+            .count(),
+        2,
+        "{cli}\n`ui=` must carry exactly 2 numbers: {ui}"
+    );
+}
+
+#[test]
+fn frame0_hash_is_sixty_four_hex() {
+    let Some(cli) = or_skip("frame0_hash_is_sixty_four_hex", rts(&["--frames", "1"])) else {
+        return;
+    };
+    cli.assert_success();
+    let hash = cli.field(cli.frame0_line(), "hash");
+    assert_eq!(hash.len(), 64, "{cli}");
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()), "{cli}");
+}
+
+#[test]
+fn the_run_is_deterministic() {
+    let Some(a) = or_skip("the_run_is_deterministic", rts(&["--frames", "50"])) else {
+        return;
+    };
+    let Some(b) = or_skip("the_run_is_deterministic", rts(&["--frames", "50"])) else {
+        return;
+    };
+    a.assert_success();
+    b.assert_success();
+    assert_eq!(a.final_hash(), b.final_hash(), "{a}\n{b}");
+}
+
+#[test]
+fn frames_zero_is_rejected() {
+    let cli = rts(&["--frames", "0"]);
+    cli.assert_actionable_failure().assert_says(&["--frames 0"]);
+}
+
+#[test]
+fn env_frame_budget_is_honoured() {
+    let mut cmd = app_bin();
+    cmd.args(["rts"])
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("MMD_RTS_FRAMES", "5")
+        .env_remove("MMD_RTS_ONCE");
+    let Some(cli) = or_skip(
+        "env_frame_budget_is_honoured",
+        run_to_completion(cmd, "MMD_RTS_FRAMES=5 rts".to_string()),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("frames"), "5", "{cli}");
+}
+
+#[test]
+fn a_malformed_env_budget_is_rejected() {
+    let mut cmd = app_bin();
+    cmd.args(["rts"])
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("MMD_RTS_FRAMES", "abc")
+        .env_remove("MMD_RTS_ONCE");
+    run_to_completion(cmd, "MMD_RTS_FRAMES=abc rts".to_string())
+        .assert_actionable_failure()
+        .assert_says(&["MMD_RTS_FRAMES"]);
+}
+
+#[test]
+fn run_and_rts_budgets_are_independent() {
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "3"])
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("MMD_RUN_FRAMES", "7")
+        .env_remove("MMD_RTS_FRAMES")
+        .env_remove("MMD_RTS_ONCE");
+    let Some(cli) = or_skip(
+        "run_and_rts_budgets_are_independent",
+        run_to_completion(cmd, "MMD_RUN_FRAMES=7 rts --frames 3".to_string()),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("frames"), "3", "{cli}");
+    assert!(
+        !cli.combined().contains("MMD_RUN_FRAMES"),
+        "{cli}\n`rts` must never mention `run`'s env var"
+    );
+
+    // The `--frames 3` case above never even reaches the env-var fallback
+    // (an explicit flag short-circuits it), so it cannot by itself catch
+    // `rts` reading the wrong env var. Drop `--frames` and set both env vars
+    // to conflicting budgets: only reading `MMD_RTS_FRAMES` (not `run`'s)
+    // explains `frames=3` here.
+    let mut cmd2 = app_bin();
+    cmd2.args(["rts"])
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("MMD_RUN_FRAMES", "7")
+        .env("MMD_RTS_FRAMES", "3")
+        .env_remove("MMD_RTS_ONCE");
+    let Some(cli2) = or_skip(
+        "run_and_rts_budgets_are_independent",
+        run_to_completion(cmd2, "MMD_RUN_FRAMES=7 MMD_RTS_FRAMES=3 rts".to_string()),
+    ) else {
+        return;
+    };
+    cli2.assert_success();
+    assert_eq!(
+        cli2.exit_field("frames"),
+        "3",
+        "{cli2}\n`rts` must read its own `MMD_RTS_FRAMES`, not `run`'s `MMD_RUN_FRAMES`"
+    );
+}
+
+#[test]
+fn a_missing_scenario_is_actionable() {
+    let dir = tmp_dir("missing_scenario");
+    let path = dir.join("nope.ron");
+    let cli = rts(&["--scenario", path.to_str().unwrap()]);
+    cli.assert_actionable_failure()
+        .assert_says(&["scenario", &format!("{}: No such file", path.display())]);
+}
+
+#[test]
+fn a_phase0_scenario_is_refused() {
+    let cli = rts(&["--scenario", "assets/scenarios/technical_prototype_v1.ron"]);
+    cli.assert_actionable_failure()
+        .assert_says(&["carries no rts block"]);
+}
+
+// ---------------------------------------------------------------------------
+// 2. Pause and overlay
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pause_freezes_the_tick() {
+    let Some(cli) = or_skip(
+        "pause_freezes_the_tick",
+        rts(&["--frames", "20", "--inject-input", "2:key:space"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("tick"), "1", "{cli}");
+    assert_eq!(cli.exit_field("frames"), "20", "{cli}");
+    assert_eq!(cli.exit_field("paused"), "true", "{cli}");
+}
+
+#[test]
+fn the_overlay_prints_one_line_per_frame() {
+    let Some(cli) = or_skip(
+        "the_overlay_prints_one_line_per_frame",
+        rts(&["--frames", "10", "--inject-input", "1:key:f1"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.hud_lines(), 10, "{cli}");
+}
+
+#[test]
+fn the_overlay_is_off_by_default() {
+    let Some(cli) = or_skip("the_overlay_is_off_by_default", rts(&["--frames", "10"])) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.hud_lines(), 0, "{cli}");
+}
+
+#[test]
+fn a_quit_on_frame_one_renders_nothing() {
+    let Some(cli) = or_skip(
+        "a_quit_on_frame_one_renders_nothing",
+        rts(&["--inject-input", "1:key:esc"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("frames"), "0", "{cli}");
+    assert_eq!(cli.exit_field("quit"), "true", "{cli}");
+    assert!(
+        !cli.stdout.contains("rts: frame0"),
+        "{cli}\na run that quit before frame 1 must not report a first frame"
+    );
+}
+
+#[test]
+fn an_unfired_entry_fails_the_run() {
+    let Some(cli) = or_skip(
+        "an_unfired_entry_fails_the_run",
+        rts(&["--frames", "3", "--inject-input", "50:key:esc"]),
+    ) else {
+        return;
+    };
+    cli.assert_actionable_failure().assert_says(&["50:esc"]);
+}
+
+// ---------------------------------------------------------------------------
+// 3. Selection, orders, building, production
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_click_selects_a_worker() {
+    let p = fmt_xy(worker_screen());
+    let Some(cli) = or_skip(
+        "a_click_selects_a_worker",
+        rts(&[
+            "--frames",
+            "5",
+            "--inject-input",
+            &format!("1:move:{p};2:lclick:{p}"),
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("selected"), "1", "{cli}");
+}
+
+#[test]
+fn a_drag_selects_the_group() {
+    let (a, b) = spawn_group_drag();
+    let Some(cli) = or_skip(
+        "a_drag_selects_the_group",
+        rts(&[
+            "--frames",
+            "5",
+            "--inject-input",
+            &format!("1:drag:{a},{b}"),
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("selected"), "6", "{cli}");
+}
+
+#[test]
+fn a_right_click_moves_the_selection() {
+    let (a, b) = spawn_group_drag();
+    let dest = fmt_xy(far_move_target_screen());
+    let script = format!("1:drag:{a},{b};5:rclick:{dest}");
+    let Some(moved) = or_skip(
+        "a_right_click_moves_the_selection",
+        rts(&["--frames", "900", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    let Some(control) = or_skip(
+        "a_right_click_moves_the_selection",
+        rts(&["--frames", "900"]),
+    ) else {
+        return;
+    };
+    moved.assert_success();
+    control.assert_success();
+    assert_ne!(
+        moved.final_hash(),
+        control.final_hash(),
+        "{moved}\n{control}\na move order did not change the state hash"
+    );
+}
+
+#[test]
+fn a_right_click_on_a_node_starts_gathering() {
+    let (a, b) = spawn_group_drag();
+    let node = fmt_xy(crystal_node_screen());
+    let script = format!("1:drag:{a},{b};5:rclick:{node}");
+    let Some(cli) = or_skip(
+        "a_right_click_on_a_node_starts_gathering",
+        rts(&["--frames", "3000", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    let crystal: u32 = cli.exit_field("crystal").parse().expect("{cli}");
+    assert!(
+        crystal > 300,
+        "{cli}\ncrystal did not rise above the starting 300"
+    );
+}
+
+#[test]
+fn arrow_keys_pan_the_camera() {
+    let Some(panned) = or_skip(
+        "arrow_keys_pan_the_camera",
+        rts(&["--frames", "60", "--inject-input", "1:pan:right"]),
+    ) else {
+        return;
+    };
+    let Some(still) = or_skip("arrow_keys_pan_the_camera", rts(&["--frames", "60"])) else {
+        return;
+    };
+    panned.assert_success();
+    still.assert_success();
+    assert_ne!(panned.final_hash(), still.final_hash(), "{panned}\n{still}");
+}
+
+/// Two 100-frame runs with the *same total* ticks of active rightward
+/// panning (9) — one held from frame 1, one from frame 50 — must reach the
+/// identical final camera centre, and so the identical state hash: nothing
+/// else in either run ever moves. If key-up failed to zero `pan_dir`, the
+/// first run would keep drifting for 91 more frames and the hashes would
+/// diverge.
+#[test]
+fn pan_stops_on_key_up() {
+    let Some(early) = or_skip(
+        "pan_stops_on_key_up",
+        rts(&[
+            "--frames",
+            "100",
+            "--inject-input",
+            "1:pan:right;10:panup:right",
+        ]),
+    ) else {
+        return;
+    };
+    let Some(late) = or_skip(
+        "pan_stops_on_key_up",
+        rts(&[
+            "--frames",
+            "100",
+            "--inject-input",
+            "50:pan:right;59:panup:right",
+        ]),
+    ) else {
+        return;
+    };
+    early.assert_success();
+    late.assert_success();
+    assert_eq!(
+        early.final_hash(),
+        late.final_hash(),
+        "{early}\n{late}\npanning did not stop cleanly at key-up"
+    );
+}
+
+#[test]
+fn w_opens_the_depot_ghost() {
+    let Some(cli) = or_skip(
+        "w_opens_the_depot_ghost",
+        rts(&["--frames", "5", "--inject-input", "1:key:f1;1:key:w"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert!(
+        cli.stdout
+            .lines()
+            .any(|l| l.starts_with("rts: hud ") && l.contains("ghost=depot")),
+        "{cli}\nno HUD line reports `ghost=depot`"
+    );
+}
+
+#[test]
+fn x_cancels_the_ghost() {
+    let Some(cli) = or_skip(
+        "x_cancels_the_ghost",
+        rts(&[
+            "--frames",
+            "5",
+            "--inject-input",
+            "1:key:f1;1:key:w;3:key:x",
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    let last_hud = cli
+        .stdout
+        .lines()
+        .rfind(|l| l.starts_with("rts: hud "))
+        .unwrap_or_else(|| panic!("{cli}\nno HUD lines"));
+    assert!(
+        last_hud.contains("ghost=none"),
+        "{cli}\nlast HUD line does not report `ghost=none`: {last_hud}"
+    );
+}
+
+#[test]
+fn a_left_click_places_the_ghost() {
+    let p = fmt_xy(clear_build_site_screen());
+    let script = format!("1:key:w;2:move:{p};3:lclick:{p}");
+    let Some(cli) = or_skip(
+        "a_left_click_places_the_ghost",
+        rts(&["--frames", "2500", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    let buildings: u32 = cli.exit_field("buildings").parse().expect("{cli}");
+    assert_eq!(buildings, 2, "{cli}\nexpected the HQ plus one new Depot");
+}
+
+#[test]
+fn a_right_click_cancels_the_ghost_without_ordering() {
+    let p = fmt_xy(clear_build_site_screen());
+    let cancel_script = format!("1:key:w;3:rclick:{p}");
+    let x_script = "1:key:w;3:key:x";
+    let Some(cancelled) = or_skip(
+        "a_right_click_cancels_the_ghost_without_ordering",
+        rts(&["--frames", "5", "--inject-input", &cancel_script]),
+    ) else {
+        return;
+    };
+    let Some(x_baseline) = or_skip(
+        "a_right_click_cancels_the_ghost_without_ordering",
+        rts(&["--frames", "5", "--inject-input", x_script]),
+    ) else {
+        return;
+    };
+    cancelled.assert_success();
+    x_baseline.assert_success();
+    assert_eq!(
+        cancelled.exit_field("buildings"),
+        "1",
+        "{cancelled}\na right click while a ghost was pending must not have built anything"
+    );
+    assert_eq!(
+        cancelled.final_hash(),
+        x_baseline.final_hash(),
+        "{cancelled}\n{x_baseline}\ncancelling via right click must match cancelling via `x`"
+    );
+}
+
+#[test]
+fn a_produces_a_worker_at_the_hq() {
+    let p = fmt_xy(hq_screen());
+    let script = format!("1:move:{p};2:lclick:{p};3:key:a");
+    let Some(cli) = or_skip(
+        "a_produces_a_worker_at_the_hq",
+        rts(&["--frames", "400", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("units"),
+        "7",
+        "{cli}\nexpected 6 + 1 workers"
+    );
+    assert_eq!(cli.exit_field("crystal"), "250", "{cli}\nexpected 300 - 50");
+}
+
+#[test]
+fn the_exit_line_reports_every_counter() {
+    let Some(cli) = or_skip(
+        "the_exit_line_reports_every_counter",
+        rts(&["--frames", "5"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    let line = cli.exit_line();
+    for key in [
+        "crystal",
+        "gas",
+        "supply",
+        "units",
+        "buildings",
+        "nodes",
+        "selected",
+    ] {
+        cli.field(line, key);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Failure and CLI surface
+// ---------------------------------------------------------------------------
+
+/// `VK_DRIVER_FILES` pointed at a nonexistent ICD directory reliably yields
+/// [`EXIT_NO_GPU`] on this host (verified directly: the process prints "GPU
+/// device unavailable on this host" and exits 3). This is a stronger result
+/// than a prior ticket's note about this env var on `run`; recorded here as
+/// what was actually observed, not assumed.
+#[test]
+fn no_gpu_exits_with_code_three() {
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "1"])
+        .env("SDL_VIDEODRIVER", "offscreen")
+        .env("VK_DRIVER_FILES", "/nonexistent");
+    let cli = run_to_completion(
+        cmd,
+        "VK_DRIVER_FILES=/nonexistent rts --frames 1".to_string(),
+    );
+    assert_eq!(
+        cli.code,
+        Some(EXIT_NO_GPU),
+        "{cli}\nexpected exit {EXIT_NO_GPU}; observed exit {:?} instead — a nonexistent \
+         Vulkan ICD directory did not force the no-GPU path on this host",
+        cli.code
+    );
+    cli.assert_says(&["GPU device unavailable on this host"]);
+}
+
+#[test]
+fn usage_error_exits_with_code_two() {
+    let cli = invoke(&["rts", "--nope"], true);
+    assert_eq!(cli.code, Some(EXIT_USAGE), "{cli}");
+    assert!(
+        cli.combined().to_ascii_lowercase().contains("usage:"),
+        "{cli}\nexpected a usage line"
+    );
+}
+
+/// T31's shutdown-order bug (the window must be released from the device
+/// before it drops) applies to this command's window path exactly as it did
+/// to `run`'s. Only the clean-quit path is exercised here — the same
+/// division of labour `tests/cli_contract.rs::quit_exits_clean_and_releases_window`
+/// documents: the device-level claim/release contract is
+/// `crates/mmd-engine/tests/render_correctness.rs`'s job, and a present
+/// failure cannot be forced from this CLI, so this proves the release call
+/// was reached, not that skipping it re-crashes this host.
+#[test]
+fn the_window_is_released_before_it_drops() {
+    let Some(cli) = or_skip(
+        "the_window_is_released_before_it_drops",
+        invoke(
+            &["rts", "--frames", "600", "--inject-input", "4:key:esc"],
+            false,
+        ),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("quit"), "true", "{cli}");
+    assert_eq!(cli.exit_field("frames"), "3", "{cli}");
+    match cli.exit_field("mode") {
+        "window" => assert!(
+            cli.stdout.contains("rts: released window"),
+            "{cli}\nthe window was never released from the device before shutdown"
+        ),
+        "offscreen" => {
+            assert!(
+                cli.stderr.contains("window create failed")
+                    || cli.stderr.contains("claim_window failed"),
+                "{cli}\nfell back to offscreen without naming a reason"
+            );
+            eprintln!("SKIP: no window on this host");
+        }
+        other => panic!("{cli}\nunknown run mode `{other}`"),
+    }
+}

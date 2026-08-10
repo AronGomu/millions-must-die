@@ -1090,3 +1090,65 @@ read the packed frame, the two device probes, and the unchanged horde output.
       `SELECTED 1` / `HQ` / `READY`; confirm the build menu always lists three
       rows (`[Q] HQ 400C`, `[W] DEPOT 100C`, `[E] BARRACKS 150C 25G`) with the
       HQ row red (300 crystal on hand, cost 400).
+
+## T14 rts-cli-subcommand
+
+The first ticket where a human can actually drive the RTS slice
+interactively: `cargo run -- rts` opens a real window over
+`assets/scenarios/rts_prototype_v1.ron` (a 320x320 map, HQ near the
+map centre, six workers spawned just south of it, a crystal node and a gas
+node on each side). Mouse and keyboard now drive `mmd_engine::rts::RtsWorld`
+directly; everything below the app layer (T6-T13) is unchanged.
+
+- [ ] `cargo run -- rts` — a window opens on the HQ. The bottom panel shows a
+      resource bar (`300` crystal, `100` gas, supply `6/10`), a build menu
+      (`[Q] HQ`, `[W] DEPOT`, `[E] BARRACKS`), and an empty selection block.
+      Press `Esc`: the window closes and the process exits cleanly (check the
+      exit code is `0`, e.g. `echo $?`).
+- [ ] `cargo run -- rts` again. Left-click directly on one of the six workers
+      just south of the HQ: the selection block now reads `SELECTED 1` /
+      `WORKER`, and a green ring appears under the clicked worker. Left-click
+      empty ground: the ring disappears and the selection block goes back to
+      empty.
+- [ ] Left-click-drag a rectangle around all six workers: the selection block
+      reads `SELECTED 6` and six rings appear. Right-click a patch of open
+      ground away from the base: all six workers turn and walk there.
+- [ ] With the six workers still selected, right-click the nearby crystal
+      node: the workers walk to it, and over the next few seconds the top
+      resource bar's crystal count climbs above `300` and keeps climbing as
+      workers cycle between the node and the HQ.
+- [ ] Press `W`: a Depot-shaped ghost (a footprint of tiles plus a building
+      silhouette) follows the mouse, tinted green where it could be placed and
+      red over the HQ, a node, or off the buildable terrain. Press `X`: the
+      ghost disappears. Press `W` again and left-click on clear ground away
+      from the HQ and the nodes: the ghost is replaced by an actual Depot
+      under construction, a worker walks to it and starts building, and the
+      build menu row's cost readout goes red if you can no longer afford the
+      next one.
+- [ ] Press `W`, then right-click anywhere: the ghost cancels (same as `X`)
+      and **no** unit moves — a right click while a ghost is pending must
+      never also issue a move/gather order.
+- [ ] Left-click the HQ itself (a ring appears around its footprint,
+      selection block reads `SELECTED 1` / `HQ`), then press `A`: the
+      production block shows a Worker queued; the crystal bar drops by 50;
+      a few seconds later a new worker walks out of the HQ and `units`-style
+      counts (visible via `--inject-input ...; --frames N` runs, see below)
+      rise by one.
+- [ ] Hold an arrow key (e.g. Right): the camera pans smoothly toward that
+      edge. Release the key: panning stops immediately — the view must not
+      keep drifting after key-up. Move the mouse to within ~12px of a window
+      edge: the camera also edge-pans in that direction while the pointer
+      stays there.
+- [ ] Press `F1`: the terminal now prints one `rts: hud tick=... crystal=...
+      gas=... supply=.../ ... sel=... ghost=...` line per frame. Press `F1`
+      again: the lines stop. Press `Space`: the world visibly freezes (units
+      stop moving, resource counts stop climbing even while gathering) until
+      `Space` is pressed again.
+- [ ] `cargo run -- rts --frames 600 --inject-input
+      "1:drag:880,540,940,590;5:rclick:920,458" ` (no window needed —
+      add `SDL_VIDEODRIVER=offscreen` first if you want to confirm the
+      headless path) — exits `0`; the final `rts: clean exit ...` line's
+      `crystal=` is above `300` (the six workers were sent to gather).
+- [ ] `cargo run -- run --agents 5000 --frames 300` — still exits 0 with
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      This ticket adds a parallel command; `run` must read as before.

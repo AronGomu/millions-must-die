@@ -388,16 +388,16 @@ plus `mod rts_input; mod rts_overlay; mod rts_run; mod rts_script;`.
 
 ## Impl steps
 
-- [ ] 1. Create `src/rts_input.rs` with both binding tables and the four lookups, plus its five unit tests.
-- [ ] 2. Create `src/rts_script.rs` with `RtsScript` and its unit tests.
-- [ ] 3. Create `src/rts_overlay.rs` with `format_rts_overlay`.
-- [ ] 4. Create `src/rts_run.rs`: `RtsOptions`, `RtsSession`, `apply`, `resolve_frames` (on `MMD_RTS_FRAMES` / `MMD_RTS_ONCE`), `step_frame`, `finish`, `run`.
-- [ ] 5. Copy `src/run.rs`'s window claim / event-pump / release ordering exactly; do not invent a new one.
-- [ ] 6. Add the `Rts` variant and the four `mod` lines to `src/main.rs`.
-- [ ] 7. Create `tests/rts_cli_contract.rs` and write every integration test from the table. Watch them fail.
-- [ ] 8. Implement until green.
-- [ ] 9. Run the mutation list; record kills in the commit body.
-- [ ] 10. Run the full validation block.
+- [x] 1. Create `src/rts_input.rs` with both binding tables and the four lookups, plus its five unit tests.
+- [x] 2. Create `src/rts_script.rs` with `RtsScript` and its unit tests.
+- [x] 3. Create `src/rts_overlay.rs` with `format_rts_overlay`.
+- [x] 4. Create `src/rts_run.rs`: `RtsOptions`, `RtsSession`, `apply`, `resolve_frames` (on `MMD_RTS_FRAMES` / `MMD_RTS_ONCE`), `step_frame`, `finish`, `run`.
+- [x] 5. Copy `src/run.rs`'s window claim / event-pump / release ordering exactly; do not invent a new one.
+- [x] 6. Add the `Rts` variant and the four `mod` lines to `src/main.rs`.
+- [x] 7. Create `tests/rts_cli_contract.rs` and write every integration test from the table. Watch them fail.
+- [x] 8. Implement until green.
+- [x] 9. Run the mutation list; record kills in the commit body.
+- [x] 10. Run the full validation block.
 
 ## Outputs
 
@@ -413,16 +413,16 @@ plus `mod rts_input; mod rts_overlay; mod rts_run; mod rts_script;`.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --test rts_cli_contract` — all green
-- [ ] `cargo test --test cli_contract` — all 24 phase-0 cases still green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -- rts --frames 600` — exit 0, one `clean exit` line
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
-- [ ] `cargo tree -e features | grep -c testkit` — `0`
-- [ ] app functional — no broken path from this slice
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test --test rts_cli_contract` — all green
+- [x] `cargo test --test cli_contract` — all 24 phase-0 cases still green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -- rts --frames 600` — exit 0, one `clean exit` line
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
+- [x] `cargo tree -e features | grep -c testkit` — `0`
+- [x] app functional — no broken path from this slice
 - [ ] commit msg draft: `feat(app): add the rts subcommand with scripted headless input`
