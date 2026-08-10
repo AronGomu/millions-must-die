@@ -425,4 +425,4 @@ plus `mod rts_input; mod rts_overlay; mod rts_run; mod rts_script;`.
 - [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
 - [x] `cargo tree -e features | grep -c testkit` — `0`
 - [x] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(app): add the rts subcommand with scripted headless input`
+- [x] commit msg draft: `feat(app): add the rts subcommand with scripted headless input`
