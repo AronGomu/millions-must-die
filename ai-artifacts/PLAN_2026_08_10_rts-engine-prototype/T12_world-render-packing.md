@@ -388,18 +388,18 @@ Harness `RtsHarness::scene()` unless stated; `frame = RtsFrame::new()`;
 
 ## Impl steps
 
-- [ ] 1. Add `camera`, `pan_dir` fields to `RtsWorld` and the five accessors; build the camera in `from_scenario` centred on the HQ.
-- [ ] 2. Implement step 2 of `tick()` exactly as quoted; extend `state_hash` with the camera centre.
-- [ ] 3. Create `crates/mmd-engine/src/rts/pack.rs` with the constants, `Prop`, `DragBox`, `RtsFrame`.
-- [ ] 4. Add `mod pack;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
-- [ ] 5. Create `crates/mmd-engine/tests/rts_pack.rs` and write every headless test from the table. Watch them fail.
-- [ ] 6. Implement `prop_uv`, `building_uv`, `node_uv`, `unit_slot`, `building_quad_px`, `ghost_min_corner`.
-- [ ] 7. Implement `RtsFrame::{new, clear, scene, instance_count}` with the exact reservations listed.
-- [ ] 8. Implement `pack_frame`'s three phases in the exact order quoted.
-- [ ] 9. Append the two GPU tests to `crates/mmd-engine/tests/gpu_smoke.rs`.
-- [ ] 10. Add `pack_frame_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 11. Run the mutation list; record kills in the commit body.
-- [ ] 12. Run the full validation block.
+- [x] 1. Add `camera`, `pan_dir` fields to `RtsWorld` and the five accessors; build the camera in `from_scenario` centred on the HQ.
+- [x] 2. Implement step 2 of `tick()` exactly as quoted; extend `state_hash` with the camera centre.
+- [x] 3. Create `crates/mmd-engine/src/rts/pack.rs` with the constants, `Prop`, `DragBox`, `RtsFrame`.
+- [x] 4. Add `mod pack;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
+- [x] 5. Create `crates/mmd-engine/tests/rts_pack.rs` and write every headless test from the table. Watch them fail.
+- [x] 6. Implement `prop_uv`, `building_uv`, `node_uv`, `unit_slot`, `building_quad_px`, `ghost_min_corner`.
+- [x] 7. Implement `RtsFrame::{new, clear, scene, instance_count}` with the exact reservations listed.
+- [x] 8. Implement `pack_frame`'s three phases in the exact order quoted.
+- [x] 9. Append the two GPU tests to `crates/mmd-engine/tests/gpu_smoke.rs`.
+- [x] 10. Add `pack_frame_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
+- [x] 11. Run the mutation list; record kills in the commit body.
+- [x] 12. Run the full validation block.
 
 ## Outputs
 
@@ -415,14 +415,14 @@ Harness `RtsHarness::scene()` unless stated; `frame = RtsFrame::new()`;
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_pack` — all green
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `git diff --stat HEAD -- lab/goldens/` — **empty**
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test rts_pack` — all green
+- [x] `cargo test -p mmd-engine --test frame_allocations` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `git diff --stat HEAD -- lab/goldens/` — **empty**
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] app functional — no broken path from this slice
 - [ ] commit msg draft: `feat(rts): pack the RTS world into draw groups`

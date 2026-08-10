@@ -1006,3 +1006,48 @@ horde window output must remain unchanged.
       supply 6/10, confirm fifth returns `SupplyBlocked`; cancel one, confirm
       crystal and one supply return; set rally `(200, 200)`, produce one Worker,
       confirm it ends within `ARRIVAL_RADIUS_CELLS` of rally.
+
+## T12 world-render-packing
+
+The RTS world now packs into instances — units, buildings, sites, nodes,
+selection rings, the placement ghost, rally flags and the drag box — and owns
+the camera the whole frame projects through. Nothing wires input or the HUD yet
+(T13–T14), so there is still no interactive RTS window: manual checks read the
+packed frame, the two device probes, and the unchanged horde output.
+
+- [ ] `cargo test -p mmd-engine --test rts_pack` — 36 passed, 0 ignored. Skim
+      for `every_entity_packs_exactly_once`, `sprites_stand_on_their_ground_point`,
+      `culling_uses_the_same_rect_as_the_horde`, `selection_rings_are_procedural`,
+      `the_ghost_covers_the_whole_footprint` and `pan_dir_moves_the_camera_each_tick`.
+- [ ] `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test gpu_smoke` — 11 passed,
+      3 ignored (the pre-existing `#[ignore]` device cases). The two new cases
+      must **run**, not skip: `the_frame_renders` rasterises the packed base
+      scene (more than 1 000 non-transparent pixels) and
+      `the_ghost_draws_over_the_world` proves a Depot ghost dropped on the HQ
+      tints the HQ's own pixels red.
+- [ ] `VK_DRIVER_FILES=/nonexistent cargo test -p mmd-engine --test gpu_smoke --
+      --nocapture` — both new cases print `SKIP …: no GPU device on this host`
+      and the run still exits 0. A skip that reported success without printing
+      is the failure mode this step exists to catch.
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 17 passed.
+      `pack_frame_allocates_nothing` measures 600 packs of the full scene with a
+      selection, a rally flag, a pending ghost and a live drag, at zero heap
+      allocations.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0; final line reads
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      The window is still phase-0 horde output: this slice adds no app path.
+- [ ] Open `crates/mmd-engine/src/rts/pack.rs`: confirm every instance pushed to
+      `frame.overlay` is a `SpriteInstance::ring` and every *textured* depth-off
+      instance (rally flag, ghost tiles, silhouette, drag edges) goes to the
+      slot-7 group in `frame.ui`. The overlay layer binds texture slot 0, so a
+      textured instance there would sample the wrong sheet.
+- [ ] Open `crates/mmd-engine/src/rts/world.rs`: confirm `tick()` runs the camera
+      pan as system 2, before construction, and that `state_hash` feeds the
+      camera centre in after the production table. A camera outside the hash
+      means a replay that ends looking elsewhere would still claim to reproduce.
+- [ ] Read a packed frame through `RtsHarness`: pack the scene at cursor
+      `(960, 540)`, confirm 17 world instances split 6 / 0 / 11 across slots
+      4 / 5 / 6; select the HQ and confirm exactly one overlay ring sized
+      `ring_quad_size_px(8, 4, 6)`; `begin_placement(Depot)` and confirm 64 red
+      tiles plus one silhouette, then move the cursor one cell `+x` and confirm
+      every ghost quad shifted by `(+4, +2)` px.

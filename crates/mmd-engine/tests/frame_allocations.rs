@@ -13,7 +13,8 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, EntityKind, GatherPhase, OWNER_PLAYER, Order, ResourceKind, UnitKind,
+    BuildingKind, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order, ResourceKind, RtsFrame,
+    UnitKind, pack_frame,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -402,6 +403,61 @@ fn ring_packing_allocates_nothing() {
     guard.assert_zero();
     drop(guard);
     assert_eq!(h.runtime().ring_instances().len(), packed);
+}
+
+/// Packing an RTS frame is under the same zero-allocation contract as the
+/// horde packer: `RtsFrame::new` reserves every buffer at its ceiling and
+/// `clear` keeps the capacity, so no frame may grow one.
+///
+/// Measured with the ghost *and* a drag live, because those are the two paths
+/// that push into the prop group — a measurement of the world layer alone
+/// would leave the UI group's reservation untested.
+///
+/// This lives here, not in `rts_pack.rs`, because the counting allocator is
+/// installed in *this* test binary — a `MeasureGuard` anywhere else records
+/// nothing and the assertion would pass vacuously.
+#[test]
+fn pack_frame_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    h.world_mut().selection_mut().insert(hq);
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let cursor = [960.0, 540.0];
+    let drag = Some(DragBox {
+        a: [10.0, 10.0],
+        b: [110.0, 60.0],
+    });
+
+    // Warm-up outside the scope: whatever the first pack would grow, it grows
+    // now. `RtsFrame::new` itself allocates — that is construction, not a
+    // frame.
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), cursor, drag, &mut frame);
+    let packed = frame.instance_count();
+    assert_eq!(
+        packed,
+        17 + 1 + 1 + 65 + 4,
+        "the warm-up must exercise all three layers: world, ring, UI"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        pack_frame(h.world(), cursor, drag, &mut frame);
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(guard.allocations(), 0, "packing an RTS frame allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        frame.instance_count(),
+        packed,
+        "re-packing an unchanged world changed the frame"
+    );
 }
 
 #[test]

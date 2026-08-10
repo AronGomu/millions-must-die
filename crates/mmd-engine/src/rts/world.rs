@@ -3,7 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::nav::field_pool::{FieldPool, FieldPoolError};
-use crate::render::IsoView;
+use crate::render::{Camera, IsoView, VIEW_HEIGHT, VIEW_WIDTH, screen_dir_to_cells};
 use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
@@ -73,6 +73,12 @@ pub struct RtsWorld {
     finished: Vec<EntityId>,
     /// One production queue and rally point per entity slot.
     production: ProductionTable,
+    /// The view every packer projects through. World state, not view state: a
+    /// replay that ends looking somewhere else did not reproduce.
+    camera: Camera,
+    /// Screen-space pan direction applied every tick, set by the input layer.
+    /// Each component in `-1.0..=1.0`.
+    pan_dir: [f32; 2],
 }
 
 impl RtsWorld {
@@ -146,6 +152,16 @@ impl RtsWorld {
             scenario.obstacle_cells(),
         )?;
 
+        // Opens on the base: the HQ's footprint centre is what a player wants
+        // to see on frame 1, not the map's geometric middle.
+        let camera = Camera::new(
+            scenario.width(),
+            scenario.height(),
+            scenario.cell_size_px() as f32,
+            [VIEW_WIDTH as f32, VIEW_HEIGHT as f32],
+            hq_pos,
+        );
+
         Ok(Self {
             scenario,
             entities,
@@ -162,6 +178,8 @@ impl RtsWorld {
             build_attend: vec![false; MAX_ENTITIES],
             finished: Vec::with_capacity(MAX_ENTITIES),
             production: ProductionTable::new(),
+            camera,
+            pan_dir: [0.0, 0.0],
         })
     }
 
@@ -214,6 +232,32 @@ impl RtsWorld {
     #[cfg(feature = "testkit")]
     pub fn nav_mut(&mut self) -> &mut FieldPool {
         &mut self.nav
+    }
+
+    /// The camera this world is looked at through.
+    pub fn camera(&self) -> &Camera {
+        &self.camera
+    }
+
+    /// Mutable camera access — "jump to base", or a direct pan.
+    pub fn camera_mut(&mut self) -> &mut Camera {
+        &mut self.camera
+    }
+
+    /// The projection this frame packs through.
+    pub fn iso_view(&self) -> IsoView {
+        self.camera.iso_view()
+    }
+
+    /// Set the per-tick pan direction, in **screen** space. Components are
+    /// expected in `-1.0..=1.0`.
+    pub fn set_pan_dir(&mut self, dir: [f32; 2]) {
+        self.pan_dir = dir;
+    }
+
+    /// The per-tick screen-space pan direction.
+    pub fn pan_dir(&self) -> [f32; 2] {
+        self.pan_dir
     }
 
     pub fn selection(&self) -> &Selection {
@@ -668,20 +712,33 @@ impl RtsWorld {
     /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
     /// 6. movement, 7. supply recount.
     ///
-    /// Today the tick counter, the construction system (3), the production
-    /// system (4), the gather system (5), the movement system (6) and the
-    /// supply recount (7) run, followed by pruning the selection of anything
-    /// that died this tick — last, so a unit that died on this tick is out of
-    /// the selection before anything reads it next tick.
+    /// Today the tick counter, the camera pan (2), the construction system (3),
+    /// the production system (4), the gather system (5), the movement system
+    /// (6) and the supply recount (7) run, followed by pruning the selection of
+    /// anything that died this tick — last, so a unit that died on this tick is
+    /// out of the selection before anything reads it next tick.
     pub fn tick(&mut self) {
         self.tick_index += 1;
         self.entities.collect_live(&mut self.live_scratch);
+        self.camera_system();
         self.construction();
         self.production_system();
         self.gather();
         self.movement();
         self.supply_recount();
         self.selection.retain_live(&self.entities);
+    }
+
+    /// System 2: apply one tick of the pan direction the input layer set.
+    ///
+    /// The direction is **screen** space — that is what a key or a screen edge
+    /// gives you — so it is converted through the live projection's tile before
+    /// it moves a cell-space centre. Panning the raw screen vector would send
+    /// the camera diagonally across the map for a "right" that is not right.
+    fn camera_system(&mut self) {
+        let v = self.camera.iso_view();
+        let d = screen_dir_to_cells(self.pan_dir, v.tile_w, v.tile_h);
+        self.camera.pan_tick(d, TICK_DT);
     }
 
     /// System 3: advance every attended construction site by one tick, finish
@@ -1113,9 +1170,12 @@ impl RtsWorld {
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
     /// progress_target, amount, carry kind, carry amount), then every live
     /// slot's order, then the selection, production queues and rally points,
-    /// then the pending placement ghost (one tag byte plus the kind byte), then
-    /// resources and supply. `f32` goes in
+    /// then the camera centre, then the pending placement ghost (one tag byte
+    /// plus the kind byte), then resources and supply. `f32` goes in
     /// as raw bits, matching `Simulation::state_hash`.
+    ///
+    /// The camera is in here because it is world state, not view state: a
+    /// replay that ends looking somewhere else did not reproduce.
     pub fn state_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(self.tick_index.to_le_bytes());
@@ -1128,6 +1188,9 @@ impl RtsWorld {
         self.orders.hash_into(&mut h, &live);
         self.selection.hash_into(&mut h);
         self.production.hash_into(&mut h, &live);
+        let center = self.camera.center();
+        h.update(center[0].to_bits().to_le_bytes());
+        h.update(center[1].to_bits().to_le_bytes());
         match self.placement {
             Placement::None => h.update([0u8, 0u8]),
             Placement::Pending { kind } => h.update([1u8, kind as u8]),

@@ -13,11 +13,13 @@
 #[cfg(any(target_os = "windows", target_os = "macos"))]
 use mmd_engine::render::validate_device_props;
 use mmd_engine::render::{
-    ATLAS_COUNT, DrawGroup, REQUIRED_BACKEND, SLOT_UI_FONT, SPRITE_SIZE_PX, ScenePass,
-    SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, frame_uv_rect, load_atlases,
-    push_text, required_backend, validate_adapter_name, validate_backend_name,
-    validate_macos_host_arch,
+    ATLAS_COUNT, DrawGroup, REQUIRED_BACKEND, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_UI_FONT,
+    SPRITE_SIZE_PX, ScenePass, SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
+    frame_uv_rect, load_atlases, push_text, required_backend, validate_adapter_name,
+    validate_backend_name, validate_macos_host_arch,
 };
+use mmd_engine::rts::{BuildingKind, RtsFrame, pack_frame};
+use mmd_engine::testkit::RtsHarness;
 use mmd_engine::workspace_root;
 use std::sync::{Mutex, MutexGuard};
 
@@ -337,5 +339,121 @@ fn text_is_drawn_over_the_world() {
     assert!(
         white >= 1,
         "expected at least one pixel white [255,255,255,255] over the world sprite"
+    );
+}
+
+/// The tracked RTS scene, packed by `rts::pack_frame`, really rasterises.
+///
+/// Every headless case in `rts_pack.rs` asserts about instances; none of them
+/// can tell a well-formed instance from a visible one. This is the binding
+/// back to the device: pack the base scene as the app will and require the
+/// frame to leave real pixels behind.
+#[test]
+fn the_frame_renders() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("the_frame_renders") else {
+        return;
+    };
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), [960.0, 540.0], None, &mut frame);
+    assert_eq!(
+        frame.instance_count(),
+        17,
+        "the base scene must actually be packed, or this probes an empty frame"
+    );
+
+    let rb = r
+        .draw_offscreen_readback_scene(frame.scene())
+        .expect("readback");
+
+    let mut lit = 0u32;
+    for y in 0..VIEW_HEIGHT {
+        for x in 0..VIEW_WIDTH {
+            if rb.pixel(x, y)[3] > 0 {
+                lit += 1;
+            }
+        }
+    }
+    assert!(
+        lit > 1_000,
+        "expected more than 1000 non-transparent pixels from the packed RTS \
+         scene, got {lit}"
+    );
+}
+
+/// The placement ghost is UI, not overlay: it draws *over* the world with the
+/// prop sheet bound, so a Depot ghost dropped on the HQ tints the HQ's own
+/// pixels with the placement-BAD red.
+///
+/// Compared against the same frame packed without the ghost rather than
+/// against a literal colour: the tile is premultiplied and blends over
+/// whatever the world put there, so "it is red" is only meaningful next to
+/// what it had to beat.
+#[test]
+fn the_ghost_draws_over_the_world() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("the_ghost_draws_over_the_world") else {
+        return;
+    };
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let cursor = [960.0, 540.0];
+    let mut frame = RtsFrame::new();
+
+    // The HQ's screen rect, read off the pack rather than hardcoded.
+    pack_frame(h.world(), cursor, None, &mut frame);
+    let hq = frame
+        .world
+        .iter()
+        .find(|g| g.atlas_id == SLOT_RTS_BUILDINGS)
+        .expect("building group")
+        .instances[0];
+    let x0 = hq.pos[0].max(0.0) as u32;
+    let y0 = hq.pos[1].max(0.0) as u32;
+    let x1 = (hq.pos[0] + hq.size[0]).min(VIEW_WIDTH as f32) as u32;
+    let y1 = (hq.pos[1] + hq.size[1]).min(VIEW_HEIGHT as f32) as u32;
+    assert!(x1 > x0 && y1 > y0, "the HQ must be on screen");
+    let under = r
+        .draw_offscreen_readback_scene(frame.scene())
+        .expect("world-only readback");
+
+    // …and now with a Depot ghost centred on that same HQ, which is an
+    // invalid footprint and therefore tiles the placement-BAD cell.
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    pack_frame(h.world(), cursor, None, &mut frame);
+    let props = &frame
+        .ui
+        .iter()
+        .find(|g| g.atlas_id == SLOT_RTS_PROPS)
+        .expect("prop group")
+        .instances;
+    assert_eq!(props.len(), 65, "64 ghost tiles plus the silhouette");
+    assert_eq!(
+        props[0].uv_rect,
+        frame_uv_rect(0, 2),
+        "a footprint over the HQ must be tiled placement-BAD"
+    );
+    let over = r
+        .draw_offscreen_readback_scene(frame.scene())
+        .expect("world + ghost readback");
+
+    // Red dominance, not absolute colour: the BAD tile is the only red thing
+    // in this frame, so any pixel the ghost pushed toward red inside the HQ's
+    // rect can only have come from it.
+    let redness = |p: [u8; 4]| i32::from(p[0]) - i32::from(p[1]).max(i32::from(p[2]));
+    let mut hits = 0u32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let a = under.pixel(x, y);
+            let b = over.pixel(x, y);
+            if redness(b) > redness(a) + 20 && b[0] > b[1] && b[0] > b[2] {
+                hits += 1;
+            }
+        }
+    }
+    assert!(
+        hits > 0,
+        "no pixel inside the HQ's screen rect ({x0}..{x1} x {y0}..{y1}) carries \
+         the placement-BAD colour"
     );
 }
