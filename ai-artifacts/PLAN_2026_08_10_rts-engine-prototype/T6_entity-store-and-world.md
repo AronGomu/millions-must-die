@@ -468,7 +468,12 @@ Export `RtsHarness`, `RtsHarnessBuilder` from `crates/mmd-engine/src/testkit/mod
 - [x] 11. Create `crates/mmd-engine/src/testkit/rts.rs` with `RtsHarness` + builder; add `mod rts;` and the `pub use` to `testkit/mod.rs`; add the `Rts` variant to `HarnessError`.
 - [x] 12. Run `cargo test -p mmd-engine --test rts_world` to green.
 - [x] 13. Run the mutation list; record kills in the commit body.
-- [ ] 14. Run the full validation block.
+- [x] 14. Run the full validation block. — re-run independently by the parent at
+  the T6 checkpoint: `cargo fmt --all -- --check` clean, `cargo clippy --workspace
+  --all-targets --all-features -- -D warnings` clean, `cargo test --workspace
+  --locked` 38 result lines all `0 failed`, `nix flake check` "all checks
+  passed!", all three `xtask --check` ok, `cargo run -- run --agents 5000
+  --frames 300` exit 0 with `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
 
 ## Outputs
 
