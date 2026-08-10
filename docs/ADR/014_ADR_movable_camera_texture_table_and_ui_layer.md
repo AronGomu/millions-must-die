@@ -136,3 +136,18 @@ generator swap with no code change.
   so an accidental change is loud and a deliberate one is reviewed.
 - Nothing here claims a speed. The texture table adds up to five extra texture
   binds per frame; no number is measured, published, or gated on.
+- **Corrected during implementation.** The `overlay`/`ui` split shipped
+  stricter than the field's own doc comment read. As built, `overlay` carries
+  **only** procedural rings — the horde's hitbox rings and the RTS selection
+  rings — and every textured depth-off element lives in a `ui` draw group:
+  placement tiles, the drag box, the rally flag, the resource and supply icons,
+  the HUD panel fill (slot 7, `rts/props.png`) and every glyph (slot 8,
+  `ui/font.png`). The stale comment on `ScenePass::overlay`, which still listed
+  placement tiles as overlay content, was corrected to match the code rather
+  than the code loosened to match it. `selection_rings_are_procedural` and
+  `hud_uses_only_the_two_ui_groups` pin the rule.
+- **Corrected during implementation.** `SpriteRenderer::pack_capacity` was
+  added as a read-only observation seam so a mutation test can see that the
+  per-frame pack buffer is reserved once and never grown, instead of the claim
+  living only in a comment. A stale note in `render/instance.rs` still listing
+  zoom as phase-1 work was corrected too: decision (a) defers it.

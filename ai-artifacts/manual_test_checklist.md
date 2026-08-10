@@ -404,7 +404,10 @@ Ubuntu fixture) named as risks rather than fixed. Everything automatable is
 green: `cargo fmt --all -- --check`, `cargo test --workspace --locked` (35
 `test result: ok` blocks, 0 failed), `cargo test -p millions_must_die --test
 validation_contract` (7/7, including `every_system_has_a_test` at
-`SCOPE_SYSTEM_COUNT = 14` and `no_perf_claim_in_docs`), `cargo clippy
+`SCOPE_SYSTEM_COUNT = 14` and `no_perf_claim_in_docs`)
+*(updated by T16: that file now holds ten tests and `SCOPE_SYSTEM_COUNT = 20` —
+the six phase-1 systems were added, and each phase's systems resolve against
+its own close doc)*, `cargo clippy
 --workspace --all-targets --all-features -- -D warnings`, `nix flake check`,
 all three xtask `--check` commands, and the gate smoke reproducing the
 T0-pinned digest
@@ -431,7 +434,12 @@ opening a real browser window is out of scope for a headless worker.
 - [ ] Click every link in `docs/ADR/README.md` in a browser or editor preview
       and confirm each opens the right ADR body, including the two new
       "superseded in part" / "supplemented" notes at the top pointing at
-      ADR 010, ADR 011 and ADR 012.
+      ADR 010, ADR 011 and ADR 012. *(T16: the index now also lists ADR 013,
+      014 and 015, and two new tests —
+      `adr_index_lists_every_adr_file` and `every_doc_link_resolves` — check
+      that every ADR file is listed and every link under `docs/` resolves. The
+      human check left is that each link's **text** matches the body it opens,
+      which no test can decide.)*
 
 ## T10 review-fixes
 
@@ -862,7 +870,9 @@ exits on `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
       `MAX_SELECTION = MAX_ENTITIES` (2048) against
       `docs/DESIGN.md`'s "Unlimited unit selection" decision — the selection
       cap is deliberately the entity store's own ceiling, not a smaller
-      RTS-traditional 12.
+      RTS-traditional 12. *(T16: `docs/DESIGN.md` now states that mapping in
+      the decision itself, so this is a two-way check between the doc and the
+      constant rather than an inference.)*
 
 ## T9 gather-loop
 
@@ -1281,3 +1291,103 @@ on a real window.
 - [ ] `cargo run -- rts` with no flags — still opens the interactive window
       from T14 and still responds to the mouse and keyboard. The script path
       is an addition; it must not have taken over the default.
+
+## T16 docs-and-phase-close
+
+The ticket that closes phase 1 on the record rather than on the code. Three
+ADRs (013, 014, 015) and the architecture page were re-read against the shipped
+source and amended where they diverged; a new
+`docs/rts-engine-prototype-functional-close.md` publishes what phase 1 proves,
+what it does not, the five deviations from plan, and fourteen known gaps; every
+index (`docs/README.md`, `docs/ADR/README.md`, `docs/CONTEXT.md`,
+`docs/DESIGN.md`, `docs/05-testing.md`, `docs/GLOSSARY.md`, `AGENT.md`,
+`README.md`) now points at it. No gameplay or render behaviour changed.
+
+Three contract tests are new in `tests/validation_contract.rs` —
+`phase1_close_doc_names_only_real_tests` (parses the close doc's
+`System | Test binary | Named tests` table and resolves every name against a
+`#[test]` scan of the binary it claims, plus a reverse scan of the prose),
+`adr_index_lists_every_adr_file`, and `every_doc_link_resolves` — and
+`every_system_has_a_test` grew six phase-1 rows (`SCOPE_SYSTEM_COUNT` 14 → 20).
+Because a phase-1 system must not be published by the *phase-0* close doc, each
+`SystemCoverage` entry now names its own close document.
+
+Two documents disagreed with the code, and the **code comment** was wrong both
+times, so the code was corrected and the ADRs record it: `ScenePass::overlay`'s
+doc comment still listed placement tiles as overlay content (they are textured
+and live in a `ui` group), and `render/instance.rs` still called zoom phase-1
+work (ADR 014 defers it). Both are comment-only edits; no behaviour moved.
+Two dead links in the superseded `docs/technical-prototype-results.md` (to the
+consolidated `02-prototype-roadmap.md`) were repointed at `CONTEXT.md#roadmap`
+so `every_doc_link_resolves` has nothing to excuse.
+
+Everything automatable is green and was run on this tree, not quoted:
+`cargo fmt --all -- --check`; `cargo test --test validation_contract` (10/10);
+`MMD_REQUIRE_GPU=1 cargo test --workspace --locked` (48 `test result: ok`
+blocks, 0 failed); `VK_DRIVER_FILES=/nonexistent cargo test --workspace
+--locked` (48 blocks, 0 failed); `cargo clippy --workspace --all-targets
+--all-features -- -D warnings`; `nix flake check`; all three xtask `--check`
+commands (`4 zombie + 4 rts + 1 ui`); `cargo run -- run --agents 5000 --frames
+300` still exiting on
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`;
+both collision scenes at exit 0; the acceptance run exiting 0 on `tick=1449
+frames=1449 crystal=86 gas=50 supply=9/20 units=8 buildings=3 nodes=10`;
+`golden_frame_matches` passing **without** `MMD_UPDATE_GOLDEN`; an empty
+`git diff --stat main -- lab/goldens/ assets/scenarios/fixtures/
+assets/sprites/generated/atlas_*.png assets/sprites/generated/manifest.json`;
+and `cargo tree -e features | grep -c testkit` = 0.
+
+The five mandatory mutations were each injected, observed red, reverted and
+observed green: a renamed mapped test, a fictional row in the close doc's
+table, a `144 fps` sentence in the close doc, ADR 014 deleted from the index,
+and a `docs/README.md` link pointed at a missing file. Five injected, five
+killed, no survivors.
+
+What is left needs eyes, a browser, or a judgement no test can make.
+
+- [ ] Open `docs/rts-engine-prototype-architecture.html` in a real browser: it
+      renders dark by default with no flash of light theme, the four SVGs (two
+      worlds, the tick order, the gather state machine) render without
+      clipping at common widths, and the browser's network panel shows no
+      request while the page loads.
+- [ ] On that page, read the box titled **The rule a contributor can get
+      wrong** and then open `crates/mmd-engine/src/rts/pack.rs`. The page says
+      `overlay` carries procedural rings only and everything textured goes in
+      `ui`; confirm `pack_frame`'s section 2 pushes only
+      `SpriteInstance::ring(...)` and that the rally flag, ghost and drag box
+      in section 3 all go through `frame.prop_group()`.
+- [ ] Read `docs/rts-engine-prototype-functional-close.md` end to end with the
+      code open beside it. Every claim must be one you can trace: the six
+      systems, the five deviations, the fourteen gaps. Anything you cannot
+      trace is a defect in this document, not a nuance.
+- [ ] In that close doc, check the tone of gap 13 (known flakiness). It must
+      read as *unexplained and unfixed* — `gpu_smoke::the_hud_draws_over_the_world`
+      failing 3/3 on one machine and passing 2/2 on another at the same commit
+      is recorded, not resolved. If a future reader could mistake it for
+      "handled", it is worded wrong.
+- [ ] Read the new **Corrected during implementation.** bullets at the end of
+      ADR 013, 014 and 015 against the code they name: the two `sim/`
+      visibility keywords (`git diff main -- crates/mmd-engine/src/sim/` must
+      show exactly two `pub`/`pub(crate)` changes and one `#[cfg(test)]`
+      re-export), the placement ghost inside `RtsWorld::state_hash`, the four
+      test hooks, and `Order::Move`-only arrival in `RtsWorld`'s mover.
+- [ ] `git diff main -- crates/mmd-engine/src/sim/` — confirm with your own
+      eyes that no signature and no body changed. This is the one promise that
+      keeps the phase-0 hash meaningful, and it is worth checking by hand
+      rather than trusting the ADR that claims it.
+- [ ] Read `README.md`'s new phase-1 paragraph, then run the command in it in
+      a real window. A new reader must be able to see the prototype from that
+      paragraph alone, and the hotkeys it lists (`Q`/`W`/`E`, `X`, `A`/`S`,
+      `R`, arrows) must be the ones that actually respond.
+- [ ] Click every link in `docs/README.md`'s new **Phase 1 architecture**
+      section and in the close doc's **Related** section. `every_doc_link_resolves`
+      proves the targets exist; only a human can say the link text describes
+      what opens.
+- [ ] Read `docs/GLOSSARY.md`'s new **RTS (phase 1)** table out loud against
+      the code refs. Each word must be one you would actually say in a chat
+      message ("fix the ghost", "the fieldpool thrashes"); any word you would
+      not say is dead weight and should be replaced, not kept.
+- [ ] Skim `docs/CONTEXT.md`'s roadmap item 1 and `AGENT.md`'s Status section
+      side by side. They must agree with each other and with the close doc on
+      what phase 1 claims — especially that performance is unmeasured and that
+      nothing cross-platform was verified.

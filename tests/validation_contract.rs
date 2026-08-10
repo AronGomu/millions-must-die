@@ -21,6 +21,10 @@ const README_DOC: &str = "README.md";
 const RESULTS_DOC: &str = "docs/technical-prototype-results.md";
 /// Doc that closes phase 0 on functional evidence (T33).
 const CLOSE_DOC: &str = "docs/technical-prototype-functional-close.md";
+/// Doc that closes phase 1 on functional evidence (T16).
+const PHASE1_CLOSE_DOC: &str = "docs/rts-engine-prototype-functional-close.md";
+/// Phase-1 architecture page. A live doc: it describes what shipped.
+const PHASE1_ARCH_DOC: &str = "docs/rts-engine-prototype-architecture.html";
 /// Doc that states what each phase claims (roadmap + vision + MVP scope, consolidated).
 const ROADMAP_DOC: &str = "docs/CONTEXT.md";
 
@@ -332,6 +336,10 @@ fn results_doc_is_superseded_history_not_a_claim() {
 /// doc's published map. A doc that agrees with itself proves nothing, so the
 /// doc is never consulted for what the systems *are*.
 struct SystemCoverage {
+    /// The close document publishing this system's map. Phase 0 and phase 1
+    /// close on separate pages, and a phase-1 system named in the phase-0
+    /// close would rewrite a record that is already closed.
+    close_doc: &'static str,
     /// Human-readable system name; must appear verbatim in the close doc.
     system: &'static str,
     /// Repo-relative file that must contain every test named below.
@@ -349,6 +357,7 @@ struct SystemCoverage {
 
 const SCOPE_SYSTEMS: &[SystemCoverage] = &[
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Simulation — movement, obstacles, recycling",
         file: "crates/mmd-engine/tests/simulation.rs",
         tests: &[
@@ -363,6 +372,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Collision — agent separation and neighbour bins",
         file: "crates/mmd-engine/tests/separation.rs",
         tests: &[
@@ -401,6 +411,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Navigation — flow field",
         file: "crates/mmd-engine/tests/flow_field.rs",
         tests: &[
@@ -414,6 +425,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Scenario loading and hash contract",
         file: "crates/mmd-engine/tests/scenario_contract.rs",
         tests: &[
@@ -432,6 +444,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Deterministic test harness",
         file: "crates/mmd-engine/tests/harness.rs",
         tests: &[
@@ -444,6 +457,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Runtime frame loop",
         file: "crates/mmd-engine/tests/runtime_frame.rs",
         tests: &[
@@ -457,6 +471,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Render correctness — instance data, projection, whole frame",
         file: "crates/mmd-engine/tests/render_correctness.rs",
         tests: &[
@@ -471,6 +486,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Debug hitbox overlay",
         file: "crates/mmd-engine/tests/render_correctness.rs",
         tests: &[
@@ -485,6 +501,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Isometric projection and depth order",
         file: "crates/mmd-engine/tests/render_correctness.rs",
         tests: &[
@@ -498,6 +515,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "GPU smoke and tracked asset hashes",
         file: "crates/mmd-engine/tests/gpu_smoke.rs",
         tests: &[
@@ -509,6 +527,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &["readback_is_1920x1080", "four_groups_drawn"],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Golden-image comparator",
         file: "crates/mmd-engine/tests/gpu_golden.rs",
         tests: &[
@@ -521,6 +540,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Allocation invariant",
         file: "crates/mmd-engine/tests/frame_allocations.rs",
         tests: &[
@@ -538,6 +558,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "App and CLI lifecycle",
         file: "tests/cli_contract.rs",
         tests: &[
@@ -553,6 +574,7 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         gpu_only: &[],
     },
     SystemCoverage {
+        close_doc: CLOSE_DOC,
         system: "Merge-gate contract",
         file: "tests/validation_contract.rs",
         tests: &[
@@ -566,17 +588,64 @@ const SCOPE_SYSTEMS: &[SystemCoverage] = &[
         ],
         gpu_only: &[],
     },
+    // ---- Phase 1: the six systems the RTS prototype claims (T16). Each maps
+    // one representative test here; the rest of each system's evidence is
+    // published by the phase-1 close doc's table and resolved by
+    // `phase1_close_doc_names_only_real_tests`.
+    SystemCoverage {
+        close_doc: PHASE1_CLOSE_DOC,
+        system: "camera",
+        file: "crates/mmd-engine/tests/camera.rs",
+        tests: &["cell_at_returns_the_cell_a_sprite_was_packed_from"],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        close_doc: PHASE1_CLOSE_DOC,
+        system: "selection",
+        file: "crates/mmd-engine/tests/rts_selection.rs",
+        tests: &["box_selects_every_own_unit_inside"],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        close_doc: PHASE1_CLOSE_DOC,
+        system: "workers",
+        file: "crates/mmd-engine/tests/rts_economy.rs",
+        tests: &["a_full_round_trip_banks_crystal"],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        close_doc: PHASE1_CLOSE_DOC,
+        system: "economy",
+        file: "crates/mmd-engine/tests/rts_economy.rs",
+        tests: &["the_node_loses_exactly_the_carried_amount"],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        close_doc: PHASE1_CLOSE_DOC,
+        system: "building",
+        file: "crates/mmd-engine/tests/rts_build.rs",
+        tests: &["a_depot_finishes_in_its_documented_time"],
+        gpu_only: &[],
+    },
+    SystemCoverage {
+        close_doc: PHASE1_CLOSE_DOC,
+        system: "unit production",
+        file: "crates/mmd-engine/tests/rts_production.rs",
+        tests: &["queueing_cannot_exceed_the_cap"],
+        gpu_only: &[],
+    },
 ];
 
 /// Floor on the total `#[test]` fns discovered across the mapped files. A scan
 /// that silently stopped finding tests would otherwise satisfy every
 /// membership check vacuously — every lookup would fail loudly, but a *broken
 /// regex* that matched everything would not. This pins the scanner itself.
-const MIN_SCANNED_TESTS: usize = 277;
+const MIN_SCANNED_TESTS: usize = 555;
 
-/// Number of systems phase 0 claims. Pinned so that deleting a `SystemCoverage`
-/// entry — which shrinks the claim without breaking any lookup — fails loudly.
-const SCOPE_SYSTEM_COUNT: usize = 14;
+/// Number of systems phases 0 and 1 claim together. Pinned so that deleting a
+/// `SystemCoverage` entry — which shrinks the claim without breaking any
+/// lookup — fails loudly.
+const SCOPE_SYSTEM_COUNT: usize = 20;
 
 /// One `#[test]` fn found by the source scan.
 #[derive(Debug)]
@@ -648,24 +717,25 @@ fn declared_tests(rel: &str) -> Vec<DeclaredTest> {
 fn every_system_has_a_test() {
     assert!(
         !SCOPE_SYSTEMS.is_empty(),
-        "the phase-0 scope list must name at least one system"
+        "the scope list must name at least one system"
     );
 
     assert_eq!(
         SCOPE_SYSTEMS.len(),
         SCOPE_SYSTEM_COUNT,
-        "the phase-0 scope list changed size. Adding a system is fine — bump \
-         the constant. *Removing* one shrinks what phase 0 claims to prove and \
-         must be a deliberate, reviewed decision, not a quiet edit."
+        "the scope list changed size. Adding a system is fine — bump the \
+         constant. *Removing* one shrinks what a closed phase claims to prove \
+         and must be a deliberate, reviewed decision, not a quiet edit."
     );
 
-    let close = read_doc(CLOSE_DOC);
     let mut scanned_total = 0usize;
 
     for entry in SCOPE_SYSTEMS {
+        let close_doc = entry.close_doc;
+        let close = read_doc(close_doc);
         assert!(
             !entry.tests.is_empty(),
-            "system `{}` claims phase-0 scope but names no test",
+            "system `{}` claims scope but names no test",
             entry.system
         );
 
@@ -716,7 +786,7 @@ fn every_system_has_a_test() {
             if found.ignored {
                 assert!(
                     close.contains(&format!("`{name}` (GPU-only)")),
-                    "{CLOSE_DOC} lists `{name}` without the `(GPU-only)` label; \
+                    "{close_doc} lists `{name}` without the `(GPU-only)` label; \
                      a reader must not mistake it for evidence the gate runs"
                 );
             } else {
@@ -734,19 +804,19 @@ fn every_system_has_a_test() {
         // truth — the doc is checked against it, never the reverse.
         assert!(
             close.contains(entry.system),
-            "{CLOSE_DOC} does not name system `{}` in its system -> test map",
+            "{close_doc} does not name system `{}` in its system -> test map",
             entry.system
         );
         assert!(
             close.contains(entry.file),
-            "{CLOSE_DOC} does not name `{}` as the file proving `{}`",
+            "{close_doc} does not name `{}` as the file proving `{}`",
             entry.file,
             entry.system
         );
         for name in entry.tests {
             assert!(
                 close.contains(name),
-                "{CLOSE_DOC} omits `{name}`, which system `{}` relies on",
+                "{close_doc} omits `{name}`, which system `{}` relies on",
                 entry.system
             );
         }
@@ -768,6 +838,7 @@ fn every_system_has_a_test() {
         .flat_map(|e| declared_tests(e.file))
         .map(|d| d.name)
         .collect();
+    let close = read_doc(CLOSE_DOC);
     for quoted in backtick_spans(&close) {
         if !looks_like_a_test_name(&quoted) {
             continue;
@@ -817,6 +888,161 @@ fn looks_like_a_test_name(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
 }
 
+// ---------------------------------------------------------------------------
+// T16 phase-1 close: the close doc's own table, the ADR index, and doc links.
+// ---------------------------------------------------------------------------
+
+/// Header cells identifying the phase-1 close doc's coverage table.
+const PHASE1_TABLE_HEADER: [&str; 3] = ["System", "Test binary", "Named tests"];
+
+/// Floor on the rows of that table: the six phase-1 systems, plus the
+/// supporting subsystems the close doc also publishes. A table that shrank to
+/// six rows would satisfy every per-row check while quietly dropping the
+/// evidence for navigation, packing, the HUD, the CLI and the acceptance run.
+const PHASE1_MIN_ROWS: usize = 18;
+
+/// Floor on the total test names the table maps, set at what it maps today.
+/// Adding evidence is free; removing it has to be a deliberate edit here.
+const PHASE1_MIN_MAPPED_TESTS: usize = 178;
+
+/// Cells of a markdown table row, without the leading/trailing empties.
+fn table_cells(line: &str) -> Vec<String> {
+    let trimmed = line.trim();
+    let inner = trimmed
+        .strip_prefix('|')
+        .and_then(|s| s.strip_suffix('|'))
+        .unwrap_or(trimmed);
+    inner.split('|').map(|c| c.trim().to_string()).collect()
+}
+
+/// `(system, test binary, named tests)` rows of the phase-1 close doc's map.
+///
+/// Parsed rather than duplicated in Rust: the point of the test below is that
+/// the *published* table is resolvable, so re-typing it here would only prove
+/// the copy agrees with itself.
+fn phase1_close_rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
+    let lines = scan(doc);
+    let header = lines
+        .iter()
+        .position(|l| {
+            !l.fenced && {
+                let cells = table_cells(l.text);
+                cells.len() == 3 && cells.iter().zip(PHASE1_TABLE_HEADER).all(|(c, h)| c == h)
+            }
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "{PHASE1_CLOSE_DOC} must publish a `{}` table",
+                PHASE1_TABLE_HEADER.join(" | ")
+            )
+        });
+
+    let mut rows = Vec::new();
+    // +2 skips the header and the `| --- |` separator beneath it.
+    for line in lines[header + 2..]
+        .iter()
+        .take_while(|l| !l.fenced && l.text.trim_start().starts_with('|'))
+    {
+        let cells = table_cells(line.text);
+        assert_eq!(
+            cells.len(),
+            3,
+            "{PHASE1_CLOSE_DOC}: coverage row has {} cells, expected 3:\n  {}",
+            cells.len(),
+            line.text
+        );
+        let file = backtick_spans_in(&cells[1]);
+        assert_eq!(
+            file.len(),
+            1,
+            "{PHASE1_CLOSE_DOC}: row `{}` must name exactly one test binary in backticks",
+            cells[0]
+        );
+        rows.push((
+            cells[0].clone(),
+            file[0].clone(),
+            backtick_spans_in(&cells[2]),
+        ));
+    }
+    rows
+}
+
+/// Every test the phase-1 close document maps to a system must exist.
+///
+/// The close doc's `System -> Test binary -> Named tests` table is a claim
+/// about the repo, and a claim nothing checks rots within a ticket. This
+/// parses that table out of the markdown and resolves every name against a
+/// scan of `#[test]` functions in the named binary.
+#[test]
+fn phase1_close_doc_names_only_real_tests() {
+    let doc = read_doc(PHASE1_CLOSE_DOC);
+    let rows = phase1_close_rows(&doc);
+
+    assert!(
+        rows.len() >= PHASE1_MIN_ROWS,
+        "{PHASE1_CLOSE_DOC} maps {} systems, expected at least {PHASE1_MIN_ROWS}; \
+         phase 1 closed on more evidence than that, and the map may not shrink \
+         without the claim shrinking with it",
+        rows.len()
+    );
+
+    let mut mapped = 0usize;
+    let mut corpus: Vec<String> = Vec::new();
+    for (system, file, names) in &rows {
+        assert!(
+            repo_root().join(file).is_file(),
+            "{PHASE1_CLOSE_DOC}: system `{system}` names `{file}`, which is not a file"
+        );
+        let declared = declared_tests(file);
+        assert!(
+            !declared.is_empty(),
+            "{file} declares no #[test] fn at all; system `{system}` has no proof"
+        );
+        assert!(
+            !names.is_empty(),
+            "{PHASE1_CLOSE_DOC}: system `{system}` names no test"
+        );
+        for name in names {
+            let found = declared.iter().find(|d| d.name == *name);
+            let Some(found) = found else {
+                let all: Vec<&str> = declared.iter().map(|d| d.name.as_str()).collect();
+                panic!(
+                    "{PHASE1_CLOSE_DOC}: system `{system}` maps to `{name}`, which \
+                     does not exist in {file}. Found there: {all:?}. A renamed, \
+                     moved or deleted test must fail the close, not silently \
+                     shrink the claim."
+                );
+            };
+            assert!(
+                !found.ignored,
+                "{PHASE1_CLOSE_DOC}: `{name}` ({file}) is #[ignore]d, so it does \
+                 not run on a plain `cargo test`; phase 1 maps no ignored test"
+            );
+            mapped += 1;
+        }
+        corpus.extend(declared.into_iter().map(|d| d.name));
+    }
+
+    assert!(
+        mapped >= PHASE1_MIN_MAPPED_TESTS,
+        "{PHASE1_CLOSE_DOC} maps {mapped} tests, expected at least \
+         {PHASE1_MIN_MAPPED_TESTS}; the table thinned out instead of the claim"
+    );
+
+    // Reverse direction, as for phase 0: prose must not advertise a test that
+    // no binary in the table declares.
+    for quoted in backtick_spans(&doc) {
+        if !looks_like_a_test_name(&quoted) {
+            continue;
+        }
+        assert!(
+            corpus.contains(&quoted),
+            "{PHASE1_CLOSE_DOC} advertises test `{quoted}`, which no binary in \
+             its own map declares; the close doc must not outlive its evidence"
+        );
+    }
+}
+
 /// Docs that make live claims. History is deliberately excluded: the retired
 /// measurements in `RESULTS_DOC` and the superseded ADRs must stay readable and
 /// keep their numbers — `results_doc_is_superseded_history_not_a_claim` is what
@@ -831,6 +1057,8 @@ const LIVE_DOCS: &[&str] = &[
     ROADMAP_DOC,
     CONTRACT_DOC,
     CLOSE_DOC,
+    PHASE1_CLOSE_DOC,
+    PHASE1_ARCH_DOC,
     "CONTRIBUTING.md",
 ];
 
@@ -1028,6 +1256,141 @@ fn no_perf_claim_in_docs() {
              proving anything about the docs."
         );
     }
+}
+
+/// Every ADR file is listed by the ADR index, and every listed link resolves.
+///
+/// The index is how a reader finds a decision at all. An ADR that exists but
+/// is unlisted is a decision nobody will read; a listed link that resolves to
+/// nothing is worse, because it looks like the decision was checked.
+#[test]
+fn adr_index_lists_every_adr_file() {
+    let dir = repo_root().join("docs/ADR");
+    let index_rel = "docs/ADR/README.md";
+    let index = read_doc(index_rel);
+
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        .map(|e| {
+            e.expect("dir entry")
+                .file_name()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|n| n.ends_with(".md") && n != "README.md")
+        .collect();
+    files.sort();
+
+    assert!(
+        files.len() >= 15,
+        "docs/ADR holds {} records, expected at least 15; the scan is broken",
+        files.len()
+    );
+
+    for file in &files {
+        assert!(
+            index.contains(&format!("]({file})")),
+            "{index_rel} does not link `{file}`; an unlisted ADR is a decision \
+             nobody will find"
+        );
+    }
+
+    // ...and nothing listed is missing. `every_doc_link_resolves` covers this
+    // repo-wide, but the index is the one place a dead ADR link is invisible.
+    for target in markdown_link_targets(&index) {
+        let path = dir.join(&target);
+        assert!(
+            path.exists(),
+            "{index_rel} links `{target}`, which does not exist"
+        );
+    }
+}
+
+/// Relative link targets of a markdown document, anchors stripped.
+///
+/// External schemes and bare fragments are skipped: this test resolves files,
+/// and a network fetch would make the merge gate depend on the internet.
+fn markdown_link_targets(doc: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = doc;
+    while let Some(open) = rest.find("](") {
+        rest = &rest[open + 2..];
+        let Some(close) = rest.find(')') else { break };
+        let target = &rest[..close];
+        rest = &rest[close + 1..];
+        if target.is_empty()
+            || target.contains(char::is_whitespace)
+            || target.starts_with("http://")
+            || target.starts_with("https://")
+            || target.starts_with("mailto:")
+            || target.starts_with('#')
+        {
+            continue;
+        }
+        let path = target.split('#').next().unwrap_or(target);
+        if !path.is_empty() {
+            out.push(path.to_string());
+        }
+    }
+    out
+}
+
+/// Markdown files under `docs/`, recursively, repo-relative.
+fn docs_markdown_files() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![repo_root().join("docs")];
+    while let Some(dir) = stack.pop() {
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
+        {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "md") {
+                out.push(path);
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Every relative markdown link under `docs/` points at a file that exists.
+///
+/// Docs are the phase record. A link that 404s locally is how a record quietly
+/// stops being one — the reader assumes the target was deleted deliberately
+/// rather than that the link rotted.
+#[test]
+fn every_doc_link_resolves() {
+    let files = docs_markdown_files();
+    assert!(
+        files.len() >= 8,
+        "found {} markdown files under docs/, expected at least 8; the walk is \
+         broken and every check below is vacuous",
+        files.len()
+    );
+
+    let mut checked = 0usize;
+    for file in &files {
+        let doc = std::fs::read_to_string(file).unwrap_or_else(|e| panic!("read {file:?}: {e}"));
+        let dir = file.parent().expect("doc has a parent directory");
+        for target in markdown_link_targets(&doc) {
+            let resolved = dir.join(&target);
+            assert!(
+                resolved.exists(),
+                "{}: link `{target}` resolves to {}, which does not exist",
+                file.display(),
+                resolved.display()
+            );
+            checked += 1;
+        }
+    }
+
+    assert!(
+        checked >= 100,
+        "only {checked} relative links found under docs/, expected at least 100; \
+         the link scanner stopped finding links"
+    );
 }
 
 #[test]

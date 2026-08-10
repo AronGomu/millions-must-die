@@ -45,6 +45,23 @@ Consolidated from former `00-vision.md`, `02-prototype-roadmap.md`, `03-mvp.md`.
      [technical prototype results](technical-prototype-results.md) (superseded).
 
 1. **RTS Engine Prototype** — camera, selection, workers, economy, building, unit production.
+   - Status (2026-08-10): **closed on functional scope.** All six systems ship
+     as a thin vertical slice on a horde-free 320 × 320 scene, each covered by
+     named automated tests, and one tracked script drives select → gather →
+     build → produce end to end through both the engine and the shipped binary
+     (`cargo run -- rts`, on the merge gate). Phase 0 is undisturbed: the
+     5 000-agent scene's state hash, the render golden and the scenario
+     contract are unchanged. It proves no combat, no enemy AI, no zoom, no
+     minimap, no fog of war, no save/load, no second faction and no balance
+     pass; performance stays **unmeasured**, and no verification exists for any
+     host other than the development one. What phase 1 proves, what it does
+     not, and every known gap:
+     [RTS engine prototype functional close](rts-engine-prototype-functional-close.md).
+     The decisions behind it: [ADR 013](ADR/013_ADR_phase1_scope_and_rts_entity_model.md),
+     [ADR 014](ADR/014_ADR_movable_camera_texture_table_and_ui_layer.md),
+     [ADR 015](ADR/015_ADR_economy_construction_and_production_determinism.md),
+     with the shape of the slice on the
+     [architecture page](rts-engine-prototype-architecture.html).
 2. **Combat Prototype** — weapons, damage, turrets, enemy AI.
 3. **Horde Prototype** — tens of thousands of enemies.
 4. **Defense Prototype** — walls, waves, multiple entrances.

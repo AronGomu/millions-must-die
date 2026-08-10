@@ -11,7 +11,7 @@
 > [retired: performance gating](05-testing.md#retired-performance-gating).
 >
 > Phase-0 acceptance is now behavioural — see the
-> [prototype roadmap](02-prototype-roadmap.md). The measurement tooling
+> [roadmap](CONTEXT.md#roadmap). The measurement tooling
 > (`crates/mmd-engine/src/bench/`, `tools/mmd-lab/`, `lab/`) is frozen in
 > place, not deleted; it must be re-validated before the optimization phase
 > reuses it.
@@ -169,4 +169,4 @@ owed.
 
 Phase 0 now closes on game-system behaviour instead — see
 [testing strategy](05-testing.md) and the
-[prototype roadmap](02-prototype-roadmap.md).
+[roadmap](CONTEXT.md#roadmap).

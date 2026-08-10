@@ -155,8 +155,10 @@
 </p>
 <p>
   So there are two entity models, side by side, and two commands to drive them.
-  <code>run</code> is unchanged — same 24 CLI contract cases, same stdout, same
-  hash. <code>rts</code> is new.
+  <code>run</code> is unchanged — <code>tests/cli_contract.rs</code> is
+  byte-identical to its phase-0 self, same stdout, same exit-line hash.
+  <code>rts</code> is new, with its own contract suite in
+  <code>tests/rts_cli_contract.rs</code>.
 </p>
 
 <div class="figure scroll">
@@ -327,7 +329,7 @@ wall built ten seconds ago.</p>
   <tbody>
     <tr><td><code>NAV_FIELD_SLOTS</code></td><td class="num">8</td><td>the live working set a player actually holds; eviction is exact LRU, ties to the lowest slot</td></tr>
     <tr><td><code>MAX_ENTITIES</code></td><td class="num">2 048</td><td>derived: 500 supply / 1 supply per worker = 500 units max, plus buildings and nodes</td></tr>
-    <tr><td><code>WORKER_SPEED_CELLS_PER_SEC</code></td><td class="num">10.0</td><td>outruns the horde's 8.0, so a base can be re-tasked faster than it can be walked across</td></tr>
+    <tr><td><code>WORKER_SPEED_CELLS_PER_SEC</code></td><td class="num">10.0</td><td>outruns the horde's 8.0, so re-tasking a worker across a base does not cost a full horde-speed walk</td></tr>
     <tr><td><code>SOLDIER_SPEED_CELLS_PER_SEC</code></td><td class="num">8.0</td><td>matches the horde exactly — a phase-2 fight must not be decided by a speed nobody chose</td></tr>
     <tr><td><code>ARRIVAL_RADIUS_CELLS</code></td><td class="num">1.5</td><td>a group is sent to one cell and only one of them can stand on it; the rest stop adjacent and the order still completes</td></tr>
   </tbody>
@@ -442,6 +444,14 @@ player only notices when production mysteriously stops.</p>
   <code>overlay</code> will sample the zombie atlas. Textured depth-off content
   belongs in <code>ui</code>.
 </p>
+<p>
+  As built, that means the overlay layer holds exactly two things: the horde's
+  hitbox rings and the RTS selection rings. <strong>Everything else that draws
+  with depth off is a <code>ui</code> group</strong> — placement tiles, the drag
+  box, the rally flag, the crystal/gas/supply icons and the HUD panel fill
+  (slot 7), and every glyph (slot 8). <code>selection_rings_are_procedural</code>
+  and <code>hud_uses_only_the_two_ui_groups</code> are the guards.
+</p>
 </div>
 
 <div class="scroll">
@@ -518,6 +528,16 @@ player only notices when production mysteriously stops.</p>
   byte-identical, <code>SpriteInstance</code> is still 48 bytes,
   <code>shaders/sprite.hlsl</code> is byte-unmodified, and
   <code>cargo tree -e features | grep -c testkit</code> is still <code>0</code>.
+</p>
+<p>
+  The frozen phase-0 <code>sim/</code> took exactly two visibility keywords and
+  one <code>#[cfg(test)]</code> re-export: <code>dir_from_vector</code> became
+  <code>pub</code> so the RTS mover shares the horde's 8-way direction mapping,
+  and <code>step_admissible</code> became <code>pub(crate)</code> so the RTS
+  mover's own copy can be proven equal to it over an exhaustive grid. No
+  signature and no body changed. What phase 1 proves, what it does not, and
+  every known gap:
+  <a href="rts-engine-prototype-functional-close.md">functional close</a>.
 </p>
 </div>
 

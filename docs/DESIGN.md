@@ -25,6 +25,9 @@ Detailed phase-0 designs:
 - [Local validation lab](local-validation-lab-architecture.html)
 - [Architecture decision records](ADR/README.md)
 
+Detailed phase-1 designs:
+- [RTS engine prototype](rts-engine-prototype-architecture.html)
+
 ## Agent collision
 
 Bodies are scenario data: each scenario declares a collision radius and a
@@ -52,11 +55,59 @@ of `1` at which the engine's walk is unchanged. See
 [agent collision architecture](agent-collision-architecture.html) page and the
 [horde sim headroom architecture](horde-sim-headroom-architecture.html) page.
 
+## RTS entity model
+
+Player entities live in their own store, beside the horde rather than inside
+it. `sim::Simulation` is a fixed-population walker with one destination and a
+recycle cursor; putting orders, cargo, construction progress and production
+queues into it would put RTS state inside the type every pinned phase-0 hash
+digests.
+
+- **Entity store.** `rts::EntityStore` is a preallocated SoA store of
+  `MAX_ENTITIES = 2 048` slots with generational ids and a LIFO free list.
+  Every column is reserved at construction, so a spawn never allocates, and a
+  stale `EntityId` resolves to `None` instead of naming whoever reused its
+  slot.
+- **Orders.** One `Order` value per unit, hashed: `Move`, `Gather` (with its
+  `ToNode` / `Mining` / `Returning` phase) or `Build`. The whole worker loop is
+  therefore pinned by `RtsWorld::state_hash` rather than by tests poking at
+  booleans. Only `Order::Move` stops on the arrival radius; `Gather` and
+  `Build` complete on their own reach tests, measured against a *footprint
+  rectangle* rather than a centre.
+- **Flow-field pool.** The "no per-enemy pathfinding" rule extends to player
+  units. `nav::FieldPool` holds `NAV_FIELD_SLOTS = 8` preallocated fields keyed
+  by destination cell, evicted exact-LRU with ties to the lowest slot. Units
+  sharing a destination share a field, which is group cohesion for free.
+  Stamping a new obstacle invalidates **every** cached field, not the ones that
+  look affected.
+- **Economy and supply.** Two resources (Crystal, Gas) and one worker loop.
+  Supply is **reserved at enqueue**, never at completion, or the cap would be
+  decoration; `Supply::used` is **recomputed** every tick from live units plus
+  queue reservations rather than incremented at five call sites. The cap is
+  clamped at the 500-unit design pillar in the type, not by a caller
+  remembering.
+- **Grid placement.** Four ordered rules — in bounds, terrain (which carries
+  every finished building, since a finished footprint is stamped into the
+  navigation mask), overlap with an unfinished site, resource nodes. A unit
+  standing on the plot is deliberately *not* a rule: placement validity must
+  not flicker with a moving unit. A site is walkable so its builder can stand
+  inside it; the footprint blocks only at completion.
+
+Decisions: [ADR 013](ADR/013_ADR_phase1_scope_and_rts_entity_model.md),
+[ADR 014](ADR/014_ADR_movable_camera_texture_table_and_ui_layer.md),
+[ADR 015](ADR/015_ADR_economy_construction_and_production_determinism.md).
+Shape of the slice: the
+[RTS engine prototype architecture](rts-engine-prototype-architecture.html)
+page. What it proves and does not:
+[functional close](rts-engine-prototype-functional-close.md).
+
 ## Design Decisions
 
 Gameplay:
 - Clone StarCraft 1 feel before innovating.
-- Unlimited unit selection.
+- Unlimited unit selection. Implemented as `MAX_SELECTION == MAX_ENTITIES`:
+  the selection can hold every entity the store can hold, so there is no
+  selection cap to hit before the entity cap.
 - Improved pathfinding.
 - Grid placement.
 - 500 unit population cap.

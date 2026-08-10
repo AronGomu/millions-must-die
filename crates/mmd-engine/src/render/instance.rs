@@ -152,8 +152,9 @@ pub fn iso_unproject(sx: f32, sy: f32, tile_w: f32, tile_h: f32, origin: [f32; 2
 
 /// The fixed camera offset that puts `dest`'s **centre** at the view centre.
 ///
-/// The camera does not move: this is evaluated once per scene. Scrolling,
-/// edge-pan, zoom and selection are Phase 1.
+/// The camera does not move on the horde path: this is evaluated once per
+/// scene. Phase 1 added scrolling, edge-pan and selection on top
+/// ([`IsoView::with_center_cell`]); zoom is deferred past phase 1 (ADR 014).
 ///
 /// `width`/`height` bound the grid the destination is read against. Scenario
 /// validation already rejects an out-of-bounds destination, so the clamp never

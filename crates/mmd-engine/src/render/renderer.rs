@@ -104,9 +104,11 @@ pub struct DrawGroup {
 pub struct ScenePass<'a> {
     /// Depth-tested world sprites. `atlas_id` is a texture slot.
     pub world: &'a [DrawGroup],
-    /// World-space annotations: hitbox rings, selection rings, placement tiles.
-    /// One flat range, drawn with slot 0 bound (the ring branch samples no
-    /// texture; a textured overlay instance must go in `ui` instead).
+    /// World-space annotations, procedural rings only: hitbox rings and
+    /// selection rings. One flat range, drawn with slot 0 bound (the ring
+    /// branch samples no texture; every *textured* depth-off instance —
+    /// placement tiles, the drag box, rally flags, icons, panels and glyphs —
+    /// goes in `ui` instead, or it samples the zombie atlas).
     pub overlay: &'a [SpriteInstance],
     /// Screen-space UI, grouped by texture slot.
     pub ui: &'a [DrawGroup],

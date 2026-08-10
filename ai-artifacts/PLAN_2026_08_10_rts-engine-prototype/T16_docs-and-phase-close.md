@@ -208,20 +208,22 @@ temporarily insert the sentence "the RTS scene renders at 144 fps".
 
 ## Impl steps
 
-- [ ] 1. Read ADR 013, 014, 015 and the architecture page; check all ten flagged claims against the shipped code.
-- [ ] 2. Amend each document where it diverges, adding a `**Corrected during implementation.**` bullet under Consequences.
-- [ ] 3. Write `docs/rts-engine-prototype-functional-close.md` with all four sections and the full system → test table.
-- [ ] 4. Add the six phase-1 rows to `every_system_has_a_test` in `tests/validation_contract.rs`.
-- [ ] 5. Write `phase1_close_doc_names_only_real_tests` in the same file.
-- [ ] 6. Add the two new docs to `no_perf_claim_in_docs`'s `LIVE_DOCS`.
-- [ ] 7. Write `adr_index_lists_every_adr_file` and `every_doc_link_resolves`.
-- [ ] 8. Update `docs/README.md`, `docs/ADR/README.md`, `docs/CONTEXT.md`, `docs/DESIGN.md`, `docs/05-testing.md`.
-- [ ] 9. Update `AGENT.md`'s Status, Workspace layout, Build/test/dev commands and Architectural constraints sections.
-- [ ] 10. Update `README.md` with the `cargo run -- rts` line.
-- [ ] 11. Run the project's glossary skill (`.claude/skills/make-glossary-aron/SKILL.md`) to add the eleven new terms to `docs/GLOSSARY.md`.
-- [ ] 12. Run `graphify update .` so the knowledge graph covers the new modules.
-- [ ] 13. Run the mutation list; record kills in the commit body.
-- [ ] 14. Run the full validation block.
+- [x] 1. Read ADR 013, 014, 015 and the architecture page; check all ten flagged claims against the shipped code.
+- [x] 2. Amend each document where it diverges, adding a `**Corrected during implementation.**` bullet under Consequences.
+- [x] 3. Write `docs/rts-engine-prototype-functional-close.md` with all four sections and the full system → test table.
+- [x] 4. Add the six phase-1 rows to `every_system_has_a_test` in `tests/validation_contract.rs`.
+- [x] 5. Write `phase1_close_doc_names_only_real_tests` in the same file.
+- [x] 6. Add the two new docs to `no_perf_claim_in_docs`'s `LIVE_DOCS`.
+- [x] 7. Write `adr_index_lists_every_adr_file` and `every_doc_link_resolves`.
+- [x] 8. Update `docs/README.md`, `docs/ADR/README.md`, `docs/CONTEXT.md`, `docs/DESIGN.md`, `docs/05-testing.md`.
+- [x] 9. Update `AGENT.md`'s Status, Workspace layout, Build/test/dev commands and Architectural constraints sections.
+- [x] 10. Update `README.md` with the `cargo run -- rts` line.
+- [x] 11. Run the project's glossary skill (`.claude/skills/make-glossary-aron/SKILL.md`) to add the eleven new terms to `docs/GLOSSARY.md`.
+- [x] 12. Run `graphify update .` so the knowledge graph covers the new modules.
+      (5 305 nodes, 10 498 edges, 296 communities; `graphify-out/` is gitignored, so nothing to stage.)
+- [x] 13. Run the mutation list; record kills in the commit body.
+      (5 injected, 5 killed, 0 survivors; each reverted and re-confirmed green.)
+- [x] 14. Run the full validation block.
 
 ## Outputs
 
@@ -239,21 +241,21 @@ temporarily insert the sentence "the RTS scene renders at 144 fps".
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --test validation_contract` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -p xtask -- shaders --check`
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
-- [ ] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — exit 0
-- [ ] `cargo tree -e features | grep -c testkit` — `0`
-- [ ] `git diff --stat HEAD -- lab/goldens/` — **empty**
-- [ ] every checkbox in `docs/05-testing.md`'s required merge gate passes, in order, from a clean tree
-- [ ] app functional — no broken path from this slice
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test --test validation_contract` — all green (10 passed)
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` — 48 binaries, 0 failures
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — 48 binaries, 0 failures
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check` — all checks passed
+- [x] `cargo run -p xtask -- bootstrap --check`
+- [x] `cargo run -p xtask -- shaders --check`
+- [x] `cargo run -p xtask -- atlases --check` — 4 zombie + 4 rts + 1 ui
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — exit 0
+- [x] `cargo tree -e features | grep -c testkit` — `0`
+- [x] `git diff --stat HEAD -- lab/goldens/` — **empty**; `golden_frame_matches` passes without `MMD_UPDATE_GOLDEN=1`
+- [x] every checkbox in `docs/05-testing.md`'s required merge gate passes, in order, from a clean tree
+- [x] app functional — no broken path from this slice
 - [ ] commit msg draft: `docs(rts): record the phase-1 decisions and close the slice`

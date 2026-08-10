@@ -18,6 +18,14 @@
 
 - [Horde sim headroom](horde-sim-headroom-architecture.html)
 
+## Phase 1 architecture
+
+- [RTS engine prototype](rts-engine-prototype-architecture.html) — two entity
+  models in one binary, the texture table, the render layers
+- [RTS engine prototype functional close](rts-engine-prototype-functional-close.md)
+  — what phase 1 proves, what it does not, and every known gap
+- [Architecture decision records](ADR/README.md) — 013, 014, 015
+
 ## Implementation plan
 
 - `.tmp/IMPLEMENTATION_PLAN_technical_prototype.md`

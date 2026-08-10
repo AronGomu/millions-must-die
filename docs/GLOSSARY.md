@@ -28,6 +28,22 @@
 | separation pool | Persistent worker pool running the separation pass across `separation_threads` participants, spawned once at construction | `crates/mmd-engine/src/sim/pool.rs`, `struct SeparationPool`                |
 | identity tuning | The default value (`1`) of a scenario knob, at which the tuned code path degenerates to bit-identical behaviour with the untuned engine | `crates/mmd-engine/src/scenario.rs`, `separation_phases`/`mass_class_count`/`separation_threads` |
 
+## RTS (phase 1)
+
+| word      | short description                                       | ref in code                                                                 |
+| --------- | ------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| entity    | One RTS unit, building or node in the preallocated store | `crates/mmd-engine/src/rts/entity.rs`, `struct EntityStore`                  |
+| order     | Per-unit task: move, gather (3 phases), or build         | `crates/mmd-engine/src/rts/orders.rs`, `enum Order`                          |
+| fieldpool | 8 flow fields keyed by destination cell, LRU-evicted     | `crates/mmd-engine/src/nav/field_pool.rs`, `struct FieldPool`                |
+| dropoff   | Building a loaded worker banks its cargo at              | `crates/mmd-engine/src/rts/entity.rs`, `fn is_drop_off`                      |
+| footprint | Square of cells a building occupies on the grid          | `crates/mmd-engine/src/rts/entity.rs`, `BuildingKind::footprint_cells`       |
+| ghost     | Pending placement preview following the cursor cell      | `crates/mmd-engine/src/rts/build.rs`, `enum Placement`                       |
+| site      | Unfinished building: walkable, advances while attended   | `crates/mmd-engine/src/rts/world.rs`, `fn confirm_placement`                 |
+| supply    | Population counter: cap granted, usage recomputed        | `crates/mmd-engine/src/rts/economy.rs`, `struct Supply`                      |
+| rally     | Cell a produced unit walks to on spawn                   | `crates/mmd-engine/src/rts/world.rs`, `fn set_rally`                         |
+| scenepass | One frame's three layers handed to the renderer          | `crates/mmd-engine/src/render/renderer.rs`, `struct ScenePass`               |
+| uilayer   | Depth-off *textured* groups: HUD, ghost, flags, glyphs   | `crates/mmd-engine/src/render/renderer.rs`, `ScenePass::ui`                  |
+
 ## Render
 
 | word      | short description                              | ref in code                                                             |

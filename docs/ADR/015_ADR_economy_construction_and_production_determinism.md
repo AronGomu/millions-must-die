@@ -120,8 +120,22 @@ raised supply and produced would make the supply mechanic unobservable.
 - Depleted nodes are not despawned. They stay as scenery and draw a distinct
   depleted sprite, so a player can see where the seam ran out.
 - The whole economy is allocation-free per tick and reproducible: two harnesses
-  given the same orders for 4 000 ticks land on the same `state_hash`. Both are
-  asserted.
+  given the same orders land on the same `state_hash` — over 4 000 ticks in
+  `the_economy_is_reproducible`, 3 000 in `production_is_reproducible`. Both
+  properties are asserted.
 - No performance claim is made. The recount, the attendance pass and the
   production sweep each walk the live-slot list once per tick; no number is
   measured, published, or gated on.
+- **Corrected during implementation.** T10 narrowed the mover's early stop to
+  `Order::Move`. It had been generic, so the arrival-radius test against the
+  destination cell centre — and the "the field says stop" zero-vector case —
+  also ended `Gather` and `Build` orders. That is wrong once decision (d) puts
+  an approach cell *outside* the footprint: a worker could be frozen a cell
+  short of the drop-off or the site, with its order cleared before the reach
+  test that actually completes it ever ran. `Gather` and `Build` now complete
+  only on their own reach rules — `DROP_OFF_REACH_CELLS` from the footprint
+  rectangle, `BUILD_REACH_CELLS` from the site — and
+  `a_gatherer_still_delivers_after_the_hq_is_stamped`,
+  `a_builder_walks_to_a_far_site` and `delivery_uses_the_footprint_not_the_centre`
+  guard the narrowing. The fix landed with T10; this record names it because
+  the two reach rules in decision (b) only hold once the generic stop is gone.

@@ -110,3 +110,28 @@ replay that ends looking somewhere else did not reproduce.
   [ADR 015](015_ADR_economy_construction_and_production_determinism.md).
 - No performance claim is made or measured anywhere in phase 1, exactly as in
   phase 0. `no_perf_claim_in_docs` covers the new documents.
+- **Corrected during implementation.** The frozen phase-0 `sim/` took **two**
+  visibility promotions, not the one this record planned.
+  `sim::tick::dir_from_vector` became `pub` as written; T7 also promoted
+  `sim::tick::step_admissible` to `pub(crate)` and re-exported it from
+  `sim/mod.rs` behind `#[cfg(test)]`, so the RTS mover could be proven to agree
+  with the horde's own rule rather than with a copy of it. Three conditions
+  were required and met: visibility keywords only, no signature or body change,
+  and the 5 000-agent gate scene's exit-line hash unmoved. The entire phase-1
+  diff against `sim/` is those two keywords plus the one re-export line. The
+  duplicate in `rts::orders` stands — what the promotion buys is the proof of
+  equality, not a shared call site.
+- **Corrected during implementation.** `RtsWorld::state_hash` also digests the
+  pending placement ghost — one tag byte plus the building kind — which
+  decision (g) does not list. A ghost is player-visible state, and a replay that
+  ended with a different building pending did not reproduce.
+- **Corrected during implementation.** Two hooks were added beyond this
+  record's API surface, both `#[cfg(feature = "testkit")]` and both following
+  the precedent already set in `sim/agents.rs`: `RtsWorld::resources_mut` and
+  `RtsWorld::nav_mut`. They are compiled out of the shipping binary, which
+  `cargo tree -e features | grep -c testkit` still reports as `0`. Two further
+  read-only observation seams — `nav::FieldPool::acquire_count` and
+  `render::SpriteRenderer::pack_capacity` — are unconditional, because neither
+  exposes a way to mutate anything; they exist so the mandated mutation tests
+  can observe "acquired once per group" and "the pack buffer never grew"
+  instead of trusting a comment.

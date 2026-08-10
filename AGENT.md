@@ -18,15 +18,26 @@ runs end-to-end on Linux/Vulkan (5 000 = `scenario::MAX_LIVE_AGENTS`).
 Performance/benchmarking is explicitly retired and frozen for a later
 optimization phase — no perf number may gate a merge.
 Branch `plan/technical-prototype` is pushed to `origin`; PR to `main` not yet
-opened. Phase 1 not started. Details: `.tmp/IMPLEMENT_PROGRESS_technical-prototype.md`.
+opened.
 Phase 0.5 (`plan/horde-sim-headroom`) adds three scenario-gated simulation
 knobs — `separation_phases`, `mass_class_count`, `separation_threads` — each
 defaulting to the identity value 1; see ADR 010 and ADR 011.
 
+Phase 1 (RTS engine prototype, branch `plan/rts-engine-prototype`) is closed on
+functional scope: camera, selection, workers, economy, building and unit
+production ship as a thin vertical slice on the horde-free `rts_prototype_v1`
+scene (320 × 320, `hard_agent_count: 0`), driven by the new `rts` subcommand.
+Phase 0's contracts are untouched — same exit-line hash, same render golden,
+same `atlas_count: 4` scenario contract. No combat, no enemy AI, no zoom, no
+balance pass, and performance is still unmeasured. What it proves and does not:
+`docs/rts-engine-prototype-functional-close.md`; decisions in ADR 013, 014, 015.
+
 ## Workspace layout
 
 - `.` (root) — app binary crate: `cargo run -- run` (game), `bench` (frozen, non-gating). Entry `src/main.rs`.
-- `crates/mmd-engine` — engine library: sim, nav (flow fields), render (SDL3/GPU sprite renderer), `runtime.rs`, `scenario.rs`, `alloc_guard.rs`, `testkit/` (headless deterministic test harness, excluded from shipping build).
+- `crates/mmd-engine` — engine library: sim, nav (flow fields, `nav/field_pool.rs`), render (SDL3/GPU sprite renderer, `render/camera.rs`, `render/text.rs`), `runtime.rs`, `scenario.rs`, `alloc_guard.rs`, `testkit/` (headless deterministic test harness, excluded from shipping build).
+- `crates/mmd-engine/src/rts/` — phase-1 RTS world: `entity.rs` (SoA store, generational ids), `orders.rs`, `economy.rs`, `build.rs`, `production.rs`, `selection.rs`, `pack.rs`, `hud.rs`, `world.rs` (`RtsWorld::tick`'s fixed system order). Separate from `sim/`, which stays frozen.
+- `src/rts_*.rs` — the app's `rts` subcommand: input table, script injection, overlay, run loop.
 - `tools/mmd-lab` — trusted local lab CLI (`doctor`, `validate`, plus frozen cross-host validation/calibration/release code). Frozen/non-gating since phase-0 close but still builds.
 - `xtask` — bootstrap/reproducibility tasks: `bootstrap`, `shaders`, `atlases` (each has a `--check` mode used as a merge gate).
 - `lab/` — data for lab tooling: `baselines`, `fixtures`, `goldens/` (host-scoped render goldens), `manifests`, `provision`, `releases`.
@@ -47,7 +58,11 @@ cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
 cargo run -- run --agents 5000 --frames 300
+cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
+cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
+cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
+- The `rts` line is the phase-1 interactive smoke: one tracked script drives select → gather → build → produce and asserts an exit line. Single source of truth for the gate: `docs/05-testing.md`.
 - Toolchain: Rust 1.95.0 pinned via `rust-toolchain.toml`. Linux/NixOS: `nix develop` / `nix flake check`. Windows/macOS: rustup from `rust-toolchain.toml`.
 - On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip.
 - Golden regeneration (explicit, reviewed): `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine --test gpu_golden -- --ignored update_host_golden`.
@@ -56,7 +71,10 @@ cargo run -- run --agents 5000 --frames 300
 ## Architectural constraints (load-bearing — don't break these)
 
 - No per-frame allocations in simulation (enforced by `alloc_guard.rs`, per-thread `MeasureGuard`).
-- No per-enemy pathfinding — navigation via flow fields. Agent-agent collision is *soft separation steering* layered on top: a repulsion sum bends the descent vector, it never resolves an overlap, and no code or doc may claim agents cannot overlap.
+- No per-enemy pathfinding — navigation via flow fields. **This extends to player units**: they descend a pooled field from `nav::FieldPool` (`NAV_FIELD_SLOTS = 8`, exact LRU, ties to the lowest slot), never a per-unit path. Agent-agent collision is *soft separation steering* layered on top: a repulsion sum bends the descent vector, it never resolves an overlap, and no code or doc may claim agents cannot overlap.
+- Supply is **reserved at enqueue**, never charged at completion, and `Supply::used` is **recomputed** every tick from live units plus queue reservations — never incremented at a call site.
+- Render layers: `ScenePass::overlay` is depth-off and binds texture slot 0, so it is honest **only for procedural rings**. Every textured depth-off element — placement tiles, drag box, rally flag, icons, panel fill, glyphs — must be a `ui` draw group, or it samples the zombie atlas.
+- `sim/` is frozen for phase 1. Its entire phase-1 diff is two visibility keywords (`dir_from_vector` → `pub`, `step_admissible` → `pub(crate)`) plus one `#[cfg(test)]` re-export; the 5 000-agent exit-line hash must not move.
 - `mmd_engine::testkit::Harness` is the single seeded, clock-free headless entry point; `testkit` is feature-gated out of the shipping binary (`cargo tree -e features | grep -c testkit` must be 0).
 - Determinism: cross-process determinism proven (test binary re-execs itself, compares hashes); seed 0 is canonical.
 - Render goldens are host-scoped (`lab/goldens/<family>/`), exact-match comparison; never a cross-platform/cross-backend claim.

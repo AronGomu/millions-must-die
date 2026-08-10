@@ -10,6 +10,14 @@ The 5 000-agent flow-field gate scene runs on Linux/Vulkan (5 000 is the engine'
 
 What phase 0 proves, what it does not, and every known gap: [docs/technical-prototype-functional-close.md](docs/technical-prototype-functional-close.md). What gates a merge: [docs/05-testing.md](docs/05-testing.md). Earlier measurements, kept as history and claiming nothing: [docs/technical-prototype-results.md](docs/technical-prototype-results.md) (superseded).
 
+Phase 1 RTS engine prototype: **closed on functional scope.** A thin vertical slice through six systems — a camera you pan, units you select, workers that gather, an economy that banks, buildings you place, units you produce — on a horde-free scene, with phase 0's contracts untouched. There is no combat, no enemy AI, no zoom and no balance pass, and performance remains unmeasured. See it run:
+
+```sh
+cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
+```
+
+That is the tracked acceptance script: it selects the starting workers, puts them on a crystal node, builds a Depot and a Barracks, and produces a Worker and a Soldier. Drop `--inject-input-file` to drive it yourself — arrows or screen edges pan, left-click and drag select, right-click orders, `Q`/`W`/`E` open a build ghost (HQ / Depot / Barracks) and `X` cancels it, `A`/`S` queue a Worker / Soldier, `R` sets a rally point. What phase 1 proves, what it does not, and every known gap: [docs/rts-engine-prototype-functional-close.md](docs/rts-engine-prototype-functional-close.md).
+
 ## License
 
 Authored project code, docs, shaders, and generated placeholder assets: **[MIT-0](LICENSE)**.
@@ -20,7 +28,7 @@ Name and logo are reserved — see [`TRADEMARKS.md`](TRADEMARKS.md). Third-party
 
 | Path | Role |
 | --- | --- |
-| `.` (`millions_must_die`) | App binary: `run`, `bench` |
+| `.` (`millions_must_die`) | App binary: `run`, `rts`, `bench` |
 | `crates/mmd-engine` | Engine library |
 | `tools/mmd-lab` | Trusted local lab CLI: `doctor`, `validate` |
 | `xtask` | Bootstrap / reproducibility tasks |
@@ -49,6 +57,7 @@ cargo run -p xtask -- atlases --check
 cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
+cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
 
 ### Developer tools (not gates)

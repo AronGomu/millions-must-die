@@ -18,6 +18,23 @@ every known gap in it, are recorded in the
 that proves it, and `no_perf_claim_in_docs` fails when a live doc states a
 speed measurement without marking it retired or unmeasured.
 
+## Phase 1 scope
+
+Phase 1 (RTS engine prototype) closes on the same terms: **functional scope
+only.** Six systems — camera, selection, workers, economy, building, unit
+production — each covered by named automated tests, plus one scripted run that
+drives the whole loop end to end. Performance stays unmeasured, and phase 1
+adds no speed claim of any kind.
+
+The system → test map, the deviations from plan, and every known gap are in the
+[RTS engine prototype functional close](rts-engine-prototype-functional-close.md).
+Two further tests in `tests/validation_contract.rs` keep it honest:
+`phase1_close_doc_names_only_real_tests` resolves every test name in that map
+against the binary it claims, and `no_perf_claim_in_docs` now covers the close
+doc and the phase-1 architecture page as well. `adr_index_lists_every_adr_file`
+and `every_doc_link_resolves` keep the record navigable — an unlisted ADR or a
+rotted link is a failure, not a nuisance.
+
 ## Required merge gate
 
 Every command here is deterministic and behavioural. None consumes a

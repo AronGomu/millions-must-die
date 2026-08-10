@@ -17,6 +17,16 @@ ADR 004 is **superseded in part** by ADR 012 (2026-08-09): its "no per-frame
 depth sort" line no longer holds — isometric depth is ordered by a depth test,
 not a sort. The fixed atlas order and the rest of its decisions still stand.
 
+ADR 012 is **superseded in part** by ADR 014 (2026-08-10): its decision (e)
+"the camera is fixed, not scrolling" no longer holds — the camera pans and
+edge-pans, and `IsoView::with_center_cell` re-derives the depth bias with the
+origin so the depth key does not move with it. Zoom, which ADR 012 also listed
+as phase-1 work, is deferred. Every other decision in ADR 012 stands.
+
+ADR 003 is **supplemented** by ADR 013 (2026-08-10): the horde simulation is
+unchanged and player units still never path per-unit — they descend a pooled
+flow field keyed by destination cell.
+
 Accepted phase-0 decisions:
 
 1. [Technical prototype scope + acceptance](001_ADR_technical_prototype_scope_and_acceptance.md)
@@ -31,5 +41,11 @@ Accepted phase-0 decisions:
 10. [Separation amortisation, bin stamping + push priority](010_ADR_separation_amortisation_and_push_priority.md)
 11. [Parallel separation + the allocation invariant](011_ADR_parallel_separation_and_the_allocation_invariant.md)
 12. [StarCraft-scale entities, hitbox rings + isometric render](012_ADR_starcraft_scale_and_isometric_render.md)
+
+Accepted phase-1 decisions:
+
+13. [Phase-1 scope + the RTS entity model](013_ADR_phase1_scope_and_rts_entity_model.md)
+14. [Movable camera, texture table + the UI layer](014_ADR_movable_camera_texture_table_and_ui_layer.md)
+15. [Economy, construction + production determinism](015_ADR_economy_construction_and_production_determinism.md)
 
 New decision → new ADR. Changed decision → superseding ADR; do not rewrite history silently.
