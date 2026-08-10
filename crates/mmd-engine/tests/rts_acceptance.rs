@@ -1,0 +1,477 @@
+//! T15 — the phase-1 acceptance run, asserted milestone by milestone.
+//!
+//! This file owns the *meaning* of the run: select six workers, put them on a
+//! crystal node, build a Depot, produce a Worker, build a Barracks, produce a
+//! Soldier. `tests/rts_acceptance.rs` in the app crate owns the separate fact
+//! that the shipped binary, driven by the tracked script, reproduces it. Two
+//! failures in different places mean different things, which is the whole
+//! reason both exist.
+//!
+//! Deliberately not driven from the script file: the run here is made of world
+//! calls, so a failure names the system that broke rather than the pixel that
+//! moved. The one thing this file *does* read from the script is its
+//! coordinates — see `the_script_coordinates_hit_what_they_name`, which is what
+//! stops the script and the scene from drifting apart.
+//!
+//! Pure logic: no GPU and no clock — every case is a headless CPU check of
+//! `mmd_engine::rts` and `testkit::RtsHarness`.
+
+use std::path::PathBuf;
+
+use mmd_engine::rts::{
+    BuildingKind, EntityId, EntityKind, Order, ProduceError, ResourceKind, UnitKind,
+    footprint_cells,
+};
+use mmd_engine::scenario::Cell;
+use mmd_engine::testkit::RtsHarness;
+
+/// The tracked acceptance script, also driven by the app-crate CLI test.
+const SCRIPT_REL: &str = "assets/scenarios/rts_acceptance_v1.script";
+
+/// The scene is 320 x 320 cells.
+const GRID: u32 = 320;
+
+// --- the run's timing ------------------------------------------------------
+//
+// Ticks, not game constants. A milestone that does not land is retimed here;
+// no number below is a balance value, and none of them is asserted against.
+
+/// Gathering long enough for the first loads to be banked.
+const TICKS_GATHER: u64 = 900;
+/// Walking to the Depot site plus `DEPOT_BUILD_TICKS` of attended work.
+const TICKS_DEPOT_BUILD: u64 = 900;
+/// `WORKER_PRODUCE_TICKS` at the HQ.
+const TICKS_WORKER_PRODUCE: u64 = 300;
+/// Walking to the Barracks site plus `BARRACKS_BUILD_TICKS`.
+const TICKS_BARRACKS_BUILD: u64 = 900;
+/// `SOLDIER_PRODUCE_TICKS` at the Barracks.
+const TICKS_SOLDIER_PRODUCE: u64 = 400;
+
+// --- the run's geometry, shared with the tracked script ---------------------
+
+/// Box-select corners, in screen pixels at the starting camera.
+const DRAG_A: [f32; 2] = [860.0, 530.0];
+const DRAG_B: [f32; 2] = [950.0, 600.0];
+/// Depot footprint min corner (ghost cell `(184, 180)`, edge 8).
+const DEPOT_MIN: Cell = Cell { x: 180, y: 176 };
+/// Barracks footprint min corner (ghost cell `(151, 181)`, edge 10).
+const BARRACKS_MIN: Cell = Cell { x: 146, y: 176 };
+
+/// Every screen coordinate the tracked script names, with the cell it claims.
+///
+/// The script is written in pixels because that is what a mouse produces; this
+/// table is the only place those pixels are given a meaning, and
+/// `the_script_coordinates_hit_what_they_name` proves the meaning is the one
+/// the live projection agrees with.
+const SCRIPT_COORDS: &[([f32; 2], Cell, &str)] = &[
+    ([960.0, 540.0], Cell { x: 166, y: 166 }, "HQ centre"),
+    (
+        [860.0, 530.0],
+        Cell { x: 151, y: 176 },
+        "worker box, top-left",
+    ),
+    (
+        [950.0, 600.0],
+        Cell { x: 179, y: 182 },
+        "worker box, bottom-right",
+    ),
+    (
+        [920.0, 458.0],
+        Cell { x: 140, y: 150 },
+        "crystal node (140,150)",
+    ),
+    (
+        [896.0, 558.0],
+        Cell { x: 162, y: 178 },
+        "worker spawn cell (162,178)",
+    ),
+    ([976.0, 606.0], Cell { x: 184, y: 180 }, "Depot ghost cell"),
+    (
+        [906.0, 563.0],
+        Cell { x: 165, y: 178 },
+        "worker spawn cell (165,178)",
+    ),
+    (
+        [840.0, 542.0],
+        Cell { x: 151, y: 181 },
+        "Barracks ghost cell",
+    ),
+];
+
+fn script_path() -> PathBuf {
+    mmd_engine::workspace_root().join(SCRIPT_REL)
+}
+
+/// What the run observed, milestone by milestone. Recorded rather than asserted
+/// in place so `the_acceptance_run_is_reproducible` can drive the identical
+/// sequence without duplicating it.
+#[derive(Debug)]
+struct Run {
+    selected: usize,
+    gather_orders: usize,
+    crystal_after_gather: u32,
+    crystal_spent_on_depot: i64,
+    depot_is_site_at_placement: bool,
+    depot_is_site_after_build: bool,
+    cap_after_depot: u32,
+    depot_cells_total: usize,
+    depot_cells_blocked: usize,
+    crystal_spent_on_worker: i64,
+    supply_used_after_worker_queued: u32,
+    workers_after_produce: usize,
+    crystal_spent_on_barracks: i64,
+    gas_spent_on_barracks: i64,
+    barracks_is_site_after_build: bool,
+    soldier_enqueue: Result<(), ProduceError>,
+    supply_used_rise_for_soldier: i64,
+    soldiers_at_end: usize,
+    supply_used_end: u32,
+    supply_cap_end: u32,
+    ticks_stepped: u64,
+    tick_index_end: u64,
+    state_hash: String,
+}
+
+/// Drive the acceptance run once. Every step is a world call, and every
+/// milestone is *recorded* rather than judged — the judging lives in
+/// `the_full_economy_loop_runs_end_to_end`, so both tests below drive exactly
+/// the same sequence. The few `assert!`/`expect` calls here are setup failures
+/// (the run could not even start), not milestones.
+fn drive() -> Run {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut ticks = 0u64;
+
+    // --- 1. box-select the six starting workers ---------------------------
+    let view = h.world().iso_view();
+    let selected = h
+        .world_mut()
+        .box_select_into_selection(&view, DRAG_A, DRAG_B);
+    let group: Vec<EntityId> = h.world().selection().ids().to_vec();
+
+    // --- 2. send them all to the nearest crystal node ---------------------
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    h.world_mut().order_gather_group(&group, node);
+    let gather_orders = group
+        .iter()
+        .filter(|&&id| matches!(h.world().order_of(id), Some(Order::Gather { .. })))
+        .count();
+
+    // --- 3. gather ---------------------------------------------------------
+    h.step_exact(TICKS_GATHER);
+    ticks += TICKS_GATHER;
+    let crystal_after_gather = h.world().resources().crystal;
+
+    // --- 4. place the Depot ------------------------------------------------
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let depot_builder = workers[0];
+    let before = h.world().resources();
+    assert!(
+        h.world_mut().begin_placement(BuildingKind::Depot),
+        "the Depot ghost would not open: {before:?}"
+    );
+    let depot = h
+        .world_mut()
+        .confirm_placement(DEPOT_MIN, depot_builder)
+        .expect("Depot placement refused");
+    let crystal_spent_on_depot = before.crystal as i64 - h.world().resources().crystal as i64;
+    let depot_is_site_at_placement = h.world().is_site(depot);
+
+    // --- 5 + 6. build it ---------------------------------------------------
+    h.step_exact(TICKS_DEPOT_BUILD);
+    ticks += TICKS_DEPOT_BUILD;
+    let depot_is_site_after_build = h.world().is_site(depot);
+    let cap_after_depot = h.world().supply().cap();
+    let depot_slot = h.world().entities().slot(depot).expect("Depot alive");
+    let depot_center = h.world().entities().position(depot_slot);
+    let blocked = h.world().nav().blocked();
+    let mut depot_cells_total = 0usize;
+    let mut depot_cells_blocked = 0usize;
+    for cell in footprint_cells(depot_center, BuildingKind::Depot.footprint_cells()) {
+        depot_cells_total += 1;
+        if blocked[(cell.x + cell.y * GRID) as usize] {
+            depot_cells_blocked += 1;
+        }
+    }
+
+    // --- 7. queue a Worker at the HQ ---------------------------------------
+    let hq = h.world().start_hq().expect("the scene's HQ");
+    let before = h.world().resources();
+    h.world_mut()
+        .enqueue_unit(hq, UnitKind::Worker)
+        .expect("the HQ refused a Worker");
+    let crystal_spent_on_worker = before.crystal as i64 - h.world().resources().crystal as i64;
+    let supply_used_after_worker_queued = h.world().supply().used();
+
+    // --- 8. produce it -----------------------------------------------------
+    h.step_exact(TICKS_WORKER_PRODUCE);
+    ticks += TICKS_WORKER_PRODUCE;
+    let workers_after_produce = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len();
+
+    // --- 9. place the Barracks ---------------------------------------------
+    let barracks_builder = workers[1];
+    let before = h.world().resources();
+    assert!(
+        h.world_mut().begin_placement(BuildingKind::Barracks),
+        "the Barracks ghost would not open: {before:?}"
+    );
+    let barracks = h
+        .world_mut()
+        .confirm_placement(BARRACKS_MIN, barracks_builder)
+        .expect("Barracks placement refused");
+    let after = h.world().resources();
+    let crystal_spent_on_barracks = before.crystal as i64 - after.crystal as i64;
+    let gas_spent_on_barracks = before.gas as i64 - after.gas as i64;
+
+    // --- 10. build it -------------------------------------------------------
+    h.step_exact(TICKS_BARRACKS_BUILD);
+    ticks += TICKS_BARRACKS_BUILD;
+    let barracks_is_site_after_build = h.world().is_site(barracks);
+
+    // --- 11. queue a Soldier ------------------------------------------------
+    let supply_before = h.world().supply().used();
+    let soldier_enqueue = h.world_mut().enqueue_unit(barracks, UnitKind::Soldier);
+    let supply_used_rise_for_soldier = h.world().supply().used() as i64 - supply_before as i64;
+
+    // --- 12. produce it -----------------------------------------------------
+    h.step_exact(TICKS_SOLDIER_PRODUCE);
+    ticks += TICKS_SOLDIER_PRODUCE;
+    let soldiers_at_end = h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier)).len();
+
+    Run {
+        selected,
+        gather_orders,
+        crystal_after_gather,
+        crystal_spent_on_depot,
+        depot_is_site_at_placement,
+        depot_is_site_after_build,
+        cap_after_depot,
+        depot_cells_total,
+        depot_cells_blocked,
+        crystal_spent_on_worker,
+        supply_used_after_worker_queued,
+        workers_after_produce,
+        crystal_spent_on_barracks,
+        gas_spent_on_barracks,
+        barracks_is_site_after_build,
+        soldier_enqueue,
+        supply_used_rise_for_soldier,
+        soldiers_at_end,
+        supply_used_end: h.world().supply().used(),
+        supply_cap_end: h.world().supply().cap(),
+        ticks_stepped: ticks,
+        tick_index_end: h.tick_index(),
+        state_hash: h.state_hash_hex(),
+    }
+}
+
+/// The acceptance run, asserted milestone by milestone.
+#[test]
+fn the_full_economy_loop_runs_end_to_end() {
+    let r = drive();
+
+    // 1
+    assert_eq!(
+        r.selected, 6,
+        "milestone 1: the box did not select the six starting workers"
+    );
+    // 2
+    assert_eq!(
+        r.gather_orders, 6,
+        "milestone 2: not every selected worker took a Gather order"
+    );
+    // 3
+    assert!(
+        r.crystal_after_gather > 300,
+        "milestone 3: crystal is {} after {TICKS_GATHER} ticks of gathering — \
+         the round trip banked nothing over the starting 300",
+        r.crystal_after_gather
+    );
+    // 4
+    assert_eq!(
+        r.crystal_spent_on_depot, 100,
+        "milestone 4: placing the Depot debited {} crystal, not DEPOT_COST",
+        r.crystal_spent_on_depot
+    );
+    assert!(
+        r.depot_is_site_at_placement,
+        "milestone 4: the Depot was not a construction site when it was placed"
+    );
+    // 5
+    assert!(
+        !r.depot_is_site_after_build,
+        "milestone 5: the Depot was still a site after {TICKS_DEPOT_BUILD} ticks"
+    );
+    assert_eq!(
+        r.cap_after_depot, 20,
+        "milestone 5: the supply cap is {} — a finished Depot must raise it to 20",
+        r.cap_after_depot
+    );
+    // 6
+    assert_eq!(
+        r.depot_cells_total, 64,
+        "milestone 6: a Depot footprint is 8 x 8 cells"
+    );
+    assert_eq!(
+        r.depot_cells_blocked, r.depot_cells_total,
+        "milestone 6: {} of {} Depot footprint cells are blocked in navigation — \
+         a finished building must be stamped whole",
+        r.depot_cells_blocked, r.depot_cells_total
+    );
+    // 7
+    assert_eq!(
+        r.crystal_spent_on_worker, 50,
+        "milestone 7: queueing a Worker debited {} crystal, not WORKER_COST",
+        r.crystal_spent_on_worker
+    );
+    assert_eq!(
+        r.supply_used_after_worker_queued, 7,
+        "milestone 7: supply used is {} — six live workers plus one reserved by \
+         the queue is 7",
+        r.supply_used_after_worker_queued
+    );
+    // 8
+    assert_eq!(
+        r.workers_after_produce, 7,
+        "milestone 8: {} workers after {TICKS_WORKER_PRODUCE} ticks — the HQ owed a seventh",
+        r.workers_after_produce
+    );
+    // 9
+    assert_eq!(
+        r.crystal_spent_on_barracks, 150,
+        "milestone 9: placing the Barracks debited {} crystal, not BARRACKS_COST",
+        r.crystal_spent_on_barracks
+    );
+    assert_eq!(
+        r.gas_spent_on_barracks, 25,
+        "milestone 9: placing the Barracks debited {} gas, not BARRACKS_COST",
+        r.gas_spent_on_barracks
+    );
+    // 10
+    assert!(
+        !r.barracks_is_site_after_build,
+        "milestone 10: the Barracks was still a site after {TICKS_BARRACKS_BUILD} ticks"
+    );
+    // 11
+    assert_eq!(
+        r.soldier_enqueue,
+        Ok(()),
+        "milestone 11: the finished Barracks refused a Soldier"
+    );
+    assert_eq!(
+        r.supply_used_rise_for_soldier, 2,
+        "milestone 11: queueing a Soldier moved supply used by {}, not \
+         SOLDIER_SUPPLY_COST",
+        r.supply_used_rise_for_soldier
+    );
+    // 12
+    assert_eq!(
+        r.soldiers_at_end, 1,
+        "milestone 12: {} soldiers after {TICKS_SOLDIER_PRODUCE} ticks — the Barracks owed one",
+        r.soldiers_at_end
+    );
+    // 13
+    assert!(
+        r.supply_used_end <= r.supply_cap_end,
+        "milestone 13: supply {}/{} — the run overspent its own cap",
+        r.supply_used_end,
+        r.supply_cap_end
+    );
+    // 14
+    assert_eq!(
+        r.tick_index_end, r.ticks_stepped,
+        "milestone 14: the world is at tick {} after {} stepped ticks — something \
+         silently did not advance",
+        r.tick_index_end, r.ticks_stepped
+    );
+}
+
+/// The same run, twice, must land on the same hash.
+#[test]
+fn the_acceptance_run_is_reproducible() {
+    let a = drive();
+    let b = drive();
+    assert_eq!(
+        a.state_hash, b.state_hash,
+        "the acceptance run is not reproducible:\n{a:#?}\n{b:#?}"
+    );
+    assert_eq!(
+        a.tick_index_end, b.tick_index_end,
+        "the two runs did not even step the same number of ticks"
+    );
+}
+
+/// Every screen coordinate the tracked script uses must project to the cell it
+/// claims. Move a node, retune the camera start, or edit the script's pixels
+/// and this fails — instead of the CLI run silently ordering nobody.
+#[test]
+fn the_script_coordinates_hit_what_they_name() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let view = h.world().iso_view();
+    assert_eq!(
+        h.world().scenario().width(),
+        GRID,
+        "the scene is no longer {GRID} cells wide; the script's pixels were derived for it"
+    );
+
+    for (screen, cell, what) in SCRIPT_COORDS {
+        assert_eq!(
+            view.cell_at(screen[0], screen[1], GRID, GRID),
+            Some(*cell),
+            "the script's {what} coordinate {screen:?} no longer lands on {cell:?}"
+        );
+    }
+
+    // ...and the table must cover the script, or a coordinate could drift by
+    // being added rather than edited.
+    let text = std::fs::read_to_string(script_path())
+        .unwrap_or_else(|e| panic!("read {}: {e}", script_path().display()));
+    let used = coords_in(&text);
+    assert!(!used.is_empty(), "{SCRIPT_REL} names no coordinates at all",);
+    for screen in &used {
+        assert!(
+            SCRIPT_COORDS.iter().any(|(s, _, _)| s == screen),
+            "{SCRIPT_REL} uses coordinate {screen:?}, which this test documents no cell for"
+        );
+    }
+    for (screen, _, what) in SCRIPT_COORDS {
+        assert!(
+            used.contains(screen),
+            "this test documents the {what} coordinate {screen:?}, which {SCRIPT_REL} \
+             no longer uses"
+        );
+    }
+}
+
+/// Every `X,Y` pair in a script's text, in order, comments stripped.
+///
+/// A deliberately separate, dumber reader than the app crate's `RtsScript`:
+/// this test must fail when the *script* drifts, not agree with the parser
+/// about a drift they share.
+fn coords_in(text: &str) -> Vec<[f32; 2]> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let line = line.split('#').next().unwrap_or("");
+        for entry in line.split(';') {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                continue;
+            }
+            let mut parts = entry.splitn(3, ':');
+            let (_frame, _kind) = (parts.next(), parts.next());
+            let Some(args) = parts.next() else {
+                continue;
+            };
+            let nums: Vec<f32> = args
+                .split(',')
+                .filter_map(|n| n.trim().parse::<f32>().ok())
+                .collect();
+            if !nums.len().is_multiple_of(2) {
+                continue;
+            }
+            for pair in nums.chunks_exact(2) {
+                out.push([pair[0], pair[1]]);
+            }
+        }
+    }
+    out
+}

@@ -34,10 +34,18 @@ cargo run -p xtask -- atlases --check
 cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
+cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
 
-The last three commands are the interactive smokes: the 5 000-agent gate scene
-and both collision demo scenes must start, tick and exit cleanly. All three
+The last command is the phase-1 interactive smoke: one tracked script selects
+the starting workers, puts them on a crystal node, builds a Depot and a
+Barracks and produces a Worker and a Soldier. It asserts behaviour and an exit
+code — it consumes no measurement number, and a scripted event that never fires
+fails it.
+
+The three `run` commands before it are the phase-0 interactive smokes: the
+5 000-agent gate scene and both collision demo scenes must start, tick and exit
+cleanly. All three
 carry the same body — a radius of exactly half a sprite width, measured in cell
 space, where the contact test lives. What the demo scenes add is the rest of the
 tuning surface, which the gate scene leaves at its identity values:

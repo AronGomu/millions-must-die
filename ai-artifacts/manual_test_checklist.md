@@ -703,9 +703,9 @@ scene file and a real CLI run — this ticket ships no window-visible change.
       --frames 3` — **fails**, printing `run failed: --agents 0 is not a
       runnable scene: the agent count must be > 0` and exiting nonzero. This
       is expected: the RTS scene is horde-free by design and nothing consumes
-      it as a runnable population yet (a later ticket adds an `rts`
-      subcommand for it). A window opening or a crash with a different
-      message would both be a defect.
+      it as a runnable population yet (that later ticket is T14: since then
+      the scene runs under `cargo run -- rts`, not under `run`). A window
+      opening or a crash with a different message would both be a defect.
 - [ ] Open `assets/scenarios/rts_prototype_v1.ron` in a text editor: confirm
       it parses as valid RON at a glance (balanced parens, trailing commas)
       and that the `rts: Some((...))` block sits last, just before the
@@ -765,7 +765,14 @@ admissibility rule the horde walk uses. `RtsWorld` gains `order_move`,
 `order_move_group`, `order_of` and `nav`. Nothing renders these units yet
 (T12) and nothing issues orders from input yet (T8): reaching them by hand
 means driving `RtsWorld` from a test or a scratch binary. The horde is
-untouched — `sim/tick.rs` changed only two visibility keywords, and
+untouched
+
+> **Restated by T15.** "A test or a scratch binary" is no longer the only way
+> in. `cargo run -- rts --frames 1600 --inject-input-file
+> assets/scenarios/rts_acceptance_v1.script` drives this movement path through
+> the shipped binary, and `cargo run -- rts` drives it by hand. The claim these
+> steps make about *this* slice's code is unchanged.
+ — `sim/tick.rs` changed only two visibility keywords, and
 `cargo run -- run --agents 5000 --frames 300` still exits on
 `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
 
@@ -820,7 +827,13 @@ entity from the selection as its last step; `state_hash()` now covers the
 selection. Nothing draws the selection ring yet (T12), no HUD panel yet
 (T13), no mouse plumbing yet (T14): reaching this by hand means driving
 `RtsWorld` from a test or a scratch binary. The horde and the existing RTS
-movement are untouched — `cargo run -- run --agents 5000 --frames 300` still
+movement are untouched
+
+> **Restated by T15.** Selection is reachable by hand since T14 (`cargo run --
+> rts`, click and drag) and is exercised end to end by the tracked acceptance
+> script's box select. The "scratch binary" note above describes T8's own
+> moment, not today's tree.
+ — `cargo run -- run --agents 5000 --frames 300` still
 exits on `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
 
 - [ ] `cargo test -p mmd-engine --test rts_selection` — 31 passed, 0 ignored.
@@ -863,7 +876,13 @@ order_gather_group, nearest_drop_off}`; a new gather system runs as step 5 of
 Nothing renders a carried load or a mining animation yet (T12); no HUD (T13);
 no input plumbing to issue a gather order from a click (T14): reaching this
 by hand means driving `RtsWorld` from a test or a scratch binary. The horde,
-existing RTS movement, and selection are untouched — `cargo run -- run
+existing RTS movement, and selection are untouched
+
+> **Restated by T15.** The gather loop is reachable by hand since T14 and is
+> driven end to end by the tracked acceptance script (box select → right-click
+> the crystal node → the exit line's `crystal=` is positive after buying 350
+> crystal of buildings and units).
+ — `cargo run -- run
 --agents 5000 --frames 300` still exits on
 `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
 
@@ -920,7 +939,12 @@ to the nearest free cell in the 4-connected ring just outside it. Nothing
 renders a build ghost, a construction site, or a progress bar yet (T12); no HUD
 build menu (T13); no CLI to trigger a placement (T14): reaching this by hand
 means driving `RtsWorld` from a test or a scratch binary. The horde, existing
-RTS movement, selection and the gather loop are untouched in outcome (though
+RTS movement, selection and the gather loop are untouched in outcome
+
+> **Restated by T15.** Placement is reachable by hand since T14 (`W`/`E` then a
+> left click) and the tracked acceptance script places both a Depot and a
+> Barracks through the shipped binary; the run's `buildings=3` is asserted.
+ (though
 the gather loop's HQ-approach routing was internally rewritten to share the new
 ring-scan) — `cargo run -- run --agents 5000 --frames 300` still exits on
 `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
@@ -981,6 +1005,12 @@ units plus queued reservations. Nothing renders these RTS units or exposes
 production input yet (T12–T14), so manual checks use tests/source; existing
 horde window output must remain unchanged.
 
+> **Restated by T15.** Production is rendered (T12), shown in the HUD (T13) and
+> driven by `A`/`S` from the keyboard (T14). The tracked acceptance script
+> queues a Worker at the HQ and a Soldier at the Barracks, and the run's
+> `units=`/`supply=` fields are asserted against both.
+
+
 - [ ] `cargo test -p mmd-engine --test rts_production` — 39 passed, 0 ignored.
       Skim for `queueing_cannot_exceed_the_cap`,
       `a_supply_blocked_enqueue_does_not_charge`,
@@ -1014,6 +1044,12 @@ selection rings, the placement ghost, rally flags and the drag box — and owns
 the camera the whole frame projects through. Nothing wires input or the HUD yet
 (T13–T14), so there is still no interactive RTS window: manual checks read the
 packed frame, the two device probes, and the unchanged horde output.
+
+> **Restated by T15.** There *is* an interactive RTS window since T14
+> (`cargo run -- rts`), and the packed frame is rendered every frame of the
+> tracked acceptance run. The steps below still read the packer directly, which
+> is what keeps them pointed at this slice.
+
 
 - [ ] `cargo test -p mmd-engine --test rts_pack` — 36 passed, 0 ignored. Skim
       for `every_entity_packs_exactly_once`, `sprites_stand_on_their_ground_point`,
@@ -1059,6 +1095,10 @@ top resource bar and a bottom command panel (selection, production, build
 menu) to an already-packed frame's UI groups. No input, no CLI, no device
 wiring yet (T14), so there is still no interactive RTS window — manual checks
 read the packed frame, the two device probes, and the unchanged horde output.
+
+> **Restated by T15.** The window exists since T14, and the tracked acceptance
+> script turns the stdout HUD on (`F1`) for its final frames, so the HUD is now
+> also exercised by the merge gate rather than only by these steps.
 
 - [ ] `cargo test -p mmd-engine --test rts_hud` — 30 passed. Skim for
       `hud_appends_and_does_not_clear`, `the_top_bar_shows_the_stock`,
@@ -1152,3 +1192,92 @@ directly; everything below the app layer (T6-T13) is unchanged.
 - [ ] `cargo run -- run --agents 5000 --frames 300` — still exits 0 with
       `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
       This ticket adds a parallel command; `run` must read as before.
+
+## T15 end-to-end-acceptance
+
+The ticket that makes "the phase-1 slice works" falsifiable. One tracked
+script, `assets/scenarios/rts_acceptance_v1.script`, drives select → gather →
+build → produce, and is asserted twice: `crates/mmd-engine/tests/rts_acceptance.rs`
+walks the same sequence through `RtsWorld` and checks fourteen milestones by
+world state, and `tests/rts_acceptance.rs` runs the shipped binary on the
+script and reads the milestones off the exit line. New CLI surface:
+`--inject-input-file <PATH>` (same grammar as `--inject-input`, plus newline
+separators and `#` comments; the two flags are mutually exclusive at the clap
+layer). `docs/05-testing.md`'s required merge gate gains the acceptance
+command as its last line.
+
+Everything automatable is green and was run on this tree, not quoted:
+`cargo fmt --all -- --check`; `cargo test -p mmd-engine --test rts_acceptance`
+(3/3); `cargo test --test rts_acceptance` (10/10);
+`MMD_REQUIRE_GPU=1 cargo test --workspace --locked` (every block ok, 0 failed —
+so the GPU cases really ran rather than skipping, including `gpu_smoke`'s 13);
+`VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` (also green;
+on this run that variable *did* force the no-GPU path and the GPU cases
+skipped — the T13 note that it does not is a real observation of a different
+run, so treat this variable as unreliable rather than as a contract);
+`cargo clippy --workspace --all-targets --all-features -- -D warnings`;
+`nix flake check`; all three xtask `--check` commands; `cargo run -- run
+--agents 5000 --frames 300` still exiting on
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`
+byte for byte, plus both collision scenes at exit 0; the acceptance run itself
+exiting 0 on `tick=1449 frames=1449 quit=true crystal=86 gas=50 supply=9/20
+units=8 buildings=3 nodes=10`; an empty
+`git diff --stat main -- lab/goldens/ assets/scenarios/fixtures/
+assets/sprites/generated/atlas_*.png assets/sprites/generated/manifest.json`;
+`host_offscreen_matches_tracked_golden` passing **without**
+`MMD_UPDATE_GOLDEN`; and `cargo tree -e features | grep -c testkit` = 0.
+
+One host-level hazard was hit and mitigated while writing this: eight
+independent 1 600-frame GPU subprocess runs in `tests/rts_acceptance.rs`,
+running in parallel with the other GPU test binaries, reproduced
+`VK_ERROR_DEVICE_LOST` twice in five full-suite runs (the run then exits 1 and
+the case fails on the exit code). The five cases that only read the exit line
+now share **one** run behind a `OnceLock`, so the file spends two heavy
+processes instead of eight — `the_acceptance_run_is_deterministic` still spends
+a second, independent process, or it would be comparing a string with itself.
+Six consecutive `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` runs were
+clean afterwards. If it ever returns, it is this host's device under
+parallelism, not the acceptance run's behaviour.
+
+Six mandatory mutations were each injected, observed red, reverted and
+observed green — see the commit body for the individual kills. The script
+needed **no** retiming; the engine test's own step counts did (the ticket's
+400 ticks for the Depot is short of the builder's walk from the crystal node,
+so the milestone steps are 900/900/300/900/400 ticks). What is left needs eyes
+on a real window.
+
+- [ ] `cargo run -- rts --frames 1600 --inject-input-file
+      assets/scenarios/rts_acceptance_v1.script` — watch the whole run in a
+      real window without touching the mouse or keyboard: six workers get
+      box-selected, walk to the crystal node north-west of the base and start
+      cycling loads back to the HQ; a Depot goes up south-east of the base; a
+      new Worker walks out of the HQ; a Barracks goes up west of the base; a
+      Soldier walks out of the Barracks. The run quits itself and exits `0`
+      (`echo $?`).
+- [ ] Same run, the last ~50 frames: one `rts: hud tick=… crystal=… gas=…
+      supply=…/… sel=… ghost=none` line per frame appears in the terminal (the
+      script presses `F1` at frame 1400). The final `rts: clean exit …` line
+      reads `units=8 buildings=3 supply=9/20` and a positive `crystal=`.
+- [ ] Open `assets/scenarios/rts_acceptance_v1.script` in an editor: every
+      entry is `FRAME:KIND[:ARGS]`, the comments explain what each block is
+      for, and every coordinate in it is one of the eight documented in
+      `crates/mmd-engine/tests/rts_acceptance.rs`'s `SCRIPT_COORDS` table.
+      Change one coordinate by hand and re-run `cargo test -p mmd-engine
+      --test rts_acceptance` — `the_script_coordinates_hit_what_they_name`
+      must fail. Put it back.
+- [ ] `cargo run -- rts --frames 30 --inject-input-file
+      assets/scenarios/rts_acceptance_v1.script` — **fails**, exits `1`, and
+      names the entries that never fired. A budget too short to reach the end
+      of a script must never look like a pass.
+- [ ] `cargo run -- rts --inject-input 1:key:esc --inject-input-file
+      assets/scenarios/rts_acceptance_v1.script` — **fails** with a clap usage
+      error and exit `2`. Two sources of scripted input must be refused rather
+      than silently ranked.
+- [ ] `cargo run -- rts --inject-input-file /nope.script` — **fails**, exits
+      `1`, and the message names `/nope.script`. No stack trace.
+- [ ] Read `docs/05-testing.md`'s **Required merge gate** block: the last
+      command is the acceptance run, and the sentence under the block says it
+      asserts behaviour and an exit code and consumes no measurement number.
+- [ ] `cargo run -- rts` with no flags — still opens the interactive window
+      from T14 and still responds to the mouse and keyboard. The script path
+      is an addition; it must not have taken over the default.

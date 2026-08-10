@@ -63,6 +63,9 @@ pub struct RtsOptions {
     pub scenario: Option<PathBuf>,
     pub frames: Option<u64>,
     pub inject_input: Option<String>,
+    /// A script file, read with [`RtsScript::parse_file_text`]. Mutually
+    /// exclusive with [`Self::inject_input`] at the clap layer.
+    pub inject_input_file: Option<PathBuf>,
 }
 
 /// Per-frame interactive state the world does not own.
@@ -295,9 +298,27 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
 
     // Flag validation first: a typo must not cost a device init.
     let auto_frames = resolve_frames(&opts)?;
-    let mut script = match opts.inject_input.as_deref() {
-        Some(spec) => RtsScript::parse(spec).map_err(RunError::Failed)?,
-        None => RtsScript::default(),
+    let mut script = match (
+        opts.inject_input_file.as_deref(),
+        opts.inject_input.as_deref(),
+    ) {
+        // A read or parse failure names the file, so the message points at the
+        // line a human has to edit rather than at the flag. The `_` is not a
+        // precedence rule: clap refuses both flags together, so this arm is
+        // only reachable with `inject_input` unset.
+        (Some(path), _) => {
+            let text = std::fs::read_to_string(path).map_err(|e| {
+                RunError::Failed(format!(
+                    "--inject-input-file {}: {e}\nhint: point it at a readable script file",
+                    path.display()
+                ))
+            })?;
+            RtsScript::parse_file_text(&text).map_err(|e| {
+                RunError::Failed(format!("--inject-input-file {}: {e}", path.display()))
+            })?
+        }
+        (None, Some(spec)) => RtsScript::parse(spec).map_err(RunError::Failed)?,
+        (None, None) => RtsScript::default(),
     };
 
     let mut world = RtsWorld::load(&scenario_path).map_err(|e| load_error(&scenario_path, e))?;

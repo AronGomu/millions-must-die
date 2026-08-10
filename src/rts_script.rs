@@ -17,6 +17,10 @@
 //!
 //! Example:
 //! `10:move:960,540;12:lclick:960,540;60:key:w;90:lclick:1000,600;200:key:esc`
+//!
+//! [`RtsScript::parse_file_text`] reads the same grammar from a file, where a
+//! newline also separates entries and `#` starts a comment — the form the
+//! tracked acceptance script is written in.
 
 use crate::rts_input::{self, RtsCommand};
 
@@ -150,6 +154,37 @@ impl RtsScript {
         Ok(Self { entries })
     }
 
+    /// Strip comments, treat every newline as a `;`, then [`Self::parse`].
+    ///
+    /// The file form exists so an acceptance run can be *read* — a one-line
+    /// `--inject-input` spec long enough to drive a whole economy loop is not
+    /// reviewable. Everything from a `#` to the end of a line is a comment,
+    /// blank lines are skipped, and `;` still separates entries on one line.
+    ///
+    /// A file with no entries at all is rejected: a script that schedules
+    /// nothing would make the run it drives prove nothing.
+    pub fn parse_file_text(text: &str) -> Result<Self, String> {
+        let mut spec = String::with_capacity(text.len());
+        for line in text.lines() {
+            let code = line.split('#').next().unwrap_or("").trim();
+            if code.is_empty() {
+                continue;
+            }
+            if !spec.is_empty() {
+                spec.push(';');
+            }
+            spec.push_str(code);
+        }
+        if spec.is_empty() {
+            return Err(
+                "the script file schedules no entries: every line is blank or a \
+                 comment, so the run would prove nothing"
+                    .to_string(),
+            );
+        }
+        Self::parse(&spec)
+    }
+
     /// Commands scheduled for `frame`, in script order, appended to `out`.
     /// Returns `true` when one of them was `Quit`; entries queued behind a
     /// `Quit` on the same frame stay unfired.
@@ -250,6 +285,49 @@ mod tests {
     fn script_rejects_an_empty_entry() {
         let err = RtsScript::parse("1:key:esc;;2:key:esc").unwrap_err();
         assert!(err.contains("empty entry"), "{err}");
+    }
+
+    #[test]
+    fn parse_file_text_strips_comments() {
+        let script =
+            RtsScript::parse_file_text("1:key:esc # go\n\n# nothing\n").expect("valid script file");
+        assert_eq!(script.entries.len(), 1);
+        assert_eq!(script.entries[0].name, "esc");
+    }
+
+    #[test]
+    fn parse_file_text_accepts_semicolons_too() {
+        let script = RtsScript::parse_file_text("1:key:esc;2:key:esc").expect("valid script file");
+        assert_eq!(script.entries.len(), 2);
+    }
+
+    #[test]
+    fn parse_file_text_rejects_a_bad_entry() {
+        let err = RtsScript::parse_file_text("1:jump:1\n").unwrap_err();
+        assert!(err.contains("jump"), "{err}");
+    }
+
+    #[test]
+    fn parse_file_text_rejects_a_script_with_no_entries() {
+        let err = RtsScript::parse_file_text("# only a comment\n\n").unwrap_err();
+        assert!(err.contains("no entries"), "{err}");
+    }
+
+    /// The committed acceptance script is the one the merge gate runs; a typo
+    /// in it must fail here, not three minutes into a GPU run.
+    #[test]
+    fn the_tracked_script_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/scenarios/rts_acceptance_v1.script");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let script =
+            RtsScript::parse_file_text(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(
+            !script.entries.is_empty(),
+            "{} parsed to nothing",
+            path.display()
+        );
     }
 
     /// A `Quit` scheduled behind another entry on the same frame stops the

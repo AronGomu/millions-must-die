@@ -60,6 +60,15 @@ enum Commands {
         /// `FRAME:KIND[:ARGS]` entries separated by `;`.
         #[arg(long, value_name = "FRAME:KIND[:ARGS];...")]
         inject_input: Option<String>,
+        /// Read the scripted input from a file instead of the command line.
+        ///
+        /// Same grammar as `--inject-input`, plus: a newline separates entries
+        /// exactly like `;`, blank lines are skipped, and everything from a `#`
+        /// to the end of a line is a comment. Mutually exclusive with
+        /// `--inject-input`: giving both is an error rather than a silent
+        /// precedence rule.
+        #[arg(long, value_name = "PATH", conflicts_with = "inject_input")]
+        inject_input_file: Option<PathBuf>,
     },
     /// Developer benchmark harness — not a gate; optimization phase.
     ///
@@ -113,11 +122,13 @@ fn main() -> ExitCode {
             scenario,
             frames,
             inject_input,
+            inject_input_file,
         } => {
             let opts = rts_run::RtsOptions {
                 scenario,
                 frames,
                 inject_input,
+                inject_input_file,
             };
             if let Err(e) = rts_run::run(opts) {
                 eprintln!("rts failed: {e}");

@@ -275,16 +275,16 @@ Both tables above are the test plan. In addition:
 
 ## Impl steps
 
-- [ ] 1. Add `parse_file_text` to `src/rts_script.rs` with its four unit tests.
-- [ ] 2. Add `--inject-input-file` to the `Rts` clap variant in `src/main.rs`, with `conflicts_with = "inject_input"`.
-- [ ] 3. Thread it through `RtsOptions` and `src/rts_run.rs`; a read failure is `RunError::Failed` naming the path.
-- [ ] 4. Create `crates/mmd-engine/tests/rts_acceptance.rs` with the 14 milestones, the reproducibility test and the coordinate test. Watch them fail.
-- [ ] 5. Create `tests/rts_acceptance.rs` with the ten CLI cases. Watch them fail.
-- [ ] 6. Write `assets/scenarios/rts_acceptance_v1.script` from the block above.
-- [ ] 7. Run both test files; retime the script (frames only) until every milestone lands. Record every retiming in the commit body.
-- [ ] 8. Add the acceptance command to `docs/05-testing.md`'s required merge gate.
-- [ ] 9. Run the mutation list; record kills in the commit body.
-- [ ] 10. Run the full validation block.
+- [x] 1. Add `parse_file_text` to `src/rts_script.rs` with its four unit tests.
+- [x] 2. Add `--inject-input-file` to the `Rts` clap variant in `src/main.rs`, with `conflicts_with = "inject_input"`.
+- [x] 3. Thread it through `RtsOptions` and `src/rts_run.rs`; a read failure is `RunError::Failed` naming the path.
+- [x] 4. Create `crates/mmd-engine/tests/rts_acceptance.rs` with the 14 milestones, the reproducibility test and the coordinate test. Watch them fail.
+- [x] 5. Create `tests/rts_acceptance.rs` with the ten CLI cases. Watch them fail.
+- [x] 6. Write `assets/scenarios/rts_acceptance_v1.script` from the block above.
+- [x] 7. Run both test files; retime the script (frames only) until every milestone lands. Record every retiming in the commit body.
+- [x] 8. Add the acceptance command to `docs/05-testing.md`'s required merge gate.
+- [x] 9. Run the mutation list; record kills in the commit body.
+- [x] 10. Run the full validation block.
 
 ## Outputs
 
@@ -301,17 +301,17 @@ Both tables above are the test plan. In addition:
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_acceptance` — all green
-- [ ] `cargo test --test rts_acceptance` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- bootstrap --check ; cargo run -p xtask -- shaders --check ; cargo run -p xtask -- atlases --check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
-- [ ] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — exit 0
-- [ ] app functional — no broken path from this slice
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test rts_acceptance` — all green
+- [x] `cargo test --test rts_acceptance` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -p xtask -- bootstrap --check ; cargo run -p xtask -- shaders --check ; cargo run -p xtask -- atlases --check`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — exit 0
+- [x] app functional — no broken path from this slice
 - [ ] commit msg draft: `test(rts): prove the full economy loop end to end`
