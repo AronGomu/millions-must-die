@@ -331,20 +331,20 @@ Unless stated otherwise, the harness is `RtsHarness::scene()` and the view is
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/src/rts/selection.rs` with the constants, `Selection`, `Pick`.
-- [ ] 2. Add `mod selection;` and the `pub use` line to `crates/mmd-engine/src/rts/mod.rs`.
-- [ ] 3. Create `crates/mmd-engine/tests/rts_selection.rs` and write every test from the table. Watch them fail.
-- [ ] 4. Implement `Selection` (sorted insert by `(index, generation)`, `remove`, `toggle`, `replace`, `retain_live`, `primary`, `hash_into`).
-- [ ] 5. Implement `normalise_rect`, `is_drag`, `footprint_contains`, `footprint_min`.
-- [ ] 6. Implement `pick_at` with the body quoted above.
-- [ ] 7. Implement `box_select` (project each live own-unit position, test containment in the normalised rect, append `EntityId`).
-- [ ] 8. Add `selection`, `pick_scratch` fields to `RtsWorld`; reserve both at `MAX_ENTITIES`.
-- [ ] 9. Add `selection`, `selection_mut`, `click_select`, `shift_click_select`, `box_select_into_selection` to `RtsWorld`.
-- [ ] 10. Add `self.selection.retain_live(&self.entities)` as the last step of `RtsWorld::tick`.
-- [ ] 11. Extend `RtsWorld::state_hash` with the selection.
-- [ ] 12. Add `selection_operations_allocate_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 13. Run the mutation list; record kills in the commit body.
-- [ ] 14. Run the full validation block.
+- [x] 1. Create `crates/mmd-engine/src/rts/selection.rs` with the constants, `Selection`, `Pick`.
+- [x] 2. Add `mod selection;` and the `pub use` line to `crates/mmd-engine/src/rts/mod.rs`.
+- [x] 3. Create `crates/mmd-engine/tests/rts_selection.rs` and write every test from the table. Watch them fail.
+- [x] 4. Implement `Selection` (sorted insert by `(index, generation)`, `remove`, `toggle`, `replace`, `retain_live`, `primary`, `hash_into`).
+- [x] 5. Implement `normalise_rect`, `is_drag`, `footprint_contains`, `footprint_min`.
+- [x] 6. Implement `pick_at` with the body quoted above.
+- [x] 7. Implement `box_select` (project each live own-unit position, test containment in the normalised rect, append `EntityId`).
+- [x] 8. Add `selection`, `pick_scratch` fields to `RtsWorld`; reserve both at `MAX_ENTITIES`.
+- [x] 9. Add `selection`, `selection_mut`, `click_select`, `shift_click_select`, `box_select_into_selection` to `RtsWorld`.
+- [x] 10. Add `self.selection.retain_live(&self.entities)` as the last step of `RtsWorld::tick`.
+- [x] 11. Extend `RtsWorld::state_hash` with the selection.
+- [x] 12. Add `selection_operations_allocate_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
+- [x] 13. Run the mutation list; record kills in the commit body.
+- [x] 14. Run the full validation block.
 
 ## Outputs
 
@@ -360,12 +360,12 @@ Unless stated otherwise, the harness is `RtsHarness::scene()` and the view is
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_selection` — all green
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): select units by click and drag rectangle`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test rts_selection` — all green
+- [x] `cargo test -p mmd-engine --test frame_allocations` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(rts): select units by click and drag rectangle`

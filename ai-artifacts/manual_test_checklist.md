@@ -806,3 +806,47 @@ untouched — `sim/tick.rs` changed only two visibility keywords, and
 - [ ] Sanity-check the speeds you can feel later: `WORKER_SPEED_CELLS_PER_SEC`
       is 10.0 and `SOLDIER_SPEED_CELLS_PER_SEC` is 8.0 (the horde's speed).
       If a phase-2 fight ever feels wrong, this is the constant to revisit.
+
+## T8 selection
+
+Turning a screen-space pointer gesture into a set of entity handles: pure
+logic, no SDL, no rendering, no orders. New `rts::selection` —
+`Selection` (a sorted, capped set of `EntityId`), `Pick` (unit → building →
+node → nothing priority), `pick_at` (click), `box_select` (drag rectangle,
+units only), `footprint_contains`/`footprint_min`, `normalise_rect`,
+`is_drag`. `RtsWorld` gains `selection`, `selection_mut`, `click_select`,
+`shift_click_select`, `box_select_into_selection`; `tick()` now drops a dead
+entity from the selection as its last step; `state_hash()` now covers the
+selection. Nothing draws the selection ring yet (T12), no HUD panel yet
+(T13), no mouse plumbing yet (T14): reaching this by hand means driving
+`RtsWorld` from a test or a scratch binary. The horde and the existing RTS
+movement are untouched — `cargo run -- run --agents 5000 --frames 300` still
+exits on `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+
+- [ ] `cargo test -p mmd-engine --test rts_selection` — 31 passed, 0 ignored.
+      Skim for `clicking_between_two_workers_picks_the_nearer`,
+      `a_worker_standing_on_the_hq_wins_the_click` and
+      `box_respects_the_camera`.
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 13 passed.
+      `selection_operations_allocate_nothing` is the new one: 100 box-selects
+      of the full scene, zero heap allocations after warm-up.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0 and the exit
+      line still reads
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      A different hash means this ticket moved the horde walk or the RTS
+      movement it depends on, which it must not: read it, do not assume it.
+- [ ] `cargo run -- run --frames 300` and watch the window: the horde scene
+      must look exactly as it did before this ticket. There is no selection
+      ring or box overlay drawn by any path yet, so a visible change here is
+      a defect.
+- [ ] Open `crates/mmd-engine/src/rts/selection.rs` and read `pick_at`'s
+      three-step priority comment against its body: own units (nearest, not
+      first-found) → own buildings (footprint contains the clicked cell) →
+      resource nodes (occupy the clicked cell exactly) → nothing. Confirm the
+      body really does check units before buildings, not the other way
+      round.
+- [ ] Sanity-check `UNIT_PICK_RADIUS_SCALE = 1.0` and
+      `MAX_SELECTION = MAX_ENTITIES` (2048) against
+      `docs/DESIGN.md`'s "Unlimited unit selection" decision — the selection
+      cap is deliberately the entity store's own ceiling, not a smaller
+      RTS-traditional 12.

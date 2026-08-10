@@ -3,6 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::nav::field_pool::{FieldPool, FieldPoolError};
+use crate::render::IsoView;
 use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
@@ -12,6 +13,7 @@ use super::entity::{
     ResourceKind, UnitKind,
 };
 use super::orders::{ARRIVAL_RADIUS_CELLS, Order, OrderTable, step_admissible, unit_speed};
+use super::selection::{Pick, Selection, box_select, pick_at};
 
 /// Starting amount in a freshly seeded Crystal node.
 pub const NODE_CRYSTAL_AMOUNT: u32 = 1_500;
@@ -45,6 +47,11 @@ pub struct RtsWorld {
     /// Live-slot buffer the per-tick sweeps reuse. Reserved to
     /// [`MAX_ENTITIES`] so a tick never grows it.
     live_scratch: Vec<usize>,
+    selection: Selection,
+    /// Scratch buffer for a box select's result, before it replaces
+    /// [`Self::selection`]. Reserved to [`MAX_ENTITIES`] so no selection
+    /// operation allocates.
+    pick_scratch: Vec<EntityId>,
 }
 
 impl RtsWorld {
@@ -128,6 +135,8 @@ impl RtsWorld {
             nav,
             orders: OrderTable::new(),
             live_scratch: Vec::with_capacity(MAX_ENTITIES),
+            selection: Selection::new(),
+            pick_scratch: Vec::with_capacity(MAX_ENTITIES),
         })
     }
 
@@ -172,6 +181,53 @@ impl RtsWorld {
     /// The navigation pool. Buildings stamp obstacles into it (T10).
     pub fn nav(&self) -> &FieldPool {
         &self.nav
+    }
+
+    pub fn selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    pub fn selection_mut(&mut self) -> &mut Selection {
+        &mut self.selection
+    }
+
+    /// Apply a plain click: replace the selection with what was picked, or
+    /// clear it when nothing was.
+    pub fn click_select(&mut self, view: &IsoView, screen: [f32; 2]) -> Pick {
+        let pick = pick_at(self, view, screen);
+        self.selection.clear();
+        match pick {
+            Pick::Unit(id) | Pick::Building(id) | Pick::Node(id) => {
+                self.selection.insert(id);
+            }
+            Pick::Nothing => {}
+        }
+        pick
+    }
+
+    /// Apply an additive (shift) click: toggle what was picked. A click on
+    /// nothing leaves the selection alone — a modifier click is a refinement,
+    /// and clearing on a near-miss is the single most annoying selection bug in
+    /// the genre.
+    pub fn shift_click_select(&mut self, view: &IsoView, screen: [f32; 2]) -> Pick {
+        let pick = pick_at(self, view, screen);
+        match pick {
+            Pick::Unit(id) | Pick::Building(id) | Pick::Node(id) => {
+                self.selection.toggle(id);
+            }
+            Pick::Nothing => {}
+        }
+        pick
+    }
+
+    /// Apply a drag rectangle: replace the selection with every own unit inside.
+    /// An empty box clears the selection.
+    pub fn box_select_into_selection(&mut self, view: &IsoView, a: [f32; 2], b: [f32; 2]) -> usize {
+        let mut scratch = std::mem::take(&mut self.pick_scratch);
+        box_select(self, view, a, b, &mut scratch);
+        self.selection.replace(&scratch);
+        self.pick_scratch = scratch;
+        self.selection.len()
     }
 
     /// Order one unit to walk to `dest`.
@@ -232,10 +288,14 @@ impl RtsWorld {
     /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
     /// 6. movement, 7. supply recount.
     ///
-    /// Today the tick counter and the movement system (6) run.
+    /// Today the tick counter and the movement system (6) run, followed by
+    /// pruning the selection of anything that died this tick — last, so a
+    /// unit that died on this tick is out of the selection before anything
+    /// reads it next tick.
     pub fn tick(&mut self) {
         self.tick_index += 1;
         self.movement();
+        self.selection.retain_live(&self.entities);
     }
 
     /// System 6: walk every unit under a move order one step down its field.
@@ -298,8 +358,9 @@ impl RtsWorld {
     ///
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
-    /// progress_target, amount), then every live slot's order, then resources
-    /// and supply. `f32` goes in as raw bits, matching `Simulation::state_hash`.
+    /// progress_target, amount), then every live slot's order, then the
+    /// selection, then resources and supply. `f32` goes in as raw bits,
+    /// matching `Simulation::state_hash`.
     pub fn state_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(self.tick_index.to_le_bytes());
@@ -310,6 +371,7 @@ impl RtsWorld {
         let mut live = Vec::with_capacity(self.entities.len());
         self.entities.collect_live(&mut live);
         self.orders.hash_into(&mut h, &live);
+        self.selection.hash_into(&mut h);
         h.update(self.resources.crystal.to_le_bytes());
         h.update(self.resources.gas.to_le_bytes());
         h.update(self.supply.used().to_le_bytes());

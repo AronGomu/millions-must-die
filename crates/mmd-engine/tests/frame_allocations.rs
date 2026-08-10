@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
+use mmd_engine::render::Camera;
 use mmd_engine::rts::{EntityKind, Order, UnitKind};
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -518,4 +519,31 @@ fn movement_allocates_nothing() {
         [162.5, 178.5],
         "the measured ticks moved nobody"
     );
+}
+
+/// Selection is under the same zero-allocation contract as the rest of the
+/// per-frame path: a box select is bounded and preallocated, not a fresh
+/// `Vec` per drag.
+#[test]
+fn selection_operations_allocate_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let view = Camera::new(320, 320, 4.0, [1920.0, 1080.0], [166.0, 172.0]).iso_view();
+    let a = view.project(162.5, 178.5);
+    let b = view.project(167.5, 178.5);
+
+    // Warm-up outside the scope: whatever the selection/scratch buffers grow
+    // to on their first use happens now.
+    let warm = h.world_mut().box_select_into_selection(&view, a, b);
+    assert_eq!(warm, 6, "the box must actually pick the six spawn workers");
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..100 {
+        let n = h.world_mut().box_select_into_selection(&view, a, b);
+        std::hint::black_box(n);
+    }
+    assert_eq!(guard.allocations(), 0, "box select allocated");
+    guard.assert_zero();
 }
