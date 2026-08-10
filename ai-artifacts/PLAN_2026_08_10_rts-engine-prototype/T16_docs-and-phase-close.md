@@ -258,4 +258,4 @@ temporarily insert the sentence "the RTS scene renders at 144 fps".
 - [x] `git diff --stat HEAD -- lab/goldens/` — **empty**; `golden_frame_matches` passes without `MMD_UPDATE_GOLDEN=1`
 - [x] every checkbox in `docs/05-testing.md`'s required merge gate passes, in order, from a clean tree
 - [x] app functional — no broken path from this slice
-- [ ] commit msg draft: `docs(rts): record the phase-1 decisions and close the slice`
+- [x] commit msg draft: `docs(rts): record the phase-1 decisions and close the slice` — landed as `54b01bf`
