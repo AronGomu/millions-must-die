@@ -327,4 +327,4 @@ the HUD drew**, not a pixel it hoped for. Spaces read back as `' '` from the gap
 - [x] `git diff --stat HEAD -- lab/goldens/` — **empty**
 - [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
 - [x] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): draw the on-screen resource and command HUD`
+- [x] commit msg draft: `feat(rts): draw the on-screen resource and command HUD`
