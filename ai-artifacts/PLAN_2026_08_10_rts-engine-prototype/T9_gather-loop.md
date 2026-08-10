@@ -361,7 +361,14 @@ Harness is `RtsHarness::scene()` unless stated. `w0` = the first worker
 - [x] 11. Add `the_gather_loop_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`. Evidence: `cargo test -p mmd-engine --test frame_allocations`: 14 passed, including the new test.
 - [x] 12. Update `rts::mod`'s re-exports with `GatherPhase`, `WORKER_CARRY_CAPACITY`, `GATHER_TICKS`, `GATHER_REACH_CELLS`, `DROP_OFF_REACH_CELLS`, `CARRY_NONE`, `node_amount`. Evidence: `crates/mmd-engine/src/rts/mod.rs` re-exports all seven; `cargo build -p mmd-engine --lib` clean.
 - [x] 13. Run the mutation list; record kills in the commit body. Evidence: 7/8 confirmed inject→red→revert→green; #6 (arrival clears a Gather order) proven a genuine equivalent mutant under the current constants (`GATHER_REACH_CELLS=2.0 > ARRIVAL_RADIUS_CELLS=1.5`; HQ footprint half-width 6 cells `>>` `ARRIVAL_RADIUS_CELLS`), recorded in the commit body.
-- [ ] 14. Run the full validation block.
+- [x] 14. Run the full validation block. — re-run independently by the parent at
+  the T9 checkpoint: `cargo fmt --all -- --check` clean, `cargo clippy --workspace
+  --all-targets --all-features -- -D warnings` clean, `cargo test --workspace
+  --locked` zero `test result: FAILED` lines, `nix flake check` "all checks
+  passed!", all three `xtask --check` ok, `cargo run -- run --agents 5000
+  --frames 300` exit 0 with
+  `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`,
+  and the phase-0 golden/fixture/atlas guard diff against `main` empty.
 
 ## Outputs
 
