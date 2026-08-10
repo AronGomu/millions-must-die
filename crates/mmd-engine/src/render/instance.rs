@@ -131,6 +131,25 @@ pub fn iso_project(cx: f32, cy: f32, tile_w: f32, tile_h: f32, origin: [f32; 2])
     ]
 }
 
+/// Exact inverse of [`iso_project`]: a screen pixel back to cell space.
+///
+/// From `sx = ox + (cx - cy) * tw/2` and `sy = oy + (cx + cy) * th/2`:
+///   `u = (sx - ox) / (tw/2) = cx - cy`
+///   `v = (sy - oy) / (th/2) = cx + cy`
+///   `cx = (u + v) / 2`,  `cy = (v - u) / 2`
+///
+/// A zero `tile_w` or `tile_h` has no inverse; it yields `[f32::NAN, f32::NAN]`
+/// rather than an infinity, so a caller's bounds check rejects it instead of
+/// indexing a cell at the far edge of the grid.
+pub fn iso_unproject(sx: f32, sy: f32, tile_w: f32, tile_h: f32, origin: [f32; 2]) -> [f32; 2] {
+    if tile_w == 0.0 || tile_h == 0.0 {
+        return [f32::NAN, f32::NAN];
+    }
+    let u = (sx - origin[0]) / (tile_w * 0.5);
+    let v = (sy - origin[1]) / (tile_h * 0.5);
+    [(u + v) * 0.5, (v - u) * 0.5]
+}
+
 /// The fixed camera offset that puts `dest`'s **centre** at the view centre.
 ///
 /// The camera does not move: this is evaluated once per scene. Scrolling,
@@ -269,6 +288,54 @@ impl IsoView {
             view_size: self.view_size,
             depth_scale: self.depth_scale,
             depth_bias: self.depth_bias,
+        }
+    }
+
+    /// [`iso_unproject`] through this view's tile and origin.
+    pub fn unproject(&self, sx: f32, sy: f32) -> [f32; 2] {
+        iso_unproject(sx, sy, self.tile_w, self.tile_h, self.origin)
+    }
+
+    /// The cell containing a screen pixel, or `None` when it falls outside the
+    /// `width` x `height` grid this view was built for.
+    ///
+    /// `width`/`height` are parameters rather than stored state: `IsoView` is a
+    /// projection, not a map, and giving it a second copy of the grid size is
+    /// how the two would drift.
+    pub fn cell_at(&self, sx: f32, sy: f32, width: u32, height: u32) -> Option<Cell> {
+        let c = self.unproject(sx, sy);
+        if !c[0].is_finite() || !c[1].is_finite() || c[0] < 0.0 || c[1] < 0.0 {
+            return None;
+        }
+        let (x, y) = (c[0] as u32, c[1] as u32);
+        if x >= width || y >= height {
+            None
+        } else {
+            Some(Cell { x, y })
+        }
+    }
+
+    /// This view re-derived around a new cell-space centre.
+    ///
+    /// `map_height_px`, `tile_w`, `tile_h` and `view_size` are unchanged;
+    /// `origin` and `depth_bias` move together so the depth key stays the
+    /// agent's position down the map diamond and does not shift under the
+    /// camera.
+    pub fn with_center_cell(&self, center: [f32; 2]) -> Self {
+        let centred = iso_project(center[0], center[1], self.tile_w, self.tile_h, [0.0, 0.0]);
+        let origin = [
+            self.view_size[0] * 0.5 - centred[0],
+            self.view_size[1] * 0.5 - centred[1],
+        ];
+        let depth_bias = if self.map_height_px > 0.0 {
+            -origin[1] / self.map_height_px
+        } else {
+            0.0
+        };
+        Self {
+            origin,
+            depth_bias,
+            ..*self
         }
     }
 }

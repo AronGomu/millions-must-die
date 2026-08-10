@@ -2,6 +2,7 @@
 
 mod atlas;
 mod backend;
+mod camera;
 mod device;
 mod error;
 mod golden;
@@ -22,6 +23,9 @@ pub use backend::{
     required_backend, validate_adapter_name, validate_backend_name, validate_device_props,
     validate_macos_host_arch,
 };
+pub use camera::{
+    CAMERA_PAN_CELLS_PER_SEC, Camera, EDGE_PAN_MARGIN_PX, edge_pan_dir, screen_dir_to_cells,
+};
 pub use device::GpuContext;
 pub use error::RenderError;
 pub use golden::{
@@ -36,7 +40,7 @@ pub use golden::{
 pub use instance::{
     FrameUniforms, ISO_DEPTH_EPSILON, ISO_TILE_H_PER_CELL, ISO_TILE_W_PER_CELL, IsoView,
     QUAD_INDICES, QUAD_VERTICES, QuadVertex, RING_SENTINEL, SpriteInstance, clip_to_pixel,
-    iso_depth, iso_origin, iso_project, quad_is_visible, world_to_clip,
+    iso_depth, iso_origin, iso_project, iso_unproject, quad_is_visible, world_to_clip,
 };
 pub use renderer::{
     DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, ScenePass, SpriteRenderer, VIEW_HEIGHT,

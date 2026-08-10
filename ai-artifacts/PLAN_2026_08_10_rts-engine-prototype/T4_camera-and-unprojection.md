@@ -282,16 +282,16 @@ plus `iso_unproject` in the existing `instance` re-export list.
 
 ## Impl steps
 
-- [ ] 1. Add `iso_unproject` to `crates/mmd-engine/src/render/instance.rs`.
-- [ ] 2. Add `IsoView::unproject`, `IsoView::cell_at`, `IsoView::with_center_cell` to the same file, bodies exactly as quoted.
-- [ ] 3. Create `crates/mmd-engine/src/render/camera.rs` with the constants and `Camera`.
-- [ ] 4. Implement `edge_pan_dir` and `screen_dir_to_cells` with the bodies quoted.
-- [ ] 5. Add `mod camera;` and the two `pub use` lines to `crates/mmd-engine/src/render/mod.rs`.
-- [ ] 6. Create `crates/mmd-engine/tests/camera.rs` and write every test from the table. Watch them fail.
-- [ ] 7. Implement `Camera::new` / `iso_view` / `center` / `pan_cells` / `pan_tick` / `look_at_cell` until green.
-- [ ] 8. Record the seven pre-existing `IsoView::new` field values in `iso_view_new_is_unchanged` by reading them from `git stash`-clean `main` first, so the assertion is a pin and not a restatement.
-- [ ] 9. Run the mutation list; record kills in the commit body.
-- [ ] 10. Run the full validation block.
+- [x] 1. Add `iso_unproject` to `crates/mmd-engine/src/render/instance.rs`.
+- [x] 2. Add `IsoView::unproject`, `IsoView::cell_at`, `IsoView::with_center_cell` to the same file, bodies exactly as quoted.
+- [x] 3. Create `crates/mmd-engine/src/render/camera.rs` with the constants and `Camera`.
+- [x] 4. Implement `edge_pan_dir` and `screen_dir_to_cells` with the bodies quoted.
+- [x] 5. Add `mod camera;` and the two `pub use` lines to `crates/mmd-engine/src/render/mod.rs`.
+- [x] 6. Create `crates/mmd-engine/tests/camera.rs` and write every test from the table. Watch them fail.
+- [x] 7. Implement `Camera::new` / `iso_view` / `center` / `pan_cells` / `pan_tick` / `look_at_cell` until green.
+- [x] 8. Record the seven pre-existing `IsoView::new` field values in `iso_view_new_is_unchanged` by reading them from `git stash`-clean `main` first, so the assertion is a pin and not a restatement.
+- [x] 9. Run the mutation list; record kills in the commit body.
+- [x] 10. Run the full validation block.
 
 ## Outputs
 
@@ -307,12 +307,12 @@ plus `iso_unproject` in the existing `instance` re-export list.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test camera` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `git diff --stat HEAD -- lab/goldens/` — **empty**
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, `hash=` on the exit line unchanged from before this ticket
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(render): add a clamped panning camera and screen-to-cell unprojection`
+- [x] `cargo fmt --all -- --check`
+- [x] `cargo test -p mmd-engine --test camera` — all green
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `git diff --stat HEAD -- lab/goldens/` — **empty**
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, `hash=` on the exit line unchanged from before this ticket
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(render): add a clamped panning camera and screen-to-cell unprojection`

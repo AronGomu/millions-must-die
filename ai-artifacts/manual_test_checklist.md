@@ -604,3 +604,49 @@ checks, and the 5000-agent/300-frame smoke).
 - [ ] `git status --porcelain` after all of the above — clean (no drift from
       running the checks; the golden-diff artifacts only appear under
       `target/` on a genuine failure).
+
+## T4 camera-and-unprojection
+
+Fourth ticket of the phase-1 RTS engine prototype plan. Adds `iso_unproject`
+(the exact inverse of `iso_project`), `IsoView::{unproject, cell_at,
+with_center_cell}`, and a new `render::Camera` with clamped cell-space
+panning and edge-pan direction resolution. `IsoView::new` is unchanged and
+still produces the fixed camera; `Runtime` builds that fixed `IsoView` the
+same way it always has and nothing in `src/` calls `Camera` yet — a human
+should again observe **zero visible change** in the running scene. Everything
+automatable is green (`cargo fmt --all -- --check`, `cargo test -p mmd-engine
+--test camera` (20/20), `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`,
+clippy, `nix flake check`, all three xtask `--check` commands, and the
+5000-agent/300-frame smoke reproducing the T0-pinned digest
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` byte
+for byte). The seven mandatory mutations (inverse-formula swap, stale
+depth_bias, off-by-one clamp, edge-pan boundary `<` vs `<=`, dropped
+outside-the-view guard, normalised diagonal, swapped `screen_dir_to_cells`
+outputs) were each injected, confirmed red, and reverted to confirmed green.
+The standing golden/atlas regression guard
+(`git diff --stat main -- lab/goldens/ assets/sprites/generated/atlas_*.png
+assets/sprites/generated/manifest.json`) is empty and `golden_frame_matches`
+passed without regenerating anything.
+
+- [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and exits
+      cleanly, and the frame looks **pixel-for-pixel like it did before this
+      ticket**: same fixed camera centred on the destination, same sprites,
+      same hitbox rings when `H` is on. Nothing pans; the camera does not
+      exist on this code path yet.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron
+      --frames 300` — exits 0 and the sprite-collision scene renders as
+      before, camera fixed as always.
+- [ ] `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test render_correctness
+      golden_frame_matches` from the workspace root — passes. This ticket
+      makes the `IsoView` origin movable in general, which is exactly the kind
+      of change that could silently move the golden; it must still pass
+      **without** anyone setting `MMD_UPDATE_GOLDEN=1`.
+- [ ] `git diff --stat main -- lab/goldens/
+      assets/sprites/generated/atlas_0.png
+      assets/sprites/generated/atlas_1.png
+      assets/sprites/generated/atlas_2.png
+      assets/sprites/generated/atlas_3.png
+      assets/sprites/generated/manifest.json` — empty. No golden or atlas
+      byte moved in this slice.
+- [ ] `git status --porcelain` after all of the above — clean (no drift from
+      running the checks).
