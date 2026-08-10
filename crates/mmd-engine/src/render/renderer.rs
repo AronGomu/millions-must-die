@@ -1,4 +1,5 @@
-//! Static sprite batch renderer: 4 atlas groups, offscreen readback, swapchain.
+//! Sprite batch renderer over a flat 9-slot texture table: a three-layer scene
+//! pass (world / overlay / UI), offscreen readback, swapchain.
 
 use std::ffi::CStr;
 use std::path::Path;
@@ -19,8 +20,8 @@ use sdl3::video::Window;
 
 use super::RenderError;
 use super::atlas::{
-    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_WIDTH_PX, AtlasRgba, SPRITE_SIZE_PX, default_atlas_dir,
-    frame_uv_rect, load_atlases,
+    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_SLOT_COUNT, ATLAS_WIDTH_PX, AtlasRgba, SPRITE_SIZE_PX,
+    default_atlas_dir, frame_uv_rect, load_atlases, load_rts_atlases, load_ui_font,
 };
 use super::device::GpuContext;
 use super::instance::{FrameUniforms, QUAD_INDICES, QUAD_VERTICES, QuadVertex, SpriteInstance};
@@ -81,11 +82,49 @@ const VERT_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.
 #[cfg(target_os = "macos")]
 const FRAG_SHADER: &[u8] = include_bytes!("../../../../shaders/generated/sprite.metallib");
 
-/// One atlas draw group.
+/// Texture slots that are not one of the phase-0 four: the RTS sheets, then
+/// the UI font.
+const EXTRA_SLOT_COUNT: usize = ATLAS_SLOT_COUNT - ATLAS_COUNT;
+
+/// One draw group: every instance in it samples the same texture slot.
 #[derive(Clone, Debug)]
 pub struct DrawGroup {
+    /// Index into the renderer's texture table, valid in `0..ATLAS_SLOT_COUNT`.
     pub atlas_id: u32,
     pub instances: Vec<SpriteInstance>,
+}
+
+/// One frame's three layers, in draw order.
+///
+/// `world` is depth-tested. `overlay` and `ui` are not: they are drawn on the
+/// same pipeline the hitbox rings already use, whose depth test *and* depth
+/// write are both off. `ui` is drawn last so a panel is never occluded by a
+/// world annotation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ScenePass<'a> {
+    /// Depth-tested world sprites. `atlas_id` is a texture slot.
+    pub world: &'a [DrawGroup],
+    /// World-space annotations: hitbox rings, selection rings, placement tiles.
+    /// One flat range, drawn with slot 0 bound (the ring branch samples no
+    /// texture; a textured overlay instance must go in `ui` instead).
+    pub overlay: &'a [SpriteInstance],
+    /// Screen-space UI, grouped by texture slot.
+    pub ui: &'a [DrawGroup],
+}
+
+impl<'a> ScenePass<'a> {
+    /// The phase-0 shape: world groups plus a ring overlay, no UI.
+    ///
+    /// With `ui` empty the pass emits exactly the sequence of binds and draws
+    /// the four-group path emitted before the table existed, which is what
+    /// keeps the committed golden byte-identical.
+    pub fn world_and_rings(world: &'a [DrawGroup], rings: &'a [SpriteInstance]) -> Self {
+        Self {
+            world,
+            overlay: rings,
+            ui: &[],
+        }
+    }
 }
 
 /// CPU readback of offscreen target.
@@ -125,6 +164,11 @@ pub struct SpriteRenderer {
     download_xfer: TransferBuffer,
     atlases_cpu: [AtlasRgba; ATLAS_COUNT],
     atlas_tex: [Texture<'static>; ATLAS_COUNT],
+    /// Texture slots 4..=8: RTS sheets then the UI font. Kept separate from
+    /// `atlas_tex` so the phase-0 four stay exactly where they were.
+    extra_tex: [Texture<'static>; EXTRA_SLOT_COUNT],
+    /// CPU copies of the five phase-1 sheets, for headless assertions.
+    extra_cpu: [AtlasRgba; EXTRA_SLOT_COUNT],
     sampler: Sampler,
     offscreen: Texture<'static>,
     /// Depth attachment for the sprite pass, cleared to [`DEPTH_CLEAR`] every
@@ -137,6 +181,11 @@ pub struct SpriteRenderer {
     frame_slot: usize,
     /// Reused contiguous pack for GPU upload (reserved at construct).
     pack_scratch: Vec<SpriteInstance>,
+    /// Per-group `(start, count)` ranges, world groups first then UI groups.
+    /// Cleared, not reallocated, per draw. Reserved at [`ATLAS_SLOT_COUNT`],
+    /// which covers any scene that names each slot at most once — the shape
+    /// the table exists for.
+    group_ranges: Vec<(u32, u32)>,
     /// Device/SDL ownership — must drop after all GPU objects above.
     pub ctx: GpuContext,
 }
@@ -153,6 +202,17 @@ impl SpriteRenderer {
     pub fn with_context(ctx: GpuContext, atlas_dir: &Path) -> Result<Self, RenderError> {
         let device = &ctx.device;
         let atlases_cpu = load_atlases(atlas_dir)?;
+        // Sibling directories of the phase-0 four, so `new(workspace_root, ..)`
+        // keeps working and a test pointing this at a temp dir gets the temp
+        // families too.
+        let rts_cpu = load_rts_atlases(&atlas_dir.join("rts"))?;
+        let ui_font_cpu = load_ui_font(&atlas_dir.join("ui"))?;
+        // Destructured rather than collected: the slot order of the table is
+        // the thing being asserted here, and this form stops compiling if
+        // either family's size moves out from under `EXTRA_SLOT_COUNT`.
+        let [worker, soldier, buildings, props] = rts_cpu;
+        let extra_cpu: [AtlasRgba; EXTRA_SLOT_COUNT] =
+            [worker, soldier, buildings, props, ui_font_cpu];
 
         let (format, vert_entry, frag_entry) = host_shader_spec();
         let vert = device
@@ -304,6 +364,14 @@ impl SpriteRenderer {
             .try_into()
             .map_err(|_| RenderError::Atlas("atlas tex count".into()))?;
 
+        let mut extra_tex_vec = Vec::with_capacity(EXTRA_SLOT_COUNT);
+        for sheet in &extra_cpu {
+            extra_tex_vec.push(upload_atlas_texture(device, &staging, &copy_pass, sheet)?);
+        }
+        let extra_tex: [Texture<'static>; EXTRA_SLOT_COUNT] = extra_tex_vec
+            .try_into()
+            .map_err(|_| RenderError::Atlas("extra tex count".into()))?;
+
         device.end_copy_pass(copy_pass);
         cmd.submit()?;
 
@@ -378,6 +446,8 @@ impl SpriteRenderer {
             download_xfer,
             atlases_cpu,
             atlas_tex,
+            extra_tex,
+            extra_cpu,
             sampler,
             offscreen,
             depth,
@@ -385,6 +455,7 @@ impl SpriteRenderer {
             depth_bias: DEFAULT_DEPTH_BIAS,
             frame_slot: 0,
             pack_scratch: Vec::with_capacity(MAX_INSTANCES as usize),
+            group_ranges: Vec::with_capacity(ATLAS_SLOT_COUNT),
             ctx,
         };
         Ok(out)
@@ -396,6 +467,28 @@ impl SpriteRenderer {
 
     pub fn atlases(&self) -> &[AtlasRgba; ATLAS_COUNT] {
         &self.atlases_cpu
+    }
+
+    /// CPU pixels for `slot`, for headless tests. `None` past the table.
+    ///
+    /// Slots 0..=3 are the zombie atlases, 4..=8 the phase-1 sheets.
+    pub fn atlas_pixels(&self, slot: u32) -> Option<&AtlasRgba> {
+        let i = slot as usize;
+        match self.atlases_cpu.get(i) {
+            Some(atlas) => Some(atlas),
+            // `i >= ATLAS_COUNT` on this arm, so the subtraction cannot wrap.
+            None => self.extra_cpu.get(i - ATLAS_COUNT),
+        }
+    }
+
+    /// Capacity of the per-frame instance pack buffer.
+    ///
+    /// Reserved once at construction and never grown: a frame that reallocated
+    /// it would have packed past [`MAX_INSTANCES`] before the budget guard
+    /// reported the error. Exposed so that ordering is testable rather than
+    /// merely commented.
+    pub fn pack_capacity(&self) -> usize {
+        self.pack_scratch.capacity()
     }
 
     /// Point the vertex stage's depth normalisation at a scene's own map.
@@ -446,7 +539,13 @@ impl SpriteRenderer {
         groups: &[DrawGroup],
         rings: &[SpriteInstance],
     ) -> Result<(), RenderError> {
-        let _fence = self.draw_offscreen_into(groups, rings)?;
+        self.validate_groups(groups)?;
+        self.draw_offscreen_scene(ScenePass::world_and_rings(groups, rings))
+    }
+
+    /// Draw a whole [`ScenePass`] into the offscreen target (no readback).
+    pub fn draw_offscreen_scene(&mut self, scene: ScenePass<'_>) -> Result<(), RenderError> {
+        let _fence = self.draw_scene_into(scene)?;
         // Drop fence without waiting — interactive path does not track queue depth here.
         Ok(())
     }
@@ -464,32 +563,41 @@ impl SpriteRenderer {
         &mut self,
         groups: &[DrawGroup],
     ) -> Result<unsafe_sys::RawFrameFence, RenderError> {
-        self.draw_offscreen_into(groups, &[])
+        self.validate_groups(groups)?;
+        self.draw_scene_into(ScenePass::world_and_rings(groups, &[]))
     }
 
-    /// Draw the four atlas groups, then the hitbox rings, into the offscreen
-    /// target and return the render submit's fence.
+    /// Draw one [`ScenePass`] into the offscreen target and return the render
+    /// submit's fence.
     ///
-    /// Rings ride the *same* pass, shader modules and blend state as the
-    /// sprites — they are extra instances in a fifth range, not a second
-    /// technique — but on the pipeline whose depth test and depth write are
-    /// off, so a unit standing in front of a ring never hides it. The fragment
-    /// stage picks the ring branch off a sentinel in `uv_rect`
-    /// ([`SpriteInstance::ring`]), so the atlas bound for that draw is never
-    /// sampled; atlas 0 is bound anyway because the pipeline declares one
-    /// sampler and a draw must not leave it unbound.
-    fn draw_offscreen_into(
+    /// All three layers ride the *same* pass, shader modules and blend state —
+    /// they are extra ranges in one instance buffer, not separate techniques.
+    /// The world layer runs on the depth-tested pipeline; the overlay and the
+    /// UI run on the pipeline whose depth test and depth write are both off,
+    /// so a unit standing in front of a ring never hides it and a panel is
+    /// never occluded by a world annotation.
+    ///
+    /// For the overlay the fragment stage picks the ring branch off a sentinel
+    /// in `uv_rect` ([`SpriteInstance::ring`]), so the texture bound for that
+    /// draw is never sampled; slot 0 is bound anyway because the pipeline
+    /// declares one sampler and a draw must not leave it unbound.
+    fn draw_scene_into(
         &mut self,
-        groups: &[DrawGroup],
-        rings: &[SpriteInstance],
+        scene: ScenePass<'_>,
     ) -> Result<unsafe_sys::RawFrameFence, RenderError> {
-        self.validate_groups(groups)?;
+        self.validate_scene(&scene)?;
 
         // Checked before the first byte is written: `pack_scratch` is reserved
         // at `MAX_INSTANCES` exactly so a frame never grows it, and a guard
         // that ran after the appends would let the overflowing frame realloc
         // (and permanently double the buffer) before reporting the error.
-        let total: usize = groups.iter().map(|g| g.instances.len()).sum::<usize>() + rings.len();
+        let total: usize = scene
+            .world
+            .iter()
+            .chain(scene.ui.iter())
+            .map(|g| g.instances.len())
+            .sum::<usize>()
+            + scene.overlay.len();
         if total > MAX_INSTANCES as usize {
             return Err(RenderError::Sdl(format!("too many instances {total}")));
         }
@@ -498,21 +606,30 @@ impl SpriteRenderer {
         let slot = self.frame_slot % FRAMES_IN_FLIGHT;
         self.frame_slot = self.frame_slot.wrapping_add(1);
 
-        // Pack instances contiguously into reused scratch; record per-group ranges.
+        // Pack instances contiguously into reused scratch; record per-group
+        // ranges. World ranges first, then UI ranges — the overlay sits
+        // between them in the buffer but keeps its own local range, because it
+        // is one flat run rather than a group list.
         self.pack_scratch.clear();
-        let mut ranges: [(u32, u32); ATLAS_COUNT] = [(0, 0); ATLAS_COUNT];
-        for (i, g) in groups.iter().enumerate() {
+        self.group_ranges.clear();
+        for g in scene.world {
             let start = self.pack_scratch.len() as u32;
             self.pack_scratch.extend_from_slice(&g.instances);
-            let count = g.instances.len() as u32;
-            ranges[i] = (start, count);
+            self.group_ranges.push((start, g.instances.len() as u32));
         }
-        // Rings go last so they land on top of the sprites they annotate.
-        let ring_range = {
+        let world_range_len = scene.world.len();
+        // The overlay goes after the world so it lands on top of the sprites it
+        // annotates, and before the UI so a panel covers it.
+        let overlay_range = {
             let start = self.pack_scratch.len() as u32;
-            self.pack_scratch.extend_from_slice(rings);
-            (start, rings.len() as u32)
+            self.pack_scratch.extend_from_slice(scene.overlay);
+            (start, scene.overlay.len() as u32)
         };
+        for g in scene.ui {
+            let start = self.pack_scratch.len() as u32;
+            self.pack_scratch.extend_from_slice(&g.instances);
+            self.group_ranges.push((start, g.instances.len() as u32));
+        }
         debug_assert!(self.pack_scratch.len() <= MAX_INSTANCES as usize);
 
         // Upload instances (cycled buffer).
@@ -582,14 +699,18 @@ impl SpriteRenderer {
             IndexElementSize::_16BIT,
         );
 
-        for (atlas_i, (start, count)) in ranges.iter().enumerate() {
+        for (i, (start, count)) in self.group_ranges[..world_range_len].iter().enumerate() {
             if *count == 0 {
                 continue;
             }
             pass.bind_fragment_samplers(
                 0,
                 &[TextureSamplerBinding::new()
-                    .with_texture(&self.atlas_tex[atlas_i])
+                    .with_texture(texture_at(
+                        &self.atlas_tex,
+                        &self.extra_tex,
+                        scene.world[i].atlas_id,
+                    ))
                     .with_sampler(&self.sampler)],
             );
             // Re-bind instance buffer with per-group byte offset.
@@ -603,9 +724,9 @@ impl SpriteRenderer {
             pass.draw_indexed_primitives(6, *count, 0, 0, 0);
         }
 
-        // Hitbox rings: after every atlas group, same pass and same shader
+        // Hitbox rings: after every world group, same pass and same shader
         // modules, on the pipeline whose depth block is off.
-        let (ring_start, ring_count) = ring_range;
+        let (ring_start, ring_count) = overlay_range;
         if ring_count > 0 {
             pass.bind_graphics_pipeline(&self.ring_pipeline);
             // Slot 1 below is the bind this draw genuinely needs — it moves to
@@ -629,13 +750,13 @@ impl SpriteRenderer {
                     .with_offset(0),
                 IndexElementSize::_16BIT,
             );
-            // Atlas 0 satisfies the pipeline's one declared sampler; the ring
-            // branch never samples it. Without this bind, a frame whose four
+            // Slot 0 satisfies the pipeline's one declared sampler; the ring
+            // branch never samples it. Without this bind, a frame whose world
             // groups were all empty would draw with no texture bound at all.
             pass.bind_fragment_samplers(
                 0,
                 &[TextureSamplerBinding::new()
-                    .with_texture(&self.atlas_tex[0])
+                    .with_texture(texture_at(&self.atlas_tex, &self.extra_tex, 0))
                     .with_sampler(&self.sampler)],
             );
             pass.bind_vertex_buffers(
@@ -645,6 +766,54 @@ impl SpriteRenderer {
                     .with_offset(ring_start * SpriteInstance::STRIDE)],
             );
             pass.draw_indexed_primitives(6, ring_count, 0, 0, 0);
+        }
+
+        // Screen-space UI last, so a panel covers both the world and the
+        // annotations over it. The depth-off pipeline is bound on the first
+        // *drawn* UI group rather than under `if !scene.ui.is_empty()`, so a
+        // frame with an empty overlay still gets it — and a frame with an
+        // empty UI layer emits nothing here at all, which is what leaves the
+        // phase-0 sequence untouched.
+        let mut ui_pipeline_bound = false;
+        for (i, (start, count)) in self.group_ranges[world_range_len..].iter().enumerate() {
+            if *count == 0 {
+                continue;
+            }
+            if !ui_pipeline_bound {
+                pass.bind_graphics_pipeline(&self.ring_pipeline);
+                // Re-issued for the same defensive reason as the overlay's:
+                // SDL3 does not document what survives a pipeline switch.
+                pass.bind_vertex_buffers(
+                    0,
+                    &[BufferBinding::new()
+                        .with_buffer(&self.quad_vb)
+                        .with_offset(0)],
+                );
+                pass.bind_index_buffer(
+                    &BufferBinding::new()
+                        .with_buffer(&self.quad_ib)
+                        .with_offset(0),
+                    IndexElementSize::_16BIT,
+                );
+                ui_pipeline_bound = true;
+            }
+            pass.bind_fragment_samplers(
+                0,
+                &[TextureSamplerBinding::new()
+                    .with_texture(texture_at(
+                        &self.atlas_tex,
+                        &self.extra_tex,
+                        scene.ui[i].atlas_id,
+                    ))
+                    .with_sampler(&self.sampler)],
+            );
+            pass.bind_vertex_buffers(
+                1,
+                &[BufferBinding::new()
+                    .with_buffer(&self.instance_bufs[slot])
+                    .with_offset(start * SpriteInstance::STRIDE)],
+            );
+            pass.draw_indexed_primitives(6, *count, 0, 0, 0);
         }
 
         device.end_render_pass(pass);
@@ -665,7 +834,16 @@ impl SpriteRenderer {
         groups: &[DrawGroup],
         rings: &[SpriteInstance],
     ) -> Result<Readback, RenderError> {
-        self.draw_offscreen_with_rings(groups, rings)?;
+        self.validate_groups(groups)?;
+        self.draw_offscreen_readback_scene(ScenePass::world_and_rings(groups, rings))
+    }
+
+    /// [`Self::draw_offscreen_scene`] followed by a readback of the target.
+    pub fn draw_offscreen_readback_scene(
+        &mut self,
+        scene: ScenePass<'_>,
+    ) -> Result<Readback, RenderError> {
+        self.draw_offscreen_scene(scene)?;
         self.readback_offscreen()
     }
 
@@ -720,7 +898,18 @@ impl SpriteRenderer {
         groups: &[DrawGroup],
         rings: &[SpriteInstance],
     ) -> Result<(), RenderError> {
-        self.draw_offscreen_with_rings(groups, rings)?;
+        self.validate_groups(groups)?;
+        self.draw_to_swapchain_scene(window, ScenePass::world_and_rings(groups, rings))
+    }
+
+    /// [`Self::draw_offscreen_scene`] followed by a blit to the window's
+    /// swapchain.
+    pub fn draw_to_swapchain_scene(
+        &mut self,
+        window: &Window,
+        scene: ScenePass<'_>,
+    ) -> Result<(), RenderError> {
+        self.draw_offscreen_scene(scene)?;
         let cmd = self.ctx.device.acquire_command_buffer()?;
         unsafe_sys::present_blit(
             &self.ctx.device,
@@ -734,6 +923,26 @@ impl SpriteRenderer {
         Ok(())
     }
 
+    /// Every grouped layer names a slot the table actually has.
+    ///
+    /// Runs before any GPU work is issued, which is what lets `texture_at`
+    /// index the table directly instead of returning an `Option` nobody could
+    /// act on mid-pass.
+    fn validate_scene(&self, scene: &ScenePass<'_>) -> Result<(), RenderError> {
+        for g in scene.world.iter().chain(scene.ui.iter()) {
+            if g.atlas_id as usize >= ATLAS_SLOT_COUNT {
+                return Err(RenderError::Atlas(format!(
+                    "draw group atlas_id {} >= ATLAS_SLOT_COUNT {ATLAS_SLOT_COUNT}",
+                    g.atlas_id
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// The phase-0 contract: exactly [`ATLAS_COUNT`] groups, each naming its
+    /// own index. Applied only by the four legacy entry points — a
+    /// [`ScenePass`] is free to name any slot in any order.
     fn validate_groups(&self, groups: &[DrawGroup]) -> Result<(), RenderError> {
         if groups.len() != ATLAS_COUNT {
             return Err(RenderError::GroupCount {
@@ -750,6 +959,27 @@ impl SpriteRenderer {
             }
         }
         Ok(())
+    }
+}
+
+/// The texture bound for `slot`. Slots 0..=3 are the zombie atlases, 4..=8 the
+/// phase-1 sheets. Out of range is a caller bug and panics — `validate_scene`
+/// rejects it before any GPU work is issued.
+///
+/// A free function rather than a `&self` method on purpose: the render pass
+/// holds `&mut self.depth` for its whole lifetime, so a method taking `&self`
+/// could not be called from inside it. Taking the two arrays directly keeps
+/// the borrows disjoint.
+fn texture_at<'t>(
+    atlas_tex: &'t [Texture<'static>; ATLAS_COUNT],
+    extra_tex: &'t [Texture<'static>; EXTRA_SLOT_COUNT],
+    slot: u32,
+) -> &'t Texture<'static> {
+    let i = slot as usize;
+    match atlas_tex.get(i) {
+        Some(tex) => tex,
+        // `i >= ATLAS_COUNT` on this arm, so the subtraction cannot wrap.
+        None => &extra_tex[i - ATLAS_COUNT],
     }
 }
 

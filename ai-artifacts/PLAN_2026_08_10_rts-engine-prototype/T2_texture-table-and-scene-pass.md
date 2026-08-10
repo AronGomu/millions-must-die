@@ -292,24 +292,24 @@ from `renderer`.
 
 ## Impl steps
 
-- [ ] 1. Add the slot constants and `RTS_FILES` to `crates/mmd-engine/src/render/atlas.rs`.
-- [ ] 2. Add `rts_atlas_dir` / `ui_atlas_dir` to the same file.
-- [ ] 3. Add a private `PlaceholderManifest` deserialiser to `atlas.rs` matching the JSON shape quoted in Inputs.
-- [ ] 4. Implement `load_rts_atlases` and `load_ui_font` with per-file sha256 verification.
-- [ ] 5. Extend `crates/mmd-engine/src/render/mod.rs` exports.
-- [ ] 6. Write the failing headless tests in `crates/mmd-engine/tests/render_correctness.rs`.
-- [ ] 7. Write the failing GPU tests in `crates/mmd-engine/tests/gpu_smoke.rs`.
-- [ ] 8. Run `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine` and record the failures.
-- [ ] 9. Add `ScenePass` + `ScenePass::world_and_rings` to `renderer.rs`.
-- [ ] 10. Add `extra_tex`, `extra_cpu`, `group_ranges` fields to `SpriteRenderer`; reserve `group_ranges` with `Vec::with_capacity(ATLAS_SLOT_COUNT)` in the constructor.
-- [ ] 11. Load and upload the five new textures in `with_context`, from `atlas_dir.join("rts")` and `atlas_dir.join("ui")`.
-- [ ] 12. Add `texture_at` and `atlas_pixels`.
-- [ ] 13. Rename `draw_offscreen_into` to `draw_scene_into` and rewrite its body to the ten steps above.
-- [ ] 14. Add `validate_scene`; keep `validate_groups` and call it from the legacy wrappers.
-- [ ] 15. Add `draw_offscreen_scene`, `draw_to_swapchain_scene`, `draw_offscreen_readback_scene`.
-- [ ] 16. Reduce `draw_offscreen_with_rings`, `draw_to_swapchain_with_rings`, `draw_offscreen_readback_with_rings`, `draw_offscreen_acquire_fence` to wrappers.
-- [ ] 17. Run the mutation list; record kills in the commit body.
-- [ ] 18. Run the full validation block.
+- [x] 1. Add the slot constants and `RTS_FILES` to `crates/mmd-engine/src/render/atlas.rs`.
+- [x] 2. Add `rts_atlas_dir` / `ui_atlas_dir` to the same file.
+- [x] 3. Add a private `PlaceholderManifest` deserialiser to `atlas.rs` matching the JSON shape quoted in Inputs.
+- [x] 4. Implement `load_rts_atlases` and `load_ui_font` with per-file sha256 verification.
+- [x] 5. Extend `crates/mmd-engine/src/render/mod.rs` exports.
+- [x] 6. Write the failing headless tests in `crates/mmd-engine/tests/render_correctness.rs`.
+- [x] 7. Write the failing GPU tests in `crates/mmd-engine/tests/gpu_smoke.rs`. **Deviation:** written in `crates/mmd-engine/tests/render_correctness.rs` instead. The auto-skip helper the ticket cites is `renderer_or_skip` in `render_correctness.rs`, not `tests/common/mod.rs` (which has no GPU helper), and integration-test binaries cannot share a private helper. `gpu_smoke.rs`'s own module doc routes correctness cases that must *run by default* to `render_correctness.rs`; its device tests are `#[ignore]`, so tests placed there would never run under the ticket's `cargo test --workspace` validation command.
+- [x] 8. Run `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine` and record the failures.
+- [x] 9. Add `ScenePass` + `ScenePass::world_and_rings` to `renderer.rs`.
+- [x] 10. Add `extra_tex`, `extra_cpu`, `group_ranges` fields to `SpriteRenderer`; reserve `group_ranges` with `Vec::with_capacity(ATLAS_SLOT_COUNT)` in the constructor.
+- [x] 11. Load and upload the five new textures in `with_context`, from `atlas_dir.join("rts")` and `atlas_dir.join("ui")`.
+- [x] 12. Add `texture_at` and `atlas_pixels`.
+- [x] 13. Rename `draw_offscreen_into` to `draw_scene_into` and rewrite its body to the ten steps above.
+- [x] 14. Add `validate_scene`; keep `validate_groups` and call it from the legacy wrappers.
+- [x] 15. Add `draw_offscreen_scene`, `draw_to_swapchain_scene`, `draw_offscreen_readback_scene`.
+- [x] 16. Reduce `draw_offscreen_with_rings`, `draw_to_swapchain_with_rings`, `draw_offscreen_readback_with_rings`, `draw_offscreen_acquire_fence` to wrappers.
+- [x] 17. Run the mutation list; record kills in the commit body.
+- [x] 18. Run the full validation block.
 
 ## Outputs
 
@@ -318,28 +318,32 @@ from `renderer`.
   - `crates/mmd-engine/src/render/renderer.rs`
   - `crates/mmd-engine/src/render/mod.rs`
   - `crates/mmd-engine/tests/render_correctness.rs`
-  - `crates/mmd-engine/tests/gpu_smoke.rs`
+  - ~~`crates/mmd-engine/tests/gpu_smoke.rs`~~ — not edited; see the deviation
+    note on Impl step 7.
 - **Public API added:** `ScenePass`, `draw_offscreen_scene`,
   `draw_to_swapchain_scene`, `draw_offscreen_readback_scene`,
   `SpriteRenderer::atlas_pixels`, the nine slot constants,
   `load_rts_atlases`, `load_ui_font`, `rts_atlas_dir`, `ui_atlas_dir`.
+  Also `SpriteRenderer::pack_capacity`, required by mandatory mutation 5
+  ("add that assertion") — `pack_scratch` is private, so the budget guard's
+  before-vs-after-packing ordering had no other observation seam.
 - **Behaviour change:** a draw group may now name any of 9 texture slots; a
   screen-space UI layer draws last with depth off.
 - **Migration / config:** none. `shaders/sprite.hlsl` is untouched.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly, nothing fails
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- shaders --check` — green, shader untouched
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `git diff --stat HEAD -- lab/goldens/` — **empty**: the golden is compared, never regenerated by this ticket
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
-- [ ] `cargo tree -e features | grep -c testkit` — `0`
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(render): draw from a flat texture table behind a scene pass`
+- [x] `cargo fmt --all -- --check`
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
+- [x] `VK_DRIVER_FILES=/nonexistent cargo test --workspace --locked` — GPU cases skip cleanly, nothing fails
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
+- [x] `nix flake check`
+- [x] `cargo run -p xtask -- shaders --check` — green, shader untouched
+- [x] `cargo run -p xtask -- atlases --check`
+- [x] `git diff --stat HEAD -- lab/goldens/` — **empty**: the golden is compared, never regenerated by this ticket
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — exit 0
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — exit 0
+- [x] `cargo tree -e features | grep -c testkit` — `0`
+- [x] app functional — no broken path from this slice
+- [x] commit msg draft: `feat(render): draw from a flat texture table behind a scene pass`

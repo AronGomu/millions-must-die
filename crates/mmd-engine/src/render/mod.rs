@@ -10,8 +10,10 @@ mod renderer;
 mod unsafe_sys;
 
 pub use atlas::{
-    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_WIDTH_PX, AtlasRgba, FRAME_SIZE_PX, SPRITE_SIZE_PX,
-    frame_uv_rect, load_atlases,
+    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_SLOT_COUNT, ATLAS_WIDTH_PX, AtlasRgba, FRAME_SIZE_PX,
+    RTS_FILES, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER, SLOT_UI_FONT,
+    SPRITE_SIZE_PX, frame_uv_rect, load_atlases, load_rts_atlases, load_ui_font, rts_atlas_dir,
+    ui_atlas_dir,
 };
 pub use backend::{
     BACKEND_D3D12, BACKEND_METAL, BACKEND_VULKAN, REQUIRED_BACKEND, REQUIRED_LINUX_BACKEND,
@@ -36,6 +38,7 @@ pub use instance::{
     iso_depth, iso_origin, iso_project, quad_is_visible, world_to_clip,
 };
 pub use renderer::{
-    DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
+    DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, ScenePass, SpriteRenderer, VIEW_HEIGHT,
+    VIEW_WIDTH,
 };
 pub use unsafe_sys::RawFrameFence;

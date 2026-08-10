@@ -44,13 +44,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use mmd_engine::render::{
-    ATLAS_COUNT, DrawGroup, FRAME_SIZE_PX, GOLDEN_DIFF_ACTUAL_PNG, GOLDEN_DIFF_MASK_PNG,
-    GOLDEN_DIFF_SUMMARY_JSON, GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_STATUS_CAPTURED,
-    GoldenDiffSummary, GoldenError, GoldenManifest, HostBinding, ISO_DEPTH_EPSILON, IsoView,
-    Readback, RenderError, SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, clip_to_pixel,
-    compare_readback_writing_diff, diff_readback, frame_uv_rect, golden_family_dir,
+    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_SLOT_COUNT, ATLAS_WIDTH_PX, DrawGroup, FRAME_SIZE_PX,
+    GOLDEN_DIFF_ACTUAL_PNG, GOLDEN_DIFF_MASK_PNG, GOLDEN_DIFF_SUMMARY_JSON,
+    GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_STATUS_CAPTURED, GoldenDiffSummary, GoldenError,
+    GoldenManifest, HostBinding, ISO_DEPTH_EPSILON, IsoView, MAX_INSTANCES, RTS_FILES, Readback,
+    RenderError, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER,
+    SLOT_UI_FONT, ScenePass, SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
+    clip_to_pixel, compare_readback_writing_diff, diff_readback, frame_uv_rect, golden_family_dir,
     host_binding_hashes, iso_depth, load_atlases, load_golden_image, load_golden_manifest,
-    world_to_clip, write_golden_diff,
+    load_rts_atlases, load_ui_font, rts_atlas_dir, ui_atlas_dir, world_to_clip, write_golden_diff,
 };
 use mmd_engine::runtime::{
     RING_INNER, RING_OUTER, RING_TINT, build_instance_groups, ring_quad_size_px, ring_radius_px,
@@ -1531,6 +1533,128 @@ fn every_tracked_manifest_pins_the_live_shader_and_atlas() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Phase-1 texture slots + scene layers — headless
+// ---------------------------------------------------------------------------
+
+/// The slot table is a dense range, not five constants that happen to differ.
+///
+/// `texture_at` indexes `extra_tex` at `slot - ATLAS_COUNT`, so a gap or a
+/// reordering here would silently bind the wrong sheet rather than fail.
+#[test]
+fn slot_constants_are_dense_and_ordered() {
+    assert_eq!(SLOT_RTS_WORKER, ATLAS_COUNT as u32);
+    assert_eq!(SLOT_RTS_SOLDIER, SLOT_RTS_WORKER + 1);
+    assert_eq!(SLOT_RTS_BUILDINGS, SLOT_RTS_SOLDIER + 1);
+    assert_eq!(SLOT_RTS_PROPS, SLOT_RTS_BUILDINGS + 1);
+    assert_eq!(SLOT_UI_FONT, SLOT_RTS_PROPS + 1);
+    assert_eq!(SLOT_UI_FONT + 1, ATLAS_SLOT_COUNT as u32);
+    // The four RTS sheets fill every slot between the zombie atlases and the
+    // font, leaving none unowned.
+    assert_eq!(RTS_FILES.len(), ATLAS_SLOT_COUNT - ATLAS_COUNT - 1);
+}
+
+/// The tracked RTS family loads, hash-verifies, and has the zombie geometry —
+/// which is what lets `frame_uv_rect(dir, frame)` address it unchanged.
+#[test]
+fn rts_manifest_matches_generated_pngs() {
+    let sheets =
+        load_rts_atlases(&rts_atlas_dir(&workspace_root())).expect("tracked RTS sheets load");
+    assert_eq!(sheets.len(), RTS_FILES.len());
+    for (i, sheet) in sheets.iter().enumerate() {
+        assert_eq!(sheet.id as usize, i, "{} id", RTS_FILES[i]);
+        assert_eq!(
+            (sheet.width, sheet.height),
+            (ATLAS_WIDTH_PX, ATLAS_HEIGHT_PX),
+            "{} must share the zombie atlas geometry",
+            RTS_FILES[i]
+        );
+        assert_eq!(
+            sheet.rgba.len(),
+            (sheet.width * sheet.height * 4) as usize,
+            "{} rgba length",
+            RTS_FILES[i]
+        );
+    }
+}
+
+/// The tracked UI font loads, hash-verifies, and is the 16x6 grid of 8px
+/// glyphs covering ASCII 32..=127.
+#[test]
+fn ui_font_manifest_matches_generated_png() {
+    let font = load_ui_font(&ui_atlas_dir(&workspace_root())).expect("tracked UI font loads");
+    assert_eq!((font.width, font.height), (128, 48));
+    assert_eq!(font.rgba.len(), (font.width * font.height * 4) as usize);
+}
+
+/// Copy one placeholder family into a temp dir and flip a byte of `file`.
+fn tampered_family(source: &Path, files: &[&str], file: &str) -> tempfile::TempDir {
+    let temp = tempfile::tempdir().expect("tempdir");
+    std::fs::copy(
+        source.join("manifest.json"),
+        temp.path().join("manifest.json"),
+    )
+    .expect("copy manifest");
+    for name in files {
+        std::fs::copy(source.join(name), temp.path().join(name)).expect("copy sheet");
+    }
+    let target = temp.path().join(file);
+    let mut bytes = std::fs::read(&target).expect("read sheet");
+    *bytes.last_mut().expect("png bytes") ^= 1;
+    std::fs::write(&target, bytes).expect("tamper sheet");
+    temp
+}
+
+/// A drifted RTS sheet is refused before it can be decoded or uploaded.
+#[test]
+fn rts_atlas_hash_tamper_is_rejected() {
+    let temp = tampered_family(
+        &rts_atlas_dir(&workspace_root()),
+        &RTS_FILES,
+        "buildings.png",
+    );
+    let err = load_rts_atlases(temp.path()).expect_err("hash drift must fail");
+    assert!(matches!(err, RenderError::Atlas(_)), "{err}");
+    assert!(err.to_string().contains("hash mismatch"), "{err}");
+}
+
+/// The same for the UI font — one family per loader, one gate each.
+#[test]
+fn ui_font_hash_tamper_is_rejected() {
+    let temp = tampered_family(&ui_atlas_dir(&workspace_root()), &["font.png"], "font.png");
+    let err = load_ui_font(temp.path()).expect_err("hash drift must fail");
+    assert!(matches!(err, RenderError::Atlas(_)), "{err}");
+    assert!(err.to_string().contains("hash mismatch"), "{err}");
+}
+
+/// A default scene draws nothing at all — the identity every layer test
+/// builds on with `..Default::default()`.
+#[test]
+fn scene_pass_default_is_empty() {
+    let scene = ScenePass::default();
+    assert!(scene.world.is_empty());
+    assert!(scene.overlay.is_empty());
+    assert!(scene.ui.is_empty());
+}
+
+/// The phase-0 shape carries no UI layer. This is the whole reason the golden
+/// survives: with `ui` empty the pass emits exactly the phase-0 draw sequence.
+#[test]
+fn world_and_rings_leaves_ui_empty() {
+    let groups = SpriteRenderer::static_demo_groups();
+    let rings = [SpriteInstance::ring(
+        [100.0, 100.0],
+        [32.0, 32.0],
+        RING_INNER,
+        RING_OUTER,
+        RING_TINT,
+    )];
+    let scene = ScenePass::world_and_rings(&groups, &rings);
+    assert_eq!(scene.world.len(), ATLAS_COUNT);
+    assert_eq!(scene.overlay.len(), 1);
+    assert!(scene.ui.is_empty());
+}
+
+// ---------------------------------------------------------------------------
 // 4. Golden drift — headless comparator
 // ---------------------------------------------------------------------------
 
@@ -2506,6 +2630,385 @@ fn a_ring_and_a_sprite_share_a_pass() {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 6b. GPU cases — the flat texture table and the three-layer scene pass
+// ---------------------------------------------------------------------------
+
+/// A prop-sheet cell whose *centre* texel is fully opaque, so a UI quad drawn
+/// from it replaces whatever is under it instead of blending with it. Read off
+/// the tracked sheet rather than hardcoded, so a regenerated family moves the
+/// expectation with the asset.
+const PROPS_OPAQUE_DIR: u32 = 1;
+const PROPS_OPAQUE_FRAME: u32 = 0;
+
+/// The texel at `(tx, ty)` inside frame `(dir, frame)` of a 4x8 sheet.
+fn frame_texel(
+    sheet: &mmd_engine::render::AtlasRgba,
+    dir: u32,
+    frame: u32,
+    tx: u32,
+    ty: u32,
+) -> [u8; 4] {
+    sheet.pixel(frame * FRAME_SIZE_PX + tx, dir * FRAME_SIZE_PX + ty)
+}
+
+/// One draw group naming a texture slot and holding a single textured quad.
+fn slot_quad(slot: u32, pos: [f32; 2], size: [f32; 2], dir: u32, frame: u32) -> DrawGroup {
+    DrawGroup {
+        atlas_id: slot,
+        instances: vec![SpriteInstance::new(
+            pos,
+            size,
+            frame_uv_rect(dir, frame),
+            SpriteInstance::WHITE,
+        )],
+    }
+}
+
+/// A slot past the end of the table is a caller bug reported as an error, not
+/// a panic and not an out-of-bounds texture bind. Both grouped layers are
+/// validated, not just the world.
+#[test]
+fn an_out_of_range_slot_is_rejected() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("an_out_of_range_slot_is_rejected") else {
+        return;
+    };
+    let bad = [slot_quad(
+        ATLAS_SLOT_COUNT as u32,
+        [100.0, 100.0],
+        [32.0, 32.0],
+        0,
+        0,
+    )];
+
+    for scene in [
+        ScenePass {
+            world: &bad,
+            ..Default::default()
+        },
+        ScenePass {
+            ui: &bad,
+            ..Default::default()
+        },
+    ] {
+        let err = r
+            .draw_offscreen_scene(scene)
+            .expect_err("a slot past the table must be refused");
+        assert!(matches!(err, RenderError::Atlas(_)), "{err}");
+        assert!(err.to_string().contains("ATLAS_SLOT_COUNT"), "{err}");
+    }
+
+    // Rejected before any GPU work was issued: the renderer still draws.
+    r.draw_offscreen_readback(&SpriteRenderer::static_demo_groups())
+        .expect("the renderer survives a rejected scene");
+}
+
+/// The phase-0 four-group contract is still enforced on the legacy entry
+/// points, even though `ScenePass` itself no longer requires it.
+#[test]
+fn legacy_four_group_contract_still_rejects_a_wrong_count() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("legacy_four_group_contract_still_rejects_a_wrong_count")
+    else {
+        return;
+    };
+    let groups = SpriteRenderer::static_demo_groups();
+    let err = r
+        .draw_offscreen_with_rings(&groups[..3], &[])
+        .expect_err("three groups is not the phase-0 contract");
+    assert!(
+        matches!(
+            err,
+            RenderError::GroupCount {
+                got: 3,
+                expected: ATLAS_COUNT
+            }
+        ),
+        "{err}"
+    );
+}
+
+/// …and the positional `atlas_id == index` half of it.
+#[test]
+fn legacy_four_group_contract_still_rejects_a_shuffled_id() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("legacy_four_group_contract_still_rejects_a_shuffled_id")
+    else {
+        return;
+    };
+    let mut groups = SpriteRenderer::static_demo_groups();
+    groups[0].atlas_id = 1;
+    groups[1].atlas_id = 0;
+    let err = r
+        .draw_offscreen_with_rings(&groups, &[])
+        .expect_err("a shuffled slot order is not the phase-0 contract");
+    assert!(matches!(err, RenderError::Atlas(_)), "{err}");
+}
+
+/// The instance budget is checked before the first byte is packed.
+///
+/// `pack_scratch` is reserved at `MAX_INSTANCES` exactly so a frame never
+/// grows it; a guard that ran *after* the appends would let the overflowing
+/// frame reallocate — and permanently double the buffer — before reporting the
+/// error. Asserting the capacity is unchanged is what makes the ordering
+/// observable rather than a comment.
+#[test]
+fn instance_budget_is_checked_before_packing() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("instance_budget_is_checked_before_packing") else {
+        return;
+    };
+    let capacity_before = r.pack_capacity();
+    let one = SpriteInstance::new(
+        [10.0, 10.0],
+        [8.0, 8.0],
+        frame_uv_rect(0, 0),
+        SpriteInstance::WHITE,
+    );
+    let world = [DrawGroup {
+        atlas_id: 0,
+        instances: vec![one; MAX_INSTANCES as usize + 1],
+    }];
+    let err = r
+        .draw_offscreen_scene(ScenePass {
+            world: &world,
+            ..Default::default()
+        })
+        .expect_err("one instance past the buffer must be refused");
+    assert!(matches!(err, RenderError::Sdl(_)), "{err}");
+    assert!(err.to_string().contains("too many instances"), "{err}");
+    assert_eq!(
+        r.pack_capacity(),
+        capacity_before,
+        "the overflowing frame reallocated the pack buffer, so the budget guard \
+         ran after the packing loop instead of before it"
+    );
+}
+
+/// A draw group naming a phase-1 slot binds *that* sheet.
+///
+/// The assertion is the sheet's own texel, not merely "something drew": a
+/// table that ignored the slot and bound atlas 0 would still leave an opaque
+/// pixel here.
+#[test]
+fn a_phase1_slot_renders() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("a_phase1_slot_renders") else {
+        return;
+    };
+    let worker = frame_texel(
+        r.atlas_pixels(SLOT_RTS_WORKER)
+            .expect("slot 4 has CPU pixels"),
+        0,
+        0,
+        16,
+        16,
+    );
+    let zombie = frame_texel(
+        r.atlas_pixels(0).expect("slot 0 has CPU pixels"),
+        0,
+        0,
+        16,
+        16,
+    );
+    assert_ne!(
+        worker, zombie,
+        "the two sheets must differ at the probe texel or this test proves nothing"
+    );
+
+    let world = [slot_quad(
+        SLOT_RTS_WORKER,
+        [100.0, 100.0],
+        [FRAME_SIZE_PX as f32, FRAME_SIZE_PX as f32],
+        0,
+        0,
+    )];
+    let rb = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            ..Default::default()
+        })
+        .expect("readback");
+
+    let drew = (100..132).any(|y| (100..132).any(|x| rb.pixel(x, y)[3] > 0));
+    assert!(drew, "the phase-1 slot drew nothing at all");
+    assert_eq!(
+        rb.pixel(116, 116),
+        worker,
+        "slot {SLOT_RTS_WORKER} rendered some other sheet's texels"
+    );
+}
+
+/// The UI layer is drawn last — after the world sprites *and* after the
+/// world-space overlay — so it covers both.
+///
+/// The overlay ring is deliberately part of this case rather than a separate
+/// one: with an empty overlay, swapping the order of the overlay and UI blocks
+/// is unobservable, so the ordering claim would be untestable. The two probes
+/// are the quad centre (inside the ring's hollow middle, where only the world
+/// competes) and a pixel on the ring's own band (where all three layers land).
+#[test]
+fn ui_layer_draws_over_the_world() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("ui_layer_draws_over_the_world") else {
+        return;
+    };
+    let panel = frame_texel(
+        r.atlas_pixels(SLOT_RTS_PROPS)
+            .expect("slot 7 has CPU pixels"),
+        PROPS_OPAQUE_DIR,
+        PROPS_OPAQUE_FRAME,
+        16,
+        16,
+    );
+    assert_eq!(panel[3], 255, "the UI probe cell must be fully opaque");
+
+    // The world sprite and the UI panel share one 128px rect centred on
+    // (232, 232); the ring's 64px quad puts its band at radius ~30..32 from
+    // that same centre, well inside the panel's opaque texels.
+    let pos = [168.0f32, 168.0f32];
+    let size = [128.0f32, 128.0f32];
+    let centre = (232u32, 232u32);
+    let on_ring = (232u32, 201u32);
+
+    let world = [slot_quad(0, pos, size, 0, 0)];
+    let overlay = [SpriteInstance::ring(
+        [200.0, 200.0],
+        [64.0, 64.0],
+        RING_INNER,
+        RING_OUTER,
+        RING_TINT,
+    )];
+    let ui = [slot_quad(
+        SLOT_RTS_PROPS,
+        pos,
+        size,
+        PROPS_OPAQUE_DIR,
+        PROPS_OPAQUE_FRAME,
+    )];
+
+    // What the layers underneath put at each probe, so "the UI won" is a
+    // comparison against the things it had to beat.
+    let under = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            overlay: &overlay,
+            ui: &[],
+        })
+        .expect("world + overlay readback");
+    assert_ne!(
+        under.pixel(centre.0, centre.1),
+        panel,
+        "the world sprite already matches the panel colour at the centre probe"
+    );
+    assert_ne!(
+        under.pixel(on_ring.0, on_ring.1),
+        under.pixel(centre.0, centre.1),
+        "the ring must actually light the band probe or the ordering claim is vacuous"
+    );
+
+    let all = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            overlay: &overlay,
+            ui: &ui,
+        })
+        .expect("world + overlay + ui readback");
+    assert_eq!(
+        all.pixel(centre.0, centre.1),
+        panel,
+        "the UI layer did not land on top of the world sprite"
+    );
+    assert_eq!(
+        all.pixel(on_ring.0, on_ring.1),
+        panel,
+        "the overlay ring is still visible through the UI panel, so the UI drew \
+         before the overlay instead of after it"
+    );
+}
+
+/// The UI layer runs on the depth-off pipeline, so a *nearer* world sprite
+/// drawn before it still does not occlude it.
+///
+/// The world quad sits lower down the screen, which under the pass's `GREATER`
+/// depth test is nearer the camera. On the sprite pipeline the UI quad would
+/// lose that comparison and vanish.
+#[test]
+fn ui_layer_is_not_depth_tested() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("ui_layer_is_not_depth_tested") else {
+        return;
+    };
+    let panel = frame_texel(
+        r.atlas_pixels(SLOT_RTS_PROPS)
+            .expect("slot 7 has CPU pixels"),
+        PROPS_OPAQUE_DIR,
+        PROPS_OPAQUE_FRAME,
+        16,
+        16,
+    );
+
+    let ui_pos = [200.0f32, 200.0f32];
+    let world_pos = [200.0f32, 216.0f32];
+    let size = [64.0f32, 64.0f32];
+    let (ds, db) = r.depth_params();
+    assert!(
+        iso_depth(world_pos[1] + size[1], ds, db) > iso_depth(ui_pos[1] + size[1], ds, db),
+        "the world quad must be the nearer of the two or this test proves nothing"
+    );
+
+    let world = [slot_quad(0, world_pos, size, 0, 0)];
+    let ui = [slot_quad(
+        SLOT_RTS_PROPS,
+        ui_pos,
+        size,
+        PROPS_OPAQUE_DIR,
+        PROPS_OPAQUE_FRAME,
+    )];
+    let rb = r
+        .draw_offscreen_readback_scene(ScenePass {
+            world: &world,
+            overlay: &[],
+            ui: &ui,
+        })
+        .expect("readback");
+    assert_eq!(
+        rb.pixel(232, 232),
+        panel,
+        "a nearer world sprite occluded the UI layer, so the UI drew depth-tested"
+    );
+}
+
+/// An empty UI layer reproduces the phase-0 frame byte for byte.
+///
+/// This is the claim the committed golden rests on: the generalised pass, fed
+/// the phase-0 shape, must emit the same binds and draws as the four-group
+/// path it replaced.
+#[test]
+fn empty_ui_layer_reproduces_the_phase0_frame() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("empty_ui_layer_reproduces_the_phase0_frame") else {
+        return;
+    };
+    let groups = SpriteRenderer::static_demo_groups();
+    let legacy = r
+        .draw_offscreen_readback_with_rings(&groups, &[])
+        .expect("legacy readback");
+    let scene = r
+        .draw_offscreen_readback_scene(ScenePass::world_and_rings(&groups, &[]))
+        .expect("scene readback");
+    assert_eq!(
+        (legacy.width, legacy.height),
+        (scene.width, scene.height),
+        "readback dimensions"
+    );
+    assert!(
+        legacy.rgba == scene.rgba,
+        "the scene pass with an empty UI layer does not reproduce the phase-0 frame"
+    );
 }
 
 /// Bounds of the non-transparent texels of atlas frame `(dir 0, frame 0)`,

@@ -539,3 +539,39 @@ three xtask checks including the new three-family `atlases --check`, and the
       png + manifest)` line and exits 0.
 - [ ] `git status --porcelain` after the above — clean (no drift from running
       the check).
+
+## T2 texture-table-and-scene-pass
+
+Second ticket of the phase-1 RTS engine prototype plan. Generalises the
+renderer's four hard-coded atlas groups into a flat 9-slot texture table and
+introduces `ScenePass` (world / overlay / UI). The phase-1 sheets T1 generated
+are now uploaded to the GPU at renderer construction, but nothing in `src/`
+emits a UI layer yet, so a human should again observe **zero visible change**
+in the running scene. Everything automatable is green (`cargo fmt`,
+`MMD_REQUIRE_GPU=1 cargo test --workspace --locked`, the headless
+`VK_DRIVER_FILES=/nonexistent` run, clippy, `nix flake check`, all three xtask
+checks, and the three app smoke runs).
+
+- [ ] `cargo run -- run --agents 5000 --frames 300` — starts, ticks, and exits
+      cleanly, and the frame looks **pixel-for-pixel like it did before this
+      ticket**: same sprites, same hitbox rings when `H` is on, no new panel,
+      text or icon anywhere. The UI layer exists in the renderer but nothing
+      fills it yet.
+- [ ] With the window up, press `H` — hitbox rings still toggle and still draw
+      *over* the sprites they annotate, including sprites standing in front of
+      them. The overlay moved from being the last thing drawn to being the
+      middle layer; it must not have gained an occluder.
+- [ ] Press `F1` (overlay) and `Space` (pause), then `Esc` — all still behave
+      exactly as before; the run prints `run: clean exit ...` and exits 0.
+- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron
+      --frames 300` — exits 0 and the sprite-collision scene renders as before.
+- [ ] `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine --test render_correctness
+      golden_frame_matches` from the workspace root — passes. This is the
+      byte-exact phase-0 frame gate; it must pass **without** anyone setting
+      `MMD_UPDATE_GOLDEN=1`. If it fails, the scene pass changed the frame and
+      the golden is right, not stale.
+- [ ] `git diff --stat main -- lab/goldens/` — empty. No golden byte moved in
+      this slice.
+- [ ] `git status --porcelain` after all of the above — clean (no drift from
+      running the checks; the golden-diff artifacts only appear under
+      `target/` on a genuine failure).
