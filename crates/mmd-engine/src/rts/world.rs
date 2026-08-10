@@ -7,6 +7,10 @@ use crate::render::IsoView;
 use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
+use super::build::{
+    BUILD_REACH_CELLS, Placement, PlacementError, build_ticks, building_cost, footprint_cells,
+    placement_valid, supply_grant,
+};
 use super::economy::{
     DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, Supply,
     WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
@@ -16,8 +20,8 @@ use super::entity::{
     ResourceKind, UnitKind,
 };
 use super::orders::{
-    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, dist2, drop_off_approach_cell, node_cell,
-    rect_distance, step_admissible, unit_speed,
+    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, building_approach_cell, dist2,
+    drop_off_approach_cell, node_cell, rect_distance, step_admissible, unit_speed,
 };
 use super::selection::{Pick, Selection, box_select, pick_at};
 
@@ -58,6 +62,14 @@ pub struct RtsWorld {
     /// [`Self::selection`]. Reserved to [`MAX_ENTITIES`] so no selection
     /// operation allocates.
     pick_scratch: Vec<EntityId>,
+    /// The pending build ghost.
+    placement: Placement,
+    /// Per-slot "is this site attended this tick" scratch, reused every tick.
+    /// Reserved to [`MAX_ENTITIES`] so construction never allocates.
+    build_attend: Vec<bool>,
+    /// Sites that finished this tick, reused every tick. Reserved to
+    /// [`MAX_ENTITIES`] so construction never allocates.
+    finished: Vec<EntityId>,
 }
 
 impl RtsWorld {
@@ -143,6 +155,9 @@ impl RtsWorld {
             live_scratch: Vec::with_capacity(MAX_ENTITIES),
             selection: Selection::new(),
             pick_scratch: Vec::with_capacity(MAX_ENTITIES),
+            placement: Placement::None,
+            build_attend: vec![false; MAX_ENTITIES],
+            finished: Vec::with_capacity(MAX_ENTITIES),
         })
     }
 
@@ -187,6 +202,14 @@ impl RtsWorld {
     /// The navigation pool. Buildings stamp obstacles into it (T10).
     pub fn nav(&self) -> &FieldPool {
         &self.nav
+    }
+
+    /// Direct navigation mutation. A test hook: phase 1 has no gameplay path
+    /// that blocks an arbitrary cell outside the construction system, and the
+    /// approach-cell regression test needs to simulate a stamped HQ.
+    #[cfg(feature = "testkit")]
+    pub fn nav_mut(&mut self) -> &mut FieldPool {
+        &mut self.nav
     }
 
     pub fn selection(&self) -> &Selection {
@@ -368,6 +391,152 @@ impl RtsWorld {
         best.and_then(|(_, slot)| self.entities.id_at(slot))
     }
 
+    /// The pending build ghost.
+    pub fn placement(&self) -> Placement {
+        self.placement
+    }
+
+    /// Choose a building to place. `false` when the player cannot currently
+    /// afford it — the cost check is repeated at [`Self::confirm_placement`],
+    /// because the stock can fall while the ghost is up.
+    pub fn begin_placement(&mut self, kind: BuildingKind) -> bool {
+        if !self.resources.covers(building_cost(kind)) {
+            return false;
+        }
+        self.placement = Placement::Pending { kind };
+        true
+    }
+
+    /// Drop the ghost. Idempotent.
+    pub fn cancel_placement(&mut self) {
+        self.placement = Placement::None;
+    }
+
+    /// Commit the pending ghost at `min`, built by `builder`.
+    ///
+    /// On success: debits the cost, spawns the site with
+    /// `set_progress(0, build_ticks(kind))`, orders `builder` to
+    /// `Order::Build { site, field_slot }`, clears the ghost, and returns the
+    /// site's id. The footprint is **not** stamped into navigation yet — a site
+    /// is walkable until it finishes, which is what lets the builder stand in it.
+    pub fn confirm_placement(
+        &mut self,
+        min: Cell,
+        builder: EntityId,
+    ) -> Result<EntityId, PlacementError> {
+        // No pending ghost is a caller-contract violation (the UI never calls
+        // this without one); there is no dedicated error for it, so this falls
+        // back to `NoBuilder` rather than adding an eighth variant for an
+        // unreachable-in-practice path.
+        let Placement::Pending { kind } = self.placement else {
+            return Err(PlacementError::NoBuilder);
+        };
+
+        let Some(builder_slot) = self.entities.slot(builder) else {
+            return Err(PlacementError::NoBuilder);
+        };
+        let is_worker = matches!(
+            self.entities.kind(builder_slot),
+            EntityKind::Unit(UnitKind::Worker)
+        );
+        if !is_worker || self.entities.owner(builder_slot) != OWNER_PLAYER {
+            return Err(PlacementError::NoBuilder);
+        }
+
+        let cost = building_cost(kind);
+        if !self.resources.covers(cost) {
+            return Err(PlacementError::Unaffordable);
+        }
+
+        placement_valid(self, kind, min)?;
+
+        let edge = kind.footprint_cells();
+        let center = [
+            min.x as f32 + edge as f32 * 0.5,
+            min.y as f32 + edge as f32 * 0.5,
+        ];
+        let Some(site) = self
+            .entities
+            .spawn(EntityKind::Building(kind), OWNER_PLAYER, center)
+        else {
+            return Err(PlacementError::StoreFull);
+        };
+        let site_slot = self.entities.slot(site).expect("just spawned");
+        self.entities.set_progress(site_slot, 0, build_ticks(kind));
+
+        let debited = self.resources.try_debit(cost);
+        debug_assert!(debited, "affordability was just checked above");
+
+        self.order_build(builder, site);
+        self.placement = Placement::None;
+        Ok(site)
+    }
+
+    /// Cancel an unfinished site: refund the full cost, unstamp nothing (a site
+    /// was never stamped), despawn it, and clear every worker whose `Build`
+    /// order named it.
+    ///
+    /// A **finished** building is not cancellable and returns `false`.
+    pub fn cancel_construction(&mut self, site: EntityId) -> bool {
+        let Some(site_slot) = self.entities.slot(site) else {
+            return false;
+        };
+        let EntityKind::Building(kind) = self.entities.kind(site_slot) else {
+            return false;
+        };
+        if self.entities.progress_target(site_slot) == 0 {
+            return false;
+        }
+
+        self.resources.credit(building_cost(kind));
+        self.entities.despawn(site);
+
+        for slot in 0..self.entities.slot_count() {
+            if !self.entities.alive(slot) {
+                continue;
+            }
+            if let Order::Build { site: s, .. } = self.orders.get(slot)
+                && s == site
+            {
+                self.orders.clear(slot);
+            }
+        }
+        true
+    }
+
+    /// Whether a building entity is still under construction.
+    pub fn is_site(&self, id: EntityId) -> bool {
+        let Some(slot) = self.entities.slot(id) else {
+            return false;
+        };
+        matches!(self.entities.kind(slot), EntityKind::Building(_))
+            && self.entities.progress_target(slot) > 0
+    }
+
+    /// Order an existing worker to attend an existing site.
+    pub fn order_build(&mut self, id: EntityId, site: EntityId) -> bool {
+        let Some(slot) = self.worker_slot(id) else {
+            return false;
+        };
+        let Some(site_slot) = self.entities.slot(site) else {
+            return false;
+        };
+        if !matches!(self.entities.kind(site_slot), EntityKind::Building(_)) {
+            return false;
+        }
+        if self.entities.progress_target(site_slot) == 0 {
+            return false;
+        }
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+        let cell = building_approach_cell(&self.entities, self.nav.blocked(), width, height, site);
+        let Ok(field_slot) = self.nav.acquire(cell) else {
+            return false;
+        };
+        self.orders.set(slot, Order::Build { site, field_slot });
+        true
+    }
+
     /// Advance one fixed 1/60 s step.
     ///
     /// Systems are added by later tickets and each one runs at a fixed point in
@@ -375,16 +544,97 @@ impl RtsWorld {
     /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
     /// 6. movement, 7. supply recount.
     ///
-    /// Today the tick counter, the gather system (5) and the movement system
-    /// (6) run, followed by pruning the selection of anything that died this
-    /// tick — last, so a unit that died on this tick is out of the selection
-    /// before anything reads it next tick.
+    /// Today the tick counter, the construction system (3), the gather system
+    /// (5) and the movement system (6) run, followed by pruning the selection
+    /// of anything that died this tick — last, so a unit that died on this
+    /// tick is out of the selection before anything reads it next tick.
     pub fn tick(&mut self) {
         self.tick_index += 1;
         self.entities.collect_live(&mut self.live_scratch);
+        self.construction();
         self.gather();
         self.movement();
         self.selection.retain_live(&self.entities);
+    }
+
+    /// System 3: advance every attended construction site by one tick, finish
+    /// sites that reach their target, and clear the orders of workers whose
+    /// site just finished.
+    ///
+    /// Runs before orders (5) and movement (6), so a site that finishes this
+    /// tick is finished for everything downstream.
+    fn construction(&mut self) {
+        // Pass A: which sites have an attending worker this tick?
+        self.build_attend.fill(false);
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            let Order::Build { site, .. } = self.orders.get(slot) else {
+                continue;
+            };
+            if !matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker)) {
+                continue;
+            }
+            let Some(site_slot) = self.entities.slot(site) else {
+                self.orders.clear(slot);
+                continue;
+            };
+            let EntityKind::Building(b) = self.entities.kind(site_slot) else {
+                self.orders.clear(slot);
+                continue;
+            };
+            if self.entities.progress_target(site_slot) == 0 {
+                self.orders.clear(slot);
+                continue;
+            }
+            if rect_distance(
+                self.entities.position(slot),
+                self.entities.position(site_slot),
+                b.footprint_cells(),
+            ) <= BUILD_REACH_CELLS
+            {
+                self.build_attend[site_slot] = true;
+            }
+        }
+
+        // Pass B: advance every attended site by exactly one tick.
+        self.finished.clear();
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            let EntityKind::Building(b) = self.entities.kind(slot) else {
+                continue;
+            };
+            let target = self.entities.progress_target(slot);
+            if target == 0 {
+                continue;
+            }
+            if !self.build_attend[slot] {
+                continue;
+            }
+            let p = self.entities.progress(slot) + 1;
+            if p < target {
+                self.entities.set_progress(slot, p, target);
+            } else {
+                // Finish.
+                self.entities.set_progress(slot, 0, 0);
+                let center = self.entities.position(slot);
+                for cell in footprint_cells(center, b.footprint_cells()) {
+                    self.nav.set_blocked(cell, true);
+                }
+                self.supply.grant_cap(supply_grant(b));
+                self.finished.push(self.entities.id_at(slot).expect("live"));
+            }
+        }
+
+        // Clear the orders of every worker that was building something now
+        // finished.
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            if let Order::Build { site, .. } = self.orders.get(slot)
+                && self.finished.contains(&site)
+            {
+                self.orders.clear(slot);
+            }
+        }
     }
 
     /// System 5: advance every gathering worker's round trip one step.
@@ -393,6 +643,9 @@ impl RtsWorld {
     /// on this same tick — otherwise the round trip would lag its own state
     /// by one frame.
     fn gather(&mut self) {
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
             let Order::Gather { node, phase } = self.orders.get(slot) else {
@@ -454,7 +707,13 @@ impl RtsWorld {
                         self.entities.set_carry(slot, Some((res, take)));
                         match self.nearest_drop_off(p) {
                             Some(d) => {
-                                let cell = drop_off_approach_cell(&self.entities, d);
+                                let cell = drop_off_approach_cell(
+                                    &self.entities,
+                                    self.nav.blocked(),
+                                    width,
+                                    height,
+                                    d,
+                                );
                                 match self.nav.acquire(cell) {
                                     Ok(fs) => self.orders.set(
                                         slot,
@@ -557,7 +816,45 @@ impl RtsWorld {
                     if self.entities.slot(drop_off).is_none() {
                         continue;
                     }
-                    (drop_off_approach_cell(&self.entities, drop_off), field_slot)
+                    (
+                        drop_off_approach_cell(
+                            &self.entities,
+                            self.nav.blocked(),
+                            width,
+                            height,
+                            drop_off,
+                        ),
+                        field_slot,
+                    )
+                }
+                Order::Build { site, field_slot } => {
+                    let Some(site_slot) = self.entities.slot(site) else {
+                        continue;
+                    };
+                    let EntityKind::Building(b) = self.entities.kind(site_slot) else {
+                        continue;
+                    };
+                    // A worker that has reached the site stops and attends it;
+                    // it does not clear the order, since the construction
+                    // system — not the mover — decides when a `Build` order ends.
+                    if rect_distance(
+                        self.entities.position(slot),
+                        self.entities.position(site_slot),
+                        b.footprint_cells(),
+                    ) <= BUILD_REACH_CELLS
+                    {
+                        continue;
+                    }
+                    (
+                        building_approach_cell(
+                            &self.entities,
+                            self.nav.blocked(),
+                            width,
+                            height,
+                            site,
+                        ),
+                        field_slot,
+                    )
                 }
                 // Idle, and Mining (a mining worker stands still).
                 _ => continue,
@@ -568,16 +865,19 @@ impl RtsWorld {
             // 1. Arrival, against the destination cell centre: a group is sent
             //    to one cell and only one of them can stand on it.
             //
-            //    Arrival clears the order only for `Order::Move`. A gathering
-            //    worker that reaches its destination is handled by the gather
-            //    system's reach tests, not by the mover — otherwise the round
-            //    trip would cancel itself on arrival.
+            //    Only `Order::Move` stops here. A gathering or building worker's
+            //    real completion condition is a *reach* test against a
+            //    footprint rectangle (the gather system's drop-off check, or the
+            //    `BUILD_REACH_CELLS` guard above), not proximity to the approach
+            //    cell's own centre — and since T10 an approach cell sits just
+            //    outside that footprint, `ARRIVAL_RADIUS_CELLS` alone can no
+            //    longer be trusted to fall inside the reach threshold. Freezing
+            //    such an order here, before its own reach test is satisfied,
+            //    would strand the unit short of the building it was sent to.
             let dx = p[0] - (dest.x as f32 + 0.5);
             let dy = p[1] - (dest.y as f32 + 0.5);
-            if dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
-                if is_move_order {
-                    self.orders.clear(slot);
-                }
+            if is_move_order && dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
+                self.orders.clear(slot);
                 continue;
             }
 
@@ -616,8 +916,9 @@ impl RtsWorld {
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
     /// progress_target, amount, carry kind, carry amount), then every live
-    /// slot's order, then the selection, then resources and supply. `f32`
-    /// goes in as raw bits, matching `Simulation::state_hash`.
+    /// slot's order, then the selection, then the pending placement ghost (one
+    /// tag byte plus the kind byte), then resources and supply. `f32` goes in
+    /// as raw bits, matching `Simulation::state_hash`.
     pub fn state_hash(&self) -> [u8; 32] {
         let mut h = Sha256::new();
         h.update(self.tick_index.to_le_bytes());
@@ -629,6 +930,10 @@ impl RtsWorld {
         self.entities.collect_live(&mut live);
         self.orders.hash_into(&mut h, &live);
         self.selection.hash_into(&mut h);
+        match self.placement {
+            Placement::None => h.update([0u8, 0u8]),
+            Placement::Pending { kind } => h.update([1u8, kind as u8]),
+        }
         h.update(self.resources.crystal.to_le_bytes());
         h.update(self.resources.gas.to_le_bytes());
         h.update(self.supply.used().to_le_bytes());

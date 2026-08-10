@@ -396,20 +396,20 @@ node.
 
 ## Impl steps
 
-- [ ] 1. Create `crates/mmd-engine/src/rts/build.rs` with the constants, `PlacementError`, `Placement`, `building_cost`, `build_ticks`, `supply_grant`, `footprint_cells`.
-- [ ] 2. Add `mod build;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`.
-- [ ] 3. Add `Order::Build { site, field_slot }`; extend `Order::tag` and `OrderTable::hash_into`.
-- [ ] 4. Replace `drop_off_approach_cell`'s body with `building_approach_cell` and make the former an alias; update the gather system's two call sites to pass `nav.blocked()`.
-- [ ] 5. Create `crates/mmd-engine/tests/rts_build.rs` and write every test from the table. Watch them fail.
-- [ ] 6. Implement `placement_valid` with the four rules in order.
-- [ ] 7. Add `placement`, `build_attend`, `finished` fields to `RtsWorld`, reserved at `MAX_ENTITIES`.
-- [ ] 8. Implement `begin_placement`, `cancel_placement`, `confirm_placement`, `cancel_construction`, `is_site`, `order_build`.
-- [ ] 9. Implement the construction system as step 3 of `tick()`, body exactly as quoted.
-- [ ] 10. Add the `Order::Build` arm to the mover's destination derivation and the in-reach stop guard.
-- [ ] 11. Extend `RtsWorld::state_hash` with `placement` (one tag byte plus the kind byte).
-- [ ] 12. Add `construction_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`.
-- [ ] 13. Run the mutation list; record kills in the commit body.
-- [ ] 14. Run the full validation block.
+- [x] 1. Create `crates/mmd-engine/src/rts/build.rs` with the constants, `PlacementError`, `Placement`, `building_cost`, `build_ticks`, `supply_grant`, `footprint_cells`. Evidence: file exists, `cargo build -p mmd-engine` green.
+- [x] 2. Add `mod build;` and the re-exports to `crates/mmd-engine/src/rts/mod.rs`. Evidence: `cargo build -p mmd-engine` green with the new items resolvable at `mmd_engine::rts::*`.
+- [x] 3. Add `Order::Build { site, field_slot }`; extend `Order::tag` and `OrderTable::hash_into`. Evidence: `state_hash_sees_construction_progress` passes.
+- [x] 4. Replace `drop_off_approach_cell`'s body with `building_approach_cell` and make the former an alias; update the gather system's two call sites to pass `nav.blocked()`. Evidence: `cargo test -p mmd-engine --test rts_economy` green (30/30), including the delivery-footprint tests.
+- [x] 5. Create `crates/mmd-engine/tests/rts_build.rs` and write every test from the table. Watch them fail. Evidence: red observed before implementation (build/gather/movement APIs did not exist); all 37 green after implementation.
+- [x] 6. Implement `placement_valid` with the four rules in order. Evidence: all 9 `placement_*`/`a_unit_standing_there_does_not_block_placement` tests pass, including mutation kill #7.
+- [x] 7. Add `placement`, `build_attend`, `finished` fields to `RtsWorld`, reserved at `MAX_ENTITIES`. Evidence: `cargo build`; `construction_allocates_nothing` proves zero growth.
+- [x] 8. Implement `begin_placement`, `cancel_placement`, `confirm_placement`, `cancel_construction`, `is_site`, `order_build`. Evidence: `cargo test -p mmd-engine --test rts_build` 37/37 green.
+- [x] 9. Implement the construction system as step 3 of `tick()`, body exactly as quoted. Evidence: `construction_advances_one_tick_per_tick`, `construction_does_not_advance_without_a_worker`, `a_second_worker_does_not_speed_it_up` pass; mutation kills #2, #3.
+- [x] 10. Add the `Order::Build` arm to the mover's destination derivation and the in-reach stop guard. Evidence: `a_builder_walks_to_a_far_site`, `a_depot_finishes_in_its_documented_time` pass.
+- [x] 11. Extend `RtsWorld::state_hash` with `placement` (one tag byte plus the kind byte). Evidence: `construction_is_reproducible` (equal hashes) and `state_hash_sees_construction_progress` (differing hash) both pass.
+- [x] 12. Add `construction_allocates_nothing` to `crates/mmd-engine/tests/frame_allocations.rs`. Evidence: `cargo test -p mmd-engine --test frame_allocations` 15/15 green, including this test.
+- [x] 13. Run the mutation list; record kills in the commit body. Evidence: all 9 mutants injected, confirmed red, reverted, confirmed green (see commit body).
+- [x] 14. Run the full validation block. Evidence: every command below run with real captured output; all passed.
 
 ## Outputs
 
@@ -425,13 +425,13 @@ node.
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test -p mmd-engine --test rts_build` — all green
-- [ ] `cargo test -p mmd-engine --test rts_economy` — all green (the approach-cell change is a regression risk)
-- [ ] `cargo test -p mmd-engine --test frame_allocations` — all green
-- [ ] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -- run --agents 5000 --frames 300` — exit 0, exit-line `hash=` unchanged
-- [ ] app functional — no broken path from this slice
-- [ ] commit msg draft: `feat(rts): place and construct buildings on the grid`
+- [x] `cargo fmt --all -- --check` — clean, no output
+- [x] `cargo test -p mmd-engine --test rts_build` — 37 passed; 0 failed
+- [x] `cargo test -p mmd-engine --test rts_economy` — all green (the approach-cell change is a regression risk) — 30 passed; 0 failed
+- [x] `cargo test -p mmd-engine --test frame_allocations` — all green — 15 passed; 0 failed
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` — all green (no FAILED lines in any suite)
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — clean
+- [x] `nix flake check` — "all checks passed!"
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0, `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` unchanged (matches the value held since T4–T9)
+- [x] app functional — no broken path from this slice — `run` binary launches, draws, and exits cleanly; no panics
+- [x] commit msg draft: `feat(rts): place and construct buildings on the grid`

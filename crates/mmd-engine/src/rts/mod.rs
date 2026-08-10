@@ -1,11 +1,18 @@
 //! Phase-1 real-time-strategy world: entities, economy, orders, buildings.
 
+mod build;
 mod economy;
 mod entity;
 mod orders;
 mod selection;
 mod world;
 
+pub use build::{
+    BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, BUILD_REACH_CELLS,
+    DEPOT_BUILD_TICKS, DEPOT_COST, DEPOT_SUPPLY_GRANT, EXTRA_BUILDERS_SPEED_UP, HQ_BUILD_TICKS,
+    HQ_COST, HQ_SUPPLY_GRANT, Placement, PlacementError, build_ticks, building_cost,
+    footprint_cells, placement_valid, supply_grant,
+};
 pub use economy::{
     DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply,
     WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount, supply_cost,

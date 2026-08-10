@@ -56,8 +56,7 @@ impl GatherPhase {
 
 /// What an entity is currently doing.
 ///
-/// Discriminants are appended, never inserted — later tickets add `Build`
-/// after `Gather`.
+/// Discriminants are appended, never inserted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
     Idle,
@@ -71,6 +70,11 @@ pub enum Order {
         node: EntityId,
         phase: GatherPhase,
     },
+    /// Walk to `site` and attend it until it finishes.
+    Build {
+        site: EntityId,
+        field_slot: u8,
+    },
 }
 
 impl Order {
@@ -80,6 +84,7 @@ impl Order {
             Self::Idle => 0,
             Self::Move { .. } => 1,
             Self::Gather { .. } => 2,
+            Self::Build { .. } => 3,
         }
     }
 }
@@ -157,6 +162,11 @@ impl OrderTable {
                         }
                     }
                 }
+                Order::Build { site, field_slot } => {
+                    h.update(site.index.to_le_bytes());
+                    h.update(site.generation.to_le_bytes());
+                    h.update([field_slot]);
+                }
             }
         }
     }
@@ -179,17 +189,94 @@ pub(crate) fn rect_distance(p: [f32; 2], center: [f32; 2], edge: u32) -> f32 {
     (cx * cx + cy * cy).sqrt()
 }
 
-/// The cell a worker should be routed to when heading for a building.
+/// The cell a unit is routed to when heading for a building.
 ///
-/// The footprint's **centre cell**. The flow field's destination must be
-/// unblocked, and T10 stamps a finished building's footprint as blocked — so
-/// this returns the centre cell *before* T10 lands and T10 changes it to the
-/// nearest free cell adjacent to the footprint. Recorded here so the change is
-/// a deliberate edit, not a surprise.
-pub(crate) fn drop_off_approach_cell(store: &EntityStore, id: EntityId) -> Cell {
-    let slot = store.slot(id).expect("live drop-off");
+/// The footprint's own cells are blocked once the building finishes, so a field
+/// cannot target them. This walks the one-cell, 4-connected ring around the
+/// rectangle (the cells directly north, east, south and west of it — no
+/// diagonal corners, which sit up to `sqrt(2)` cells from the rectangle and
+/// would blow past a 1-cell-scale reach test) in a fixed order — top edge
+/// left→right, right edge top→bottom, bottom edge right→left, left edge
+/// bottom→top — and returns the first unblocked, in-bounds cell. Fixed order,
+/// not "nearest", because two equally near cells would make the choice depend
+/// on float comparison and the state hash would stop being reproducible across
+/// a refactor.
+///
+/// Returns the footprint's centre cell when the ring is entirely blocked, which
+/// then makes `FieldPool::acquire` fail cleanly rather than silently routing
+/// somewhere else.
+pub(crate) fn building_approach_cell(
+    store: &EntityStore,
+    blocked: &[bool],
+    width: u32,
+    height: u32,
+    id: EntityId,
+) -> Cell {
+    let slot = store.slot(id).expect("live building");
     let pos = store.position(slot);
+    let edge = store.kind(slot).footprint_cells() as i64;
+    let min = super::selection::footprint_min(pos, edge as u32);
+    let min_x = min.x as i64;
+    let min_y = min.y as i64;
+    let max_x = min_x + edge;
+    let max_y = min_y + edge;
+
+    // top edge, left -> right
+    for x in min_x..max_x {
+        if let Some(c) = ring_try(x, min_y - 1, width, height, blocked) {
+            return c;
+        }
+    }
+    // right edge, top -> bottom
+    for y in min_y..max_y {
+        if let Some(c) = ring_try(max_x, y, width, height, blocked) {
+            return c;
+        }
+    }
+    // bottom edge, right -> left
+    for x in (min_x..max_x).rev() {
+        if let Some(c) = ring_try(x, max_y, width, height, blocked) {
+            return c;
+        }
+    }
+    // left edge, bottom -> top
+    for y in (min_y..max_y).rev() {
+        if let Some(c) = ring_try(min_x - 1, y, width, height, blocked) {
+            return c;
+        }
+    }
+
     node_cell(pos)
+}
+
+/// One cell of [`building_approach_cell`]'s ring scan: `None` when out of
+/// bounds or blocked, `Some` otherwise.
+fn ring_try(x: i64, y: i64, width: u32, height: u32, blocked: &[bool]) -> Option<Cell> {
+    if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
+        return None;
+    }
+    let idx = (x as u32 + y as u32 * width) as usize;
+    if blocked[idx] {
+        None
+    } else {
+        Some(Cell {
+            x: x as u32,
+            y: y as u32,
+        })
+    }
+}
+
+/// The cell a worker should be routed to when heading for a drop-off building.
+///
+/// A thin, semantically-named alias for [`building_approach_cell`].
+pub(crate) fn drop_off_approach_cell(
+    store: &EntityStore,
+    blocked: &[bool],
+    width: u32,
+    height: u32,
+    id: EntityId,
+) -> Cell {
+    building_approach_cell(store, blocked, width, height, id)
 }
 
 /// The cell a node occupies.
@@ -312,5 +399,68 @@ mod tests {
         let t = OrderTable::new();
         assert_eq!(t.get(0), Order::Idle);
         assert_eq!(t.get(MAX_ENTITIES - 1), Order::Idle);
+    }
+
+    // --- building_approach_cell ------------------------------------------------
+    //
+    // `building_approach_cell` is `pub(crate)`, so these two cases live here as
+    // unit tests rather than in `tests/rts_build.rs` (an external integration
+    // test cannot see a crate-private item) — the same reason
+    // `rts_step_admissible_agrees_with_the_sim` above tests `step_admissible`
+    // in-crate instead of from outside.
+
+    use super::super::entity::{BuildingKind, EntityKind, OWNER_PLAYER};
+
+    const W: u32 = 320;
+    const H: u32 = 320;
+
+    #[test]
+    fn the_approach_cell_rings_a_finished_building() {
+        let mut store = EntityStore::new();
+        let id = store
+            .spawn(
+                EntityKind::Building(BuildingKind::Hq),
+                OWNER_PLAYER,
+                [166.0, 166.0],
+            )
+            .expect("spawn hq");
+        let blocked = vec![false; (W * H) as usize];
+
+        let a = building_approach_cell(&store, &blocked, W, H, id);
+        let b = building_approach_cell(&store, &blocked, W, H, id);
+        assert_eq!(a, b, "the approach cell must be the same on every call");
+
+        // The HQ footprint is [160, 172) x [160, 172); the ring cell must be
+        // outside it and unblocked.
+        assert!(
+            a.x < 160 || a.x >= 172 || a.y < 160 || a.y >= 172,
+            "approach cell {a:?} must lie outside the footprint"
+        );
+        assert!(!blocked[(a.x + a.y * W) as usize]);
+    }
+
+    #[test]
+    fn the_approach_cell_is_deterministic_under_a_blocked_ring() {
+        let mut store = EntityStore::new();
+        // Depot, edge 8, centred at [20.0, 20.0] -> min corner (16, 16).
+        let id = store
+            .spawn(
+                EntityKind::Building(BuildingKind::Depot),
+                OWNER_PLAYER,
+                [20.0, 20.0],
+            )
+            .expect("spawn depot");
+        let mut blocked = vec![false; (W * H) as usize];
+
+        // Block the whole top edge of the ring: y = 15, x in 16..24.
+        for x in 16..24u32 {
+            blocked[(x + 15 * W) as usize] = true;
+        }
+
+        let cell = building_approach_cell(&store, &blocked, W, H, id);
+
+        // The scan must then move to the right edge, top -> bottom, whose
+        // first cell is (24, 16).
+        assert_eq!(cell, Cell { x: 24, y: 16 });
     }
 }

@@ -12,7 +12,7 @@ use mmd_engine::alloc_guard::{
     CountingAllocator, MeasureGuard, alloc_count, is_counting, reset_count,
 };
 use mmd_engine::render::Camera;
-use mmd_engine::rts::{EntityKind, GatherPhase, Order, ResourceKind, UnitKind};
+use mmd_engine::rts::{BuildingKind, EntityKind, GatherPhase, Order, ResourceKind, UnitKind};
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
 use mmd_engine::sim::SpatialGrid;
@@ -548,16 +548,28 @@ fn the_gather_loop_allocates_nothing() {
 
     // Warm-up outside the scope: run one full round trip per worker so every
     // field this test will ever need (to each node, then to the HQ) has
-    // already been built and the scratch heap has already settled.
-    h.step_exact(2_000);
+    // already been built and the scratch heap has already settled. Ticked one
+    // at a time and watched, not a single fixed-count snapshot: T10's
+    // ring-based approach cell shifted the round-trip's cadence, so a lucky
+    // exact tick count is not reliable evidence of a completed cycle any more.
+    let mut saw_returning = false;
+    for _ in 0..2_000 {
+        h.step_exact(1);
+        if workers.iter().any(|id| {
+            matches!(
+                h.world().order_of(*id),
+                Some(Order::Gather {
+                    phase: GatherPhase::Returning { .. },
+                    ..
+                })
+            )
+        }) {
+            saw_returning = true;
+            break;
+        }
+    }
     assert!(
-        workers.iter().any(|id| matches!(
-            h.world().order_of(*id),
-            Some(Order::Gather {
-                phase: GatherPhase::Returning { .. },
-                ..
-            })
-        )),
+        saw_returning,
         "warm-up must have driven at least one worker into a return trip, \
          or this measures a sweep that never exercised the drop-off field"
     );
@@ -602,4 +614,77 @@ fn selection_operations_allocate_nothing() {
     }
     assert_eq!(guard.allocations(), 0, "box select allocated");
     guard.assert_zero();
+}
+
+/// Construction is under the same zero-allocation contract as the rest of the
+/// per-tick path — including the one bounded exception: a finished building's
+/// footprint stamp (`FieldPool::set_blocked`) invalidates every cached field,
+/// and the misses that follow must land in the same reused scratch heap the
+/// pool already warmed, not a fresh allocation.
+#[test]
+fn construction_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+
+    // Three obstacle-, node- and HQ-free Depot footprints, mutually
+    // non-overlapping, each paid from the scene's exact starting 300 crystal.
+    let sites: Vec<_> = [
+        Cell { x: 180, y: 176 },
+        Cell { x: 198, y: 176 },
+        Cell { x: 210, y: 176 },
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(i, min)| {
+        assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+        let builder = workers[i * 2];
+        let site = h
+            .world_mut()
+            .confirm_placement(min, builder)
+            .expect("confirm");
+        assert!(h.world_mut().order_build(workers[i * 2 + 1], site));
+        site
+    })
+    .collect();
+    assert_eq!(h.world().resources().crystal, 0);
+
+    // Warm-up outside the scope: run every builder's walk-in and let
+    // attendance (and the fields that requires) settle before measuring.
+    let mut attending = 0;
+    for _ in 0..600 {
+        h.step_exact(1);
+        attending = sites
+            .iter()
+            .filter(|&&s| {
+                let slot = h.world().entities().slot(s);
+                slot.is_some_and(|slot| h.world().entities().progress(slot) > 0)
+            })
+            .count();
+        if attending == sites.len() {
+            break;
+        }
+    }
+    assert_eq!(
+        attending,
+        sites.len(),
+        "every site must have started attending"
+    );
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(600);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0, "the construction sweep allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and the run really did build something: at least one site finished
+    // (which is what exercises the bounded-miss exception above).
+    assert!(
+        sites.iter().any(|&s| !h.world().is_site(s)),
+        "the measured ticks finished nothing"
+    );
 }

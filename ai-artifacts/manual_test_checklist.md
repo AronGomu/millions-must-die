@@ -900,3 +900,73 @@ existing RTS movement, and selection are untouched — `cargo run -- run
       `GATHER_REACH_CELLS = 2.0`, `DROP_OFF_REACH_CELLS = 1.0`. If a
       round trip ever feels too fast or too slow once it renders, these are
       the knobs.
+
+## T10 building-placement
+
+Buildings exist, cost, take time, block pathing and grant supply. New
+`rts::build` (`Placement`, `PlacementError`, `building_cost`, `build_ticks`,
+`supply_grant`, `footprint_cells`, `placement_valid`, the per-kind cost/time/
+supply constants). `RtsWorld` gains `placement`, `begin_placement`,
+`cancel_placement`, `confirm_placement`, `cancel_construction`, `is_site`,
+`order_build`; `Order` gains `Build { site, field_slot }`; a new construction
+system runs as step 3 of `tick()`, before orders and movement, so a site that
+finishes this tick is finished for everything downstream that same tick. A
+worker standing on a chosen footprint does **not** block placement — only
+terrain, another building (finished or mid-construction), or a resource node
+does. `drop_off_approach_cell` (T9's HQ-delivery routing) was rewritten on top
+of the same new ring-scan the Build order uses: since a finished building's
+footprint is now blocked, a worker can no longer be routed to its centre, only
+to the nearest free cell in the 4-connected ring just outside it. Nothing
+renders a build ghost, a construction site, or a progress bar yet (T12); no HUD
+build menu (T13); no CLI to trigger a placement (T14): reaching this by hand
+means driving `RtsWorld` from a test or a scratch binary. The horde, existing
+RTS movement, selection and the gather loop are untouched in outcome (though
+the gather loop's HQ-approach routing was internally rewritten to share the new
+ring-scan) — `cargo run -- run --agents 5000 --frames 300` still exits on
+`hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+
+- [ ] `cargo test -p mmd-engine --test rts_build` — 37 passed, 0 ignored. Skim
+      for `a_depot_finishes_in_its_documented_time`,
+      `a_finished_depot_blocks_navigation`, `cancel_refunds_the_full_cost` and
+      `a_gatherer_still_delivers_after_the_hq_is_stamped`.
+- [ ] `cargo test -p mmd-engine --test rts_economy` — 30 passed, 0 ignored (no
+      new tests here; this is the "T10's approach-cell rewrite didn't regress
+      T9's delivery" check — the riskiest part of this ticket).
+- [ ] `cargo test -p mmd-engine --test frame_allocations` — 15 passed.
+      `construction_allocates_nothing` is the new one: three simultaneous
+      Depot sites, six attending workers, 600 RTS ticks including at least one
+      site finishing (and therefore one footprint stamp, one flow-field
+      cache invalidation, and the misses that follow), zero heap allocations.
+- [ ] `cargo run -- run --agents 5000 --frames 300` — exits 0 and the exit
+      line still reads
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881`.
+      A different hash means this ticket moved the horde walk or something it
+      depends on, which it must not: read it, do not assume it.
+- [ ] `cargo run -- run --frames 300` and watch the window: the horde scene
+      must look exactly as it did before this ticket. There is no build
+      ghost, construction site, or supply-cap overlay drawn by any path yet,
+      so a visible change here is a defect.
+- [ ] Open `crates/mmd-engine/src/rts/world.rs` and read the `construction`
+      method against `tick()`'s comment listing the reserved system order (1.
+      commands, 2. camera, 3. construction — this is where it sits, 4.
+      production, 5. orders, 6. movement, 7. supply recount). Confirm
+      `construction()` really is called before `gather()` and `movement()`,
+      not after.
+- [ ] Open `crates/mmd-engine/src/rts/orders.rs` and read
+      `building_approach_cell`'s doc comment against its body: the ring scan
+      order (top edge left→right, right edge top→bottom, bottom edge
+      right→left, left edge bottom→top) is 4-connected only — no diagonal
+      corner cells — which is what keeps a routed worker within
+      `DROP_OFF_REACH_CELLS`/`BUILD_REACH_CELLS` of the footprint it was sent
+      to. A version that included the four corner cells would intermittently
+      strand a worker just outside reach; that regression is exactly what
+      `rts_economy`'s delivery tests above exist to catch.
+- [ ] Sanity-check the constants in `crates/mmd-engine/src/rts/build.rs`
+      against feel, not just correctness: Depot costs 100 crystal and takes
+      180 ticks (3 s) attended; Barracks costs 150 crystal + 25 gas and takes
+      300 ticks (5 s); HQ (not player-placeable in phase 1, but costed for
+      completeness) costs 400 crystal and takes 600 ticks (10 s). Only HQ and
+      Depot grant supply (10 each); Barracks grants none. A second worker
+      attending the same site does **not** speed it up
+      (`EXTRA_BUILDERS_SPEED_UP = false`) — that is a deliberate, documented
+      deferral, not an oversight.
