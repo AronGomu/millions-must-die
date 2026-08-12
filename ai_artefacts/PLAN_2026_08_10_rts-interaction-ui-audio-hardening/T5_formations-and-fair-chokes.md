@@ -101,4 +101,4 @@
 - [x] `cargo check --workspace --all-targets --all-features --locked` — criterion: exits 0, no warnings.
 - [x] full merge-gate suite `cargo test --workspace --locked`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` — criterion: all exit 0 (determinism cases `the_economy_is_reproducible` / `the_acceptance_run_is_deterministic` included).
 - [x] manual check: box-select six workers; right-click ground/node/site → visible spread, no merge — criterion: appended as unchecked steps to `ai_artefacts/manual_test_checklist.md` under `## T5 formations-and-fair-chokes`.
-- [ ] commit msg draft: `feat(rts): give group orders deterministic collision-safe slots` — criterion: committed with that subject.
+- [x] commit msg draft: `feat(rts): give group orders deterministic collision-safe slots` — criterion: committed with that subject.
