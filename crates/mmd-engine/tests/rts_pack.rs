@@ -69,8 +69,14 @@ fn frame_new_reserves_the_documented_groups() {
     let ui_slots: Vec<u32> = frame.ui.iter().map(|g| g.atlas_id).collect();
     assert_eq!(
         ui_slots,
-        vec![SLOT_RTS_PROPS, SLOT_UI_FONT],
-        "the UI layer is exactly props then font, in slot order"
+        vec![
+            SLOT_RTS_WORKER,
+            SLOT_RTS_SOLDIER,
+            SLOT_RTS_BUILDINGS,
+            SLOT_RTS_PROPS,
+            SLOT_UI_FONT
+        ],
+        "the UI layer mirrors the world's three atlases, then props, then font"
     );
 
     // Reserved at the ceilings each buffer can reach: a frame must never grow
@@ -79,8 +85,10 @@ fn frame_new_reserves_the_documented_groups() {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
     }
     assert_eq!(frame.overlay.capacity(), MAX_ENTITIES);
-    assert_eq!(frame.ui[0].instances.capacity(), MAX_ENTITIES);
-    assert_eq!(frame.ui[1].instances.capacity(), 4_096);
+    for g in &frame.ui[..4] {
+        assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
+    }
+    assert_eq!(frame.ui[4].instances.capacity(), 4_096);
 
     assert_eq!(frame.instance_count(), 0, "a fresh frame holds nothing");
 }
@@ -98,6 +106,14 @@ fn prop_uv_maps_to_the_published_cells() {
         Prop::GasIcon,
         Prop::SupplyIcon,
         Prop::PanelFill,
+        Prop::GearIcon,
+        Prop::MinimapFrame,
+        Prop::IconBuildHq,
+        Prop::IconBuildDepot,
+        Prop::IconBuildBarracks,
+        Prop::IconTrainWorker,
+        Prop::IconTrainSoldier,
+        Prop::IconSetRally,
     ];
     for (i, p) in all.into_iter().enumerate() {
         let i = i as u32;

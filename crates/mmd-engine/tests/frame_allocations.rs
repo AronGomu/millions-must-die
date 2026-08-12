@@ -476,7 +476,7 @@ fn pack_frame_allocates_nothing() {
 /// installed in *this* test binary — a `MeasureGuard` anywhere else records
 /// nothing and the assertion would pass vacuously.
 #[test]
-fn pack_hud_allocates_nothing() {
+fn new_hud_pack_allocates_nothing() {
     let _lock = lock_alloc_tests();
     reset_count();
 

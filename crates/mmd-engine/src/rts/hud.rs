@@ -1,4 +1,4 @@
-//! On-screen resource and command HUD — T13.
+//! On-screen StarCraft-like control HUD — `T11`.
 //!
 //! Pure layout: reads world state and appends instances to the frame's UI
 //! groups. No input, no device, no world mutation. Every number is formatted
@@ -7,36 +7,94 @@
 //! path.
 //!
 //! The `overlay` layer of a `ScenePass` is only honest for procedural rings;
-//! a HUD is entirely textured, so every push here lands in `frame.ui[0]`
-//! (props: panels and icons) or `frame.ui[1]` (font).
+//! a HUD is entirely textured, so every push here lands in one of
+//! [`RtsFrame::ui`]'s five groups (worker, soldier, building, props, font).
 
-use crate::render::{GLYPH_H_PX, SpriteInstance, push_text};
+use crate::render::{DrawGroup, GLYPH_H_PX, SpriteInstance, frame_uv_rect, push_text};
 
-use super::build::{Placement, building_cost};
-use super::entity::{BuildingKind, EntityKind, ResourceKind, UnitKind};
-use super::pack::{Prop, RtsFrame, prop_uv};
-use super::production::{PRODUCTION_QUEUE_CAP, produce_ticks};
+use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
+use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
 use super::world::RtsWorld;
 
-/// Top resource bar.
-pub const TOP_BAR_RECT: [f32; 4] = [0.0, 0.0, 1920.0, 40.0]; // x, y, w, h
-/// Bottom command panel.
-pub const BOTTOM_PANEL_RECT: [f32; 4] = [0.0, 920.0, 1920.0, 160.0];
-/// Selection block inside the bottom panel.
-pub const SELECTION_RECT: [f32; 4] = [16.0, 936.0, 560.0, 128.0];
-/// Production block inside the bottom panel.
-pub const PRODUCTION_RECT: [f32; 4] = [608.0, 936.0, 640.0, 128.0];
-/// Build-menu block inside the bottom panel.
-pub const BUILD_MENU_RECT: [f32; 4] = [1280.0, 936.0, 624.0, 128.0];
+/// Every fixed logical-space rect the HUD's chrome occupies.
+///
+/// One constant source: a later hit-testing pass (`T12`) reads exactly these
+/// values instead of a second derivation that could drift from the picture.
+pub struct HudLayout;
+
+impl HudLayout {
+    /// Top resource bar.
+    pub const TOP_BAR: [f32; 4] = [0.0, 0.0, 1920.0, 40.0];
+    /// Settings gear, top-right of the top bar.
+    pub const GEAR: [f32; 4] = [1872.0, 8.0, 32.0, 32.0];
+    /// Bottom command panel, the whole strip.
+    pub const BOTTOM_PANEL: [f32; 4] = [0.0, 840.0, 1920.0, 240.0];
+    /// Minimap frame, left of the bottom panel.
+    pub const MINIMAP_PANEL: [f32; 4] = [16.0, 856.0, 384.0, 208.0];
+    /// The minimap's own map area, inset inside [`Self::MINIMAP_PANEL`].
+    pub const MINIMAP_MAP: [f32; 4] = [32.0, 872.0, 352.0, 176.0];
+    /// Selection card, centre of the bottom panel.
+    pub const SELECTION_PANEL: [f32; 4] = [424.0, 856.0, 880.0, 208.0];
+    /// Command card, right of the bottom panel.
+    pub const COMMAND_PANEL: [f32; 4] = [1328.0, 856.0, 576.0, 208.0];
+    /// The 3x3 command grid, inset to the right of [`Self::COMMAND_PANEL`].
+    pub const COMMAND_GRID: [f32; 4] = [1696.0, 856.0, 208.0, 208.0];
+}
+
+/// Flat aliases of [`HudLayout`]'s rects, for call sites that only need one.
+pub const TOP_BAR_RECT: [f32; 4] = HudLayout::TOP_BAR;
+pub const GEAR_RECT: [f32; 4] = HudLayout::GEAR;
+pub const BOTTOM_PANEL_RECT: [f32; 4] = HudLayout::BOTTOM_PANEL;
+pub const MINIMAP_PANEL_RECT: [f32; 4] = HudLayout::MINIMAP_PANEL;
+pub const MINIMAP_MAP_RECT: [f32; 4] = HudLayout::MINIMAP_MAP;
+pub const SELECTION_PANEL_RECT: [f32; 4] = HudLayout::SELECTION_PANEL;
+pub const COMMAND_PANEL_RECT: [f32; 4] = HudLayout::COMMAND_PANEL;
+pub const COMMAND_GRID_RECT: [f32; 4] = HudLayout::COMMAND_GRID;
 
 /// Icon edge in the top bar.
 pub const ICON_PX: f32 = 32.0;
-/// Text scale in the top bar (24 px glyphs).
+/// Text scale in the top bar (8 px glyphs).
 pub const TOP_TEXT_SCALE: f32 = 3.0;
-/// Text scale in the bottom panel (16 px glyphs).
+/// Text scale in the bottom panel (8 px glyphs).
 pub const PANEL_TEXT_SCALE: f32 = 2.0;
 /// Line height in the bottom panel.
 pub const PANEL_LINE_PX: f32 = 22.0;
+
+/// Single-selection portrait edge, in pixels.
+pub const PORTRAIT_PX: f32 = 128.0;
+/// Portrait's top-left, inside [`HudLayout::SELECTION_PANEL`].
+pub const PORTRAIT_POS: [f32; 2] = [440.0, 872.0];
+/// Detail text's left edge, right of the portrait.
+pub const DETAIL_TEXT_X: f32 = PORTRAIT_POS[0] + PORTRAIT_PX + 16.0;
+/// Detail text's top edge, level with the portrait.
+pub const DETAIL_TEXT_Y: f32 = PORTRAIT_POS[1];
+/// The direction row and animation frame the portrait is cropped from — a
+/// fixed, camera-facing pose, matching `sim::tick::dir_from_vector`'s South.
+const PORTRAIT_DIR: u32 = 6;
+const PORTRAIT_FRAME: u32 = 0;
+
+/// Multi-selection icon grid: columns, rows, edge and gap.
+pub const MULTI_ICON_COLS: usize = 8;
+pub const MULTI_ICON_ROWS: usize = 3;
+pub const MULTI_ICON_CAP: usize = MULTI_ICON_COLS * MULTI_ICON_ROWS;
+pub const MULTI_ICON_PX: f32 = 48.0;
+pub const MULTI_ICON_GAP_PX: f32 = 8.0;
+/// Multi-selection icon grid's top-left, inside [`HudLayout::SELECTION_PANEL`].
+pub const MULTI_ICON_ORIGIN: [f32; 2] = [440.0, 872.0];
+/// Where the "+N" overflow marker is drawn, right of the icon grid.
+const OVERFLOW_TEXT_POS: [f32; 2] = [
+    MULTI_ICON_ORIGIN[0]
+        + MULTI_ICON_COLS as f32 * MULTI_ICON_PX
+        + (MULTI_ICON_COLS as f32 - 1.0) * MULTI_ICON_GAP_PX
+        + 16.0,
+    MULTI_ICON_ORIGIN[1],
+];
+
+/// Command grid: 3x3 icons, edge and gap sized to exactly fill
+/// [`HudLayout::COMMAND_GRID`] (`3 * 64 + 2 * 8 == 208`).
+pub const COMMAND_GRID_COLS: usize = 3;
+pub const COMMAND_ICON_PX: f32 = 64.0;
+pub const COMMAND_ICON_GAP_PX: f32 = 8.0;
 
 /// Panel tint, premultiplied. The sheet cell already carries the alpha; this
 /// keeps the tint neutral so the panel colour lives in exactly one place.
@@ -48,11 +106,13 @@ pub const TEXT_TINT_BLOCKED: [f32; 4] = [0.75, 0.28, 0.24, 1.0];
 /// Text for a hotkey letter.
 pub const TEXT_TINT_HOTKEY: [f32; 4] = [0.95, 0.80, 0.25, 1.0];
 
-/// The build menu's three rows, in display order, with their hotkey letters.
+/// The build hotkeys, in display order, with their letters.
 ///
 /// The letters are the HUD's copy of the binding, and `T14` asserts they match
-/// the app's keyboard table — a menu that says `Q` while the key is `B` is worse
-/// than no menu.
+/// the app's keyboard table — a menu that says `Q` while the key is `B` is
+/// worse than no menu. This slice's command grid does not draw these letters
+/// (that lands with the interactive menu, `T13`); the table stays the single
+/// source both sides read.
 pub const BUILD_MENU: [(u8, BuildingKind); 3] = [
     (b'Q', BuildingKind::Hq),
     (b'W', BuildingKind::Depot),
@@ -64,8 +124,8 @@ pub const NUM_BUF: usize = 12;
 
 /// Format `v` into `buf` and return the written slice as a `&str`.
 ///
-/// No allocation: the HUD runs every frame and a `String` per number would put
-/// four heap allocations inside the frame path.
+/// No allocation: the HUD runs every frame and a `String` per number would
+/// put a heap allocation inside the frame path.
 pub fn fmt_u32(buf: &mut [u8; NUM_BUF], v: u32) -> &str {
     let mut i = NUM_BUF;
     let mut n = v;
@@ -110,7 +170,7 @@ pub fn fmt_ratio(buf: &mut [u8; NUM_BUF], a: u32, b: u32) -> &str {
     std::str::from_utf8(&buf[i..]).expect("ascii digits")
 }
 
-/// A one-word name for an entity kind, for the selection panel.
+/// A one-word name for an entity kind, for the selection card.
 pub fn kind_label(kind: EntityKind) -> &'static str {
     match kind {
         EntityKind::Unit(UnitKind::Worker) => "WORKER",
@@ -123,6 +183,115 @@ pub fn kind_label(kind: EntityKind) -> &'static str {
     }
 }
 
+/// One command a context card can offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandId {
+    BuildHq,
+    BuildDepot,
+    BuildBarracks,
+    TrainWorker,
+    TrainSoldier,
+    SetRally,
+}
+
+/// One cell of the 3x3 command grid.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandSlot {
+    pub command: Option<CommandId>,
+    pub enabled: bool,
+}
+
+const EMPTY_SLOT: CommandSlot = CommandSlot {
+    command: None,
+    enabled: false,
+};
+
+/// The command icon for one [`CommandId`].
+fn command_icon(cmd: CommandId) -> Prop {
+    match cmd {
+        CommandId::BuildHq => Prop::IconBuildHq,
+        CommandId::BuildDepot => Prop::IconBuildDepot,
+        CommandId::BuildBarracks => Prop::IconBuildBarracks,
+        CommandId::TrainWorker => Prop::IconTrainWorker,
+        CommandId::TrainSoldier => Prop::IconTrainSoldier,
+        CommandId::SetRally => Prop::IconSetRally,
+    }
+}
+
+/// The 9 stable, row-major command-grid slots for the current selection.
+///
+/// Exact context, matching the ticket:
+/// - any selected worker, no selected non-worker unit/building: build
+///   commands at slots 0/1/2 (HQ, Depot, Barracks).
+/// - exactly one selected, finished HQ: Worker at slot 0, Rally at slot 8.
+/// - exactly one selected, finished Barracks: Soldier at slot 0, Rally at
+///   slot 8.
+/// - anything else (mixed kinds, empty, multiple buildings, an unfinished
+///   site): every slot disabled.
+///
+/// Allocation-free: called from the per-frame packing path.
+pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
+    let store = world.entities();
+
+    let mut worker_count = 0u32;
+    let mut building_count = 0u32;
+    let mut disqualified = false;
+    let mut finished_building: Option<BuildingKind> = None;
+
+    for &id in world.selection().ids() {
+        let Some(slot) = store.slot(id) else {
+            continue; // stale — not counted either way
+        };
+        match store.kind(slot) {
+            EntityKind::Unit(UnitKind::Worker) => worker_count += 1,
+            EntityKind::Building(kind) => {
+                building_count += 1;
+                if store.progress_target(slot) == 0 {
+                    finished_building = Some(kind);
+                } else {
+                    disqualified = true;
+                }
+            }
+            _ => disqualified = true,
+        }
+    }
+
+    let mut out = [EMPTY_SLOT; 9];
+
+    if worker_count > 0 && building_count == 0 && !disqualified {
+        out[0] = CommandSlot {
+            command: Some(CommandId::BuildHq),
+            enabled: true,
+        };
+        out[1] = CommandSlot {
+            command: Some(CommandId::BuildDepot),
+            enabled: true,
+        };
+        out[2] = CommandSlot {
+            command: Some(CommandId::BuildBarracks),
+            enabled: true,
+        };
+    } else if worker_count == 0 && building_count == 1 && !disqualified {
+        let produce = match finished_building {
+            Some(BuildingKind::Hq) => Some(CommandId::TrainWorker),
+            Some(BuildingKind::Barracks) => Some(CommandId::TrainSoldier),
+            _ => None,
+        };
+        if let Some(cmd) = produce {
+            out[0] = CommandSlot {
+                command: Some(cmd),
+                enabled: true,
+            };
+            out[8] = CommandSlot {
+                command: Some(CommandId::SetRally),
+                enabled: true,
+            };
+        }
+    }
+
+    out
+}
+
 /// One stretched `Prop::PanelFill` quad.
 fn push_panel(out: &mut Vec<SpriteInstance>, rect: [f32; 4], tint: [f32; 4]) {
     out.push(SpriteInstance::new(
@@ -133,35 +302,37 @@ fn push_panel(out: &mut Vec<SpriteInstance>, rect: [f32; 4], tint: [f32; 4]) {
     ));
 }
 
-/// One `ICON_PX` icon at `pos`, white — the sheet already carries the colour.
-fn push_icon(out: &mut Vec<SpriteInstance>, pos: [f32; 2], prop: Prop) {
+/// One square icon of `prop` at `pos`, edge `edge_px`, white — the sheet
+/// already carries the colour.
+fn push_icon(out: &mut Vec<SpriteInstance>, pos: [f32; 2], edge_px: f32, prop: Prop) {
     out.push(SpriteInstance::new(
         pos,
-        [ICON_PX, ICON_PX],
+        [edge_px, edge_px],
         prop_uv(prop),
         SpriteInstance::WHITE,
     ));
 }
 
-/// Section A: the top resource bar.
+/// Section: the top resource bar plus the settings gear.
 fn push_top_bar(world: &RtsWorld, props: &mut Vec<SpriteInstance>, font: &mut Vec<SpriteInstance>) {
-    push_panel(props, TOP_BAR_RECT, PANEL_TINT);
+    push_panel(props, HudLayout::TOP_BAR, PANEL_TINT);
 
     let resources = world.resources();
     let supply = world.supply();
     let mut buf = [0u8; NUM_BUF];
     let icon_y = 4.0;
-    let text_y = TOP_BAR_RECT[1] + (TOP_BAR_RECT[3] - GLYPH_H_PX * TOP_TEXT_SCALE) * 0.5;
+    let text_y =
+        HudLayout::TOP_BAR[1] + (HudLayout::TOP_BAR[3] - GLYPH_H_PX * TOP_TEXT_SCALE) * 0.5;
 
-    push_icon(props, [16.0, icon_y], Prop::CrystalIcon);
+    push_icon(props, [16.0, icon_y], ICON_PX, Prop::CrystalIcon);
     let s = fmt_u32(&mut buf, resources.crystal);
     push_text(font, s, [56.0, text_y], TOP_TEXT_SCALE, TEXT_TINT);
 
-    push_icon(props, [280.0, icon_y], Prop::GasIcon);
+    push_icon(props, [280.0, icon_y], ICON_PX, Prop::GasIcon);
     let s = fmt_u32(&mut buf, resources.gas);
     push_text(font, s, [320.0, text_y], TOP_TEXT_SCALE, TEXT_TINT);
 
-    push_icon(props, [544.0, icon_y], Prop::SupplyIcon);
+    push_icon(props, [544.0, icon_y], ICON_PX, Prop::SupplyIcon);
     let supply_tint = if supply.free() == 0 {
         TEXT_TINT_BLOCKED
     } else {
@@ -169,36 +340,88 @@ fn push_top_bar(world: &RtsWorld, props: &mut Vec<SpriteInstance>, font: &mut Ve
     };
     let s = fmt_ratio(&mut buf, supply.used(), supply.cap());
     push_text(font, s, [584.0, text_y], TOP_TEXT_SCALE, supply_tint);
+
+    push_icon(
+        props,
+        [HudLayout::GEAR[0], HudLayout::GEAR[1]],
+        HudLayout::GEAR[2],
+        Prop::GearIcon,
+    );
 }
 
-/// Section C: the selection block, all five primary-kind branches.
-fn push_selection_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
-    let sel = world.selection();
+/// Section: the minimap frame and its (currently static) map area.
+///
+/// Projection and clicking are out of scope for this slice (`T12`/`T13`);
+/// this only paints the two nested rects the design reserves.
+fn push_minimap(props: &mut Vec<SpriteInstance>) {
+    push_panel(props, HudLayout::MINIMAP_PANEL, PANEL_TINT);
+    props.push(SpriteInstance::new(
+        [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]],
+        [HudLayout::MINIMAP_MAP[2], HudLayout::MINIMAP_MAP[3]],
+        prop_uv(Prop::MinimapFrame),
+        PANEL_TINT,
+    ));
+}
+
+/// Which UI draw group a portrait/icon for `kind` belongs in.
+#[derive(Clone, Copy)]
+enum PortraitTarget {
+    Worker,
+    Soldier,
+    Building,
+}
+
+/// The draw group and UV rect a portrait/icon for the entity at `slot` reads
+/// from — one of the worker/soldier/building sheets, never a duplicate image.
+fn portrait_source(store: &EntityStore, slot: usize) -> (PortraitTarget, [f32; 4]) {
+    match store.kind(slot) {
+        EntityKind::Unit(UnitKind::Worker) => (
+            PortraitTarget::Worker,
+            frame_uv_rect(PORTRAIT_DIR, PORTRAIT_FRAME),
+        ),
+        EntityKind::Unit(UnitKind::Soldier) => (
+            PortraitTarget::Soldier,
+            frame_uv_rect(PORTRAIT_DIR, PORTRAIT_FRAME),
+        ),
+        EntityKind::Building(kind) => (
+            PortraitTarget::Building,
+            building_uv(kind, store.progress_target(slot) > 0),
+        ),
+        EntityKind::Node(kind) => (
+            PortraitTarget::Building,
+            node_uv(kind, store.amount(slot) == 0),
+        ),
+    }
+}
+
+fn push_to_target(
+    target: PortraitTarget,
+    worker: &mut DrawGroup,
+    soldier: &mut DrawGroup,
+    building: &mut DrawGroup,
+    inst: SpriteInstance,
+) {
+    match target {
+        PortraitTarget::Worker => worker.instances.push(inst),
+        PortraitTarget::Soldier => soldier.instances.push(inst),
+        PortraitTarget::Building => building.instances.push(inst),
+    }
+}
+
+/// The selection card's detail text, right of the portrait: kind, then a
+/// state line (carry/idle/progress/ready/remaining), then rally if any.
+fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance>) {
+    let store = world.entities();
     let mut buf = [0u8; NUM_BUF];
-    let x = SELECTION_RECT[0];
-    let mut y = SELECTION_RECT[1];
+    let x = DETAIL_TEXT_X;
+    let mut y = DETAIL_TEXT_Y;
 
-    let mut cx = x;
-    cx += push_text(font, "SELECTED ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-    let s = fmt_u32(&mut buf, sel.len() as u32);
-    push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-
-    let Some(primary_id) = sel.primary() else {
-        return;
-    };
-    let Some(slot) = world.entities().slot(primary_id) else {
-        // A stale primary (despawned since selection) — report the count
-        // above and stop rather than reading dead columns.
-        return;
-    };
-
-    y += PANEL_LINE_PX;
-    let kind = world.entities().kind(slot);
+    let kind = store.kind(slot);
     push_text(font, kind_label(kind), [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
-
     y += PANEL_LINE_PX;
+
     match kind {
-        EntityKind::Unit(UnitKind::Worker) => match world.entities().carry(slot) {
+        EntityKind::Unit(UnitKind::Worker) => match store.carry(slot) {
             Some((res_kind, amount)) => {
                 let mut cx = x;
                 cx += push_text(font, "CARRYING ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
@@ -227,7 +450,7 @@ fn push_selection_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
             push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
         }
         EntityKind::Building(_) => {
-            let target = world.entities().progress_target(slot);
+            let target = store.progress_target(slot);
             // Not a manual `checked_div`: `target == 0` is the site-vs-finished
             // business branch (READY has no percentage at all), not a guard
             // against dividing by zero.
@@ -235,7 +458,7 @@ fn push_selection_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
             if target == 0 {
                 push_text(font, "READY", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
             } else {
-                let progress = world.entities().progress(slot);
+                let progress = store.progress(slot);
                 let pct = progress * 100 / target;
                 let mut cx = x;
                 cx += push_text(font, "BUILDING ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
@@ -244,7 +467,9 @@ fn push_selection_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
                 push_text(font, "%", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
             }
 
-            if let Some(cell) = world.rally(primary_id) {
+            if let Some(id) = store.id_at(slot)
+                && let Some(cell) = world.rally(id)
+            {
                 y += PANEL_LINE_PX;
                 let mut cx = x;
                 cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
@@ -256,7 +481,7 @@ fn push_selection_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
             }
         }
         EntityKind::Node(_) => {
-            let amount = world.entities().amount(slot);
+            let amount = store.amount(slot);
             let mut cx = x;
             cx += push_text(font, "REMAINING ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
             let s = fmt_u32(&mut buf, amount);
@@ -265,137 +490,162 @@ fn push_selection_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
     }
 }
 
-/// Section D: the production block, only for a finished building with a
-/// non-empty queue.
-fn push_production_block(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
-    let Some(primary_id) = world.selection().primary() else {
-        return;
-    };
-    let Some(slot) = world.entities().slot(primary_id) else {
-        return;
-    };
-    if !matches!(world.entities().kind(slot), EntityKind::Building(_)) {
-        return;
-    }
-    if world.entities().progress_target(slot) > 0 {
-        return; // still under construction
-    }
-    let Some(queue) = world.production_queue(primary_id) else {
-        return;
-    };
-    let Some(head) = queue.head() else {
-        return; // empty queue
+/// Single selection: a 128x128 portrait plus the full detail text.
+fn push_single_selection(
+    world: &RtsWorld,
+    id: EntityId,
+    worker: &mut DrawGroup,
+    soldier: &mut DrawGroup,
+    building: &mut DrawGroup,
+    font: &mut Vec<SpriteInstance>,
+) {
+    let store = world.entities();
+    let Some(slot) = store.slot(id) else {
+        return; // a stale primary draws nothing rather than a dead column
     };
 
-    let mut buf = [0u8; NUM_BUF];
-    let x = PRODUCTION_RECT[0];
-    let mut y = PRODUCTION_RECT[1];
-
-    let mut cx = x;
-    cx += push_text(font, "PRODUCING ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-    push_text(
-        font,
-        kind_label(EntityKind::Unit(head)),
-        [cx, y],
-        PANEL_TEXT_SCALE,
-        TEXT_TINT,
+    let (target, uv) = portrait_source(store, slot);
+    push_to_target(
+        target,
+        worker,
+        soldier,
+        building,
+        SpriteInstance::new(
+            PORTRAIT_POS,
+            [PORTRAIT_PX, PORTRAIT_PX],
+            uv,
+            SpriteInstance::WHITE,
+        ),
     );
 
-    y += PANEL_LINE_PX;
-    let pct = queue.progress() * 100 / produce_ticks(head);
-    let mut cx = x;
-    let s = fmt_u32(&mut buf, pct);
-    cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-    push_text(font, "%", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-
-    y += PANEL_LINE_PX;
-    let mut cx = x;
-    cx += push_text(font, "QUEUE ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-    let s = fmt_ratio(&mut buf, queue.len() as u32, PRODUCTION_QUEUE_CAP as u32);
-    push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+    push_detail_text(world, slot, font);
 }
 
-/// Section E: the build menu, always, one row per [`BUILD_MENU`] entry.
-fn push_build_menu(world: &RtsWorld, font: &mut Vec<SpriteInstance>) {
-    let pending_kind = match world.placement() {
-        Placement::Pending { kind } => Some(kind),
-        Placement::None => None,
-    };
-    let resources = world.resources();
-    let mut buf = [0u8; NUM_BUF];
-
-    for (i, (letter, kind)) in BUILD_MENU.into_iter().enumerate() {
-        let y = BUILD_MENU_RECT[1] + i as f32 * PANEL_LINE_PX;
-        let cost = building_cost(kind);
-        let affordable = resources.covers(cost);
-        let tint = if affordable {
-            TEXT_TINT
-        } else {
-            TEXT_TINT_BLOCKED
-        };
-        let prefix = if pending_kind == Some(kind) { ">" } else { " " };
-
-        let mut cx = BUILD_MENU_RECT[0];
-        cx += push_text(font, prefix, [cx, y], PANEL_TEXT_SCALE, tint);
-        cx += push_text(font, "[", [cx, y], PANEL_TEXT_SCALE, tint);
-        let letter_buf = [letter];
-        let letter_str = std::str::from_utf8(&letter_buf).expect("ascii hotkey letter");
-        cx += push_text(
-            font,
-            letter_str,
-            [cx, y],
-            PANEL_TEXT_SCALE,
-            TEXT_TINT_HOTKEY,
-        );
-        cx += push_text(font, "] ", [cx, y], PANEL_TEXT_SCALE, tint);
-        cx += push_text(
-            font,
-            kind_label(EntityKind::Building(kind)),
-            [cx, y],
-            PANEL_TEXT_SCALE,
-            tint,
-        );
-        cx += push_text(font, " ", [cx, y], PANEL_TEXT_SCALE, tint);
-        let s = fmt_u32(&mut buf, cost.crystal);
-        cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, tint);
-        cx += push_text(font, "C", [cx, y], PANEL_TEXT_SCALE, tint);
-        if cost.gas != 0 {
-            cx += push_text(font, " ", [cx, y], PANEL_TEXT_SCALE, tint);
-            let s = fmt_u32(&mut buf, cost.gas);
-            cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, tint);
-            push_text(font, "G", [cx, y], PANEL_TEXT_SCALE, tint);
+/// Multi selection: the first 24 sorted ids as 8x3 icons; stale ids are
+/// skipped; a selection over 24 draws a "+N" marker for the remainder.
+///
+/// `ids` is already ascending by slot ([`super::selection::Selection::ids`]).
+fn push_multi_selection(
+    world: &RtsWorld,
+    ids: &[EntityId],
+    worker: &mut DrawGroup,
+    soldier: &mut DrawGroup,
+    building: &mut DrawGroup,
+    font: &mut Vec<SpriteInstance>,
+) {
+    let store = world.entities();
+    let mut drawn = 0usize;
+    for &id in ids {
+        if drawn >= MULTI_ICON_CAP {
+            break;
         }
+        let Some(slot) = store.slot(id) else {
+            continue; // skip stale
+        };
+        let row = drawn / MULTI_ICON_COLS;
+        let col = drawn % MULTI_ICON_COLS;
+        let pos = [
+            MULTI_ICON_ORIGIN[0] + col as f32 * (MULTI_ICON_PX + MULTI_ICON_GAP_PX),
+            MULTI_ICON_ORIGIN[1] + row as f32 * (MULTI_ICON_PX + MULTI_ICON_GAP_PX),
+        ];
+        let (target, uv) = portrait_source(store, slot);
+        push_to_target(
+            target,
+            worker,
+            soldier,
+            building,
+            SpriteInstance::new(
+                pos,
+                [MULTI_ICON_PX, MULTI_ICON_PX],
+                uv,
+                SpriteInstance::WHITE,
+            ),
+        );
+        drawn += 1;
+    }
+
+    if ids.len() > MULTI_ICON_CAP {
+        let mut buf = [0u8; NUM_BUF];
+        let mut cx = OVERFLOW_TEXT_POS[0];
+        cx += push_text(
+            font,
+            "+",
+            [cx, OVERFLOW_TEXT_POS[1]],
+            PANEL_TEXT_SCALE,
+            TEXT_TINT,
+        );
+        let s = fmt_u32(&mut buf, (ids.len() - MULTI_ICON_CAP) as u32);
+        push_text(
+            font,
+            s,
+            [cx, OVERFLOW_TEXT_POS[1]],
+            PANEL_TEXT_SCALE,
+            TEXT_TINT,
+        );
+    }
+}
+
+/// Section: the selection card — background, then portrait/icons + text.
+#[allow(clippy::too_many_arguments)]
+fn push_selection_card(
+    world: &RtsWorld,
+    props: &mut Vec<SpriteInstance>,
+    worker: &mut DrawGroup,
+    soldier: &mut DrawGroup,
+    building: &mut DrawGroup,
+    font: &mut Vec<SpriteInstance>,
+) {
+    push_panel(props, HudLayout::SELECTION_PANEL, PANEL_TINT);
+
+    let sel = world.selection();
+    if sel.is_empty() {
+        return;
+    }
+    if sel.len() == 1 {
+        push_single_selection(world, sel.ids()[0], worker, soldier, building, font);
+    } else {
+        push_multi_selection(world, sel.ids(), worker, soldier, building, font);
+    }
+}
+
+/// Section: the command card — background, then the 3x3 grid.
+fn push_command_card(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
+    push_panel(props, HudLayout::COMMAND_PANEL, PANEL_TINT);
+
+    for (i, cmd_slot) in command_slots(world).into_iter().enumerate() {
+        let Some(cmd) = cmd_slot.command else {
+            continue;
+        };
+        let row = i / COMMAND_GRID_COLS;
+        let col = i % COMMAND_GRID_COLS;
+        let pos = [
+            HudLayout::COMMAND_GRID[0] + col as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
+            HudLayout::COMMAND_GRID[1] + row as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
+        ];
+        push_icon(props, pos, COMMAND_ICON_PX, command_icon(cmd));
     }
 }
 
 /// Append the whole HUD to `frame`.
 ///
-/// Appends to `frame.ui[0]` (props: panels and icons) and `frame.ui[1]` (font).
-/// Call **after** [`super::pack_frame`], which owns the world-space half of the
-/// UI layer. Allocation-free.
+/// Appends to every group of [`RtsFrame::ui`]; never touches `world` or
+/// `overlay`. Call **after** [`super::pack_frame`], which owns the
+/// world-space half of the UI layer. Allocation-free.
 pub fn pack_hud(world: &RtsWorld, frame: &mut RtsFrame) {
-    // A. Top bar.
-    {
-        // Split the borrow once: props and font never need to be mutably
-        // borrowed at the same instant, but the two indices into `frame.ui`
-        // are taken together to keep every section's call sites uniform.
-        let (props_slice, font_slice) = frame.ui.split_at_mut(1);
-        push_top_bar(
-            world,
-            &mut props_slice[0].instances,
-            &mut font_slice[0].instances,
-        );
-    }
+    let [worker, soldier, building, props, font] = frame.ui.as_mut_slice() else {
+        unreachable!("RtsFrame::new always reserves exactly 5 UI groups")
+    };
 
-    // B. Bottom panel.
-    push_panel(&mut frame.ui[0].instances, BOTTOM_PANEL_RECT, PANEL_TINT);
-
-    // C. Selection block.
-    push_selection_block(world, &mut frame.ui[1].instances);
-
-    // D. Production block.
-    push_production_block(world, &mut frame.ui[1].instances);
-
-    // E. Build menu.
-    push_build_menu(world, &mut frame.ui[1].instances);
+    push_top_bar(world, &mut props.instances, &mut font.instances);
+    push_panel(&mut props.instances, HudLayout::BOTTOM_PANEL, PANEL_TINT);
+    push_minimap(&mut props.instances);
+    push_selection_card(
+        world,
+        &mut props.instances,
+        worker,
+        soldier,
+        building,
+        &mut font.instances,
+    );
+    push_command_card(world, &mut props.instances);
 }

@@ -49,6 +49,14 @@ pub enum Prop {
     GasIcon = 5,
     SupplyIcon = 6,
     PanelFill = 7,
+    GearIcon = 8,
+    MinimapFrame = 9,
+    IconBuildHq = 10,
+    IconBuildDepot = 11,
+    IconBuildBarracks = 12,
+    IconTrainWorker = 13,
+    IconTrainSoldier = 14,
+    IconSetRally = 15,
 }
 
 /// UV rect of a prop cell. `(row, col) = (i / 4, i % 4)`.
@@ -139,8 +147,12 @@ pub struct RtsFrame {
     pub world: Vec<DrawGroup>,
     /// Procedural rings only — selection rings.
     pub overlay: Vec<SpriteInstance>,
-    /// Depth-off textured groups: the placement ghost, the rally flags, the
-    /// drag box, and (from T13) the HUD. Slot 7 first, then slot 8.
+    /// Depth-off textured groups, texture slots [`SLOT_RTS_WORKER`] through
+    /// [`SLOT_UI_FONT`] in order: worker, soldier, building, props, font.
+    /// The placement ghost, the rally flags and the drag box always land in
+    /// the props group; from `T11` the selection card's portrait/icons can
+    /// also land in the worker/soldier/building groups, since a portrait is
+    /// a crop of an existing sheet, never a duplicate image.
     pub ui: Vec<DrawGroup>,
     /// Live-slot buffer [`pack_frame`] reuses, reserved to [`MAX_ENTITIES`] so
     /// `collect_live` never allocates.
@@ -176,16 +188,22 @@ impl RtsFrame {
                 })
                 .collect(),
             overlay: Vec::with_capacity(MAX_ENTITIES),
-            ui: vec![
-                DrawGroup {
-                    atlas_id: SLOT_RTS_PROPS,
-                    instances: Vec::with_capacity(MAX_ENTITIES),
-                },
-                DrawGroup {
-                    atlas_id: SLOT_UI_FONT,
-                    instances: Vec::with_capacity(UI_TEXT_CAPACITY),
-                },
-            ],
+            ui: [
+                SLOT_RTS_WORKER,
+                SLOT_RTS_SOLDIER,
+                SLOT_RTS_BUILDINGS,
+                SLOT_RTS_PROPS,
+            ]
+            .into_iter()
+            .map(|atlas_id| DrawGroup {
+                atlas_id,
+                instances: Vec::with_capacity(MAX_ENTITIES),
+            })
+            .chain(std::iter::once(DrawGroup {
+                atlas_id: SLOT_UI_FONT,
+                instances: Vec::with_capacity(UI_TEXT_CAPACITY),
+            }))
+            .collect(),
             scratch: Vec::with_capacity(MAX_ENTITIES),
             frame_uniforms: None,
         }
@@ -226,9 +244,17 @@ impl RtsFrame {
         &mut self.world[index].instances
     }
 
+    /// The UI group drawing texture slot `slot`. Slots [`SLOT_RTS_WORKER`]
+    /// through [`SLOT_UI_FONT`], same order as [`Self::world_group`] plus the
+    /// two UI-only slots.
+    pub(super) fn ui_group(&mut self, slot: u32) -> &mut Vec<SpriteInstance> {
+        let index = (slot - SLOT_RTS_WORKER) as usize;
+        &mut self.ui[index].instances
+    }
+
     /// The UI group drawing the prop sheet.
     fn prop_group(&mut self) -> &mut Vec<SpriteInstance> {
-        &mut self.ui[0].instances
+        self.ui_group(SLOT_RTS_PROPS)
     }
 }
 

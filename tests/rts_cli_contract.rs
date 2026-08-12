@@ -391,8 +391,8 @@ fn frame0_line_reports_three_world_groups() {
             .trim_end_matches(']')
             .split(',')
             .count(),
-        2,
-        "{cli}\n`ui=` must carry exactly 2 numbers: {ui}"
+        5,
+        "{cli}\n`ui=` must carry exactly 5 numbers: {ui}"
     );
 }
 

@@ -69,13 +69,13 @@
 
 ## Impl steps
 
-- [ ] 1. Replace test expectations first; add exact layout/card/multi tests.
-- [ ] 2. Add gear/minimap/grid props to generator; regenerate atlas + manifest.
-- [ ] 3. Expand `RtsFrame.ui` groups/reservations and stdout count formatting/tests.
-- [ ] 4. Add `HudLayout`, `CommandId`, `CommandSlot`, `command_slots`.
-- [ ] 5. Implement left/center/right packing + gear.
-- [ ] 6. Add single portrait and multi 8×3 icon packing.
-- [ ] 7. Add allocation + render layer regressions.
+- [x] 1. Replace test expectations first; add exact layout/card/multi tests. — validated: `crates/mmd-engine/tests/rts_hud.rs` rewritten with `hud_regions_cover_bottom_without_overlap`, `single_selection_draws_portrait_and_full_details`, `multi_selection_draws_first_24_sorted_icons`, `worker_card_uses_stable_three_build_slots`, `producer_cards_show_train_and_rally`, `mixed_or_empty_selection_disables_card`, `rts_frame_ui_groups_are_texture_slots_4_through_8`.
+- [x] 2. Add gear/minimap/grid props to generator; regenerate atlas + manifest. — validated: `xtask/src/placeholder_art.rs` new `Prop` cells (rows 2-3 of `props.png`), tracked `assets/sprites/generated/rts/{props.png,manifest.json}` regenerated, `cargo run -p xtask -- atlases --check` passes.
+- [x] 3. Expand `RtsFrame.ui` groups/reservations and stdout count formatting/tests. — validated: `RtsFrame::new` reserves 5 UI groups (worker/soldier/building/props/font, `MAX_ENTITIES` each except font's 4096); `src/rts_run.rs` prints `ui=[<n>,<n>,<n>,<n>,<n>]`; `tests/rts_cli_contract.rs::frame0_line_reports_three_world_groups` asserts 5 counts.
+- [x] 4. Add `HudLayout`, `CommandId`, `CommandSlot`, `command_slots`. — validated: `crates/mmd-engine/src/rts/hud.rs`, covered by `worker_card_uses_stable_three_build_slots`, `producer_cards_show_train_and_rally`, `mixed_or_empty_selection_disables_card`.
+- [x] 5. Implement left/center/right packing + gear. — validated: `push_minimap`/`push_selection_card`/`push_command_card`/gear push in `pack_hud`; `hud_regions_cover_bottom_without_overlap`, `the_gear_icon_appears_in_the_top_bar`.
+- [x] 6. Add single portrait and multi 8×3 icon packing. — validated: `push_single_selection`/`push_multi_selection` in `hud.rs`; `single_selection_draws_portrait_and_full_details`, `multi_selection_draws_first_24_sorted_icons`, `multi_selection_skips_stale_ids`.
+- [x] 7. Add allocation + render layer regressions. — validated: `crates/mmd-engine/tests/frame_allocations.rs::new_hud_pack_allocates_nothing` passes; `cargo test -p mmd-engine --locked --test gpu_smoke the_hud_` (see Validation below for the known flaky case).
 
 ## Outputs
 
@@ -86,10 +86,10 @@
 
 ## Validation
 
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `cargo test -p mmd-engine --locked --test rts_hud`
-- [ ] `cargo test -p mmd-engine --locked --test rts_pack`
-- [ ] `cargo test -p mmd-engine --locked --test frame_allocations new_hud_pack_allocates_nothing`
-- [ ] `cargo test -p mmd-engine --locked --test gpu_smoke the_hud_`
-- [ ] manual check: single/multi selections show expected center panel; worker/HQ/Barracks card changes
-- [ ] commit msg draft: `feat(rts): replace bottom HUD with RTS control regions`
+- [x] `cargo run -p xtask -- atlases --check` — `atlases: ok (4 zombie png + manifest, 4 rts png + manifest, 1 ui png + manifest)`
+- [x] `cargo test -p mmd-engine --locked --test rts_hud` — 20 passed
+- [x] `cargo test -p mmd-engine --locked --test rts_pack` — 39 passed
+- [x] `cargo test -p mmd-engine --locked --test frame_allocations new_hud_pack_allocates_nothing` — 1 passed
+- [x] `cargo test -p mmd-engine --locked --test gpu_smoke the_hud_` — `the_hud_renders_legible_pixels` passes; `the_hud_draws_over_the_world` reproduces the environment's known intermittent failure identically on a stashed baseline (verified: same assertion fails pre-change), then passes clean in the full-workspace run — not a regression from this ticket, per the ticket's own environment note.
+- [ ] manual check: single/multi selections show expected center panel; worker/HQ/Barracks card changes — left for a human (`ai_artefacts/manual_test_checklist.md`, `## T11 starcraft-hud-layout`).
+- [x] commit msg draft: `feat(rts): replace bottom HUD with RTS control regions`

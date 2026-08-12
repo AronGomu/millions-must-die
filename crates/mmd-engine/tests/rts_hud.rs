@@ -1,21 +1,22 @@
-//! T13 — the on-screen HUD: pure layout, appended to an already-packed frame.
+//! T11 — the StarCraft-like control HUD: pure layout, appended to an already
+//! packed frame.
 //!
 //! Pure logic, no GPU, no clock: every case here is a headless CPU check of
 //! `mmd_engine::rts::hud`. The two device cases live in `gpu_smoke.rs`.
 
 use mmd_engine::render::{
-    FONT_FIRST_CHAR, FONT_LAST_CHAR, GLYPH_TRACKING_PX, GLYPH_W_PX, SpriteInstance, glyph_uv_rect,
+    FONT_FIRST_CHAR, FONT_LAST_CHAR, GLYPH_TRACKING_PX, GLYPH_W_PX, SLOT_RTS_BUILDINGS,
+    SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER, SLOT_UI_FONT, SpriteInstance, frame_uv_rect,
+    glyph_uv_rect,
 };
 use mmd_engine::rts::{
-    BUILD_MENU, BuildingKind, EntityId, EntityKind, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX,
-    PANEL_TEXT_SCALE, PRODUCTION_QUEUE_CAP, Prop, ResourceKind, RtsFrame, SELECTION_RECT,
-    TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind,
-    fmt_ratio, fmt_u32, kind_label, pack_frame, pack_hud, prop_uv,
+    BuildingKind, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y, EntityId, EntityKind, GEAR_RECT,
+    HudLayout, MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF,
+    OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, Prop, ResourceKind,
+    RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv,
+    command_slots, fmt_ratio, fmt_u32, kind_label, node_uv, pack_frame, pack_hud, prop_uv,
 };
-use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
-
-use mmd_engine::rts::{BOTTOM_PANEL_RECT, BUILD_MENU_RECT, PRODUCTION_RECT};
 
 /// The view centre — matches `rts_pack.rs`'s `CURSOR`.
 const CURSOR: [f32; 2] = [960.0, 540.0];
@@ -28,24 +29,27 @@ fn workers(h: &RtsHarness) -> Vec<EntityId> {
     h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))
 }
 
-/// The font group's instances — the only place `pack_hud`'s text lands.
-fn glyphs(frame: &RtsFrame) -> &[SpriteInstance] {
-    &frame.ui[1].instances
+fn group(frame: &RtsFrame, atlas_id: u32) -> &[SpriteInstance] {
+    &frame
+        .ui
+        .iter()
+        .find(|g| g.atlas_id == atlas_id)
+        .unwrap_or_else(|| panic!("no ui group for slot {atlas_id}"))
+        .instances
 }
 
-/// The prop group's instances — panels and icons.
+fn glyphs(frame: &RtsFrame) -> &[SpriteInstance] {
+    group(frame, SLOT_UI_FONT)
+}
+
 fn props(frame: &RtsFrame) -> &[SpriteInstance] {
-    &frame.ui[0].instances
+    group(frame, SLOT_RTS_PROPS)
 }
 
 /// Walk the font group's instances from `pos` in advance-width steps and map
 /// each `uv_rect` back through `glyph_uv_rect` to a byte, so a test asserts
 /// **the string the HUD drew**, not a pixel it hoped for. A step with no
 /// matching instance reads back as `' '` — the same gap a real space leaves.
-///
-/// `max_len` bounds the walk so a read never wanders past its own block into
-/// a neighbouring one at the same `y`; every call site below passes the
-/// widest value that still stays inside the block being asserted on.
 fn text_at(frame: &RtsFrame, pos: [f32; 2], scale: f32, max_len: usize) -> String {
     let advance = (GLYPH_W_PX + GLYPH_TRACKING_PX) * scale;
     let all = glyphs(frame);
@@ -61,7 +65,6 @@ fn text_at(frame: &RtsFrame, pos: [f32; 2], scale: f32, max_len: usize) -> Strin
     out.trim_end().to_string()
 }
 
-/// The tint of the glyph instance whose top-left is exactly `pos`, if any.
 fn tint_at(frame: &RtsFrame, pos: [f32; 2]) -> Option<[f32; 4]> {
     glyphs(frame)
         .iter()
@@ -78,9 +81,16 @@ fn byte_for_uv(uv: [f32; 4]) -> u8 {
     panic!("uv_rect {uv:?} matches no real glyph cell");
 }
 
-/// Advance of one panel-scale glyph — used to skip the build menu's leading
-/// pending marker when a test wants the row's own text.
-const PANEL_ADVANCE: f32 = GLYPH_W_PX * PANEL_TEXT_SCALE; // tracking is 0.0
+fn inside_rect(pos: [f32; 2], size: [f32; 2], rect: [f32; 4]) -> bool {
+    pos[0] >= rect[0]
+        && pos[0] + size[0] <= rect[0] + rect[2]
+        && pos[1] >= rect[1]
+        && pos[1] + size[1] <= rect[1] + rect[3]
+}
+
+fn disjoint(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1]
+}
 
 // --- fmt_u32 / fmt_ratio / kind_label ----------------------------------------
 
@@ -119,7 +129,24 @@ fn kind_label_covers_every_kind() {
     assert_eq!(labels.len(), 7, "every kind must have a distinct label");
 }
 
-// --- append, don't clear; only the two UI groups -----------------------------
+// --- the frame's five UI groups ----------------------------------------------
+
+#[test]
+fn rts_frame_ui_groups_are_texture_slots_4_through_8() {
+    let frame = RtsFrame::new();
+    let slots: Vec<u32> = frame.ui.iter().map(|g| g.atlas_id).collect();
+    assert_eq!(
+        slots,
+        vec![
+            SLOT_RTS_WORKER,
+            SLOT_RTS_SOLDIER,
+            SLOT_RTS_BUILDINGS,
+            SLOT_RTS_PROPS,
+            SLOT_UI_FONT,
+        ],
+        "worker, soldier, building, props, font — in texture-slot order 4..=8"
+    );
+}
 
 #[test]
 fn hud_appends_and_does_not_clear() {
@@ -144,7 +171,7 @@ fn hud_appends_and_does_not_clear() {
 }
 
 #[test]
-fn hud_uses_only_the_two_ui_groups() {
+fn hud_uses_only_the_five_ui_groups() {
     let mut h = scene();
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), CURSOR, None, &mut frame);
@@ -154,7 +181,7 @@ fn hud_uses_only_the_two_ui_groups() {
 
     pack_hud(h.world_mut(), &mut frame);
 
-    assert_eq!(frame.ui.len(), 2, "the UI layer stays exactly two groups");
+    assert_eq!(frame.ui.len(), 5, "the UI layer stays exactly five groups");
     let world_after: Vec<Vec<SpriteInstance>> =
         frame.world.iter().map(|g| g.instances.clone()).collect();
     assert_eq!(
@@ -167,26 +194,7 @@ fn hud_uses_only_the_two_ui_groups() {
     );
 }
 
-#[test]
-fn the_panels_are_drawn_before_the_text() {
-    let mut h = scene();
-    let mut frame = RtsFrame::new();
-    pack_frame(h.world(), CURSOR, None, &mut frame);
-    pack_hud(h.world_mut(), &mut frame);
-
-    let panel_uv = prop_uv(Prop::PanelFill);
-    let panel_count = props(&frame)
-        .iter()
-        .filter(|i| i.uv_rect == panel_uv)
-        .count();
-    assert_eq!(panel_count, 2, "top bar + bottom panel, exactly two fills");
-
-    // Every glyph really is in ui[1], which the renderer draws after ui[0].
-    assert!(!glyphs(&frame).is_empty());
-    assert_eq!(frame.ui[1].instances.len(), glyphs(&frame).len());
-}
-
-// --- the top bar --------------------------------------------------------------
+// --- the top bar and gear -----------------------------------------------------
 
 #[test]
 fn the_top_bar_shows_the_stock() {
@@ -223,7 +231,6 @@ fn the_top_bar_shows_supply_as_a_ratio() {
 fn supply_turns_red_at_the_cap() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
-    // Used starts at 6/10; four more Workers close the gap without a tick.
     for _ in 0..4 {
         assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     }
@@ -249,102 +256,96 @@ fn supply_is_normal_below_the_cap() {
     assert_eq!(tint_at(&frame, [584.0, text_y]), Some(TEXT_TINT));
 }
 
-// --- the selection block -------------------------------------------------------
-
 #[test]
-fn an_empty_selection_says_zero() {
+fn the_gear_icon_appears_in_the_top_bar() {
     let h = scene();
-    assert!(h.world().selection().is_empty());
     let mut frame = RtsFrame::new();
     pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1]],
-            PANEL_TEXT_SCALE,
-            20
-        ),
-        "SELECTED 0"
+    assert!(
+        props(&frame)
+            .iter()
+            .any(|i| i.pos == [GEAR_RECT[0], GEAR_RECT[1]]
+                && i.size == [GEAR_RECT[2], GEAR_RECT[3]]
+                && i.uv_rect == prop_uv(Prop::GearIcon)),
+        "the gear icon must be drawn at its documented rect"
     );
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            20
+    assert!(
+        inside_rect(
+            [GEAR_RECT[0], GEAR_RECT[1]],
+            [GEAR_RECT[2], GEAR_RECT[3]],
+            TOP_BAR_RECT
         ),
-        "",
-        "an empty selection draws no line 1"
+        "the gear sits inside the top bar"
     );
 }
 
+// --- the layout regions --------------------------------------------------------
+
 #[test]
-fn a_selected_worker_names_itself() {
+fn hud_regions_cover_bottom_without_overlap() {
+    let minimap = HudLayout::MINIMAP_PANEL;
+    let selection = HudLayout::SELECTION_PANEL;
+    let command = HudLayout::COMMAND_PANEL;
+    let bottom = HudLayout::BOTTOM_PANEL;
+
+    for rect in [minimap, selection, command] {
+        assert!(
+            inside_rect([rect[0], rect[1]], [rect[2], rect[3]], bottom),
+            "{rect:?} must sit inside the bottom panel"
+        );
+    }
+    assert!(disjoint(minimap, selection), "minimap/selection overlap");
+    assert!(disjoint(selection, command), "selection/command overlap");
+    assert!(disjoint(minimap, command), "minimap/command overlap");
+
+    assert!(inside_rect(
+        [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]],
+        [HudLayout::MINIMAP_MAP[2], HudLayout::MINIMAP_MAP[3]],
+        minimap
+    ));
+    assert!(inside_rect(
+        [HudLayout::COMMAND_GRID[0], HudLayout::COMMAND_GRID[1]],
+        [HudLayout::COMMAND_GRID[2], HudLayout::COMMAND_GRID[3]],
+        command
+    ));
+    const { assert!(TOP_BAR_RECT[1] + TOP_BAR_RECT[3] <= HudLayout::BOTTOM_PANEL[1]) };
+}
+
+// --- single selection: portrait + detail text --------------------------------
+
+#[test]
+fn single_selection_draws_portrait_and_full_details() {
     let mut h = scene();
+
+    // Worker.
     let w = workers(&h)[0];
     h.world_mut().selection_mut().insert(w);
     let mut frame = RtsFrame::new();
     pack_hud(h.world(), &mut frame);
+    assert!(
+        group(&frame, SLOT_RTS_WORKER)
+            .iter()
+            .any(|i| i.pos == PORTRAIT_POS
+                && i.size == [PORTRAIT_PX, PORTRAIT_PX]
+                && i.uv_rect == frame_uv_rect(6, 0)),
+        "a worker's portrait must crop the worker sheet"
+    );
     assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            20
-        ),
+        text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 20),
         "WORKER"
     );
-}
-
-#[test]
-fn a_carrying_worker_reports_its_cargo() {
-    let mut h = scene();
-    let w = workers(&h)[0];
-    let slot = h.world().entities().slot(w).expect("live worker");
-    h.world_mut()
-        .entities_mut()
-        .set_carry(slot, Some((ResourceKind::Gas, 8)));
-    h.world_mut().selection_mut().insert(w);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
     assert_eq!(
         text_at(
             &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 2.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        "CARRYING GAS 8"
-    );
-}
-
-#[test]
-fn an_empty_handed_worker_says_so() {
-    let mut h = scene();
-    let w = workers(&h)[0];
-    assert!(
-        h.world()
-            .entities()
-            .carry(h.world().entities().slot(w).unwrap())
-            .is_none()
-    );
-    h.world_mut().selection_mut().insert(w);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 2.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
         "CARRYING NOTHING"
     );
-}
+    h.world_mut().selection_mut().clear();
 
-#[test]
-fn a_selected_soldier_is_idle() {
-    let mut h = scene();
+    // Soldier.
     let soldier = h
         .world_mut()
         .entities_mut()
@@ -357,19 +358,253 @@ fn a_selected_soldier_is_idle() {
     h.world_mut().selection_mut().insert(soldier);
     let mut frame = RtsFrame::new();
     pack_hud(h.world(), &mut frame);
+    assert!(
+        group(&frame, SLOT_RTS_SOLDIER)
+            .iter()
+            .any(|i| i.pos == PORTRAIT_POS
+                && i.size == [PORTRAIT_PX, PORTRAIT_PX]
+                && i.uv_rect == frame_uv_rect(6, 0)),
+        "a soldier's portrait must crop the soldier sheet"
+    );
     assert_eq!(
         text_at(
             &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 2.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            10
+        ),
+        "IDLE"
+    );
+    h.world_mut().selection_mut().clear();
+
+    // Building, finished, with a rally point.
+    let hq = h.world().start_hq().expect("hq");
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 200, y: 210 }))
+    );
+    h.world_mut().selection_mut().insert(hq);
+    let slot = h.world().entities().slot(hq).expect("live hq");
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    assert!(
+        group(&frame, SLOT_RTS_BUILDINGS)
+            .iter()
+            .any(|i| i.pos == PORTRAIT_POS
+                && i.size == [PORTRAIT_PX, PORTRAIT_PX]
+                && i.uv_rect
+                    == building_uv(
+                        BuildingKind::Hq,
+                        h.world().entities().progress_target(slot) > 0
+                    )),
+        "a building's portrait must crop the building sheet"
+    );
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            10
+        ),
+        "READY"
+    );
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
-        "IDLE"
+        "RALLY 200,210"
+    );
+    h.world_mut().selection_mut().clear();
+
+    // Resource node.
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    h.world_mut().selection_mut().insert(node);
+    let node_slot = h.world().entities().slot(node).expect("live node");
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    assert!(
+        group(&frame, SLOT_RTS_BUILDINGS)
+            .iter()
+            .any(|i| i.pos == PORTRAIT_POS
+                && i.size == [PORTRAIT_PX, PORTRAIT_PX]
+                && i.uv_rect
+                    == node_uv(
+                        ResourceKind::Crystal,
+                        h.world().entities().amount(node_slot) == 0
+                    )),
+        "a node's portrait must crop the buildings sheet's node row"
+    );
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            25
+        ),
+        "REMAINING 1500"
+    );
+}
+
+// --- multi selection: sorted icon grid ----------------------------------------
+
+#[test]
+fn multi_selection_draws_first_24_sorted_icons() {
+    let mut h = scene();
+    let mut ids: Vec<EntityId> = Vec::new();
+    for i in 0..30 {
+        let x = 40.0 + (i as f32) * 2.0;
+        let id = h
+            .world_mut()
+            .entities_mut()
+            .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, [x, 40.0])
+            .expect("spawn worker");
+        ids.push(id);
+    }
+    // Insert shuffled: `Selection` keeps ascending order regardless.
+    let mut shuffled = ids.clone();
+    shuffled.reverse();
+    for &id in &shuffled {
+        h.world_mut().selection_mut().insert(id);
+    }
+    assert_eq!(h.world().selection().len(), 30);
+
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+
+    let sorted_ids = h.world().selection().ids().to_vec();
+    let first_24 = &sorted_ids[..24];
+    let worker_icons = group(&frame, SLOT_RTS_WORKER);
+    for (i, &id) in first_24.iter().enumerate() {
+        let slot = h.world().entities().slot(id).expect("live worker");
+        let _ = slot; // only the position/uv are asserted, both kind-independent here
+        let row = i / MULTI_ICON_COLS;
+        let col = i % MULTI_ICON_COLS;
+        let pos = [
+            MULTI_ICON_ORIGIN[0] + col as f32 * (MULTI_ICON_PX + MULTI_ICON_GAP_PX),
+            MULTI_ICON_ORIGIN[1] + row as f32 * (MULTI_ICON_PX + MULTI_ICON_GAP_PX),
+        ];
+        assert!(
+            worker_icons
+                .iter()
+                .any(|inst| inst.pos == pos && inst.size == [MULTI_ICON_PX, MULTI_ICON_PX]),
+            "icon {i} missing at {pos:?}"
+        );
+    }
+    assert_eq!(
+        worker_icons.len(),
+        24,
+        "only the first 24 sorted ids draw an icon"
+    );
+
+    let overflow_x = MULTI_ICON_ORIGIN[0]
+        + MULTI_ICON_COLS as f32 * MULTI_ICON_PX
+        + (MULTI_ICON_COLS as f32 - 1.0) * MULTI_ICON_GAP_PX
+        + 16.0;
+    assert_eq!(
+        text_at(
+            &frame,
+            [overflow_x, MULTI_ICON_ORIGIN[1]],
+            PANEL_TEXT_SCALE,
+            5
+        ),
+        "+6",
+        "30 selected, 24 drawn, 6 overflow"
     );
 }
 
 #[test]
-fn a_selected_site_reports_its_percentage() {
+fn multi_selection_skips_stale_ids() {
+    let mut h = scene();
+    let ids = workers(&h);
+    for &id in &ids[..3] {
+        h.world_mut().selection_mut().insert(id);
+    }
+    assert!(h.world_mut().entities_mut().despawn(ids[1]));
+
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame); // must not panic
+    let worker_icons = group(&frame, SLOT_RTS_WORKER);
+    assert_eq!(
+        worker_icons.len(),
+        2,
+        "the despawned id must not draw an icon"
+    );
+}
+
+// --- command_slots -------------------------------------------------------------
+
+#[test]
+fn worker_card_uses_stable_three_build_slots() {
+    let mut h = scene();
+    let ws = workers(&h);
+    h.world_mut().selection_mut().insert(ws[0]);
+    h.world_mut().selection_mut().insert(ws[1]);
+
+    let slots = command_slots(h.world());
+    assert_eq!(slots[0].command, Some(CommandId::BuildHq));
+    assert_eq!(slots[1].command, Some(CommandId::BuildDepot));
+    assert_eq!(slots[2].command, Some(CommandId::BuildBarracks));
+    assert!(slots[0].enabled && slots[1].enabled && slots[2].enabled);
+    for (i, s) in slots.iter().enumerate() {
+        if !(0..=2).contains(&i) {
+            assert_eq!(s.command, None, "slot {i} must be empty");
+        }
+    }
+}
+
+#[test]
+fn producer_cards_show_train_and_rally() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    h.world_mut().selection_mut().insert(hq);
+    let slots = command_slots(h.world());
+    assert_eq!(slots[0].command, Some(CommandId::TrainWorker));
+    assert_eq!(slots[8].command, Some(CommandId::SetRally));
+    assert!(slots[0].enabled && slots[8].enabled);
+    for (i, s) in slots.iter().enumerate() {
+        if i != 0 && i != 8 {
+            assert_eq!(s.command, None, "slot {i} must be empty");
+        }
+    }
+    h.world_mut().selection_mut().clear();
+
+    let barracks = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Barracks),
+            OWNER_PLAYER,
+            [200.0, 210.0],
+        )
+        .expect("spawn finished barracks");
+    h.world_mut().selection_mut().insert(barracks);
+    let slots = command_slots(h.world());
+    assert_eq!(slots[0].command, Some(CommandId::TrainSoldier));
+    assert_eq!(slots[8].command, Some(CommandId::SetRally));
+}
+
+#[test]
+fn mixed_or_empty_selection_disables_card() {
+    let h = scene();
+    assert!(h.world().selection().is_empty());
+    let slots = command_slots(h.world());
+    assert!(slots.iter().all(|s| s.command.is_none() && !s.enabled));
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let hq = h.world().start_hq().expect("hq");
+    h.world_mut().selection_mut().insert(w);
+    h.world_mut().selection_mut().insert(hq);
+    let slots = command_slots(h.world());
+    assert!(
+        slots.iter().all(|s| s.command.is_none()),
+        "a worker mixed with a building must disable the card"
+    );
+
+    // An unfinished building alone must also disable the card.
     let mut h = scene();
     let site = h
         .world_mut()
@@ -381,251 +616,13 @@ fn a_selected_site_reports_its_percentage() {
         )
         .expect("spawn depot site");
     let slot = h.world().entities().slot(site).expect("live site");
-    h.world_mut().entities_mut().set_progress(slot, 90, 180);
+    h.world_mut().entities_mut().set_progress(slot, 10, 100);
     h.world_mut().selection_mut().insert(site);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 2.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        "BUILDING 50%"
-    );
-}
-
-#[test]
-fn a_finished_building_says_ready() {
-    let mut h = scene();
-    let hq = h.world().start_hq().expect("hq");
-    h.world_mut().selection_mut().insert(hq);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 2.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        "READY"
-    );
-}
-
-#[test]
-fn a_selected_node_reports_its_remainder() {
-    let mut h = scene();
-    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
-    h.world_mut().selection_mut().insert(node);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 2.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        "REMAINING 1500"
-    );
-}
-
-#[test]
-fn a_rally_point_is_shown() {
-    let mut h = scene();
-    let hq = h.world().start_hq().expect("hq");
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 200, y: 210 })));
-    h.world_mut().selection_mut().insert(hq);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 3.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        "RALLY 200,210"
-    );
-}
-
-#[test]
-fn no_rally_means_no_line_three() {
-    let mut h = scene();
-    let hq = h.world().start_hq().expect("hq");
-    assert!(h.world().rally(hq).is_none());
-    h.world_mut().selection_mut().insert(hq);
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1] + 3.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        ""
-    );
-}
-
-// --- the production block ------------------------------------------------------
-
-fn inside_rect(pos: [f32; 2], rect: [f32; 4]) -> bool {
-    pos[0] >= rect[0]
-        && pos[0] < rect[0] + rect[2]
-        && pos[1] >= rect[1]
-        && pos[1] < rect[1] + rect[3]
-}
-
-#[test]
-fn the_production_block_is_absent_without_a_queue() {
-    let mut h = scene();
-    let hq = h.world().start_hq().expect("hq");
-    h.world_mut().selection_mut().insert(hq);
-    assert!(h.world().production_queue(hq).expect("hq queue").is_empty());
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
+    let slots = command_slots(h.world());
     assert!(
-        glyphs(&frame)
-            .iter()
-            .all(|g| !inside_rect(g.pos, PRODUCTION_RECT)),
-        "no queue must mean no production block glyphs"
+        slots.iter().all(|s| s.command.is_none()),
+        "an under-construction building must disable the card"
     );
-}
-
-#[test]
-fn the_production_block_reports_the_head() {
-    let mut h = scene();
-    let hq = h.world().start_hq().expect("hq");
-    h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
-    h.step_exact(150);
-
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    assert_eq!(
-        text_at(
-            &frame,
-            [PRODUCTION_RECT[0], PRODUCTION_RECT[1]],
-            PANEL_TEXT_SCALE,
-            25
-        ),
-        "PRODUCING WORKER"
-    );
-    assert_eq!(
-        text_at(
-            &frame,
-            [PRODUCTION_RECT[0], PRODUCTION_RECT[1] + PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            10
-        ),
-        "50%"
-    );
-    assert_eq!(
-        text_at(
-            &frame,
-            [PRODUCTION_RECT[0], PRODUCTION_RECT[1] + 2.0 * PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            15
-        ),
-        format!("QUEUE 1/{PRODUCTION_QUEUE_CAP}")
-    );
-}
-
-// --- the build menu --------------------------------------------------------------
-
-#[test]
-fn the_build_menu_lists_three_rows() {
-    let h = scene();
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    for i in 0..3 {
-        let y = BUILD_MENU_RECT[1] + i as f32 * PANEL_LINE_PX;
-        let s = text_at(
-            &frame,
-            [BUILD_MENU_RECT[0] + PANEL_ADVANCE, y],
-            PANEL_TEXT_SCALE,
-            25,
-        );
-        assert!(!s.is_empty(), "row {i} must draw something");
-    }
-}
-
-#[test]
-fn the_build_menu_shows_costs() {
-    let h = scene();
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    let rows = [
-        (0, "[Q] HQ 400C"),
-        (1, "[W] DEPOT 100C"),
-        (2, "[E] BARRACKS 150C 25G"),
-    ];
-    for (i, want) in rows {
-        let y = BUILD_MENU_RECT[1] + i as f32 * PANEL_LINE_PX;
-        let got = text_at(
-            &frame,
-            [BUILD_MENU_RECT[0] + PANEL_ADVANCE, y],
-            PANEL_TEXT_SCALE,
-            25,
-        );
-        assert_eq!(got, want, "row {i}");
-    }
-}
-
-#[test]
-fn an_unaffordable_row_is_red() {
-    let h = scene();
-    assert_eq!(
-        h.world().resources().crystal,
-        300,
-        "HQ costs 400, must be short"
-    );
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    let hq_row_y = BUILD_MENU_RECT[1];
-    let depot_row_y = BUILD_MENU_RECT[1] + PANEL_LINE_PX;
-    // The "[" glyph, one advance past the prefix.
-    assert_eq!(
-        tint_at(&frame, [BUILD_MENU_RECT[0] + PANEL_ADVANCE, hq_row_y]),
-        Some(TEXT_TINT_BLOCKED)
-    );
-    assert_eq!(
-        tint_at(&frame, [BUILD_MENU_RECT[0] + PANEL_ADVANCE, depot_row_y]),
-        Some(TEXT_TINT)
-    );
-}
-
-#[test]
-fn the_hotkey_letter_is_tinted_separately() {
-    let h = scene();
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    for (i, (_, _)) in BUILD_MENU.into_iter().enumerate() {
-        let y = BUILD_MENU_RECT[1] + i as f32 * PANEL_LINE_PX;
-        // prefix, "[", hotkey — two advances past the row start.
-        let pos = [BUILD_MENU_RECT[0] + 2.0 * PANEL_ADVANCE, y];
-        assert_eq!(tint_at(&frame, pos), Some(TEXT_TINT_HOTKEY), "row {i}");
-    }
-}
-
-#[test]
-fn the_pending_row_is_marked() {
-    let mut h = scene();
-    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
-    let mut frame = RtsFrame::new();
-    pack_hud(h.world(), &mut frame);
-    for (i, (_, kind)) in BUILD_MENU.into_iter().enumerate() {
-        let y = BUILD_MENU_RECT[1] + i as f32 * PANEL_LINE_PX;
-        let marker = text_at(&frame, [BUILD_MENU_RECT[0], y], PANEL_TEXT_SCALE, 1);
-        if kind == BuildingKind::Depot {
-            assert_eq!(marker, ">", "row {i} (the pending kind)");
-        } else {
-            assert_eq!(marker, "", "row {i} must read back as a blank prefix");
-        }
-    }
 }
 
 // --- resilience and purity -----------------------------------------------------
@@ -639,15 +636,9 @@ fn the_hud_never_panics_on_a_stale_primary() {
 
     let mut frame = RtsFrame::new();
     pack_hud(h.world(), &mut frame); // must not panic
-    assert_eq!(
-        text_at(
-            &frame,
-            [SELECTION_RECT[0], SELECTION_RECT[1]],
-            PANEL_TEXT_SCALE,
-            20
-        ),
-        "SELECTED 1",
-        "the stale id is still counted; only reading its dead columns is skipped"
+    assert!(
+        group(&frame, SLOT_RTS_WORKER).is_empty(),
+        "a stale primary draws no portrait"
     );
 }
 
@@ -656,7 +647,10 @@ fn pack_hud_does_not_mutate_the_world() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 180, y: 176 }))
+    );
 
     let before = h.state_hash();
     let mut frame = RtsFrame::new();
@@ -669,25 +663,4 @@ fn pack_hud_does_not_mutate_the_world() {
         before,
         "packing the HUD is a read of world state"
     );
-}
-
-#[test]
-fn bottom_panel_rect_is_covered_by_the_selection_and_build_blocks() {
-    // Cheap sanity pin on the constants themselves, not on pack_hud: every
-    // block referenced by the design lives inside the bottom panel, and the
-    // top bar is a distinct region above it — a layout regression here would
-    // otherwise only be caught by eyeballing a screenshot.
-    assert!(inside_rect(
-        [SELECTION_RECT[0], SELECTION_RECT[1]],
-        BOTTOM_PANEL_RECT
-    ));
-    assert!(inside_rect(
-        [PRODUCTION_RECT[0], PRODUCTION_RECT[1]],
-        BOTTOM_PANEL_RECT
-    ));
-    assert!(inside_rect(
-        [BUILD_MENU_RECT[0], BUILD_MENU_RECT[1]],
-        BOTTOM_PANEL_RECT
-    ));
-    const { assert!(TOP_BAR_RECT[1] + TOP_BAR_RECT[3] <= BOTTOM_PANEL_RECT[1]) };
 }

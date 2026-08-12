@@ -58,6 +58,18 @@ const SOLDIER_BODY: [u8; 4] = [190, 70, 60, 255];
 const SOLDIER_HEAD: [u8; 4] = [220, 210, 200, 255];
 const PIP_COLOR: [u8; 4] = [255, 230, 90, 255];
 
+// T11 HUD props: the gear, the minimap frame and the six command-grid
+// icons. One flat opaque colour each — deterministic and, at alpha 255,
+// already premultiplied — since these are UI glyphs, not painterly art.
+const GEAR_COLOR: [u8; 4] = [170, 175, 185, 255];
+const MINIMAP_FRAME_COLOR: [u8; 4] = [45, 60, 80, 255];
+const ICON_BUILD_HQ_COLOR: [u8; 4] = [70, 110, 170, 255];
+const ICON_BUILD_DEPOT_COLOR: [u8; 4] = [80, 140, 110, 255];
+const ICON_BUILD_BARRACKS_COLOR: [u8; 4] = [150, 110, 60, 255];
+const ICON_TRAIN_WORKER_COLOR: [u8; 4] = [60, 150, 220, 255];
+const ICON_TRAIN_SOLDIER_COLOR: [u8; 4] = [190, 70, 60, 255];
+const ICON_SET_RALLY_COLOR: [u8; 4] = [240, 200, 60, 255];
+
 /// Tracked placeholder set manifest (one per family).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlaceholderManifest {
@@ -295,8 +307,22 @@ fn draw_props_cell(tile: &mut [u8], row: u32, col: u32) {
             RTS_FRAME_SIZE_PX - 1,
             premul([16, 18, 24, 200]),
         ),
+        (2, 0) => draw_hud_icon(tile, GEAR_COLOR),
+        (2, 1) => draw_hud_icon(tile, MINIMAP_FRAME_COLOR),
+        (2, 2) => draw_hud_icon(tile, ICON_BUILD_HQ_COLOR),
+        (2, 3) => draw_hud_icon(tile, ICON_BUILD_DEPOT_COLOR),
+        (3, 0) => draw_hud_icon(tile, ICON_BUILD_BARRACKS_COLOR),
+        (3, 1) => draw_hud_icon(tile, ICON_TRAIN_WORKER_COLOR),
+        (3, 2) => draw_hud_icon(tile, ICON_TRAIN_SOLDIER_COLOR),
+        (3, 3) => draw_hud_icon(tile, ICON_SET_RALLY_COLOR),
         _ => {}
     }
+}
+
+/// One flat-filled square, inset by 4px — a HUD glyph cell (gear, minimap
+/// frame, command icons).
+fn draw_hud_icon(tile: &mut [u8], color: [u8; 4]) {
+    blit_rect(tile, RTS_FRAME_SIZE_PX, 4, 4, 27, 27, color);
 }
 
 fn render_props_sheet() -> Vec<u8> {
@@ -893,12 +919,37 @@ mod tests {
         }
         let props = encode_rts_png(3).expect("props");
         let (w2, _h2, px2) = decode_png(&props);
-        for row in 2..RTS_FRAMES_Y {
+        for row in 4..RTS_FRAMES_Y {
             for col in 0..RTS_FRAMES_X {
                 let cell = extract_cell(&px2, w2, col, row);
                 assert!(
                     cell.chunks_exact(4).all(|p| p == [0, 0, 0, 0]),
                     "props row={row} col={col} not transparent"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hud_icon_cells_are_opaque_and_distinct() {
+        let props = encode_rts_png(3).expect("props");
+        let (w, _h, px) = decode_png(&props);
+        let mut cells = Vec::new();
+        for row in 2..=3u32 {
+            for col in 0..RTS_FRAMES_X {
+                let cell = extract_cell(&px, w, col, row);
+                assert!(
+                    cell.chunks_exact(4).any(|p| p[3] > 0),
+                    "row={row} col={col} must draw something"
+                );
+                cells.push(cell);
+            }
+        }
+        for i in 0..cells.len() {
+            for j in (i + 1)..cells.len() {
+                assert_ne!(
+                    cells[i], cells[j],
+                    "HUD icon cells {i} and {j} are identical"
                 );
             }
         }

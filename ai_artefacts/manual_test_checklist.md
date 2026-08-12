@@ -104,3 +104,16 @@
 - [ ] With `pause_on_focus_loss: false` (default), Alt-Tab away and back a few times: confirm the sim keeps ticking the whole time and nothing about camera/selection state is corrupted by the focus churn.
 - [ ] Resize the windowed-mode window (or move it to a display with a different scale factor, if available) while it is running: confirm the rendered scene's aspect-fit content rect and mouse-click accuracy (T8) stay correct immediately after the resize/display change — no stale letterboxing, no click landing on the wrong cell.
 - [ ] Run `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3`: confirm no window is created, no "rts: window ... claimed"/"rts: released window" lines print, and the run exits clean exactly as before this ticket.
+
+## T11 starcraft-hud-layout
+
+- [ ] Launch `cargo run -- rts` and confirm the bottom of the screen shows three distinct panels: a minimap frame on the left (`[16,856]..[400,1064]`), a selection card in the centre (`[424,856]..[1304,1064]`), and a 3x3 command grid on the right (`[1696,856]..[1904,1064]`) — with visible gaps between them, not one continuous strip.
+- [ ] Confirm a small gear icon renders in the top-right corner of the top bar (`[1872,8]..[1904,40]`).
+- [ ] Select a single worker: confirm a 128x128 portrait (cropped from the worker sheet) appears at the selection card's left edge, with kind/carry text to its right.
+- [ ] Select a single HQ or Barracks: confirm its portrait shows the building art, "READY", and (if a rally point is set) a `RALLY x,y` line.
+- [ ] Box-select more than 24 units: confirm the selection card switches to an 8x3 grid of 48px icons (first 24 by ascending id) and a `+N` marker appears to the right of the grid for the remainder.
+- [ ] With only workers selected: confirm the command grid's top-left three cells light up with distinct build icons (HQ/Depot/Barracks).
+- [ ] With a single finished HQ selected: confirm the command grid shows a Train-Worker icon top-left and a Rally icon bottom-right (slot 8), and nothing else.
+- [ ] With a single finished Barracks selected: confirm the command grid shows a Train-Soldier icon top-left and the same Rally icon bottom-right.
+- [ ] Select nothing, then select a worker and a building together: confirm the command grid goes fully blank in both cases.
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the HUD renders throughout without visual corruption (no wrong-sheet sampling, no panel z-fighting with world sprites).

@@ -12,7 +12,7 @@
 //! rts: backend=<b> adapter=<a> view=<w>x<h> scenario=<path> (engine <v>)
 //! rts: settings mode=<m> confine_pointer=<bool> keyboard_pan=<n> edge_pan=<n> \
 //!      pause_on_focus_loss=<bool> master=<n> music=<n> voice=<n> sfx=<n>
-//! rts: frame0 tick=<t> hash=<64 hex> world=[<n>,<n>,<n>] overlay=<n> ui=[<n>,<n>]   (a)
+//! rts: frame0 tick=<t> hash=<64 hex> world=[<n>,<n>,<n>] overlay=<n> ui=[<n>,<n>,<n>,<n>,<n>]   (a)
 //! rts: offscreen draw ok (backend=<b>)                                              (a)
 //! rts: window <w>x<h> claimed; Esc quit, Space pause, F1 overlay, X cancel, ...      (b)
 //! <one HUD line per frame while the overlay is on>                                  (c)
@@ -251,7 +251,7 @@ struct FrameReport {
     tick: u64,
     world_lens: [usize; 3],
     overlay_len: usize,
-    ui_lens: [usize; 2],
+    ui_lens: [usize; 5],
 }
 
 fn fmt_counts(counts: &[usize]) -> String {
@@ -779,6 +779,9 @@ where
     let ui_lens = [
         frame_buf.ui[0].instances.len(),
         frame_buf.ui[1].instances.len(),
+        frame_buf.ui[2].instances.len(),
+        frame_buf.ui[3].instances.len(),
+        frame_buf.ui[4].instances.len(),
     ];
     Ok(Some(FrameReport {
         tick: world.tick_index(),
