@@ -615,8 +615,17 @@ fn acceptance_audio_counts_are_exact() {
     // Four command-card clicks, the minimap, the gear, SETTINGS, the slider.
     assert_eq!(cli.exit_u32("sfx_ui"), 8, "{cli}");
 
-    // The `rts: audio` line is the same tally, seen from the sink side: the
-    // two must agree or one of them is decorative.
+    // The `rts: audio` line, pinned the same way.
+    //
+    // This used to compare those fields against the exit-line fields above and
+    // call it a "sink-side cross-check". It was neither: both lines are
+    // printed from the one `session.audio_counters`, so the comparison was a
+    // tally checked against itself and would have passed with every number
+    // wrong together. The sink's *own* tally (`FakeAudioSink::counters`) is
+    // never printed, so there is no second observer to compare with from out
+    // here. Hard equalities against the script's own owed numbers are what a
+    // CLI-level test can actually assert — and they are strictly stronger than
+    // the tautology they replace.
     let audio = cli
         .stdout
         .lines()
@@ -629,9 +638,14 @@ fn acceptance_audio_counts_are_exact() {
             .and_then(|v| v.parse().ok())
             .unwrap_or_else(|| panic!("{cli}\n`rts: audio` has no numeric `{key}=`"))
     };
-    assert_eq!(field("music"), cli.exit_u32("music_starts"), "{cli}");
-    assert_eq!(field("reject"), cli.exit_u32("voice_reject"), "{cli}");
-    assert_eq!(field("ui"), cli.exit_u32("sfx_ui"), "{cli}");
+    assert_eq!(field("music"), 1, "{cli}");
+    assert_eq!(field("reject"), 1, "{cli}");
+    assert_eq!(field("ui"), 8, "{cli}");
+    // Voice *batches*: one per action that voiced anything, which is fewer
+    // than the cues inside them.
+    assert_eq!(field("voice"), 7, "{cli}");
+    // Every individual unit cue: the 8 selects plus the 9 accepted orders.
+    assert_eq!(field("cues"), 17, "{cli}");
     assert_eq!(
         field("cues"),
         cli.exit_u32("voice_select") + cli.exit_u32("voice_order"),

@@ -24,8 +24,8 @@ use super::formation::{
     nearest_body_clear_cell,
 };
 use super::orders::{
-    GatherPhase, Order, OrderTable, adaptive_reach, dist2, entity_approach_cell, rect_distance,
-    step_admissible, unit_speed,
+    GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC,
+    adaptive_reach, dist2, entity_approach_cell, rect_distance, step_admissible, unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
 use super::selection::{MAX_SELECTION, Pick, Selection, box_select, footprint_min, pick_at};
@@ -274,6 +274,47 @@ const MAX_PUSHED_BODIES: usize = 8;
 /// rippling across a whole base. A chain that would need to go deeper is
 /// rejected whole; the mover waits instead.
 const MAX_PUSH_DEPTH: u8 = 3;
+
+/// The longest a single displacement can be, in cells, as a multiple of one
+/// tick's walk step.
+///
+/// No two bodies overlap when a tick begins, so a mover that advanced by one
+/// `step` can have penetrated a depth-1 body by at most `step`, and
+/// [`RtsWorld::push_target`] pushes it out by `depth + step` — at most
+/// `2 * step`. That displaced body can in turn have penetrated a depth-2 body
+/// by at most `2 * step`, so it is pushed at most `3 * step`, and so on: the
+/// deepest link in the chain moves at most `(MAX_PUSH_DEPTH + 1) * step`.
+const MAX_DISPLACEMENT_STEPS: f32 = MAX_PUSH_DEPTH as f32 + 1.0;
+
+/// Unit-speed ceiling the displaced-vs-displaced check in
+/// [`RtsWorld::try_push_chain`] imposes.
+///
+/// Two displaced bodies are checked against each other at their **endpoints**
+/// only. That is sound while they cannot have crossed on the way there, and
+/// the rule the check relies on is that crossing takes a relative displacement
+/// of at least one body diameter. Two bodies each moving up to
+/// [`MAX_DISPLACEMENT_STEPS`] steps have a relative displacement of up to
+/// twice that, so the bound is
+/// `2 * MAX_DISPLACEMENT_STEPS * speed * TICK_DT < RTS_UNIT_BODY_DIAMETER_CELLS`.
+///
+/// At today's `MAX_PUSH_DEPTH = 3`, `TICK_DT = 1/60` and a 6-cell diameter
+/// that is 45 cells/second. Raise a unit past it and the invariant stops
+/// holding *silently* — no test fails, bodies just start clipping through each
+/// other inside a push chain — so the ceiling is asserted at compile time
+/// below rather than left as a comment.
+pub const MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC: f32 =
+    RTS_UNIT_BODY_DIAMETER_CELLS / (2.0 * MAX_DISPLACEMENT_STEPS * TICK_DT);
+
+const _: () = assert!(
+    WORKER_SPEED_CELLS_PER_SEC < MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC,
+    "the worker outruns the push chain's endpoint check: raise MAX_PUSH_DEPTH's \
+     cost or lower the speed — see MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC"
+);
+const _: () = assert!(
+    SOLDIER_SPEED_CELLS_PER_SEC < MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC,
+    "the soldier outruns the push chain's endpoint check: raise MAX_PUSH_DEPTH's \
+     cost or lower the speed — see MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC"
+);
 
 /// The headings one mover tries in a tick, as `(cos, sin)` rotations of its
 /// own field descent vector: straight ahead first, then 45 degrees to each
@@ -1273,7 +1314,14 @@ impl RtsWorld {
             };
         }
 
-        let selected = scratch.len();
+        // Only orderable units can be rejected: a selected building or
+        // resource node was never a candidate for a move/gather/build order,
+        // so counting it as "rejected" made the caller play a reject cue for a
+        // selection that contained no refused unit at all.
+        let selected = scratch
+            .iter()
+            .filter(|&&id| self.orderable_slot(id).is_some())
+            .count();
         let target = match pick {
             Pick::Node(n) => Some(GroupTarget::Node(n)),
             Pick::Building(b) if self.is_site(b) => Some(GroupTarget::Site(b)),
@@ -2186,10 +2234,14 @@ impl RtsWorld {
     /// - **State is untouched.** Only positions move; order, cargo, facing and
     ///   animation stay exactly as they were.
     ///
-    /// A displacement is under one cell long, so two bodies displaced by the
-    /// same step cannot have swapped sides on the way to the final positions
-    /// that are checked against each other — passing through would take a
-    /// relative displacement of a whole body diameter.
+    /// The deepest link in a chain moves at most
+    /// [`MAX_DISPLACEMENT_STEPS`] walk steps — 2.0 cells at today's speeds, not
+    /// "under one cell" as this used to claim — so two displaced bodies have a
+    /// relative displacement of at most twice that. Crossing takes a whole body
+    /// diameter, so while that bound holds the endpoint check between two
+    /// displaced bodies cannot miss a crossing. It is a real ceiling on unit
+    /// speed, and [`MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC`] asserts it at
+    /// compile time.
     fn try_push_chain(
         &mut self,
         i: usize,

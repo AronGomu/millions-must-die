@@ -790,6 +790,59 @@ fn context_order_with_no_selection_is_a_no_op() {
     assert!(receipts.as_slice().is_empty());
 }
 
+/// A selection that holds no orderable unit rejects nothing.
+///
+/// `rejected` used to be `selection.len() - accepted`, so a selected building
+/// or resource node counted as a refused *unit* — and the app plays a reject
+/// cue off that count, so right-clicking the ground with only the HQ selected
+/// sounded exactly like a refused order.
+#[test]
+fn a_selection_with_no_orderable_unit_rejects_nothing() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.ids_of_kind(EntityKind::Building(BuildingKind::Hq))[0];
+    h.world_mut().select_only(hq);
+    assert_eq!(h.world().selection().ids(), &[hq]);
+
+    let view = h.world().iso_view();
+    // Empty ground, well clear of the base.
+    let screen = view.project(60.5, 60.5);
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&view, screen, &mut receipts);
+
+    assert_eq!(result.accepted, 0, "a building takes no ground order");
+    assert_eq!(
+        result.rejected, 0,
+        "a selected building is not a refused unit"
+    );
+    assert!(receipts.as_slice().is_empty());
+}
+
+/// The same click with one worker in the selection alongside the building:
+/// the worker is accepted and the building still counts as nothing.
+#[test]
+fn a_mixed_selection_counts_only_its_units() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.ids_of_kind(EntityKind::Building(BuildingKind::Hq))[0];
+    let worker = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
+    h.world_mut().select_only(hq);
+    h.world_mut().toggle_selection(worker);
+
+    let view = h.world().iso_view();
+    let screen = view.project(60.5, 60.5);
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&view, screen, &mut receipts);
+
+    assert_eq!(result.accepted, 1, "the worker takes the ground order");
+    assert_eq!(
+        result.rejected, 0,
+        "the building alongside it is not a refused unit"
+    );
+}
+
 // --- T5: group approaches around a resource ---------------------------------
 
 /// Six workers sent to one node get six *distinct* legal approach slots around

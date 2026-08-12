@@ -93,6 +93,6 @@
 - [x] `cargo test -p mmd-engine --locked --test render_correctness golden_frame_matches`
 - [x] `cargo test -p millions_must_die --locked --test rts_cli_contract script_coordinates_remain_logical`
 - [x] `cargo check --workspace --all-targets --all-features --locked`
-- [x] manual check: resize non-16:9 window → no stretch; bar click causes no world action
-- [x] app functional: `cargo run -- rts --frames 60`
+- [ ] manual check: resize non-16:9 window → no stretch; bar click causes no world action — **unchecked in the review-fix pass: this needs a real window and nobody opened one.** The equivalent human steps live in `ai_artefacts/manual_test_checklist.md` § T8 (resize to 1280x1024 or an ultrawide, confirm no stretch and flat bars; click in a bar and confirm no world action).
+- [ ] app functional: `cargo run -- rts --frames 60` — **unchecked for the same reason: without `SDL_VIDEODRIVER=offscreen` this opens a real window.** The offscreen equivalent is on the merge gate; the windowed one is `ai_artefacts/manual_test_checklist.md` § T8.
 - [x] commit msg draft: `feat(render): preserve logical RTS canvas across window shapes`

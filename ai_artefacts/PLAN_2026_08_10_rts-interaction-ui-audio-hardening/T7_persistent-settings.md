@@ -95,6 +95,6 @@
 - [x] `cargo test -p millions_must_die --locked rts_settings`
 - [x] `cargo test -p millions_must_die --locked --test rts_cli_contract offscreen_settings`
 - [x] `cargo check --workspace --all-targets --all-features --locked`
-- [x] manual check: launch, create cfg via test helper, relaunch → loaded values printed in debug overlay
+- [ ] manual check: launch, create cfg via test helper, relaunch → loaded values printed in debug overlay — **unchecked in the review-fix pass: this needs a real window and nobody opened one.** The equivalent human steps live in `ai_artefacts/manual_test_checklist.md` § T7 (hand-write a `settings-v1.json` with legal non-default values, relaunch, confirm the `rts: settings ...` line matches).
 - [x] app functional: `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3`
 - [x] commit msg draft: `feat(app): persist validated RTS settings outside deterministic runs`

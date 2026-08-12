@@ -5,3 +5,6 @@
 # Generated knowledge graph (AGENT.md § graphify). Rebuilt with `graphify update .`;
 # tens of megabytes, and stale the moment the tree moves.
 /graphify-out/
+
+# Scratch/progress notes kept out of the tracked history.
+/.tmp/
