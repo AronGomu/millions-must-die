@@ -80,6 +80,18 @@ Rotated movement priority is choke fairness. No random/choke detector.
 - Production: ready head spawns at nearest legal position; no space → head stays ready/paid/reserved.
 - Site completion: atomically preplan all body evacuations before solid stamp. Failure → site stays final pre-complete tick/walkable.
 - New spawns participate in same tick collision sweep.
+- **Every one of those relocations is confined to one connected region of legal
+  body centres.** Raw Euclidean distance alone would pick the legal centre one
+  cell across a wall whenever it is nearer than anything on the body's own
+  side, teleporting an evacuated, produced or overlap-repaired unit into a
+  pocket it could never have walked to. `StaticNav` therefore labels
+  connected components of `center_blocked` on every mask rebuild, using the
+  same 8-neighbour, no-corner-cut rule the pooled fields integrate with, so
+  "same component" means exactly what "reachable" means to a walk — answered in
+  O(1) instead of by building a field per relocation. A body standing where no
+  body may legally stand (a building finished on top of it) has no component of
+  its own; the anchor is then the region holding the nearest legal centre to
+  it, which is its own pocket.
 
 Raw store mutation becomes crate-private/testkit-only.
 

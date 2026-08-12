@@ -351,6 +351,24 @@ enum BodySweep {
 /// `exclude` is a cell rectangle (minimum corner, edge) no candidate body may
 /// penetrate: the footprint a building is about to occupy, which is not in
 /// `static_nav` yet because the plan that would stamp it may still fail.
+///
+/// # Connectivity
+///
+/// A relocation is a body being *moved*, not teleported. Raw Euclidean
+/// distance alone would happily pick the legal centre one cell across a wall
+/// — nearer than anything on the body's own side — and drop an evacuated,
+/// produced or repaired unit into a pocket it could never have walked to and
+/// may never walk out of. So a candidate must also lie in the *same connected
+/// region of legal centres* as `preferred`, by
+/// [`StaticNav::connected`] — the same 8-neighbour, no-corner-cut rule the
+/// pooled fields integrate with, so "connected" here means exactly what
+/// "reachable" means to a walk.
+///
+/// `preferred` itself may be illegal (a body inside the footprint a building
+/// is about to occupy is exactly that), and an illegal cell has no region.
+/// The anchor region is then the one holding the nearest legal centre to
+/// `preferred` — the pocket the body is standing in — which is the same
+/// answer whenever `preferred` is legal, so there is one rule, not two.
 fn nearest_free_body_center(
     static_nav: &StaticNav,
     placed: &[[f32; 2]],
@@ -362,12 +380,16 @@ fn nearest_free_body_center(
     let height = static_nav.height();
     let cb = static_nav.center_blocked();
     let diam2 = RTS_UNIT_BODY_DIAMETER_CELLS * RTS_UNIT_BODY_DIAMETER_CELLS;
+    let anchor = anchor_component(static_nav, preferred)?;
 
     let mut best: Option<(f32, u32)> = None;
     for y in 0..height {
         for x in 0..width {
             let idx = (x + y * width) as usize;
             if cb[idx] {
+                continue;
+            }
+            if static_nav.component_at(Cell { x, y }) != Some(anchor) {
                 continue;
             }
             let p = [x as f32 + 0.5, y as f32 + 0.5];
@@ -391,6 +413,43 @@ fn nearest_free_body_center(
         }
     }
     best.map(|(_, idx)| [(idx % width) as f32 + 0.5, (idx / width) as f32 + 0.5])
+}
+
+/// The connected region [`nearest_free_body_center`] confines its search to:
+/// the one holding `preferred`, or — when `preferred` is not itself a legal
+/// body centre — the one holding the nearest legal centre to it.
+///
+/// `None` only when the grid has no legal body centre at all.
+fn anchor_component(static_nav: &StaticNav, preferred: [f32; 2]) -> Option<u32> {
+    let width = static_nav.width();
+    let height = static_nav.height();
+    let cell = Cell {
+        x: (preferred[0].floor().max(0.0) as u32).min(width.saturating_sub(1)),
+        y: (preferred[1].floor().max(0.0) as u32).min(height.saturating_sub(1)),
+    };
+    if let Some(c) = static_nav.component_at(cell) {
+        return Some(c);
+    }
+    let cb = static_nav.center_blocked();
+    let mut best: Option<(f32, u32)> = None;
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (x + y * width) as usize;
+            if cb[idx] {
+                continue;
+            }
+            let d = dist2([x as f32 + 0.5, y as f32 + 0.5], preferred);
+            let idx = idx as u32;
+            if best.is_none_or(|(bd, bi)| d < bd || (d == bd && idx < bi)) {
+                best = Some((d, idx));
+            }
+        }
+    }
+    let (_, idx) = best?;
+    static_nav.component_at(Cell {
+        x: idx % width,
+        y: idx / width,
+    })
 }
 
 impl RtsWorld {
@@ -2536,5 +2595,112 @@ impl RtsWorld {
         h.update(self.supply.used().to_le_bytes());
         h.update(self.supply.cap().to_le_bytes());
         h.finalize().into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rts::entity::RTS_UNIT_BODY_RADIUS_CELLS;
+
+    const W: u32 = 40;
+    const H: u32 = 40;
+
+    fn idx(x: u32, y: u32) -> usize {
+        (x + y * W) as usize
+    }
+
+    /// A 40x40 grid, solid except for a sealed 7 x 7 room at
+    /// `[2, 9) x [2, 9)` and a wide open field at `[20, 38) x [2, 38)`.
+    ///
+    /// A 7-cell room has exactly one legal centre for a 3-cell body \u2014 its
+    /// middle, `(5, 5)` \u2014 so the room is a one-body pocket with no route
+    /// anywhere. The open field is full of legal centres, all of them
+    /// disconnected from the room.
+    fn sealed_room_and_open_field() -> StaticNav {
+        let mut solids = vec![true; (W * H) as usize];
+        for y in 2..9u32 {
+            for x in 2..9u32 {
+                solids[idx(x, y)] = false;
+            }
+        }
+        for y in 2..38u32 {
+            for x in 20..38u32 {
+                solids[idx(x, y)] = false;
+            }
+        }
+        StaticNav::from_raw(W, H, solids, RTS_UNIT_BODY_RADIUS_CELLS)
+    }
+
+    #[test]
+    fn the_sealed_room_holds_exactly_one_legal_centre() {
+        let nav = sealed_room_and_open_field();
+        let legal: Vec<(u32, u32)> = (0..H)
+            .flat_map(|y| (0..W).map(move |x| (x, y)))
+            .filter(|&(x, y)| !nav.center_blocked()[idx(x, y)])
+            .filter(|&(x, _)| x < 20)
+            .collect();
+        assert_eq!(
+            legal,
+            vec![(5, 5)],
+            "the room's geometry must leave exactly one legal body centre"
+        );
+        assert!(
+            !nav.connected(Cell { x: 5, y: 5 }, Cell { x: 28, y: 20 }),
+            "the room and the open field must be separate regions"
+        );
+    }
+
+    /// A relocation moves a body; it does not teleport it. When the only free
+    /// legal centre near a unit is on the far side of a wall, the answer is
+    /// \"nowhere\", not \"through the wall\".
+    ///
+    /// Without the connectivity rule this returned the nearest cell of the
+    /// open field by raw Euclidean distance \u2014 dropping an evacuated, produced
+    /// or overlap-repaired body into a pocket it could never have walked to.
+    #[test]
+    fn a_relocation_never_crosses_into_a_disconnected_region() {
+        let nav = sealed_room_and_open_field();
+        let occupied = [[5.5f32, 5.5]];
+
+        // The room's one legal centre is taken, and everything else legal is
+        // across the wall.
+        assert_eq!(
+            nearest_free_body_center(&nav, &occupied, None, None, [5.5, 5.5]),
+            None,
+            "a body in a full one-slot pocket has nowhere to go, and the open \
+             field on the far side of the wall is not an answer"
+        );
+
+        // Same call with the pocket empty: it still finds the pocket's own
+        // centre, so the rule refuses a teleport rather than refusing to work.
+        assert_eq!(
+            nearest_free_body_center(&nav, &[], None, None, [5.5, 5.5]),
+            Some([5.5, 5.5])
+        );
+    }
+
+    /// The anchor is resolved even when the body is standing somewhere no
+    /// body may legally stand \u2014 which is exactly the case a building
+    /// finishing on top of one produces. It resolves to the pocket the body
+    /// is in, never to the far side of a wall.
+    #[test]
+    fn an_illegal_start_still_anchors_to_its_own_region() {
+        let nav = sealed_room_and_open_field();
+        // A corner of the room: legal for nothing, one cell inside the wall's
+        // clearance.
+        let inside_the_room = [2.5f32, 2.5];
+        assert!(nav.center_blocked()[idx(2, 2)]);
+        assert_eq!(
+            nearest_free_body_center(&nav, &[], None, None, inside_the_room),
+            Some([5.5, 5.5]),
+            "an illegal start anchors to the region holding the nearest legal \
+             centre, which is its own room"
+        );
+        assert_eq!(
+            nearest_free_body_center(&nav, &[[5.5, 5.5]], None, None, inside_the_room),
+            None,
+            "and with that region full, there is no answer at all"
+        );
     }
 }

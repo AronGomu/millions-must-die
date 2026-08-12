@@ -45,7 +45,23 @@ pub struct StaticNav {
     /// Per-cell: is this cell's centre a legal position for a body of the
     /// radius last passed to [`Self::rebuild_center_blocked`]?
     center_blocked: Vec<bool>,
+    /// Connected-component id per cell over [`Self::center_blocked`],
+    /// [`NO_COMPONENT`] for a blocked cell.
+    ///
+    /// Connectivity is the *same* rule a pooled flow field integrates with —
+    /// 8 neighbours, no diagonal corner cut — so "same component" is exactly
+    /// "a field to one would resolve a finite cost at the other". That is
+    /// what makes this a legitimate substitute for building a field just to
+    /// ask a reachability question, which every body-relocation site needs
+    /// and none of them can afford.
+    components: Vec<u32>,
+    /// Reused flood-fill stack, so [`Self::rebuild_center_blocked`] allocates
+    /// nothing after construction.
+    component_stack: Vec<u32>,
 }
+
+/// [`StaticNav::component_at`]'s answer for a blocked cell: no component.
+pub const NO_COMPONENT: u32 = u32::MAX;
 
 impl StaticNav {
     /// Build from a validated scenario and the entity store at the moment
@@ -111,6 +127,8 @@ impl StaticNav {
             solids,
             placement_solids,
             center_blocked: vec![false; n],
+            components: vec![NO_COMPONENT; n],
+            component_stack: Vec::with_capacity(n),
         };
         nav.rebuild_center_blocked(super::entity::RTS_UNIT_BODY_RADIUS_CELLS);
         Ok(nav)
@@ -236,19 +254,105 @@ impl StaticNav {
             solids,
             placement_solids,
             center_blocked: vec![false; n],
+            components: vec![NO_COMPONENT; n],
+            component_stack: Vec::with_capacity(n),
         };
         nav.rebuild_center_blocked(radius);
         nav
     }
 
     /// Recompute [`Self::center_blocked`] for a body of `radius` cells, from
-    /// the current [`Self::solids`].
+    /// the current [`Self::solids`], and relabel [`Self::components`] with it.
     pub fn rebuild_center_blocked(&mut self, radius: f32) {
         for y in 0..self.height {
             for x in 0..self.width {
                 let idx = (x + y * self.width) as usize;
                 let p = [x as f32 + 0.5, y as f32 + 0.5];
                 self.center_blocked[idx] = !self.position_clear(p, radius);
+            }
+        }
+        self.rebuild_components();
+    }
+
+    /// Which connected region of legal body centres `cell` belongs to, or
+    /// `None` when it is blocked (or off the grid).
+    pub fn component_at(&self, cell: Cell) -> Option<u32> {
+        if cell.x >= self.width || cell.y >= self.height {
+            return None;
+        }
+        match self.components[(cell.x + cell.y * self.width) as usize] {
+            NO_COMPONENT => None,
+            c => Some(c),
+        }
+    }
+
+    /// Whether a body standing at `a` could walk to `b` — same component, by
+    /// the field's own connectivity rule. Blocked or off-grid on either side
+    /// is `false`.
+    pub fn connected(&self, a: Cell, b: Cell) -> bool {
+        match (self.component_at(a), self.component_at(b)) {
+            (Some(ca), Some(cb)) => ca == cb,
+            _ => false,
+        }
+    }
+
+    /// Flood-fill [`Self::components`] over [`Self::center_blocked`].
+    ///
+    /// Ascending cell index seeds the labels, so a given mask always produces
+    /// the same ids — nothing here depends on scan order beyond that.
+    fn rebuild_components(&mut self) {
+        self.components.fill(NO_COMPONENT);
+        let width = self.width as i32;
+        let height = self.height as i32;
+        let mut next = 0u32;
+        for seed in 0..self.center_blocked.len() {
+            if self.center_blocked[seed] || self.components[seed] != NO_COMPONENT {
+                continue;
+            }
+            let id = next;
+            next += 1;
+            self.components[seed] = id;
+            self.component_stack.clear();
+            self.component_stack.push(seed as u32);
+            while let Some(idx) = self.component_stack.pop() {
+                let cx = (idx % self.width) as i32;
+                let cy = (idx / self.width) as i32;
+                for (dx, dy) in [
+                    (0, -1),
+                    (1, -1),
+                    (1, 0),
+                    (1, 1),
+                    (0, 1),
+                    (-1, 1),
+                    (-1, 0),
+                    (-1, -1),
+                ] {
+                    let nx = cx + dx;
+                    let ny = cy + dy;
+                    if nx < 0 || ny < 0 || nx >= width || ny >= height {
+                        continue;
+                    }
+                    let n_idx = (nx as u32 + ny as u32 * self.width) as usize;
+                    if self.center_blocked[n_idx] || self.components[n_idx] != NO_COMPONENT {
+                        continue;
+                    }
+                    if dx != 0
+                        && dy != 0
+                        && !crate::nav::flow_field::diagonal_clear(
+                            cx,
+                            cy,
+                            dx,
+                            dy,
+                            self.width,
+                            self.height,
+                            &self.center_blocked,
+                        )
+                    {
+                        continue;
+                    }
+                    self.components[n_idx] = id;
+                    self.component_stack.push(n_idx as u32);
+                }
             }
         }
     }
