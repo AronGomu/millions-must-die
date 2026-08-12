@@ -58,6 +58,7 @@ pub use selection::{
 };
 pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
-    ContextOrderReason, ContextOrderResult, IssuedOrder, NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT,
-    OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError, UnitOrderReceipt,
+    ContextOrderReason, ContextOrderResult, DEFAULT_CAMERA_PAN_SPEED, IssuedOrder,
+    NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT, OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError,
+    UnitOrderReceipt,
 };

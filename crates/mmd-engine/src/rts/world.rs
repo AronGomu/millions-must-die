@@ -3,7 +3,7 @@
 use sha2::{Digest, Sha256};
 
 use crate::nav::field_pool::{FieldPool, FieldPoolError};
-use crate::render::{Camera, IsoView, VIEW_HEIGHT, VIEW_WIDTH, screen_dir_to_cells};
+use crate::render::{Camera, IsoView, VIEW_HEIGHT, VIEW_WIDTH, screen_axes_to_cells};
 use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
@@ -236,10 +236,23 @@ pub struct RtsWorld {
     /// The view every packer projects through. World state, not view state: a
     /// replay that ends looking somewhere else did not reproduce.
     camera: Camera,
-    /// Screen-space pan direction applied every tick, set by the input layer.
-    /// Each component in `-1.0..=1.0`.
-    pan_dir: [f32; 2],
+    /// Held arrow-key pan direction, set by the input layer. Each component
+    /// in `-1.0..=1.0`. Transient input, not world state.
+    keyboard_pan_dir: [f32; 2],
+    /// Pointer-edge pan direction, set by the input layer. Each component in
+    /// `-1.0..=1.0`. Transient input, not world state.
+    edge_pan_dir: [f32; 2],
+    /// Keyboard pan speed, cells/second. Transient config, not world state.
+    keyboard_pan_speed: f32,
+    /// Edge pan speed, cells/second. Transient config, not world state.
+    edge_pan_speed: f32,
 }
+
+/// The camera pan speed a world starts with, before the app applies the
+/// player's persisted settings value. The app's settings module lives
+/// outside this crate and cannot be imported here, so this mirrors its
+/// default (`48`) rather than sharing it.
+pub const DEFAULT_CAMERA_PAN_SPEED: f32 = 48.0;
 
 /// How many bodies one mover may displace, in total, in a single step —
 /// counting the bodies it touches directly and every body those in turn have
@@ -512,7 +525,10 @@ impl RtsWorld {
             evac_to: Vec::with_capacity(MAX_ENTITIES),
             production: ProductionTable::new(),
             camera,
-            pan_dir: [0.0, 0.0],
+            keyboard_pan_dir: [0.0, 0.0],
+            edge_pan_dir: [0.0, 0.0],
+            keyboard_pan_speed: DEFAULT_CAMERA_PAN_SPEED,
+            edge_pan_speed: DEFAULT_CAMERA_PAN_SPEED,
         })
     }
 
@@ -616,15 +632,39 @@ impl RtsWorld {
         self.camera.iso_view()
     }
 
-    /// Set the per-tick pan direction, in **screen** space. Components are
-    /// expected in `-1.0..=1.0`.
-    pub fn set_pan_dir(&mut self, dir: [f32; 2]) {
-        self.pan_dir = dir;
+    /// Set the held arrow-key pan direction, in **screen** space.
+    /// Components are expected in `-1.0..=1.0`.
+    pub fn set_keyboard_pan_dir(&mut self, dir: [f32; 2]) {
+        self.keyboard_pan_dir = dir;
     }
 
-    /// The per-tick screen-space pan direction.
-    pub fn pan_dir(&self) -> [f32; 2] {
-        self.pan_dir
+    /// The held arrow-key pan direction.
+    pub fn keyboard_pan_dir(&self) -> [f32; 2] {
+        self.keyboard_pan_dir
+    }
+
+    /// Set the pointer-edge pan direction, in **screen** space. Components
+    /// are expected in `-1.0..=1.0`.
+    pub fn set_edge_pan_dir(&mut self, dir: [f32; 2]) {
+        self.edge_pan_dir = dir;
+    }
+
+    /// The pointer-edge pan direction.
+    pub fn edge_pan_dir(&self) -> [f32; 2] {
+        self.edge_pan_dir
+    }
+
+    /// Set the keyboard and edge pan speeds, cells/second. Applied by the app
+    /// from the player's persisted settings before the first tick.
+    pub fn set_camera_speeds(&mut self, keyboard: f32, edge: f32) {
+        self.keyboard_pan_speed = keyboard;
+        self.edge_pan_speed = edge;
+    }
+
+    /// Centre the camera on a fractional map point (clamped to the
+    /// frontier). Minimap-ready: `point` need not be a cell centre.
+    pub fn look_at_map_point(&mut self, point: [f32; 2]) {
+        self.camera.look_at_point(point);
     }
 
     pub fn selection(&self) -> &Selection {
@@ -1301,16 +1341,19 @@ impl RtsWorld {
         self.selection.retain_live(&self.entities);
     }
 
-    /// System 2: apply one tick of the pan direction the input layer set.
+    /// System 2: apply one tick of the keyboard and edge pan the input layer
+    /// set.
     ///
-    /// The direction is **screen** space — that is what a key or a screen edge
-    /// gives you — so it is converted through the live projection's tile before
-    /// it moves a cell-space centre. Panning the raw screen vector would send
-    /// the camera diagonally across the map for a "right" that is not right.
+    /// Both directions are **screen** space — that is what a key or a screen
+    /// edge gives you — so each is converted to its cell-space cardinal basis
+    /// before it moves the centre. The two sources are additive and each
+    /// keeps its own persisted speed; neither is diagonal-normalised.
     fn camera_system(&mut self) {
-        let v = self.camera.iso_view();
-        let d = screen_dir_to_cells(self.pan_dir, v.tile_w, v.tile_h);
-        self.camera.pan_tick(d, TICK_DT);
+        let kb = screen_axes_to_cells(self.keyboard_pan_dir);
+        let ed = screen_axes_to_cells(self.edge_pan_dir);
+        let dx = kb[0] * self.keyboard_pan_speed + ed[0] * self.edge_pan_speed;
+        let dy = kb[1] * self.keyboard_pan_speed + ed[1] * self.edge_pan_speed;
+        self.camera.pan_cells(dx * TICK_DT, dy * TICK_DT);
     }
 
     /// System 3: advance every attended construction site by one tick, finish

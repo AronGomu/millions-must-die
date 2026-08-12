@@ -88,8 +88,8 @@ struct RtsSession {
     /// Left button pressed at this position, if it is down.
     press: Option<[f32; 2]>,
     drag: Option<DragBox>,
-    /// Currently held pan directions, summed and clamped per axis.
-    pan_held: [f32; 2],
+    /// Currently held keyboard pan directions, summed and clamped per axis.
+    keyboard_held: [f32; 2],
     paused: bool,
     overlay_visible: bool,
     quit: bool,
@@ -103,7 +103,7 @@ impl Default for RtsSession {
             cursor: [0.0, 0.0],
             press: None,
             drag: None,
-            pan_held: [0.0, 0.0],
+            keyboard_held: [0.0, 0.0],
             paused: false,
             overlay_visible: false,
             quit: false,
@@ -183,12 +183,12 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             }
         }
         RtsCommand::PanStart(d) => {
-            session.pan_held = clamp_axes(add2(session.pan_held, d));
-            world.set_pan_dir(session.pan_held);
+            session.keyboard_held = clamp_axes(add2(session.keyboard_held, d));
+            world.set_keyboard_pan_dir(session.keyboard_held);
         }
         RtsCommand::PanStop(d) => {
-            session.pan_held = clamp_axes(sub2(session.pan_held, d));
-            world.set_pan_dir(session.pan_held);
+            session.keyboard_held = clamp_axes(sub2(session.keyboard_held, d));
+            world.set_keyboard_pan_dir(session.keyboard_held);
         }
         RtsCommand::Move(p) => {
             session.cursor = p;
@@ -198,7 +198,7 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
                 session.drag = Some(DragBox { a, b: p });
             }
             let edge = edge_pan_dir(p, [VIEW_WIDTH as f32, VIEW_HEIGHT as f32]);
-            world.set_pan_dir(clamp_axes(add2(session.pan_held, edge)));
+            world.set_edge_pan_dir(edge);
         }
         RtsCommand::LeftClick(p) => {
             if let Placement::Pending { kind } = world.placement() {
@@ -360,6 +360,10 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     };
 
     let mut world = RtsWorld::load(&scenario_path).map_err(|e| load_error(&scenario_path, e))?;
+    world.set_camera_speeds(
+        settings.camera.keyboard_pan as f32,
+        settings.camera.edge_pan as f32,
+    );
     let mut renderer = SpriteRenderer::new(&root, true).map_err(from_render)?;
     let iso = world.iso_view();
     renderer.set_depth_params(iso.depth_scale, iso.depth_bias);

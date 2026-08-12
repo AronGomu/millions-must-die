@@ -112,10 +112,20 @@ pub struct ScenePass<'a> {
     pub overlay: &'a [SpriteInstance],
     /// Screen-space UI, grouped by texture slot.
     pub ui: &'a [DrawGroup],
+    /// This pass's own depth uniforms, if it has one.
+    ///
+    /// `None` is the phase-0 shape: the renderer falls back to its
+    /// constructor-fixed `(depth_scale, depth_bias)` via
+    /// [`SpriteRenderer::set_depth_params`], which keeps every legacy caller
+    /// and the committed golden byte-identical. `Some` is what an RTS scene
+    /// packed this tick supplies, so a panned camera's depth bias follows it
+    /// instead of staying pinned to frame 0's.
+    pub frame_uniforms: Option<FrameUniforms>,
 }
 
 impl<'a> ScenePass<'a> {
-    /// The phase-0 shape: world groups plus a ring overlay, no UI.
+    /// The phase-0 shape: world groups plus a ring overlay, no UI, no
+    /// per-pass frame uniforms.
     ///
     /// With `ui` empty the pass emits exactly the sequence of binds and draws
     /// the four-group path emitted before the table existed, which is what
@@ -125,6 +135,7 @@ impl<'a> ScenePass<'a> {
             world,
             overlay: rings,
             ui: &[],
+            frame_uniforms: None,
         }
     }
 }
@@ -660,11 +671,11 @@ impl SpriteRenderer {
 
         // Render pass → offscreen; acquire fence for queue-depth + latency proxy.
         let cmd = device.acquire_command_buffer()?;
-        let uniforms = FrameUniforms {
+        let uniforms = scene.frame_uniforms.unwrap_or(FrameUniforms {
             view_size: [VIEW_WIDTH as f32, VIEW_HEIGHT as f32],
             depth_scale: self.depth_scale,
             depth_bias: self.depth_bias,
-        };
+        });
         cmd.push_vertex_uniform_data(0, &uniforms);
 
         let color_targets = [ColorTargetInfo::default()

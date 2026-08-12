@@ -81,3 +81,13 @@
 - [ ] With that same non-16:9 window, click in one of the clear-colour bars: confirm nothing happens — no selection, no order, no placement — while a click on the actual scene content still works normally.
 - [ ] Move the mouse from inside the scene content out into a bar and hold it against the physical edge of the window: confirm the camera still edge-pans (the clamp-to-edge behavior), the same as parking the pointer against the content edge on an exact-16:9 window.
 - [ ] Run a scripted session (`cargo run -- rts --frames 5 --inject-input "1:move:960,540;2:lclick:960,540"`) and confirm clicks/moves still land on the same logical cell they always have — scripted coordinates are unaffected by the live aspect-fit transform.
+
+## T9 camera-frontier-and-speeds
+
+- [ ] Launch `cargo run -- rts` and hold the right arrow key until the camera stops moving: confirm it stops with the map's right edge still fully filling the screen (no dead space beyond the diamond), not at some arbitrary distance short of it.
+- [ ] Repeat holding left, up and down: confirm the camera stops at each of the map's four edges the same way, and never shows blank space past any of them.
+- [ ] Park the pointer against a screen edge (edge-pan) at each of the four edges in turn: confirm edge-pan clamps at the same frontier the keyboard pan does.
+- [ ] Hold an arrow key *and* park the pointer on a different edge at the same time: confirm the camera moves faster (both speeds add) while both are held, and still stops cleanly at the frontier.
+- [ ] With `camera.keyboard_pan` and `camera.edge_pan` set to different values in `settings-v1.json` (e.g. `keyboard_pan: 24`, `edge_pan: 96`), launch `cargo run -- rts`: confirm holding an arrow key visibly pans slower than parking the pointer on an edge.
+- [ ] While the camera is panned away from the base, watch units near the *bottom* of the screen relative to ones near the *top*: confirm the depth/occlusion ordering (nearer sprites still draw in front of farther ones) stays correct after the pan — it must not look like the pre-pan frame's depth is still in effect.
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the panned-camera milestone still visibly moves the view away from the base and the rest of the flow (select → gather → build → produce) completes normally.

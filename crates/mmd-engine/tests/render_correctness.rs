@@ -2897,6 +2897,7 @@ fn ui_layer_draws_over_the_world() {
             world: &world,
             overlay: &overlay,
             ui: &[],
+            frame_uniforms: None,
         })
         .expect("world + overlay readback");
     assert_ne!(
@@ -2915,6 +2916,7 @@ fn ui_layer_draws_over_the_world() {
             world: &world,
             overlay: &overlay,
             ui: &ui,
+            frame_uniforms: None,
         })
         .expect("world + overlay + ui readback");
     assert_eq!(
@@ -2973,6 +2975,7 @@ fn ui_layer_is_not_depth_tested() {
             world: &world,
             overlay: &[],
             ui: &ui,
+            frame_uniforms: None,
         })
         .expect("readback");
     assert_eq!(

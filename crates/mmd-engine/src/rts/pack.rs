@@ -12,8 +12,8 @@
 //! would sample the wrong sheet.
 
 use crate::render::{
-    DrawGroup, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER, SLOT_UI_FONT,
-    ScenePass, SpriteInstance, frame_uv_rect, quad_is_visible,
+    DrawGroup, FrameUniforms, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER,
+    SLOT_RTS_WORKER, SLOT_UI_FONT, ScenePass, SpriteInstance, frame_uv_rect, quad_is_visible,
 };
 use crate::runtime::ring_quad_size_px;
 use crate::scenario::Cell;
@@ -145,6 +145,11 @@ pub struct RtsFrame {
     /// Live-slot buffer [`pack_frame`] reuses, reserved to [`MAX_ENTITIES`] so
     /// `collect_live` never allocates.
     scratch: Vec<usize>,
+    /// The projection [`pack_frame`] packed this frame through — what
+    /// [`Self::scene`] hands the renderer so the depth uniforms follow the
+    /// live camera instead of the stale value fixed at renderer construction.
+    /// `None` before the first `pack_frame` call.
+    frame_uniforms: Option<FrameUniforms>,
 }
 
 impl Default for RtsFrame {
@@ -182,6 +187,7 @@ impl RtsFrame {
                 },
             ],
             scratch: Vec::with_capacity(MAX_ENTITIES),
+            frame_uniforms: None,
         }
     }
 
@@ -193,12 +199,14 @@ impl RtsFrame {
         self.overlay.clear();
     }
 
-    /// A [`ScenePass`] borrowing this frame.
+    /// A [`ScenePass`] borrowing this frame, carrying the frame uniforms of
+    /// the projection [`pack_frame`] last packed through.
     pub fn scene(&self) -> ScenePass<'_> {
         ScenePass {
             world: &self.world,
             overlay: &self.overlay,
             ui: &self.ui,
+            frame_uniforms: self.frame_uniforms,
         }
     }
 
@@ -246,6 +254,7 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
     frame.clear();
 
     let iso = world.iso_view();
+    frame.frame_uniforms = Some(iso.frame_uniforms());
     let store = world.entities();
     let sprite_size = RTS_SPRITE_SIZE_PX;
 

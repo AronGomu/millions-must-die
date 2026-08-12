@@ -7,15 +7,16 @@
 
 use mmd_engine::render::{
     DrawGroup, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER, SLOT_UI_FONT,
-    SpriteInstance, frame_uv_rect, quad_is_visible, screen_dir_to_cells,
+    SpriteInstance, frame_uv_rect, quad_is_visible, screen_axes_to_cells,
 };
 use mmd_engine::rts::{
-    BuildingKind, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_ENTITIES, OWNER_PLAYER,
-    Prop, ResourceKind, RtsFrame, UnitKind, building_quad_px, building_uv, ghost_min_corner,
-    node_uv, pack_frame, prop_uv, unit_slot,
+    BuildingKind, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind,
+    MAX_ENTITIES, OWNER_PLAYER, Prop, ResourceKind, RtsFrame, UnitKind, building_quad_px,
+    building_uv, ghost_min_corner, node_uv, pack_frame, prop_uv, unit_slot,
 };
 use mmd_engine::runtime::ring_quad_size_px;
 use mmd_engine::scenario::Cell;
+use mmd_engine::sim::TICK_DT;
 use mmd_engine::testkit::RtsHarness;
 
 /// The view centre, and therefore the default cursor: the tracked scene opens
@@ -338,13 +339,25 @@ fn sprites_stand_on_their_ground_point() {
 #[test]
 fn offscreen_entities_are_culled() {
     let mut h = scene();
-    h.world_mut().camera_mut().pan_cells(200.0, -200.0);
+    // The camera frontier keeps the view inside the map's projected diamond,
+    // so a pan can never carry the camera far enough from a 320x320 map's
+    // own centre to leave every entity offscreen. Moving every live entity
+    // instead — the same test-only hook `culling_uses_the_same_rect_as_the_
+    // horde` uses — isolates the thing this test actually checks: the
+    // packer's per-quad cull, not how far a legal camera can travel.
+    let mut live = Vec::new();
+    h.world().entities().collect_live(&mut live);
+    for slot in live {
+        h.world_mut()
+            .entities_mut()
+            .set_position(slot, [10_000.0, 10_000.0]);
+    }
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), CURSOR, None, &mut frame);
     assert_eq!(
         world_total(&frame),
         0,
-        "a camera 200 cells off the base packs nothing"
+        "every entity moved off the visible view must pack nothing"
     );
 }
 
@@ -724,28 +737,82 @@ fn the_camera_starts_on_the_base() {
         (p[0] - 960.0).abs() < 1e-3 && (p[1] - 540.0).abs() < 1e-3,
         "the HQ centre must open dead centre of the view, got {p:?}"
     );
-    assert_eq!(h.world().pan_dir(), [0.0, 0.0]);
+    assert_eq!(h.world().keyboard_pan_dir(), [0.0, 0.0]);
+    assert_eq!(h.world().edge_pan_dir(), [0.0, 0.0]);
 }
 
 #[test]
-fn pan_dir_moves_the_camera_each_tick() {
+fn keyboard_pan_moves_the_camera_at_the_documented_speed() {
     let mut h = scene();
     let start = h.world().camera().center();
-    let iso = h.world().iso_view();
 
-    h.world_mut().set_pan_dir([1.0, 0.0]);
-    h.step_exact(60);
+    h.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
+    h.step_exact(1);
 
-    // One second of panning at CAMERA_PAN_CELLS_PER_SEC, along the cell-space
-    // direction a screen-space `+x` maps to.
-    let d = screen_dir_to_cells([1.0, 0.0], iso.tile_w, iso.tile_h);
-    let want = [start[0] + d[0] * 24.0, start[1] + d[1] * 24.0];
+    // One tick at `DEFAULT_CAMERA_PAN_SPEED`, along the cell-space cardinal
+    // basis a screen-space `+x` maps to.
+    let d = screen_axes_to_cells([1.0, 0.0]);
+    let want = [
+        start[0] + d[0] * DEFAULT_CAMERA_PAN_SPEED * TICK_DT,
+        start[1] + d[1] * DEFAULT_CAMERA_PAN_SPEED * TICK_DT,
+    ];
     let got = h.world().camera().center();
     assert!(
-        (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
-        "after 60 ticks the centre is {got:?}, expected {want:?}"
+        (got[0] - want[0]).abs() < 1e-4 && (got[1] - want[1]).abs() < 1e-4,
+        "after 1 tick the centre is {got:?}, expected {want:?}"
     );
     assert_ne!(got, start);
+}
+
+#[test]
+fn keyboard_and_edge_speeds_are_independent() {
+    let mut h = scene();
+    let start = h.world().camera().center();
+    h.world_mut().set_camera_speeds(48.0, 96.0);
+
+    h.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
+    h.step_exact(1);
+    let kb_only = h.world().camera().center();
+
+    h.world_mut().set_keyboard_pan_dir([0.0, 0.0]);
+    h.world_mut().set_edge_pan_dir([1.0, 0.0]);
+    h.step_exact(1);
+    let after_edge_only = h.world().camera().center();
+
+    let kb = screen_axes_to_cells([1.0, 0.0]);
+    let want_kb = [
+        start[0] + kb[0] * 48.0 * TICK_DT,
+        start[1] + kb[1] * 48.0 * TICK_DT,
+    ];
+    assert!(
+        (kb_only[0] - want_kb[0]).abs() < 1e-4 && (kb_only[1] - want_kb[1]).abs() < 1e-4,
+        "keyboard-only step was {kb_only:?}, expected {want_kb:?}"
+    );
+
+    let want_edge = [
+        kb_only[0] + kb[0] * 96.0 * TICK_DT,
+        kb_only[1] + kb[1] * 96.0 * TICK_DT,
+    ];
+    assert!(
+        (after_edge_only[0] - want_edge[0]).abs() < 1e-4
+            && (after_edge_only[1] - want_edge[1]).abs() < 1e-4,
+        "edge-only step was {after_edge_only:?}, expected {want_edge:?}"
+    );
+
+    // Additive: holding both at once moves by the sum of the two.
+    h.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
+    h.world_mut().set_edge_pan_dir([1.0, 0.0]);
+    let before_both = h.world().camera().center();
+    h.step_exact(1);
+    let after_both = h.world().camera().center();
+    let want_both = [
+        before_both[0] + kb[0] * (48.0 + 96.0) * TICK_DT,
+        before_both[1] + kb[1] * (48.0 + 96.0) * TICK_DT,
+    ];
+    assert!(
+        (after_both[0] - want_both[0]).abs() < 1e-4 && (after_both[1] - want_both[1]).abs() < 1e-4,
+        "combined step was {after_both:?}, expected {want_both:?}"
+    );
 }
 
 #[test]
@@ -772,8 +839,47 @@ fn state_hash_sees_the_camera() {
     // differently must not agree.
     let mut still = scene();
     let mut panning = scene();
-    panning.world_mut().set_pan_dir([1.0, 0.0]);
+    panning.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
     still.step_exact(1);
     panning.step_exact(1);
     assert_ne!(still.state_hash(), panning.state_hash());
+}
+
+#[test]
+fn look_at_map_point_moves_the_camera_and_hashes() {
+    let mut h = scene();
+    let before = h.state_hash();
+    // Chosen to fall well inside this scene's frontier (projected x in
+    // [-320, 320], y in [540, 740] with origin [0, 0]) so the clamp does not
+    // fire and the point centres exactly.
+    h.world_mut().look_at_map_point([200.5, 150.5]);
+    let p = h.world().iso_view().project(200.5, 150.5);
+    assert!(
+        (p[0] - 960.0).abs() < 1e-3 && (p[1] - 540.0).abs() < 1e-3,
+        "look_at_map_point must centre the requested map point, got {p:?}"
+    );
+    assert_ne!(h.state_hash(), before, "the camera is world state");
+}
+
+#[test]
+fn depth_uniforms_follow_the_panned_camera() {
+    let mut h = scene();
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    let before = frame
+        .scene()
+        .frame_uniforms
+        .expect("pack_frame must supply frame uniforms");
+
+    h.world_mut().camera_mut().pan_cells(20.0, 0.0);
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    let after = frame
+        .scene()
+        .frame_uniforms
+        .expect("pack_frame must supply frame uniforms");
+
+    assert_ne!(
+        before.depth_bias, after.depth_bias,
+        "a pan must move the packed depth bias, or the renderer draws stale depth"
+    );
 }

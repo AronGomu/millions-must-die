@@ -25,7 +25,7 @@ pub use backend::{
     validate_macos_host_arch,
 };
 pub use camera::{
-    CAMERA_PAN_CELLS_PER_SEC, Camera, EDGE_PAN_MARGIN_PX, edge_pan_dir, screen_dir_to_cells,
+    Camera, CameraFrontier, CameraPanIntent, EDGE_PAN_MARGIN_PX, edge_pan_dir, screen_axes_to_cells,
 };
 pub use device::GpuContext;
 pub use error::RenderError;

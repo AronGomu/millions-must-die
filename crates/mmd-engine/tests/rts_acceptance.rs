@@ -283,10 +283,10 @@ fn drive() -> Run {
     // screen space, converted through the live projection by the camera
     // system. A player who cannot look away from their own base cannot play.
     let camera_before_pan = h.world().camera().center();
-    h.world_mut().set_pan_dir([1.0, 0.0]);
+    h.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
     h.step_exact(TICKS_PAN);
     ticks += TICKS_PAN;
-    h.world_mut().set_pan_dir([0.0, 0.0]);
+    h.world_mut().set_keyboard_pan_dir([0.0, 0.0]);
     let camera_after_pan = h.world().camera().center();
 
     Run {

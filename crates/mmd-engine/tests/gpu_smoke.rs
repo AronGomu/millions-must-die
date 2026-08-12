@@ -274,6 +274,7 @@ fn text_renders_visible_pixels() {
             world: &[],
             overlay: &[],
             ui: &ui,
+            frame_uniforms: None,
         })
         .expect("readback");
 
@@ -327,6 +328,7 @@ fn text_is_drawn_over_the_world() {
             world: &world,
             overlay: &[],
             ui: &ui,
+            frame_uniforms: None,
         })
         .expect("readback");
 
@@ -539,6 +541,7 @@ fn the_hud_draws_over_the_world() {
             world: &world,
             overlay: &[],
             ui: &[],
+            frame_uniforms: None,
         })
         .expect("world-only readback");
     let over = r
@@ -546,6 +549,7 @@ fn the_hud_draws_over_the_world() {
             world: &world,
             overlay: &[],
             ui: &frame.ui,
+            frame_uniforms: None,
         })
         .expect("world + HUD readback");
 

@@ -1,12 +1,13 @@
-//! T4 — panning camera + screen<->cell unprojection.
+//! T4/T9 — panning camera, screen<->cell unprojection, and the projected
+//! camera frontier.
 //!
 //! Pure math, no GPU: every case here is a headless CPU check of
 //! `iso_unproject`, `IsoView::{unproject, cell_at, with_center_cell}` and the
-//! new `render::camera` module.
+//! `render::camera` module.
 
 use mmd_engine::render::{
-    CAMERA_PAN_CELLS_PER_SEC, Camera, EDGE_PAN_MARGIN_PX, IsoView, edge_pan_dir, iso_project,
-    iso_unproject, screen_dir_to_cells,
+    Camera, CameraFrontier, EDGE_PAN_MARGIN_PX, IsoView, edge_pan_dir, iso_project, iso_unproject,
+    screen_axes_to_cells,
 };
 use mmd_engine::scenario::Cell;
 
@@ -134,28 +135,80 @@ fn depth_key_is_camera_independent() {
     }
 }
 
+// --- T9: the projected camera frontier ---------------------------------
+
 #[test]
-fn panning_moves_the_origin_the_other_way() {
-    let mut camera = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
-    let before = camera.iso_view().origin;
-    camera.pan_cells(2.0, 0.0);
-    let after = camera.iso_view().origin;
-    assert!((after[0] - (before[0] - 2.0 * camera.iso_view().tile_w * 0.5)).abs() < 1e-3);
+fn frontier_shrinks_projected_map_by_view() {
+    // 320x320, tile 8x4 (cell_size_px 4), 1920x1080 view.
+    let frontier = CameraFrontier::new(320, 320, 8.0, 4.0, VIEW);
+    assert_eq!(frontier.x, [-320.0, 320.0]);
+    assert_eq!(frontier.y, [540.0, 740.0]);
 }
 
 #[test]
-fn pan_is_clamped_to_the_grid() {
+fn undersized_axis_collapses_to_midpoint() {
+    // A map far smaller than the view along both axes: the diamond's own
+    // extent minus half the view inverts on both, so each axis collapses to
+    // the diamond's un-inset midpoint.
+    let frontier = CameraFrontier::new(4, 4, 8.0, 4.0, VIEW);
+    // aabb_x = [-16, 16], midpoint 0. aabb_y = [0, 16], midpoint 8.
+    assert_eq!(frontier.x, [0.0, 0.0]);
+    assert_eq!(frontier.y, [8.0, 8.0]);
+}
+
+#[test]
+fn camera_cannot_cross_any_frontier_edge() {
     let mut camera = Camera::new(320, 320, 4.0, VIEW, [160.0, 160.0]);
-    camera.pan_cells(-10_000.0, -10_000.0);
-    assert_eq!(camera.center(), [0.0, 0.0]);
-    camera.pan_cells(10_000.0, 10_000.0);
-    assert_eq!(camera.center(), [320.0, 320.0]);
+    let frontier = camera.frontier();
+
+    camera.pan_cells(-1_000_000.0, -1_000_000.0);
+    let p = iso_project(camera.center()[0], camera.center()[1], 8.0, 4.0, [0.0, 0.0]);
+    assert!(
+        p[0] >= frontier.x[0] - 1e-3 && p[0] <= frontier.x[1] + 1e-3,
+        "{p:?}"
+    );
+    assert!(
+        p[1] >= frontier.y[0] - 1e-3 && p[1] <= frontier.y[1] + 1e-3,
+        "{p:?}"
+    );
+
+    camera.pan_cells(2_000_000.0, 2_000_000.0);
+    let p = iso_project(camera.center()[0], camera.center()[1], 8.0, 4.0, [0.0, 0.0]);
+    assert!(
+        p[0] >= frontier.x[0] - 1e-3 && p[0] <= frontier.x[1] + 1e-3,
+        "{p:?}"
+    );
+    assert!(
+        p[1] >= frontier.y[0] - 1e-3 && p[1] <= frontier.y[1] + 1e-3,
+        "{p:?}"
+    );
+
+    camera.look_at_point([-9_999.0, 9_999.0]);
+    let p = iso_project(camera.center()[0], camera.center()[1], 8.0, 4.0, [0.0, 0.0]);
+    assert!(
+        p[0] >= frontier.x[0] - 1e-3 && p[0] <= frontier.x[1] + 1e-3,
+        "{p:?}"
+    );
+    assert!(
+        p[1] >= frontier.y[0] - 1e-3 && p[1] <= frontier.y[1] + 1e-3,
+        "{p:?}"
+    );
 }
 
 #[test]
-fn start_center_is_clamped() {
-    let camera = Camera::new(64, 64, 4.0, VIEW, [999.0, -999.0]);
-    assert_eq!(camera.center(), [64.0, 0.0]);
+fn look_at_point_clamps_fractional_target() {
+    let mut camera = Camera::new(320, 320, 4.0, VIEW, [160.0, 160.0]);
+    let frontier = camera.frontier();
+    camera.look_at_point([500.0, -500.0]);
+    let p = iso_project(camera.center()[0], camera.center()[1], 8.0, 4.0, [0.0, 0.0]);
+    assert!(
+        p[0] >= frontier.x[0] - 1e-3 && p[0] <= frontier.x[1] + 1e-3,
+        "{p:?}"
+    );
+    assert!(
+        p[1] >= frontier.y[0] - 1e-3 && p[1] <= frontier.y[1] + 1e-3,
+        "{p:?}"
+    );
 }
 
 #[test]
@@ -167,27 +220,21 @@ fn a_non_finite_pan_is_ignored() {
 }
 
 #[test]
-fn pan_tick_uses_the_documented_speed() {
+fn a_non_finite_look_at_point_is_ignored() {
     let mut camera = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
     let before = camera.center();
-    camera.pan_tick([1.0, 0.0], 1.0 / 60.0);
-    assert!((camera.center()[0] - (before[0] + CAMERA_PAN_CELLS_PER_SEC / 60.0)).abs() < 1e-6);
-    assert_eq!(camera.center()[1], before[1]);
+    camera.look_at_point([f32::NAN, 1.0]);
+    assert_eq!(camera.center(), before);
 }
 
-#[test]
-fn diagonal_pan_is_not_normalised() {
-    let mut cardinal = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
-    let mut diagonal = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
-    let dt = 1.0 / 60.0;
-    cardinal.pan_tick([1.0, 0.0], dt);
-    diagonal.pan_tick([1.0, 1.0], dt);
+// --- screen <-> cell cardinal basis --------------------------------------
 
-    let cardinal_step = cardinal.center()[0] - 240.0;
-    let diagonal_step_x = diagonal.center()[0] - 240.0;
-    let diagonal_step_y = diagonal.center()[1] - 135.0;
-    assert!((diagonal_step_x - cardinal_step).abs() < 1e-6);
-    assert!((diagonal_step_y - cardinal_step).abs() < 1e-6);
+#[test]
+fn screen_axes_map_to_cell_axes() {
+    assert_eq!(screen_axes_to_cells([1.0, 0.0]), [1.0, -1.0]);
+    assert_eq!(screen_axes_to_cells([-1.0, 0.0]), [-1.0, 1.0]);
+    assert_eq!(screen_axes_to_cells([0.0, 1.0]), [1.0, 1.0]);
+    assert_eq!(screen_axes_to_cells([0.0, -1.0]), [-1.0, -1.0]);
 }
 
 #[test]
@@ -225,41 +272,13 @@ fn edge_pan_corner_pans_both_axes() {
     assert_eq!(edge_pan_dir([2.0, 2.0], VIEW), [-1.0, -1.0]);
 }
 
-// Both of the next two tests project the camera's *centre* with a fixed
-// `[0.0, 0.0]` origin (exactly the pattern `IsoView::with_center_cell` uses
-// internally) rather than through `camera.iso_view()`. The view re-centres
-// on every pan, so the centre's projection through its own view is always
-// the view's midpoint and can never show movement; the fixed-origin
-// projection is what exposes which way the cell-space centre actually moved.
-#[test]
-fn screen_right_moves_the_camera_screen_right() {
-    let mut camera = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
-    let tw = camera.iso_view().tile_w;
-    let th = camera.iso_view().tile_h;
-    let before = iso_project(camera.center()[0], camera.center()[1], tw, th, [0.0, 0.0]);
-    let dir = screen_dir_to_cells([1.0, 0.0], tw, th);
-    camera.pan_tick(dir, 1.0);
-    let after = iso_project(camera.center()[0], camera.center()[1], tw, th, [0.0, 0.0]);
-    assert!(after[0] > before[0], "before={before:?} after={after:?}");
-}
-
-#[test]
-fn screen_down_moves_the_camera_screen_down() {
-    let mut camera = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
-    let tw = camera.iso_view().tile_w;
-    let th = camera.iso_view().tile_h;
-    let before = iso_project(camera.center()[0], camera.center()[1], tw, th, [0.0, 0.0]);
-    let dir = screen_dir_to_cells([0.0, 1.0], tw, th);
-    camera.pan_tick(dir, 1.0);
-    let after = iso_project(camera.center()[0], camera.center()[1], tw, th, [0.0, 0.0]);
-    assert!(after[1] > before[1], "before={before:?} after={after:?}");
-}
-
 #[test]
 fn look_at_cell_centres_that_cell() {
-    let mut camera = Camera::new(480, 270, 4.0, VIEW, [240.0, 135.0]);
-    camera.look_at_cell(Cell { x: 10, y: 200 });
-    let projected = camera.iso_view().project(10.5, 200.5);
+    // (240, 135) sits well inside this grid's frontier, so the clamp does
+    // not fire and the cell centres exactly.
+    let mut camera = Camera::new(480, 270, 4.0, VIEW, [0.0, 0.0]);
+    camera.look_at_cell(Cell { x: 240, y: 135 });
+    let projected = camera.iso_view().project(240.5, 135.5);
     assert!((projected[0] - 960.0).abs() < 1e-3);
     assert!((projected[1] - 540.0).abs() < 1e-3);
 }

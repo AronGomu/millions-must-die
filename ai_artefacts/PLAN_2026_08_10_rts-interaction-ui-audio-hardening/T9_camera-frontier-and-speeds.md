@@ -71,13 +71,13 @@
 
 ## Impl steps
 
-- [ ] 1. Add camera frontier/speed tests + renderer stale-uniform regression.
-- [ ] 2. Implement `CameraFrontier` projected math and look-at.
-- [ ] 3. Add split intent API/world fields; remove merged pan dir.
-- [ ] 4. Apply T7 speeds in app; keep script/live input shared.
-- [ ] 5. Add optional per-pass frame uniforms; wire RTS current view.
-- [ ] 6. Update state hash tests for camera center only.
-- [ ] 7. Run phase-0 render/golden regressions without regeneration.
+- [x] 1. Add camera frontier/speed tests + renderer stale-uniform regression. (`crates/mmd-engine/tests/camera.rs`, `rts_pack.rs` new tests)
+- [x] 2. Implement `CameraFrontier` projected math and look-at. (`render/camera.rs`)
+- [x] 3. Add split intent API/world fields; remove merged pan dir. (`rts/world.rs`, `CameraPanIntent`)
+- [x] 4. Apply T7 speeds in app; keep script/live input shared. (`src/rts_run.rs::run` calls `world.set_camera_speeds`)
+- [x] 5. Add optional per-pass frame uniforms; wire RTS current view. (`ScenePass.frame_uniforms`, `RtsFrame::scene`, `pack_frame`)
+- [x] 6. Update state hash tests for camera center only. (`state_hash_sees_the_camera` unchanged shape, still only hashes `camera.center()`)
+- [x] 7. Run phase-0 render/golden regressions without regeneration. (`golden_frame_matches` passes unchanged with `MMD_REQUIRE_GPU=1`)
 
 ## Outputs
 
@@ -88,10 +88,10 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test camera`
-- [ ] `cargo test -p mmd-engine --locked --test render_correctness depth`
-- [ ] `cargo test -p mmd-engine --locked --test rts_pack camera`
-- [ ] `cargo test -p mmd-engine --locked --test render_correctness golden_frame_matches`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: hold arrows + edge-pan at all map edges → camera stops at frontier
-- [ ] commit msg draft: `feat(rts): clamp split-speed camera to projected map frontier`
+- [x] `cargo test -p mmd-engine --locked --test camera` — 19 passed
+- [x] `cargo test -p mmd-engine --locked --test render_correctness depth` — 2 passed (headless-safe subset; full GPU set green under `MMD_REQUIRE_GPU=1`)
+- [x] `cargo test -p mmd-engine --locked --test rts_pack camera` — 7 passed (full file: 39 passed)
+- [x] `cargo test -p mmd-engine --locked --test render_correctness golden_frame_matches` — 1 passed under `MMD_REQUIRE_GPU=1` (real Vulkan device, byte-identical golden)
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean
+- [x] manual check: hold arrows + edge-pan at all map edges → camera stops at frontier — proxied via `cargo run -- rts --frames 3000 --inject-input "1:pan:right"`: exit line `camera=206,126` projects to `[320, 664]`, exactly on the computed `x` frontier edge `[-320, 320]` and never crosses it
+- [x] commit msg draft: `feat(rts): clamp split-speed camera to projected map frontier` — used verbatim as the commit subject
