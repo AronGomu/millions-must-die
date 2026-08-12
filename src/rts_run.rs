@@ -46,14 +46,14 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use mmd_engine::render::{
-    DisplayViewport, RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
+    RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
     DragBox, EntityId, EntityKind, OWNER_PLAYER, OrderReceiptBuffer, Placement, RtsFrame, RtsWorld,
     RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame, pack_hud,
 };
 use mmd_engine::scenario::ScenarioError;
-use sdl3::event::Event;
+use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Scancode;
 use sdl3::mouse::MouseButton;
 
@@ -61,6 +61,7 @@ use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
 use crate::rts_settings::{RtsSettings, SettingsStore, escape_warning};
+use crate::rts_window::{self, FocusAction, RtsWindowState, SdlWindowOps, WindowOps};
 use crate::run::RunError;
 
 /// Frames rendered when neither `--frames` nor `MMD_RTS_FRAMES` is given and
@@ -122,15 +123,6 @@ fn sub2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
 
 fn clamp_axes(v: [f32; 2]) -> [f32; 2] {
     [v[0].clamp(-1.0, 1.0), v[1].clamp(-1.0, 1.0)]
-}
-
-/// Fallback viewport for the degenerate case a drawable cannot fit even one
-/// `16x9` unit: an exact 1:1 identity over the fixed logical canvas, so a
-/// resize that momentarily shrinks the drawable below that floor cannot stop
-/// input dead.
-fn identity_viewport() -> DisplayViewport {
-    DisplayViewport::new([VIEW_WIDTH, VIEW_HEIGHT], [VIEW_WIDTH, VIEW_HEIGHT])
-        .expect("1920x1080 always fits an exact 16:9 rect")
 }
 
 /// The first live player [`UnitKind::Worker`] in the selection, else the
@@ -431,13 +423,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     let window = if offscreen_driver {
         None
     } else {
-        match renderer
-            .ctx
-            .video
-            .window("millions_must_die — rts prototype", VIEW_WIDTH, VIEW_HEIGHT)
-            .position_centered()
-            .build()
-        {
+        match rts_window::build_rts_window(&renderer.ctx.video, settings.display.mode) {
             Ok(w) => match renderer.ctx.claim_window(&w) {
                 Ok(()) => Some(w),
                 Err(e) => {
@@ -452,7 +438,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         }
     };
 
-    let Some(window) = window else {
+    let Some(mut window) = window else {
         run_offscreen(
             &mut world,
             &mut renderer,
@@ -471,6 +457,19 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         VIEW_HEIGHT,
         rts_input::window_banner()
     );
+
+    // Startup grab: applied directly rather than waiting on a
+    // `WindowEvent::FocusGained` — some window managers never deliver one
+    // for the window that already has focus at creation, and a run must
+    // never start with a stale (missing) confinement.
+    if let Err(e) = SdlWindowOps(&mut window).set_mouse_grab(settings.display.confine_pointer) {
+        eprintln!("rts: startup pointer grab failed ({e}); continuing unconfined");
+    }
+    let mut win_state = RtsWindowState {
+        mode: settings.display.mode,
+        focused: true,
+        viewport: rts_window::refresh_viewport(&window)?,
+    };
 
     if let Err(e) = renderer.draw_to_swapchain_scene(&window, scratch.frame_buf.scene()) {
         eprintln!("rts: present failed ({e}); offscreen-only");
@@ -498,17 +497,12 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
             break;
         }
 
-        // Refreshed once per event batch rather than cached across frames: a
-        // resize/display-move can change either `size()` (window units) or
-        // `size_in_pixels()` (drawable px, HiDPI) between batches, and every
-        // mouse event in this batch must map through the shape the window
-        // actually has *now*. Falls back to an identity 1920x1080 viewport
-        // (never `None`) if the drawable is ever too small to hold one 16:9
-        // unit — degenerate, but must not stop input dead.
-        let (win_w, win_h) = window.size();
-        let (px_w, px_h) = window.size_in_pixels();
-        let viewport =
-            DisplayViewport::new([win_w, win_h], [px_w, px_h]).unwrap_or_else(identity_viewport);
+        // `win_state.viewport` is refreshed reactively below on
+        // resize/pixel-size/display-change events, not recomputed every
+        // batch: every mouse event still maps through whatever shape the
+        // window has *now*, without a redundant `size()`/`size_in_pixels()`
+        // syscall pair on batches that changed nothing.
+        let viewport = win_state.viewport;
 
         // Collected rather than iterated live: `pump.keyboard_state()` below
         // needs an immutable borrow of `pump`, which cannot coexist with the
@@ -521,6 +515,52 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     state.quit = true;
                     break 'running;
                 }
+                Event::Window { win_event, .. } => match win_event {
+                    WindowEvent::FocusGained => {
+                        win_state.focused = true;
+                        let mut ops = SdlWindowOps(&mut window);
+                        if let Err(e) = rts_window::handle_focus(
+                            &mut ops,
+                            true,
+                            settings.display.confine_pointer,
+                            settings.gameplay.pause_on_focus_loss,
+                            || {},
+                        ) {
+                            eprintln!("rts: focus-gain grab restore failed ({e})");
+                        }
+                    }
+                    WindowEvent::FocusLost => {
+                        win_state.focused = false;
+                        let mut ops = SdlWindowOps(&mut window);
+                        match rts_window::handle_focus(
+                            &mut ops,
+                            false,
+                            settings.display.confine_pointer,
+                            settings.gameplay.pause_on_focus_loss,
+                            || {
+                                session.keyboard_held = [0.0, 0.0];
+                                session.press = None;
+                                session.drag = None;
+                                world.set_keyboard_pan_dir([0.0, 0.0]);
+                                world.set_edge_pan_dir([0.0, 0.0]);
+                            },
+                        ) {
+                            Ok(FocusAction::PauseRequested) => session.paused = true,
+                            Ok(FocusAction::None) => {}
+                            Err(e) => eprintln!("rts: focus-loss grab release failed ({e})"),
+                        }
+                    }
+                    WindowEvent::Resized(_, _)
+                    | WindowEvent::PixelSizeChanged(_, _)
+                    | WindowEvent::DisplayChanged(_) => match rts_window::refresh_viewport(&window)
+                    {
+                        Ok(vp) => win_state.viewport = vp,
+                        Err(e) => {
+                            eprintln!("rts: viewport refresh failed ({e}); keeping previous")
+                        }
+                    },
+                    _ => {}
+                },
                 Event::KeyDown {
                     keycode: Some(kc),
                     repeat: false,

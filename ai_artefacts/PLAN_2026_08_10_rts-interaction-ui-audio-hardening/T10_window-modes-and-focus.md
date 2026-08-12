@@ -67,13 +67,13 @@
 
 ## Impl steps
 
-- [ ] 1. Add fake adapter + red sequence/focus tests.
-- [ ] 2. Implement mode selector/sequences against `WindowOps`.
-- [ ] 3. Implement real SDL wrappers + startup default mode.
-- [ ] 4. Add release/apply/reclaim rollback transition.
-- [ ] 5. Route focus/resize/display events; clear held input exactly once.
-- [ ] 6. Apply pointer confinement on startup/gain/loss.
-- [ ] 7. Add offscreen no-window regression; keep native smoke manual.
+- [x] 1. Add fake adapter + red sequence/focus tests.
+- [x] 2. Implement mode selector/sequences against `WindowOps`.
+- [x] 3. Implement real SDL wrappers + startup default mode.
+- [x] 4. Add release/apply/reclaim rollback transition.
+- [x] 5. Route focus/resize/display events; clear held input exactly once.
+- [x] 6. Apply pointer confinement on startup/gain/loss.
+- [x] 7. Add offscreen no-window regression; keep native smoke manual.
 
 ## Outputs
 
@@ -85,10 +85,12 @@
 
 ## Validation
 
-- [ ] `cargo test -p millions_must_die --locked rts_window`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract focus_`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract offscreen_never_builds_window_adapter`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: cycle 3 modes; Alt-Tab releases pointer; regain confines; no stuck pan/drag
-- [ ] app functional: `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3`
-- [ ] commit msg draft: `feat(app): apply RTS window modes and focus-safe confinement`
+- [x] `cargo test -p millions_must_die --locked rts_window` — 11 passed
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract focus_` — 1 passed
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract offscreen_never_builds_window_adapter` — 1 passed
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean
+- [ ] manual check: cycle 3 modes; Alt-Tab releases pointer; regain confines; no stuck pan/drag —
+      left for a human: this host is the maintainer's live desktop session, and an
+      agent must not seize its focus/grab the pointer to self-verify a manual step.
+- [x] app functional: `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` — clean exit
+- [x] commit msg draft: `feat(app): apply RTS window modes and focus-safe confinement`

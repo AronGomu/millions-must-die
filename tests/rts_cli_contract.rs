@@ -879,6 +879,62 @@ fn the_exit_line_reports_every_counter() {
 }
 
 // ---------------------------------------------------------------------------
+// 3b. Window/focus offscreen isolation (T10)
+// ---------------------------------------------------------------------------
+
+/// Hard isolation constraint (T10): an offscreen run must never build a
+/// window adapter, so it can never print a window-claim/release line or
+/// touch the window-mode/grab machinery `src/rts_window.rs` owns.
+#[test]
+fn offscreen_never_builds_window_adapter() {
+    let Some(cli) = or_skip(
+        "offscreen_never_builds_window_adapter",
+        rts(&["--frames", "3"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("mode"), "offscreen", "{cli}");
+    assert!(
+        !cli.combined().contains("rts: window "),
+        "{cli}\noffscreen run must never claim/build a real window"
+    );
+    assert!(
+        !cli.combined().contains("released window"),
+        "{cli}\noffscreen run has nothing to release"
+    );
+}
+
+/// A `SDL_VIDEODRIVER=offscreen` run never opens a real window, so it can
+/// never receive a `FocusGained`/`FocusLost` event — `paused` must stay
+/// `false` and no focus/grab bookkeeping in `src/rts_window.rs` can fire.
+/// Real focus-loss/gain behaviour on a live window is manual/platform
+/// evidence only (ADR 018); this is the offscreen-isolation half of that
+/// contract, which is the half a headless test host can prove.
+#[test]
+fn focus_state_never_diverges_from_default_offscreen() {
+    let Some(cli) = or_skip(
+        "focus_state_never_diverges_from_default_offscreen",
+        rts(&["--frames", "5"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    let line = cli.exit_line();
+    assert_eq!(
+        cli.field(line, "paused"),
+        "false",
+        "{cli}\nno real window exists offscreen, so a focus-loss pause request can never fire"
+    );
+    for needle in ["focus-gain", "focus-loss", "grab"] {
+        assert!(
+            !cli.combined().contains(needle),
+            "{cli}\noffscreen run must never touch window-focus/grab machinery (`{needle}`)"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 4. Settings isolation
 // ---------------------------------------------------------------------------
 

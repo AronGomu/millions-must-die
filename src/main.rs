@@ -8,6 +8,7 @@ mod rts_overlay;
 mod rts_run;
 mod rts_script;
 mod rts_settings;
+mod rts_window;
 mod run;
 
 use std::path::PathBuf;

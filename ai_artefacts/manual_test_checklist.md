@@ -91,3 +91,16 @@
 - [ ] With `camera.keyboard_pan` and `camera.edge_pan` set to different values in `settings-v1.json` (e.g. `keyboard_pan: 24`, `edge_pan: 96`), launch `cargo run -- rts`: confirm holding an arrow key visibly pans slower than parking the pointer on an edge.
 - [ ] While the camera is panned away from the base, watch units near the *bottom* of the screen relative to ones near the *top*: confirm the depth/occlusion ordering (nearer sprites still draw in front of farther ones) stays correct after the pan — it must not look like the pre-pan frame's depth is still in effect.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the panned-camera milestone still visibly moves the view away from the base and the rest of the flow (select → gather → build → produce) completes normally.
+
+## T10 window-modes-and-focus
+
+- [ ] Set `display.mode: "borderless_desktop"` in `settings-v1.json` and launch `cargo run -- rts`: confirm the window comes up borderless, filling the desktop resolution, no title bar/border.
+- [ ] Set `display.mode: "exclusive1920x1080"` and relaunch: confirm the display switches to a real exclusive 1920x1080 fullscreen mode (a monitor at a different native resolution briefly blanks/resyncs), not a scaled/letterboxed borderless window.
+- [ ] Set `display.mode: "windowed1280x720"` and relaunch: confirm a bordered, resizable 1280x720 window appears centred on the display, and dragging its edges actually resizes it.
+- [ ] With `display.confine_pointer: true` and the window focused: confirm the OS pointer cannot leave the window (drag the mouse hard toward an edge — it stops at the window boundary instead of reaching a second monitor/the desktop).
+- [ ] Alt-Tab away from the focused window: confirm the pointer is released immediately (it can now reach the rest of the desktop) and any held pan key/edge-pan/in-progress drag box stops dead — the camera does not keep drifting while unfocused.
+- [ ] Alt-Tab back to the window: confirm the pointer is re-confined per the `confine_pointer` setting, and nothing from before the focus loss (old drag box, old held pan direction) resumes — panning/dragging only resumes from fresh input given after regaining focus.
+- [ ] Set `gameplay.pause_on_focus_loss: true`, launch, then Alt-Tab away: confirm the sim visibly pauses (HUD/tick stops advancing) while unfocused, and resuming happens only from an explicit unpause once focus returns (T13 wires the actual paused-menu UI; this slice only stops the tick).
+- [ ] With `pause_on_focus_loss: false` (default), Alt-Tab away and back a few times: confirm the sim keeps ticking the whole time and nothing about camera/selection state is corrupted by the focus churn.
+- [ ] Resize the windowed-mode window (or move it to a display with a different scale factor, if available) while it is running: confirm the rendered scene's aspect-fit content rect and mouse-click accuracy (T8) stay correct immediately after the resize/display change — no stale letterboxing, no click landing on the wrong cell.
+- [ ] Run `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3`: confirm no window is created, no "rts: window ... claimed"/"rts: released window" lines print, and the run exits clean exactly as before this ticket.
