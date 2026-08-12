@@ -10,10 +10,11 @@
 //! [`SettingsStore::pref_path`] is the *only* place this module touches the
 //! real per-user config location (`SDL_GetPrefPath`, which creates the pref
 //! directory as a side effect of being called). [`crate::rts_run::run`] must
-//! not call it when `SDL_VIDEODRIVER=offscreen` — offscreen/deterministic
-//! runs always use [`RtsSettings::default`] and never resolve, read, or
-//! write that path. [`SettingsStore::at`] is a test seam so unit tests never
-//! call `pref_path` either; they always point a store at a temp-dir path.
+//! not call it under any non-interactive `SDL_VIDEODRIVER` — `offscreen` and
+//! `dummy` alike — those runs always use [`RtsSettings::default`] and never
+//! resolve, read, or write that path. [`SettingsStore::at`] is a test seam so
+//! unit tests never call `pref_path` either; they always point a store at a
+//! temp-dir path.
 //!
 //! # Recoverable persistence
 //!
@@ -255,7 +256,7 @@ impl SettingsStore {
     /// `${SDL pref path}/settings-v1.json`.
     ///
     /// Calling this resolves (and, per `SDL_GetPrefPath`, creates) the real
-    /// OS pref directory — callers must not reach it from an offscreen or
+    /// OS pref directory — callers must not reach it from a non-interactive or
     /// deterministic run. Use [`Self::at`] for tests.
     pub fn pref_path() -> Result<PathBuf, String> {
         sdl3::filesystem::get_pref_path(SETTINGS_ORG, SETTINGS_APP)

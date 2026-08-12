@@ -32,8 +32,9 @@
 //! - (d) printed only when persisted settings are missing/malformed/out of
 //!   range/unsupported schema and this run fell back to
 //!   [`crate::rts_settings::RtsSettings::default`]; absent on a clean load
-//!   and always absent under `SDL_VIDEODRIVER=offscreen` (settings lookup is
-//!   skipped entirely, so there is nothing to warn about).
+//!   and always absent under a non-interactive `SDL_VIDEODRIVER` (`offscreen`
+//!   or `dummy`: the settings lookup is skipped entirely, so there is nothing
+//!   to warn about).
 //! - (e) the deterministic semantic audio trace (`T15`): one `StartMusic`
 //!   per session, one `voice` batch per action that voiced anything (`cues`
 //!   counts the individual unit cues inside them), one `reject` per refused
@@ -460,17 +461,14 @@ fn from_render(e: RenderError) -> RunError {
 /// saves through — `None` under the same conditions the load itself falls
 /// back to defaults (offscreen, or an unresolvable pref path).
 ///
-/// An offscreen/deterministic run (`SDL_VIDEODRIVER=offscreen`) always uses
+/// A non-interactive run ([`headless_driver`]) always uses
 /// [`RtsSettings::default`] and never resolves [`SettingsStore::pref_path`]
 /// (which creates the real per-user pref directory as a side effect of being
 /// called) — the hard isolation constraint this ticket exists to prove. A
-/// settings-menu edit can therefore change values in memory during an
-/// offscreen run, but never persists one: there is no store to save through.
-fn load_settings(
-    opts: &RtsOptions,
-    offscreen_driver: bool,
-) -> (RtsSettings, Option<SettingsStore>) {
-    if offscreen_driver {
+/// settings-menu edit can therefore change values in memory during such a
+/// run, but never persists one: there is no store to save through.
+fn load_settings(opts: &RtsOptions, headless_driver: bool) -> (RtsSettings, Option<SettingsStore>) {
+    if headless_driver {
         return (RtsSettings::default(), None);
     }
 
@@ -497,17 +495,29 @@ fn load_settings(
     }
 }
 
+/// SDL video drivers that never drive a real display, and therefore never a
+/// real user: `offscreen` (the deterministic gate driver) and `dummy` (SDL's
+/// own no-op driver, which CI images and `nix flake check` sandboxes pick up).
+///
+/// Both are treated as fully isolated: no per-user settings are read or
+/// written, no window mode is applied, no pointer is grabbed. Matching only
+/// the exact string `offscreen` — as this used to — left `dummy` resolving the
+/// developer's real `SDL_GetPrefPath`, which creates the pref directory just
+/// by being called.
+fn headless_driver() -> bool {
+    std::env::var_os("SDL_VIDEODRIVER")
+        .map(|v| v == "offscreen" || v == "dummy")
+        .unwrap_or(false)
+}
+
 /// Run the `rts` subcommand.
 pub fn run(opts: RtsOptions) -> Result<(), RunError> {
-    // Detected once, up front, and reused for both the settings lookup below
-    // and the later window-vs-offscreen fork: an offscreen/deterministic run
-    // must never resolve the real per-user pref path (`SettingsStore::pref_path`
-    // creates it as a side effect of being called), so this check has to gate
-    // the settings lookup, not just window creation.
-    let offscreen_driver = std::env::var_os("SDL_VIDEODRIVER")
-        .map(|v| v == "offscreen")
-        .unwrap_or(false);
-    let (settings, settings_store) = load_settings(&opts, offscreen_driver);
+    // Detected once, up front, and reused for both the settings lookup and the
+    // later window-vs-offscreen fork: a non-interactive run must never resolve
+    // the real per-user pref path (`SettingsStore::pref_path` creates it as a
+    // side effect of being called), so this check has to gate the settings
+    // lookup, not just window creation.
+    let headless_driver = headless_driver();
 
     let root = workspace_root_or_cwd();
     let scenario_path = opts
@@ -515,7 +525,10 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         .clone()
         .unwrap_or_else(|| root.join("assets/scenarios/rts_prototype_v1.ron"));
 
-    // Flag validation first: a typo must not cost a device init.
+    // Flag validation first: a typo must not cost a device init — nor a
+    // per-user pref directory. `rts --frames 0` used to create the real one
+    // before rejecting the flag, so the settings lookup sits *after* every
+    // flag has been validated, not before.
     let auto_frames = resolve_frames(&opts)?;
     let mut script = match (
         opts.inject_input_file.as_deref(),
@@ -539,6 +552,8 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         (None, Some(spec)) => RtsScript::parse(spec).map_err(RunError::Failed)?,
         (None, None) => RtsScript::default(),
     };
+
+    let (settings, settings_store) = load_settings(&opts, headless_driver);
 
     let mut world = RtsWorld::load(&scenario_path).map_err(|e| load_error(&scenario_path, e))?;
     world.set_camera_speeds(
@@ -623,7 +638,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         .event_pump()
         .map_err(|e| RunError::Failed(format!("SDL event pump unavailable: {e}")))?;
 
-    let window = if offscreen_driver {
+    let window = if headless_driver {
         None
     } else {
         match rts_window::build_rts_window(&renderer.ctx.video, settings.display.mode) {

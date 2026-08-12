@@ -74,6 +74,8 @@
 - [ ] Corrupt that file (e.g. truncate it to `{`) and relaunch: confirm the run still starts cleanly, prints an `rts: settings warning=` line naming the file path, and the settings debug line falls back to the documented defaults (`mode=BorderlessDesktop confine_pointer=true keyboard_pan=48 edge_pan=48 pause_on_focus_loss=false master=80 music=35 voice=70 sfx=60`) rather than crashing or silently keeping stale values.
 - [ ] Set an out-of-range value by hand (e.g. `audio.master: 101`, or `camera.keyboard_pan: 50` which is not a multiple of 6) and relaunch: confirm the same warn-and-default behavior as the corrupt-file case.
 - [ ] Run `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` with a *malformed* settings file already on disk at the real pref path: confirm the offscreen run never prints an `rts: settings warning=` line and the file on disk is left untouched (byte-for-byte) — the offscreen path must never look at it at all.
+- [ ] Repeat the previous step with `SDL_VIDEODRIVER=dummy`: same result. `dummy` is display-less too, and is now treated as fully isolated — no settings lookup, no window, no pointer grab.
+- [ ] On a machine that has never run this build, run `cargo run -- rts --frames 0`: confirm it refuses the flag *and* that `~/.local/share/AronGomu/MillionsMustDie/` was still not created. A rejected flag must cost nothing, and `SDL_GetPrefPath` creates its directory just by being called.
 
 ## T8 aspect-fit-canvas
 

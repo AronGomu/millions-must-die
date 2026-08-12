@@ -242,8 +242,96 @@ impl std::fmt::Display for Cli {
     }
 }
 
+/// The app's `SDL_GetPrefPath` organisation directory — `SETTINGS_ORG` in
+/// `src/rts_settings.rs`. Hard-coded here because the app is a binary crate
+/// with no library target to import it from.
+const SETTINGS_ORG_DIR: &str = "AronGomu";
+
+/// One throwaway `HOME`/`XDG_DATA_HOME` every subprocess this file spawns
+/// points at.
+///
+/// `SDL_GetPrefPath` creates its directory as a side effect of being *called*,
+/// and resolves it from `XDG_DATA_HOME`, falling back to `$HOME/.local/share`
+/// — so both have to be redirected, not just one. Without this, any case that
+/// runs with a real video driver (the window-release case does, by design)
+/// reaches the developer's real per-user config, loads their persisted window
+/// mode and pointer-confinement, and creates their pref directory. Isolation
+/// belongs on the spawn helper every case already goes through, not on the
+/// cases that happen to remember it.
+fn user_config_sentinel() -> &'static Path {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    DIR.get_or_init(|| {
+        // Emptied once per test process: the emptiness assertion below is
+        // about *this* run, and a leftover from an earlier, failing run must
+        // not report as a leak (nor mask one).
+        let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join("user-config-sentinel");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create sentinel HOME");
+        dir
+    })
+    .as_path()
+}
+
+/// Assert the app's real per-user config directory was never created under
+/// the sentinel — anywhere beneath it, so both the `XDG_DATA_HOME` and the
+/// `$HOME/.local/share` resolution are covered.
+fn assert_no_user_config(label: &str) {
+    let mut stack = vec![user_config_sentinel().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            assert!(
+                path.file_name().is_none_or(|n| n != SETTINGS_ORG_DIR),
+                "{label}: {} was created under the sentinel HOME/XDG_DATA_HOME — \
+                 the run resolved the real per-user config path",
+                path.display()
+            );
+            if entry.file_type().is_ok_and(|t| t.is_dir()) {
+                stack.push(path);
+            }
+        }
+    }
+}
+
+/// A dedicated sentinel `HOME`/`XDG_DATA_HOME` for `case`, pre-seeded with a
+/// valid settings file that makes an *interactive* run harmless on a live
+/// desktop: a plain 1280x720 window (so no display mode is changed), no
+/// pointer confinement, and a silent master bus.
+///
+/// The interactive path legitimately loads and creates a pref directory — that
+/// is what shipping does. What must never happen is that it is the developer's
+/// own, with the developer's own persisted window mode and
+/// `confine_pointer: true`. Seeding the sentinel uses the shipping load path
+/// rather than adding a test-only knob to the binary.
+fn seeded_settings_home(case: &str) -> PathBuf {
+    let home = tmp_dir(case);
+    let dir = home.join(SETTINGS_ORG_DIR).join("MillionsMustDie");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create sentinel pref dir");
+    std::fs::write(
+        dir.join("settings-v1.json"),
+        r#"{
+  "schema_version": 1,
+  "display": { "mode": "windowed1280x720", "confine_pointer": false },
+  "camera": { "keyboard_pan": 48, "edge_pan": 48 },
+  "gameplay": { "pause_on_focus_loss": false },
+  "audio": { "master": 0, "music": 0, "voice": 0, "sfx": 0 }
+}
+"#,
+    )
+    .expect("seed sentinel settings");
+    home
+}
+
 fn app_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_millions_must_die"))
+    let sentinel = user_config_sentinel();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_millions_must_die"));
+    cmd.env("HOME", sentinel);
+    cmd.env("XDG_DATA_HOME", sentinel);
+    cmd
 }
 
 /// Invoke the app with `args`. `offscreen` forces SDL's offscreen video
@@ -977,6 +1065,105 @@ fn offscreen_settings_run_does_not_touch_settings() {
     );
 }
 
+/// The same constraint for SDL's own `dummy` driver.
+///
+/// The isolation gate used to be an exact string match on
+/// `SDL_VIDEODRIVER == "offscreen"`, so a `dummy`-driver run — equally
+/// display-less, and what a sandboxed build environment picks — resolved the
+/// real `SDL_GetPrefPath`, applied the developer's persisted window mode and
+/// requested their persisted pointer confinement.
+#[test]
+fn dummy_driver_run_does_not_touch_settings() {
+    let data_home = tmp_dir("dummy_driver_run_does_not_touch_settings");
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "3"]);
+    cmd.env("SDL_VIDEODRIVER", "dummy");
+    cmd.env("XDG_DATA_HOME", &data_home);
+    cmd.env("HOME", &data_home);
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    let cli = run_to_completion(
+        cmd,
+        "XDG_DATA_HOME=<sentinel> HOME=<sentinel> SDL_VIDEODRIVER=dummy rts --frames 3".to_string(),
+    );
+    let Some(cli) = or_skip("dummy_driver_run_does_not_touch_settings", cli) else {
+        return;
+    };
+    cli.assert_success();
+
+    assert!(
+        !cli.combined().contains("rts: settings warning="),
+        "{cli}\na dummy-driver run must never look up settings"
+    );
+    assert!(
+        !cli.combined().contains("window"),
+        "{cli}\na dummy-driver run must never build, claim or grab a window"
+    );
+
+    let entries: Vec<_> = std::fs::read_dir(&data_home)
+        .expect("read sentinel pref dir")
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "{cli}\ndummy-driver run created something under the sentinel pref dir: {entries:?}"
+    );
+}
+
+/// A rejected flag must cost nothing at all — not a device init, and not the
+/// developer's per-user pref directory. `rts --frames 0` used to resolve
+/// `SDL_GetPrefPath` (which creates that directory just by being called)
+/// *before* validating the flag it was about to refuse.
+#[test]
+fn a_rejected_flag_creates_no_pref_directory() {
+    let data_home = tmp_dir("a_rejected_flag_creates_no_pref_directory");
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "0"]);
+    cmd.env("XDG_DATA_HOME", &data_home);
+    cmd.env("HOME", &data_home);
+    cmd.env_remove("SDL_VIDEODRIVER");
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    let cli = run_to_completion(
+        cmd,
+        "XDG_DATA_HOME=<sentinel> HOME=<sentinel> rts --frames 0".to_string(),
+    );
+    assert_ne!(cli.code, Some(0), "{cli}\n--frames 0 must be refused");
+    cli.assert_says(&["--frames 0 renders nothing"]);
+
+    let entries: Vec<_> = std::fs::read_dir(&data_home)
+        .expect("read sentinel pref dir")
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "{cli}\na refused flag created something under the sentinel pref dir: \
+         {entries:?}"
+    );
+}
+
+/// The whole-file guarantee: no run this test binary spawns — under any video
+/// driver — reads, writes or creates anything under the real per-user config.
+///
+/// [`app_bin`] points every subprocess' `HOME` and `XDG_DATA_HOME` at one
+/// shared sentinel, so this case only has to drive the driver paths and check
+/// that sentinel. The interactive (real-driver) path is covered by
+/// [`the_window_is_released_before_it_drops`], which asserts the same thing
+/// after its own run rather than opening a second window here.
+#[test]
+fn no_rts_run_creates_the_real_user_config() {
+    for driver in ["offscreen", "dummy"] {
+        let mut cmd = app_bin();
+        cmd.args(["rts", "--frames", "2"]);
+        cmd.env("SDL_VIDEODRIVER", driver);
+        cmd.env_remove("MMD_RTS_FRAMES");
+        cmd.env_remove("MMD_RTS_ONCE");
+        let cli = run_to_completion(cmd, format!("SDL_VIDEODRIVER={driver} rts --frames 2"));
+        if or_skip("no_rts_run_creates_the_real_user_config", cli).is_none() {
+            return;
+        }
+        assert_no_user_config(&format!("SDL_VIDEODRIVER={driver}"));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // 5. Failure and CLI surface
 // ---------------------------------------------------------------------------
@@ -1024,18 +1211,39 @@ fn usage_error_exits_with_code_two() {
 /// `crates/mmd-engine/tests/render_correctness.rs`'s job, and a present
 /// failure cannot be forced from this CLI, so this proves the release call
 /// was reached, not that skipping it re-crashes this host.
+///
+/// This is the only case in this file that runs with the host's real video
+/// driver, and it is therefore the only one that resolves a settings path at
+/// all. It is pinned to its own seeded sentinel `HOME`/`XDG_DATA_HOME`
+/// ([`seeded_settings_home`]): a developer's persisted settings must never
+/// reach a test run, because "open a window" would then also mean "switch this
+/// desktop's display mode and confine this developer's pointer" — which is
+/// exactly what it did before, since `DisplaySettings::default` is borderless
+/// desktop with `confine_pointer: true`.
 #[test]
 fn the_window_is_released_before_it_drops() {
+    let home = seeded_settings_home("the_window_is_released_before_it_drops");
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "600", "--inject-input", "4:quit"]);
+    cmd.env("HOME", &home);
+    cmd.env("XDG_DATA_HOME", &home);
+    cmd.env_remove("SDL_VIDEODRIVER");
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
     let Some(cli) = or_skip(
         "the_window_is_released_before_it_drops",
-        invoke(
-            &["rts", "--frames", "600", "--inject-input", "4:quit"],
-            false,
+        run_to_completion(
+            cmd,
+            "HOME=<seeded sentinel> rts --frames 600 --inject-input 4:quit".to_string(),
         ),
     ) else {
         return;
     };
     cli.assert_success();
+    assert!(
+        !cli.combined().contains("rts: settings warning="),
+        "{cli}\nthe seeded sentinel settings file must load cleanly"
+    );
     assert_eq!(cli.exit_field("quit"), "true", "{cli}");
     assert_eq!(cli.exit_field("frames"), "3", "{cli}");
     match cli.exit_field("mode") {
@@ -1053,6 +1261,9 @@ fn the_window_is_released_before_it_drops() {
         }
         other => panic!("{cli}\nunknown run mode `{other}`"),
     }
+    // Nothing leaked into the *shared* sentinel either: this run's whole
+    // settings footprint has to be the dedicated seeded one above.
+    assert_no_user_config("the_window_is_released_before_it_drops");
 }
 
 // ---------------------------------------------------------------------------
