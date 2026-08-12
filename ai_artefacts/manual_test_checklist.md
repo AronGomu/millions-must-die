@@ -149,3 +149,12 @@
 - [ ] After changing several settings, quit and relaunch `cargo run -- rts`: confirm every changed value (window mode, pan speeds, confine/focus toggles, volumes) is exactly what was last set — the `rts: settings mode=... ...` startup line should match.
 - [ ] Force a save failure (e.g. remove write permission on the settings directory, or point `SDL_VIDEODRIVER`'s pref dir at a read-only path) and change a setting: confirm a `SETTINGS NOT SAVED: <reason>` line appears in the settings panel and the control visibly reverts to its old value.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm it still completes cleanly and quits at the same milestone (now via the `quit` script token instead of `Escape`).
+
+## T14 generated-audio-assets
+
+- [ ] Run `cargo run -p xtask -- audio` from a clean checkout: confirm it writes `music_placeholder.wav`, five `voice_*.wav` files, `ui_click.wav`, and `manifest.json` under `assets/audio/generated/`, with no network access and no `.wav`/binary present anywhere else in the repo.
+- [ ] Run `cargo run -p xtask -- audio` twice into two separate directories (or regenerate and diff against the tracked copy): confirm every generated file is byte-identical both times.
+- [ ] Run `cargo run -p xtask -- audio --check`: confirm it prints `audio: ok (7 wav + manifest)` and exits 0 against the tracked assets with no edits.
+- [ ] Open `music_placeholder.wav` in any PCM-capable player/tool (e.g. `ffprobe`): confirm 48,000 Hz, 16-bit, stereo, ~8s duration, and that it loops without an audible click (first/last sample are silence by construction).
+- [ ] Play each `voice_*.wav`/`ui_click.wav`: confirm each is a short (60-180ms) clean tone with an audible fade-in/out, not a click/pop, and that no two cues sound identical.
+- [ ] Read `assets/audio/README.md`: confirm it documents the generated provenance, the WAV replacement contract (source/license/attribution/checksum), and contains no StarCraft/Blizzard/Terran audio file or URL — only the negative statement disclaiming them.

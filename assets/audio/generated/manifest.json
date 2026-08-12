@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "generator": "mmd-audio-placeholder-v1",
+  "license": "MIT-0",
+  "assets": [
+    {
+      "id": 0,
+      "file": "music_placeholder.wav",
+      "role": "music",
+      "frames": 384000,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 6144,
+      "sha256": "78f483336ad9efcb21c169bee3db34242341ba5b08eb786e7dd64e6d1d252ea2"
+    },
+    {
+      "id": 1,
+      "file": "voice_select.wav",
+      "role": "voice",
+      "frames": 5760,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 1536,
+      "sha256": "d541c12f8ee86d28b5d5a7831aa98e49fd71f5874ee4c5611ad0b247d910e727"
+    },
+    {
+      "id": 2,
+      "file": "voice_move.wav",
+      "role": "voice",
+      "frames": 5760,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 1536,
+      "sha256": "a76fbd34f04aec67e7542d20632214b53135c0f2a5bb8e59a712cb74a703ada0"
+    },
+    {
+      "id": 3,
+      "file": "voice_gather.wav",
+      "role": "voice",
+      "frames": 5760,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 1536,
+      "sha256": "6ebf1f787fcb616df953356cbe0e2ef2dc42303b64b3018cf4f811a1f4dbfe79"
+    },
+    {
+      "id": 4,
+      "file": "voice_build.wav",
+      "role": "voice",
+      "frames": 5760,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 1536,
+      "sha256": "804a8925108303bf44ef6f70ff98ce3985e207a8d60388c7210df62e1c2e5928"
+    },
+    {
+      "id": 5,
+      "file": "voice_reject.wav",
+      "role": "voice",
+      "frames": 8640,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 1536,
+      "sha256": "976a6f2741bda3c84e268c279612786ccc93d4d934cc84c54df484f96c537e5d"
+    },
+    {
+      "id": 6,
+      "file": "ui_click.wav",
+      "role": "ui",
+      "frames": 2880,
+      "rate": 48000,
+      "channels": 2,
+      "bits": 16,
+      "peak": 1536,
+      "sha256": "f55f1588797ebe4ce32bbb35e0d958cf4cfff52b00ab013ff724e0b469100e28"
+    }
+  ]
+}

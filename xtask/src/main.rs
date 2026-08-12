@@ -1,6 +1,7 @@
 //! Build/bootstrap task runner.
 
 mod atlases;
+mod audio;
 mod bootstrap;
 mod digest;
 mod placeholder_art;
@@ -39,6 +40,12 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
+    /// Generate or verify deterministic placeholder audio
+    Audio {
+        /// Verify tracked audio matches clean regeneration
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() {
@@ -59,6 +66,13 @@ fn main() {
         Commands::Atlases { check } => {
             if let Err(err) = atlases::run_atlases(check) {
                 eprintln!("atlases error: {err}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Audio { check } => {
+            let root = atlases::workspace_root_from_xtask_manifest();
+            if let Err(err) = audio::run_audio(check, &root) {
+                eprintln!("audio error: {err}");
                 std::process::exit(1);
             }
         }

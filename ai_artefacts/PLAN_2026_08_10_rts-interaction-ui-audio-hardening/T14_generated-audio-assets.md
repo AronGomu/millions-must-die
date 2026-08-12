@@ -60,13 +60,13 @@
 
 ## Impl steps
 
-- [ ] 1. Add `audio.rs` unit tests and asset spec table.
-- [ ] 2. Implement canonical WAV header/sample writer.
-- [ ] 3. Implement integer triangle/envelopes/music sequence.
-- [ ] 4. Implement manifest generation/hash/validation.
-- [ ] 5. Wire `xtask audio` and `--check`.
-- [ ] 6. Generate tracked assets + README.
-- [ ] 7. Tamper-copy test proves `--check` fails without mutating tracked files.
+- [x] 1. Add `audio.rs` unit tests and asset spec table.
+- [x] 2. Implement canonical WAV header/sample writer.
+- [x] 3. Implement integer triangle/envelopes/music sequence.
+- [x] 4. Implement manifest generation/hash/validation.
+- [x] 5. Wire `xtask audio` and `--check`.
+- [x] 6. Generate tracked assets + README.
+- [x] 7. Tamper-copy test proves `--check` fails without mutating tracked files.
 
 ## Outputs
 
@@ -78,9 +78,9 @@
 
 ## Validation
 
-- [ ] `cargo test -p xtask --locked audio`
-- [ ] `cargo run -p xtask -- audio --check`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: inspect README/manifest; confirm no StarCraft/Terran binary/source URL
-- [ ] app functional: unchanged; assets not loaded yet
-- [ ] commit msg draft: `feat(xtask): generate licensed placeholder RTS audio deterministically`
+- [x] `cargo test -p xtask --locked audio` — 10 passed
+- [x] `cargo run -p xtask -- audio --check` — `audio: ok (7 wav + manifest)`
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean
+- [x] manual check: inspect README/manifest; confirm no StarCraft/Terran binary/source URL — README only names them in the exclusion sentence; manifest has no such terms
+- [x] app functional: unchanged; assets not loaded yet — no runtime code touched
+- [x] commit msg draft: `feat(xtask): generate licensed placeholder RTS audio deterministically`
