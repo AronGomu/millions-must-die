@@ -45,6 +45,18 @@ pub enum UiPage {
     Settings,
 }
 
+impl UiPage {
+    /// The `ui_page=` token of the `rts` exit line (`T17`). Stable, lower
+    /// snake case, one word per page — never the `Debug` spelling.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gameplay => "gameplay",
+            Self::PauseMenu => "pause_menu",
+            Self::Settings => "settings",
+        }
+    }
+}
+
 /// Every independent reason the sim can be paused. `manual` (Space) and
 /// `menu`/`focus` (the paused-menu FSM) are tracked separately so closing
 /// the menu never accidentally resumes a manual pause, and vice versa.

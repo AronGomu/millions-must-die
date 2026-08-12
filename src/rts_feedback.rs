@@ -230,6 +230,12 @@ pub struct AudioCounters {
     pub voice: u32,
     /// Individual unit cues inside those batches.
     pub cues: u32,
+    /// Of [`Self::cues`], the [`VoiceCue::Select`] ones — what the run's
+    /// selections voiced (`T17`'s `voice_select` exit field).
+    pub select_cues: u32,
+    /// Of [`Self::cues`], the accepted-order ones (`Move`/`Gather`/`Build`)
+    /// — `T17`'s `voice_order` exit field.
+    pub order_cues: u32,
     pub reject: u32,
     pub ui: u32,
 }
@@ -240,7 +246,13 @@ impl AudioCounters {
             AudioEvent::StartMusic => self.music += 1,
             AudioEvent::Voice(batch) => {
                 self.voice += 1;
-                self.cues += batch.cues().count() as u32;
+                for cue in batch.cues() {
+                    self.cues += 1;
+                    match cue.cue {
+                        VoiceCue::Select => self.select_cues += 1,
+                        VoiceCue::Move | VoiceCue::Gather | VoiceCue::Build => self.order_cues += 1,
+                    }
+                }
             }
             AudioEvent::Reject => self.reject += 1,
             AudioEvent::Ui(_) => self.ui += 1,

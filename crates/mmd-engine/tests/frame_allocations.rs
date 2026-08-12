@@ -14,7 +14,8 @@ use mmd_engine::alloc_guard::{
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
     BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order,
-    ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, pack_frame, pack_hud,
+    OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots,
+    hud_hit_test, minimap_projection, pack_frame, pack_hud,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -1067,4 +1068,93 @@ fn blocked_transitions_allocate_nothing() {
         "the blocked head produced a unit after all"
     );
     assert!(build.world().is_site(site), "the sealed site finished");
+}
+
+/// T17: one *joined* phase-1.1 frame — the whole per-frame surface the
+/// acceptance run actually exercises together, not one subsystem at a time.
+///
+/// Hard-body collision and formation planning (a six-worker group walking a
+/// gather order), the world pack, the HUD pack with a live multi-selection
+/// card and command grid, the minimap projection, the HUD hit test, and the
+/// `OrderReceiptBuffer` refill the app derives every voice cue from. Each of
+/// those already has its own case above; this one exists because a joined
+/// frame is what ships, and an allocation can hide in the seam between two
+/// individually-clean subsystems.
+///
+/// `RtsWorld::body_overlap_count` is deliberately *outside* the measured
+/// window: it is an exit-line/test observation seam that builds its own live
+/// list, never a per-frame path, so measuring it here would pin an
+/// allocation budget onto something the game never runs.
+///
+/// Measured after a warm load, and it consumes no timing threshold — this is
+/// the same code-health invariant as every case above, never a perf gate.
+#[test]
+fn joined_phase1_1_frame_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6, "the scene's six starting workers");
+    for &id in &workers {
+        h.world_mut().selection_mut().insert(id);
+    }
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    assert!(
+        h.world_mut().order_gather_group(&workers, node).is_ok(),
+        "the whole group must take the gather order before measuring"
+    );
+
+    // The tracked script's own geometry, so this frame is the shipped one.
+    let cursor = [960.0, 540.0];
+    let drag = Some(DragBox {
+        a: [850.0, 520.0],
+        b: [1000.0, 600.0],
+    });
+    let node_quad_corner = [897.0, 411.0];
+    let command_slot_1 = [1800.0, 888.0];
+
+    let mut frame = RtsFrame::new();
+    let mut receipts = OrderReceiptBuffer::new();
+
+    // Warm-up outside the scope: the nav field, every packing buffer and the
+    // receipt buffer grow now, not under the guard.
+    for _ in 0..4 {
+        h.step_exact(1);
+        let view = h.world().iso_view();
+        let _ = h
+            .world_mut()
+            .issue_context_order_at(&view, node_quad_corner, &mut receipts);
+        pack_frame(h.world(), cursor, drag, &mut frame);
+        pack_hud(h.world(), &mut frame);
+    }
+    let packed = frame.instance_count();
+    assert!(
+        packed > 17,
+        "the warm-up must have packed more than the bare world"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..120 {
+        h.step_exact(1);
+        let view = h.world().iso_view();
+        let result = h
+            .world_mut()
+            .issue_context_order_at(&view, node_quad_corner, &mut receipts);
+        std::hint::black_box((result.accepted, receipts.as_slice().len()));
+        pack_frame(h.world(), cursor, drag, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        std::hint::black_box(minimap_projection(h.world()).scale);
+        std::hint::black_box(command_slots(h.world())[1].enabled);
+        std::hint::black_box(hud_hit_test(h.world(), command_slot_1));
+    }
+    assert_eq!(guard.allocations(), 0, "a joined phase-1.1 frame allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "the measured window let two bodies penetrate"
+    );
 }

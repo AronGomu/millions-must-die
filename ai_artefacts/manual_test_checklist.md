@@ -181,3 +181,18 @@
 - [ ] Open Settings and drag the Master/Music/Voice/SFX sliders one at a time while music/voice/UI sounds are playing: confirm each slider's bus changes volume live and independently (e.g. Music to 0 silences only the music, not the voice cues).
 - [ ] With `SDL_AUDIODRIVER` set to a nonexistent driver name and a real (non-offscreen) window, run `cargo run -- rts`: confirm the process exits with a nonzero code and an actionable message naming the audio failure, rather than falling back to silent/offscreen play.
 - [ ] Confirm `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=invalid cargo run -- rts --frames 3` still exits 0 and prints an `rts: audio` line — an offscreen run must never depend on (or be broken by) a real audio device.
+
+## T17 phase1-1-acceptance
+
+The offscreen run proves state machines, assets and events. It cannot prove
+sound or display hardware, and no agent may open a window, grab the pointer
+or play audio on a live desktop — so everything below is human-only.
+
+- [ ] Run the merge-gate command in its real windowed form on this desktop: `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`. Confirm it exits 0 and its `rts: clean exit` line ends with `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`.
+- [ ] Watch that same windowed run: confirm you *see* the six workers box-selected, walking to the crystal and gas nodes, the Depot and Barracks ghost-then-build, and a Worker and a Soldier pop out — the run is not just a green exit line.
+- [ ] Watch the last 300 frames of it: confirm the camera jumps to the map's far right when the script clicks the minimap, the paused menu and then the settings panel open, the keyboard-pan slider visibly lands on 78, both Escapes back all the way out, and the units start moving again once the menu closes.
+- [ ] Listen to that run on real hardware: confirm you hear music, eight selection cues, nine order cues, exactly one reject when the script orders off the map, and eight UI clicks — the counters above are derived, not recorded from the speakers.
+- [ ] Open the settings panel by hand during that run's menu section is not possible (it is scripted); instead launch `cargo run -- rts`, open Settings, click the keyboard-pan track at the same place the script does, and confirm the panel shows `78` and holding an arrow key afterward pans visibly faster.
+- [ ] Confirm the scripted settings edit did **not** persist: after the acceptance run, relaunch `cargo run -- rts` and check the `rts: settings ...` startup line still shows your own `keyboard_pan`, not 78. A scripted click commits in memory only.
+- [ ] Play for a few minutes and try to force two units into each other (order a large group through a one-unit-wide gap, park units on a build site as it completes, push a group into a corner): confirm no two unit sprites ever visually interpenetrate, matching the `body_overlaps=0` the exit line reports.
+- [ ] Window mode, pointer confinement and Alt-Tab behaviour are still window/OS evidence only (see the `T10` and `T13` sections) — the offscreen acceptance run claims nothing about them.

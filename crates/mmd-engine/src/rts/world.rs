@@ -540,6 +540,44 @@ impl RtsWorld {
         &self.entities
     }
 
+    /// How many pairs of live units currently penetrate each other (`T17`).
+    ///
+    /// The one shared body-safety oracle: the engine acceptance run asserts
+    /// it at every milestone, and the app's `rts` exit line reports it, so a
+    /// scripted run and a world-call run cannot disagree about what "hard
+    /// bodies" means. Exactly [`units_overlap`]'s test — touching at
+    /// `r1 + r2` is legal, anything closer is a penetration — over every
+    /// unordered pair, buildings and nodes excluded (they are footprints,
+    /// not circles).
+    ///
+    /// `O(n^2)` on purpose: this is an observation seam for tests and the
+    /// exit line, never a per-tick path.
+    pub fn body_overlap_count(&self) -> u32 {
+        let store = &self.entities;
+        let radius = |slot: usize| match store.kind(slot) {
+            EntityKind::Unit(k) => Some(k.body_radius_cells()),
+            _ => None,
+        };
+        let mut units: Vec<(usize, f32)> = Vec::new();
+        for slot in 0..store.slot_count() {
+            if store.alive(slot)
+                && let Some(r) = radius(slot)
+            {
+                units.push((slot, r));
+            }
+        }
+        let mut overlaps = 0u32;
+        for (n, &(a, ra)) in units.iter().enumerate() {
+            let pa = store.position(a);
+            for &(b, rb) in &units[n + 1..] {
+                if units_overlap(pa, ra, store.position(b), rb) {
+                    overlaps += 1;
+                }
+            }
+        }
+        overlaps
+    }
+
     /// Direct entity-store mutation. A test hook: hard unit collision makes a
     /// raw position or spawn a world invariant, so shipping code routes
     /// through [`RtsWorld`]'s own systems instead.

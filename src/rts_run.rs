@@ -21,7 +21,9 @@
 //! rts: clean exit mode=<offscreen|window> backend=<b> tick=<t> frames=<n> \
 //!      hash=<64 hex> quit=<bool> paused=<bool> crystal=<n> gas=<n> \
 //!      supply=<used>/<cap> units=<n> buildings=<n> nodes=<n> selected=<n> \
-//!      camera=<cx>,<cy>
+//!      camera=<cx>,<cy> body_overlaps=<n> ui_page=<p> music_starts=<n> \
+//!      voice_select=<n> voice_order=<n> voice_reject=<n> sfx_ui=<n> \
+//!      keyboard_pan=<n>                                                             (f)
 //! ```
 //!
 //! - (a) absent when a scripted quit lands on frame 1.
@@ -38,6 +40,15 @@
 //!   action, one `ui` per successful enabled pointer activation, and the
 //!   effective per-bus gains in basis points. No physical device is ever
 //!   opened by this line's sink.
+//! - (f) `T17`'s joined phase-1.1 observation, in exactly this order:
+//!   `body_overlaps` from [`mmd_engine::rts::RtsWorld::body_overlap_count`]
+//!   (penetrating live-unit pairs; a shipped run must always report 0),
+//!   `ui_page` from the `T13` menu FSM (`gameplay|pause_menu|settings`),
+//!   then the `T15` audio counters split by meaning — `music_starts`,
+//!   `voice_select` (Select cues), `voice_order` (accepted Move/Gather/Build
+//!   cues), `voice_reject`, `sfx_ui` — and finally the live
+//!   `keyboard_pan` speed in cells/s, which a settings edit can move
+//!   mid-run.
 //!
 //! The `frame0` and `clean exit` lines are strictly `key=value` separated by
 //! single spaces, with no spaces inside a value.
@@ -1001,6 +1012,7 @@ where
     }
     for &cmd in cmd_buf.iter() {
         apply(world, session, cmd);
+        commit_scripted_setting_change(world, session);
     }
     if session.quit {
         state.quit = true;
@@ -1054,6 +1066,38 @@ where
         overlay_len: frame_buf.overlay.len(),
         ui_lens,
     }))
+}
+
+/// Drain a scripted click's pending settings edit (`T17`).
+///
+/// The live path drains it at the `MouseButtonUp` site, which owns the
+/// window and the store [`crate::rts_ui::commit_setting_change`] needs. A
+/// scripted click reaches [`apply`] with neither, so it commits **in memory
+/// only**: it validates, applies the camera-speed runtime and publishes the
+/// new value into `session.settings`, but never touches a window and never
+/// writes a user file. That is exactly the offscreen-isolation contract the
+/// deterministic acceptance run needs — a scripted settings edit must be
+/// observable on the exit line without ever becoming a side effect on the
+/// developer's machine.
+///
+/// A refused edit leaves `session.ui.warning` set, exactly as the live path
+/// does, so a script cannot silently apply an illegal value.
+fn commit_scripted_setting_change(world: &mut RtsWorld, session: &mut RtsSession) {
+    let Some(change) = session.pending_setting_change.take() else {
+        return;
+    };
+    let outcome = crate::rts_ui::commit_setting_change::<SdlWindowOps<'_>>(
+        world,
+        None,
+        None,
+        &mut session.settings,
+        session.audio.as_mut(),
+        change,
+    );
+    match outcome {
+        Ok(()) => session.ui.warning = None,
+        Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+    }
 }
 
 /// Release the window from the device, then drop it — in that order.
@@ -1117,7 +1161,8 @@ fn finish(
     println!(
         "rts: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} \
          paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
-         camera={},{}",
+         camera={},{} body_overlaps={} ui_page={} music_starts={} voice_select={} \
+         voice_order={} voice_reject={} sfx_ui={} keyboard_pan={}",
         world.tick_index(),
         state.frames,
         hex::encode(state.last_hash),
@@ -1133,6 +1178,14 @@ fn finish(
         world.selection().len(),
         center[0],
         center[1],
+        world.body_overlap_count(),
+        session.ui.page.label(),
+        counters.music,
+        counters.select_cues,
+        counters.order_cues,
+        counters.reject,
+        counters.ui,
+        session.settings.camera.keyboard_pan,
     );
     Ok(())
 }

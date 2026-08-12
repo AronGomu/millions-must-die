@@ -1,35 +1,57 @@
-# Phase-1 acceptance: select -> gather -> build -> produce.
+# Phase-1.1 acceptance: select -> gather -> build -> produce -> HUD -> menu.
 # Frames are 1-based. Coordinates are screen pixels at the starting camera.
+#
+# Two rules this script exists to enforce:
+#   * every build and produce command goes through the command card, never a
+#     hotkey — the point is to prove the shipped *pointer* path, and a hotkey
+#     bypasses the grid's own selection/enable/hit-test logic;
+#   * every worker the card acts on is really selected first. `find_builder`
+#     falls back to "any live worker", so a placement can succeed with an
+#     empty selection — the card cannot, and neither may this run.
+#
+# The selection clicks therefore all land in the first ~50 frames, while the
+# six relocated workers (T3) are still on the spawn cells named below.
 
 1:move:960,540
-5:drag:850,520,1000,600        # box-select the six starting workers (T3: radius-aware spawn scatters them wider)
-10:rclick:920,458              # send them all to the crystal node
-12:lclick:916,568              # re-select one of them (spawn cell 167,178)
-16:rclick:1072,606             # put that one on the gas node (196,168) instead
+5:drag:850,520,1000,600        # box-select the six starting workers (T3 scatters them wider than one row)
+10:rclick:897,411              # crystal node, one pixel inside its visible quad [896,410,48,48] (ground 920,458)
+12:lclick:916,568              # narrow to one already-selected worker (spawn cell 167,178) — a re-select is silent
+16:rclick:1049,559             # gas node, one pixel inside its visible quad [1048,558,48,48] (ground 1072,606)
+20:rclick:1900,100             # off the map, one worker selected: exactly one Reject
 
-# --- Depot ---
-60:lclick:896,558              # select one worker (spawn cell 162,178)
-65:key:w                       # Depot ghost
-70:move:976,606
-75:lclick:976,606              # place it at min corner (180,176)
+# --- Depot, built by the worker on spawn cell (162,178) ---
+24:lclick:896,558
+28:lclick:1800,888             # command slot 1 = Depot ghost
+32:move:976,606
+34:lclick:976,606              # place it at min corner (180,176)
+36:rclick:976,606              # order that worker onto its own site: one Build receipt
+
+# --- Barracks, built by the worker on spawn cell (165,178) ---
+40:lclick:906,563
+44:lclick:1872,888             # command slot 2 = Barracks ghost
+48:move:840,542
+50:lclick:840,542              # place it at min corner (146,176)
+52:rclick:840,542              # order that worker onto its own site: one Build receipt
 
 # --- a Worker from the HQ ---
 120:lclick:960,540             # select the HQ
-125:key:a                      # queue a Worker
-
-# --- Barracks ---
-400:lclick:906,563             # select a worker near the crystal run
-405:key:e                      # Barracks ghost
-410:move:840,542
-415:lclick:840,542             # place it at min corner (146,176)
+125:lclick:1728,888            # command slot 0 = Worker
 
 # --- a Soldier from the Barracks ---
 900:lclick:840,542             # select the finished Barracks
-905:key:s                      # queue a Soldier
+905:lclick:1728,888            # command slot 0 = Soldier
+
+# --- the minimap, then the nested menu ---
+1310:lclick:360,960            # minimap, inside the diamond's right half (map ~298,22)
+1320:lclick:1888,24            # gear -> paused menu
+1330:lclick:960,540            # SETTINGS -> settings panel
+1340:lclick:1170,288           # keyboard-pan slider -> 78 cells/s
+1350:key:esc                   # settings -> menu
+1360:key:esc                   # menu -> gameplay; the sim resumes
 
 # --- look away from the base ---
-1000:pan:right                 # hold the right arrow
-1300:panup:right               # release it
+1400:pan:right                 # hold the right arrow
+1500:panup:right               # release it
 
-1400:key:f1                    # overlay on for the final frames
-1450:quit
+1520:key:f1                    # overlay on for the final frames
+1560:quit

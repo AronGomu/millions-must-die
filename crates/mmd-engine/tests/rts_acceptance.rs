@@ -19,8 +19,9 @@
 use std::path::PathBuf;
 
 use mmd_engine::rts::{
-    BuildingKind, EntityId, EntityKind, Order, ProduceError, ResourceKind, UnitKind,
-    footprint_cells,
+    BuildingKind, EntityId, EntityKind, HudHit, HudLayout, ModalHit, ModalPage, Order, Pick,
+    ProduceError, ResourceKind, UnitKind, footprint_cells, hud_hit_test, minimap_projection,
+    modal_hit_test, pick_at, sprite_screen_rect,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
@@ -69,54 +70,132 @@ const DEPOT_MIN: Cell = Cell { x: 180, y: 176 };
 /// Barracks footprint min corner (ghost cell `(151, 181)`, edge 10).
 const BARRACKS_MIN: Cell = Cell { x: 146, y: 176 };
 
-/// Every screen coordinate the tracked script names, with the cell it claims.
+/// The minimap point the tracked script clicks, in screen pixels.
+///
+/// Derived, not guessed: `acceptance_minimap_click_moves_camera` runs it back
+/// through the live [`mmd_engine::rts::MinimapProjection`], proves it falls in
+/// the map's own diamond and in its right half, and then proves the camera
+/// actually goes there and stays frontier-safe.
+const MINIMAP_CLICK: [f32; 2] = [360.0, 960.0];
+
+/// The keyboard-pan speed the script's slider click must snap to.
+const SLIDER_PAN_SPEED: u32 = 78;
+
+/// What one script coordinate means — and therefore what must be true of it.
+///
+/// A phase-1.1 script no longer names only world cells: it clicks node
+/// sprites, HUD chrome, an open modal, and one point deliberately off the
+/// map. Each of those is a *different* claim, so each gets its own variant
+/// rather than one `Cell` the HUD points would have to lie about.
+#[derive(Debug)]
+enum ScriptPoint {
+    /// A world click that projects to this map cell.
+    Cell(Cell),
+    /// A world click one pixel inside a resource node's **visible quad**, at
+    /// the named corner: it picks the node standing on this ground cell, and
+    /// deliberately does *not* project to it.
+    NodeQuad(Cell),
+    /// A world click with no map cell under it at all — the run's one
+    /// deliberate invalid order.
+    OffMap,
+    /// Owned by the HUD before the world ever sees it.
+    Hud(HudHit),
+    /// Owned by an open settings modal.
+    Modal(ModalHit),
+}
+
+/// Every screen coordinate the tracked script names, with what it claims.
 ///
 /// The script is written in pixels because that is what a mouse produces; this
 /// table is the only place those pixels are given a meaning, and
 /// `the_script_coordinates_hit_what_they_name` proves the meaning is the one
-/// the live projection agrees with.
-const SCRIPT_COORDS: &[([f32; 2], Cell, &str)] = &[
-    ([960.0, 540.0], Cell { x: 166, y: 166 }, "HQ centre"),
+/// the live projection, the live HUD hit test and the live modal hit test all
+/// agree with.
+const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
+    (
+        [960.0, 540.0],
+        ScriptPoint::Cell(Cell { x: 166, y: 166 }),
+        "HQ centre (and, with the menu open, the SETTINGS button)",
+    ),
     (
         [850.0, 520.0],
-        Cell { x: 147, y: 174 },
+        ScriptPoint::Cell(Cell { x: 147, y: 174 }),
         "worker box, top-left",
     ),
     (
         [1000.0, 600.0],
-        Cell { x: 186, y: 176 },
+        ScriptPoint::Cell(Cell { x: 186, y: 176 }),
         "worker box, bottom-right",
     ),
     (
-        [920.0, 458.0],
-        Cell { x: 140, y: 150 },
-        "crystal node (140,150)",
+        [897.0, 411.0],
+        ScriptPoint::NodeQuad(Cell { x: 140, y: 150 }),
+        "crystal node quad, one pixel inside its top-left corner",
     ),
     (
         [916.0, 568.0],
-        Cell { x: 167, y: 178 },
+        ScriptPoint::Cell(Cell { x: 167, y: 178 }),
         "worker spawn cell (167,178)",
     ),
     (
-        [1072.0, 606.0],
-        Cell { x: 196, y: 168 },
-        "gas node (196,168)",
+        [1049.0, 559.0],
+        ScriptPoint::NodeQuad(Cell { x: 196, y: 168 }),
+        "gas node quad, one pixel inside its top-left corner",
+    ),
+    (
+        [1900.0, 100.0],
+        ScriptPoint::OffMap,
+        "the invalid order: logical content, no HUD, no map cell",
     ),
     (
         [896.0, 558.0],
-        Cell { x: 162, y: 178 },
+        ScriptPoint::Cell(Cell { x: 162, y: 178 }),
         "worker spawn cell (162,178)",
     ),
-    ([976.0, 606.0], Cell { x: 184, y: 180 }, "Depot ghost cell"),
+    (
+        [1800.0, 888.0],
+        ScriptPoint::Hud(HudHit::CommandSlot(1)),
+        "command slot 1 centre (Depot)",
+    ),
+    (
+        [976.0, 606.0],
+        ScriptPoint::Cell(Cell { x: 184, y: 180 }),
+        "Depot ghost cell",
+    ),
     (
         [906.0, 563.0],
-        Cell { x: 165, y: 178 },
+        ScriptPoint::Cell(Cell { x: 165, y: 178 }),
         "worker spawn cell (165,178)",
     ),
     (
+        [1872.0, 888.0],
+        ScriptPoint::Hud(HudHit::CommandSlot(2)),
+        "command slot 2 centre (Barracks)",
+    ),
+    (
         [840.0, 542.0],
-        Cell { x: 151, y: 181 },
+        ScriptPoint::Cell(Cell { x: 151, y: 181 }),
         "Barracks ghost cell",
+    ),
+    (
+        [1728.0, 888.0],
+        ScriptPoint::Hud(HudHit::CommandSlot(0)),
+        "command slot 0 centre (Worker / Soldier)",
+    ),
+    (
+        MINIMAP_CLICK,
+        ScriptPoint::Hud(HudHit::Minimap(MINIMAP_CLICK)),
+        "minimap, inside the diamond's right half",
+    ),
+    (
+        [1888.0, 24.0],
+        ScriptPoint::Hud(HudHit::Gear),
+        "settings gear centre",
+    ),
+    (
+        [1170.0, 288.0],
+        ScriptPoint::Modal(ModalHit::KeyboardPan(SLIDER_PAN_SPEED)),
+        "keyboard-pan slider, at the 78 cells/s step",
     ),
 ];
 
@@ -156,6 +235,11 @@ struct Run {
     supply_cap_end: u32,
     ticks_stepped: u64,
     tick_index_end: u64,
+    /// Body-penetration scans, `(milestone, penetrating live-unit pairs)`,
+    /// taken before the first order and after every order/build/produce
+    /// phase. Every entry must read 0 — see
+    /// `acceptance_never_has_body_penetration`.
+    body_scans: Vec<(&'static str, u32)>,
     state_hash: String,
 }
 
@@ -167,6 +251,13 @@ struct Run {
 fn drive() -> Run {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let mut ticks = 0u64;
+    let mut body_scans: Vec<(&'static str, u32)> = Vec::new();
+    macro_rules! scan {
+        ($h:expr, $what:literal) => {
+            body_scans.push(($what, $h.world().body_overlap_count()))
+        };
+    }
+    scan!(h, "initial spawn");
 
     // --- 1. box-select the six starting workers ---------------------------
     let view = h.world().iso_view();
@@ -195,9 +286,12 @@ fn drive() -> Run {
         .order_gather_group(&[gas_worker], gas_node)
         .unwrap_or(0);
 
+    scan!(h, "after the gather orders");
+
     // --- 3. gather ---------------------------------------------------------
     h.step_exact(TICKS_GATHER);
     ticks += TICKS_GATHER;
+    scan!(h, "after gathering");
     let crystal_after_gather = h.world().resources().crystal;
     let gas_after_gather = h.world().resources().gas;
 
@@ -215,11 +309,13 @@ fn drive() -> Run {
         .expect("Depot placement refused");
     let crystal_spent_on_depot = before.crystal as i64 - h.world().resources().crystal as i64;
     let depot_is_site_at_placement = h.world().is_site(depot);
+    scan!(h, "after the Depot was placed");
 
     // --- 5 + 6. build it ---------------------------------------------------
     h.step_exact(TICKS_DEPOT_BUILD);
     ticks += TICKS_DEPOT_BUILD;
     let depot_is_site_after_build = h.world().is_site(depot);
+    scan!(h, "after the Depot finished");
     let cap_after_depot = h.world().supply().cap();
     let depot_slot = h.world().entities().slot(depot).expect("Depot alive");
     let depot_center = h.world().entities().position(depot_slot);
@@ -246,6 +342,7 @@ fn drive() -> Run {
     h.step_exact(TICKS_WORKER_PRODUCE);
     ticks += TICKS_WORKER_PRODUCE;
     let workers_after_produce = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len();
+    scan!(h, "after the HQ produced a Worker");
 
     // --- 9. place the Barracks ---------------------------------------------
     let barracks_builder = workers[1];
@@ -266,6 +363,7 @@ fn drive() -> Run {
     h.step_exact(TICKS_BARRACKS_BUILD);
     ticks += TICKS_BARRACKS_BUILD;
     let barracks_is_site_after_build = h.world().is_site(barracks);
+    scan!(h, "after the Barracks finished");
 
     // --- 11. queue a Soldier ------------------------------------------------
     let supply_before = h.world().supply().used();
@@ -276,6 +374,7 @@ fn drive() -> Run {
     h.step_exact(TICKS_SOLDIER_PRODUCE);
     ticks += TICKS_SOLDIER_PRODUCE;
     let soldiers_at_end = h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier)).len();
+    scan!(h, "after the Barracks produced a Soldier");
 
     // --- 13. pan the camera off the base ------------------------------------
     //
@@ -288,6 +387,7 @@ fn drive() -> Run {
     ticks += TICKS_PAN;
     h.world_mut().set_keyboard_pan_dir([0.0, 0.0]);
     let camera_after_pan = h.world().camera().center();
+    scan!(h, "final");
 
     Run {
         selected,
@@ -317,6 +417,7 @@ fn drive() -> Run {
         supply_cap_end: h.world().supply().cap(),
         ticks_stepped: ticks,
         tick_index_end: h.tick_index(),
+        body_scans,
         state_hash: h.state_hash_hex(),
     }
 }
@@ -475,6 +576,147 @@ fn the_full_economy_loop_runs_end_to_end() {
     );
 }
 
+/// Hard bodies, asserted as an invariant rather than at one lucky moment:
+/// every milestone of the acceptance run scans every unordered pair of live
+/// units and demands `d^2 >= (r1 + r2)^2`.
+///
+/// The same oracle the shipped `rts` exit line reports as `body_overlaps`,
+/// so a scripted run and this world-call run cannot disagree about what
+/// "hard bodies" means.
+#[test]
+fn acceptance_never_has_body_penetration() {
+    let r = drive();
+    assert!(
+        r.body_scans.len() >= 9,
+        "the run must scan for penetration at every milestone, not once: {:?}",
+        r.body_scans
+    );
+    for (milestone, overlaps) in &r.body_scans {
+        assert_eq!(
+            *overlaps, 0,
+            "{milestone}: {overlaps} pair(s) of live units penetrate each other"
+        );
+    }
+}
+
+/// Anti-vacuity for the scan above: the oracle must actually be able to see
+/// a penetration, or reading 0 everywhere proves nothing.
+#[test]
+fn the_body_oracle_sees_a_forced_penetration() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    assert_eq!(h.world().body_overlap_count(), 0, "the scene starts clean");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let target = {
+        let store = h.world().entities();
+        store.position(store.slot(workers[0]).expect("live worker"))
+    };
+    assert!(
+        h.world_mut().force_position_for_test(workers[1], target),
+        "the test hook must accept a live id"
+    );
+    assert_eq!(
+        h.world().body_overlap_count(),
+        1,
+        "two bodies at the same point are one penetrating pair"
+    );
+}
+
+/// The script's resource clicks are one pixel inside the *visible quad*'s
+/// top-left corner, not on the node's ground point: a player clicks the
+/// sprite they can see, so the sprite is what must be pickable.
+#[test]
+fn resource_click_uses_visible_quad_corner() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let view = h.world().iso_view();
+    let store = h.world().entities();
+
+    for (screen, claim, what) in SCRIPT_COORDS {
+        let ScriptPoint::NodeQuad(ground) = claim else {
+            continue;
+        };
+        let node = node_standing_on(&h, *ground);
+        let slot = store.slot(node).expect("live node");
+        let quad = sprite_screen_rect(&view, store.position(slot));
+        assert_eq!(
+            *screen,
+            [quad[0] + 1.0, quad[1] + 1.0],
+            "{what}: {screen:?} is not one pixel inside the quad {quad:?}'s top-left corner"
+        );
+        // ...and the corner is genuinely *not* the ground point's own cell:
+        // a click that happened to land on the node's cell anyway would
+        // prove nothing about picking the sprite.
+        assert_ne!(
+            view.cell_at(screen[0], screen[1], GRID, GRID),
+            Some(*ground),
+            "{what}: the quad corner still projects onto the node's own cell, so this \
+             coordinate does not exercise sprite picking at all"
+        );
+        assert_eq!(
+            pick_at(h.world(), &view, *screen),
+            Pick::Node(node),
+            "{what}: the visible quad corner does not pick the node"
+        );
+    }
+}
+
+/// The script's minimap click: derived from the live projection, inside the
+/// map's own diamond and in its right half, and it moves the camera to a
+/// frontier-legal centre.
+#[test]
+fn acceptance_minimap_click_moves_camera() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let projection = minimap_projection(h.world());
+    let origin = [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]];
+    let local = [MINIMAP_CLICK[0] - origin[0], MINIMAP_CLICK[1] - origin[1]];
+    let map_point = projection
+        .minimap_to_map(local)
+        .unwrap_or_else(|| panic!("{MINIMAP_CLICK:?} is outside the minimap's map diamond"));
+    assert!(
+        map_point[0] > GRID as f32 * 0.5,
+        "the click must be in the diamond's right half, got {map_point:?}"
+    );
+
+    let before = h.world().camera().center();
+    h.world_mut().look_at_map_point(map_point);
+    let after = h.world().camera().center();
+    assert_ne!(
+        before, after,
+        "a minimap click on the far side of the map did not move the camera"
+    );
+    // Frontier-safe: the clamp is what keeps a minimap jump from showing
+    // the void past the map's own edge.
+    let frontier = h.world().camera().frontier();
+    let view = h.world().camera().iso_view();
+    let p =
+        mmd_engine::render::iso_project(after[0], after[1], view.tile_w, view.tile_h, [0.0, 0.0]);
+    assert!(
+        p[0] >= frontier.x[0] - 1e-3 && p[0] <= frontier.x[1] + 1e-3,
+        "camera centre {after:?} projects to {p:?}, outside the frontier {frontier:?}"
+    );
+    assert!(
+        p[1] >= frontier.y[0] - 1e-3 && p[1] <= frontier.y[1] + 1e-3,
+        "camera centre {after:?} projects to {p:?}, outside the frontier {frontier:?}"
+    );
+}
+
+/// The live node standing on `ground`, by its floored cell-space position.
+fn node_standing_on(h: &RtsHarness, ground: Cell) -> EntityId {
+    let store = h.world().entities();
+    for kind in [
+        EntityKind::Node(ResourceKind::Crystal),
+        EntityKind::Node(ResourceKind::Gas),
+    ] {
+        for id in h.ids_of_kind(kind) {
+            let slot = store.slot(id).expect("live node");
+            let p = store.position(slot);
+            if p[0].floor() as u32 == ground.x && p[1].floor() as u32 == ground.y {
+                return id;
+            }
+        }
+    }
+    panic!("no resource node stands on {ground:?}")
+}
+
 /// The same run, twice, must land on the same hash.
 #[test]
 fn the_acceptance_run_is_reproducible() {
@@ -503,12 +745,59 @@ fn the_script_coordinates_hit_what_they_name() {
         "the scene is no longer {GRID} cells wide; the script's pixels were derived for it"
     );
 
-    for (screen, cell, what) in SCRIPT_COORDS {
-        assert_eq!(
-            view.cell_at(screen[0], screen[1], GRID, GRID),
-            Some(*cell),
-            "the script's {what} coordinate {screen:?} no longer lands on {cell:?}"
-        );
+    for (screen, claim, what) in SCRIPT_COORDS {
+        let cell = view.cell_at(screen[0], screen[1], GRID, GRID);
+        match claim {
+            ScriptPoint::Cell(expected) => {
+                assert_eq!(
+                    cell,
+                    Some(*expected),
+                    "the script's {what} coordinate {screen:?} no longer lands on {expected:?}"
+                );
+                assert_eq!(
+                    hud_hit_test(h.world(), *screen),
+                    None,
+                    "the script's {what} coordinate {screen:?} is a world click, but the \
+                     HUD now owns it"
+                );
+            }
+            ScriptPoint::NodeQuad(ground) => {
+                let node = node_standing_on(&h, *ground);
+                assert_eq!(
+                    pick_at(h.world(), &view, *screen),
+                    Pick::Node(node),
+                    "the script's {what} coordinate {screen:?} no longer picks the node on \
+                     {ground:?}"
+                );
+            }
+            ScriptPoint::OffMap => {
+                assert_eq!(
+                    cell, None,
+                    "the script's {what} coordinate {screen:?} now has a map cell under it, \
+                     so the order it makes would no longer be refused"
+                );
+                assert_eq!(
+                    hud_hit_test(h.world(), *screen),
+                    None,
+                    "the script's {what} coordinate {screen:?} must reach the world to be \
+                     refused by it; the HUD now consumes it instead"
+                );
+            }
+            ScriptPoint::Hud(expected) => {
+                assert_eq!(
+                    hud_hit_test(h.world(), *screen),
+                    Some(*expected),
+                    "the script's {what} coordinate {screen:?} no longer hits {expected:?}"
+                );
+            }
+            ScriptPoint::Modal(expected) => {
+                assert_eq!(
+                    modal_hit_test(ModalPage::Settings, *screen),
+                    *expected,
+                    "the script's {what} coordinate {screen:?} no longer hits {expected:?}"
+                );
+            }
+        }
     }
 
     // ...and the table must cover the script, or a coordinate could drift by
@@ -520,7 +809,7 @@ fn the_script_coordinates_hit_what_they_name() {
     for screen in &used {
         assert!(
             SCRIPT_COORDS.iter().any(|(s, _, _)| s == screen),
-            "{SCRIPT_REL} uses coordinate {screen:?}, which this test documents no cell for"
+            "{SCRIPT_REL} uses coordinate {screen:?}, which this test documents no meaning for"
         );
     }
     for (screen, _, what) in SCRIPT_COORDS {

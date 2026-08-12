@@ -95,6 +95,29 @@ impl Cli {
         hash
     }
 
+    /// The `T17` joined observation of one run, in exit-line field order.
+    ///
+    /// Read as one struct rather than field by field so
+    /// `phase1_1_run_is_cross_process_deterministic` compares *all* of it
+    /// between two processes — a counter added later is compared for free,
+    /// instead of being silently unproven.
+    fn phase1_1(&self) -> Phase11 {
+        Phase11 {
+            hash: self.final_hash(),
+            tick: self.exit_u32("tick"),
+            frames: self.exit_u32("frames"),
+            body_overlaps: self.exit_u32("body_overlaps"),
+            ui_page: self.exit_field("ui_page").to_string(),
+            music_starts: self.exit_u32("music_starts"),
+            voice_select: self.exit_u32("voice_select"),
+            voice_order: self.exit_u32("voice_order"),
+            voice_reject: self.exit_u32("voice_reject"),
+            sfx_ui: self.exit_u32("sfx_ui"),
+            keyboard_pan: self.exit_u32("keyboard_pan"),
+            camera: self.exit_pair("camera"),
+        }
+    }
+
     fn assert_success(&self) -> &Self {
         assert_eq!(
             self.code,
@@ -131,6 +154,24 @@ impl Cli {
         }
         self
     }
+}
+
+/// Everything `T17` added to the exit line, plus the identity fields a
+/// cross-process comparison needs.
+#[derive(Debug, PartialEq)]
+struct Phase11 {
+    hash: String,
+    tick: u32,
+    frames: u32,
+    body_overlaps: u32,
+    ui_page: String,
+    music_starts: u32,
+    voice_select: u32,
+    voice_order: u32,
+    voice_reject: u32,
+    sfx_ui: u32,
+    keyboard_pan: u32,
+    camera: [f32; 2],
 }
 
 impl std::fmt::Display for Cli {
@@ -444,6 +485,189 @@ fn the_acceptance_run_is_deterministic() {
         b.final_hash(),
         "{a}\n{b}\nthe acceptance run is not reproducible"
     );
+}
+
+// ---------------------------------------------------------------------------
+// T17: the joined phase-1.1 claim
+// ---------------------------------------------------------------------------
+
+/// Hard bodies, end to end: the shipped binary reports its own
+/// `RtsWorld::body_overlap_count` at exit, and a run that drives selection,
+/// group orders, construction and production through the real input path
+/// must never leave a single penetrating pair behind.
+#[test]
+fn acceptance_never_has_body_penetration() {
+    let Some(cli) = shared_acceptance_run("acceptance_never_has_body_penetration") else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_u32("body_overlaps"),
+        0,
+        "{cli}\nlive unit bodies penetrate each other at the end of the run"
+    );
+}
+
+/// Every build and produce command in the tracked script is a command-card
+/// click, not a hotkey. The card only enables a slot for a selection it
+/// actually fits, so four accepted clicks (`sfx_ui` counts them) plus the
+/// finished Depot, Barracks, Worker and Soldier is the proof that the
+/// pointer path — selection, hit test, enable check, execute — works.
+#[test]
+fn acceptance_uses_command_card_for_build_and_produce() {
+    let Some(cli) = shared_acceptance_run("acceptance_uses_command_card_for_build_and_produce")
+    else {
+        return;
+    };
+    cli.assert_success();
+
+    let script = std::fs::read_to_string(script_path()).expect("read the tracked script");
+    // Whole tokens, not a substring search: `key:esc` contains `key:e`.
+    for line in script.lines() {
+        for entry in line.split('#').next().unwrap_or("").split(';') {
+            let mut parts = entry.trim().split(':');
+            let (_frame, kind, arg) = (parts.next(), parts.next(), parts.next());
+            if kind == Some("key") && matches!(arg, Some("w" | "e" | "a" | "s")) {
+                panic!(
+                    "the tracked script still uses the `key:{}` build/produce hotkey; \
+                     phase 1.1 must go through the command card",
+                    arg.unwrap_or_default()
+                );
+            }
+        }
+    }
+    for slot in ["1728,888", "1800,888", "1872,888"] {
+        assert!(
+            script.contains(slot),
+            "the tracked script never clicks command-grid centre {slot}"
+        );
+    }
+
+    assert_eq!(
+        cli.exit_u32("buildings"),
+        3,
+        "{cli}\nthe card's Depot and Barracks slots did not finish both buildings"
+    );
+    assert!(
+        cli.exit_u32("units") >= 8,
+        "{cli}\nthe card's Worker and Soldier slots did not produce both units"
+    );
+}
+
+/// Gear -> SETTINGS -> a slider -> Escape -> Escape. The menu pauses the sim
+/// while it is open, the settings edit lands (78 cells/s, a legal step), and
+/// closing it puts the run back on `gameplay` with the simulation ticking
+/// again.
+#[test]
+fn acceptance_menu_settings_round_trip_resumes() {
+    let Some(cli) = shared_acceptance_run("acceptance_menu_settings_round_trip_resumes") else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("ui_page"),
+        "gameplay",
+        "{cli}\nthe run ended inside a menu; both Escapes must back all the way out"
+    );
+    assert_eq!(
+        cli.exit_field("paused"),
+        "false",
+        "{cli}\nthe sim is still paused after the menu closed"
+    );
+    assert_eq!(
+        cli.exit_u32("keyboard_pan"),
+        78,
+        "{cli}\nthe settings slider click did not land on the 78 cells/s step"
+    );
+    // The menu really paused: the run rendered strictly more frames than it
+    // stepped ticks, and every one of those missing ticks is a menu frame.
+    let (frames, tick) = (cli.exit_u32("frames"), cli.exit_u32("tick"));
+    assert!(
+        tick < frames,
+        "{cli}\ntick {tick} of {frames} frames: the menu never paused the sim"
+    );
+    assert!(
+        tick > 0,
+        "{cli}\nthe sim never advanced at all, so 'it resumed' proves nothing"
+    );
+}
+
+/// The exact audio counters the tracked script owes, cue by cue.
+///
+/// These are hard equalities on purpose: an inequality would still pass when
+/// a whole class of feedback silently stopped being derived.
+#[test]
+fn acceptance_audio_counts_are_exact() {
+    let Some(cli) = shared_acceptance_run("acceptance_audio_counts_are_exact") else {
+        return;
+    };
+    cli.assert_success();
+    // One music start per session; nothing (menu, pause) ever restarts it.
+    assert_eq!(cli.exit_u32("music_starts"), 1, "{cli}");
+    // The six boxed starting workers plus the two later newly selected ones.
+    // A re-select is silence, which is why narrowing the box to one of its
+    // own members does not count.
+    assert_eq!(cli.exit_u32("voice_select"), 8, "{cli}");
+    // Six crystal gathers, one gas gather, two build receipts.
+    assert_eq!(cli.exit_u32("voice_order"), 9, "{cli}");
+    // The one deliberate off-map order.
+    assert_eq!(cli.exit_u32("voice_reject"), 1, "{cli}");
+    // Four command-card clicks, the minimap, the gear, SETTINGS, the slider.
+    assert_eq!(cli.exit_u32("sfx_ui"), 8, "{cli}");
+
+    // The `rts: audio` line is the same tally, seen from the sink side: the
+    // two must agree or one of them is decorative.
+    let audio = cli
+        .stdout
+        .lines()
+        .find(|l| l.starts_with("rts: audio "))
+        .unwrap_or_else(|| panic!("{cli}\nno `rts: audio` line"));
+    let field = |key: &str| -> u32 {
+        audio
+            .split_whitespace()
+            .find_map(|tok| tok.strip_prefix(&format!("{key}=")))
+            .and_then(|v| v.parse().ok())
+            .unwrap_or_else(|| panic!("{cli}\n`rts: audio` has no numeric `{key}=`"))
+    };
+    assert_eq!(field("music"), cli.exit_u32("music_starts"), "{cli}");
+    assert_eq!(field("reject"), cli.exit_u32("voice_reject"), "{cli}");
+    assert_eq!(field("ui"), cli.exit_u32("sfx_ui"), "{cli}");
+    assert_eq!(
+        field("cues"),
+        cli.exit_u32("voice_select") + cli.exit_u32("voice_order"),
+        "{cli}\nthe split select/order counters do not add up to the cue total"
+    );
+}
+
+/// Two independent processes, same script: identical state hash *and*
+/// identical joined counters.
+///
+/// The hash alone would not cover the audio/UI/body observation, which is
+/// derived outside the world state on purpose (ADR 020) — so a run could be
+/// hash-stable while its feedback drifted.
+#[test]
+fn phase1_1_run_is_cross_process_deterministic() {
+    let Some(a) = shared_acceptance_run("phase1_1_run_is_cross_process_deterministic") else {
+        return;
+    };
+    let Some(b) = or_skip(
+        "phase1_1_run_is_cross_process_deterministic",
+        acceptance_run(),
+    ) else {
+        return;
+    };
+    a.assert_success();
+    b.assert_success();
+    assert_eq!(
+        a.phase1_1(),
+        b.phase1_1(),
+        "{a}\n{b}\ntwo processes running the same script disagreed"
+    );
+}
+
+/// The tracked script, resolved against the crate root.
+fn script_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(SCRIPT)
 }
 
 /// A scripted entry that never fires makes the run exit 1, so a clean exit is

@@ -68,14 +68,22 @@
 
 ## Impl steps
 
-- [ ] 1. Add exit parser + red exact counter/page/body tests.
-- [ ] 2. Replace tracked script resource clicks with exact visible-corner literals.
-- [ ] 3. Replace build/produce keys with exact command-grid centers.
-- [ ] 4. Add one invalid order, minimap click, gear/settings/slider/Escape sequence.
-- [ ] 5. Add joined overlap oracle + fake sink counters to exit observation.
-- [ ] 6. Update engine/app acceptance expected state/hash after review.
-- [ ] 7. Add cross-process + joined allocation test.
-- [ ] 8. Run exact 1,600-frame smoke; do not raise budget or weaken assertions.
+- [x] 1. Add exit parser + red exact counter/page/body tests.
+  - validate: `tests/rts_acceptance.rs` parses `body_overlaps`/`ui_page`/`music_starts`/`voice_select`/`voice_order`/`voice_reject`/`sfx_ui`/`keyboard_pan` and the cases fail against the pre-change binary.
+- [x] 2. Replace tracked script resource clicks with exact visible-corner literals.
+  - validate: script contains `897,411` and `1049,559`; engine acceptance proves each is one pixel inside the node's `sprite_screen_rect` and picks that node.
+- [x] 3. Replace build/produce keys with exact command-grid centers.
+  - validate: script has no `key:w|e|a|s`; contains `1800,888`, `1728,888`, `1872,888`; run still reports `buildings=3` and a Soldier.
+- [x] 4. Add one invalid order, minimap click, gear/settings/slider/Escape sequence.
+  - validate: script contains `1900,100`, `360,960`, `1888,24`, `960,540`, `1170,288`, two `key:esc`; exit line reports `voice_reject=1`, `ui_page=gameplay`, `keyboard_pan=78`.
+- [x] 5. Add joined overlap oracle + fake sink counters to exit observation.
+  - validate: `RtsWorld::body_overlap_count` exists and the exit line reports `body_overlaps=0`; `AudioCounters` splits select/order cues.
+- [x] 6. Update engine/app acceptance expected state/hash after review.
+  - validate: `cargo test -p mmd-engine --locked --test rts_acceptance` and `cargo test -p millions_must_die --locked --test rts_acceptance` both green.
+- [x] 7. Add cross-process + joined allocation test.
+  - validate: `phase1_1_run_is_cross_process_deterministic` and `joined_phase1_1_frame_allocates_nothing` both green.
+- [x] 8. Run exact 1,600-frame smoke; do not raise budget or weaken assertions.
+  - validate: `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` exits 0 with the exact counters.
 
 ## Outputs
 
@@ -86,10 +94,13 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test rts_acceptance`
-- [ ] `cargo test -p millions_must_die --locked --test rts_acceptance`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract`
-- [ ] `cargo test -p mmd-engine --locked --test frame_allocations joined_phase1_1_frame_allocates_nothing`
-- [ ] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
-- [ ] app functional: exit0; exact counters; Worker+Soldier+buildings/resources present
-- [ ] commit msg draft: `test(rts): prove phase 1.1 feedback loop through live-equivalent input`
+- [x] `cargo test -p mmd-engine --locked --test rts_acceptance`
+- [x] `cargo test -p millions_must_die --locked --test rts_acceptance`
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract`
+- [x] `cargo test -p mmd-engine --locked --test frame_allocations joined_phase1_1_frame_allocates_nothing`
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
+  - run as `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 1600 --inject-input-file ...`: an
+    agent may not open a window, grab the pointer or play audio on the live desktop. The windowed
+    form of the same command is on the human checklist.
+- [x] app functional: exit0; exact counters; Worker+Soldier+buildings/resources present
+- [x] commit msg draft: `test(rts): prove phase 1.1 feedback loop through live-equivalent input`
