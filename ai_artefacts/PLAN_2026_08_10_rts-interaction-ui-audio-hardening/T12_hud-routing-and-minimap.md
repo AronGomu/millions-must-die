@@ -71,14 +71,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add `rts_minimap.rs` tests + HUD hit tests.
-- [ ] 2. Implement projection/inverse/camera polygon; pack diamond + edges.
-- [ ] 3. Add `HudHit` and shared layout-driven hit testing.
-- [ ] 4. Add pointer ownership/UI router before world input.
-- [ ] 5. Add selection icon world APIs + route click/Shift-click.
-- [ ] 6. Replace separate key/card commands with `CommandId` executor.
-- [ ] 7. Make rally pending-next-world-click.
-- [ ] 8. Add CLI scripted HUD/minimap regressions.
+- [x] 1. Add `rts_minimap.rs` tests + HUD hit tests. Evidence: `crates/mmd-engine/tests/rts_minimap.rs` (4 tests), `hit_*` tests added to `crates/mmd-engine/tests/rts_hud.rs` (13 tests).
+- [x] 2. Implement projection/inverse/camera polygon; pack diamond + edges. Evidence: `crates/mmd-engine/src/rts/minimap.rs::MinimapProjection`; camera-polygon edge stamping wired into `hud.rs::push_minimap`.
+- [x] 3. Add `HudHit` and shared layout-driven hit testing. Evidence: `crates/mmd-engine/src/rts/minimap.rs::{HudHit, hud_hit_test}`.
+- [x] 4. Add pointer ownership/UI router before world input. Evidence: `src/rts_ui.rs::{PointerOwner, owner_for_point}`, wired into `src/rts_run.rs::apply` before every click/drag branch.
+- [x] 5. Add selection icon world APIs + route click/Shift-click. Evidence: `RtsWorld::{select_only, toggle_selection}` in `world.rs`; routed through `rts_ui::handle_hud_click`.
+- [x] 6. Replace separate key/card commands with `CommandId` executor. Evidence: `RtsCommand::Execute(CommandId)` in `src/rts_input.rs`; `src/rts_ui.rs::execute_command` is the one shared executor for hotkeys and command-grid clicks.
+- [x] 7. Make rally pending-next-world-click. Evidence: `RtsSession::pending_rally`, armed by `CommandId::SetRally`, consumed by the next world `LeftClick` in `apply()`.
+- [x] 8. Add CLI scripted HUD/minimap regressions. Evidence: 5 `hud_*` tests in `tests/rts_cli_contract.rs`.
 
 ## Outputs
 
@@ -90,10 +90,10 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test rts_minimap`
-- [ ] `cargo test -p mmd-engine --locked --test rts_hud hit_`
-- [ ] `cargo test -p millions_must_die --locked rts_input`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract hud_`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: minimap/card/icon clicks work; bottom-panel gaps never select/order world
-- [ ] commit msg draft: `feat(rts): route minimap and command HUD before world input`
+- [x] `cargo test -p mmd-engine --locked --test rts_minimap` — 4 passed.
+- [x] `cargo test -p mmd-engine --locked --test rts_hud hit_` — 13 passed.
+- [x] `cargo test -p millions_must_die --locked rts_input` — 7 passed.
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract hud_` — 5 passed.
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean.
+- [ ] manual check: minimap/card/icon clicks work; bottom-panel gaps never select/order world — left for a human (no window on this desktop, per worker constraint); logged in `ai_artefacts/manual_test_checklist.md`.
+- [x] commit msg draft: `feat(rts): route minimap and command HUD before world input`

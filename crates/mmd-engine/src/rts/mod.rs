@@ -6,6 +6,7 @@ mod economy;
 mod entity;
 mod formation;
 mod hud;
+mod minimap;
 mod orders;
 mod pack;
 mod production;
@@ -33,14 +34,15 @@ pub use formation::{
     FormationError, FormationGoal, FormationScratch,
 };
 pub use hud::{
-    BOTTOM_PANEL_RECT, BUILD_MENU, COMMAND_GRID_RECT, COMMAND_ICON_PX, COMMAND_PANEL_RECT,
-    CommandId, CommandSlot, DETAIL_TEXT_X, DETAIL_TEXT_Y, GEAR_RECT, HudLayout, ICON_PX,
-    MINIMAP_MAP_RECT, MINIMAP_PANEL_RECT, MULTI_ICON_CAP, MULTI_ICON_COLS, MULTI_ICON_GAP_PX,
-    MULTI_ICON_ORIGIN, MULTI_ICON_PX, MULTI_ICON_ROWS, NUM_BUF, PANEL_LINE_PX, PANEL_TEXT_SCALE,
-    PANEL_TINT, PORTRAIT_POS, PORTRAIT_PX, SELECTION_PANEL_RECT, TEXT_TINT, TEXT_TINT_BLOCKED,
-    TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, command_slots, fmt_ratio, fmt_u32, kind_label,
-    pack_hud,
+    BOTTOM_PANEL_RECT, BUILD_MENU, CAMERA_POLY_PX, CAMERA_POLY_TINT, COMMAND_GRID_RECT,
+    COMMAND_ICON_PX, COMMAND_PANEL_RECT, CommandId, CommandSlot, DETAIL_TEXT_X, DETAIL_TEXT_Y,
+    GEAR_RECT, HudLayout, ICON_PX, MINIMAP_MAP_RECT, MINIMAP_PANEL_RECT, MULTI_ICON_CAP,
+    MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, MULTI_ICON_ROWS, NUM_BUF,
+    PANEL_LINE_PX, PANEL_TEXT_SCALE, PANEL_TINT, PORTRAIT_POS, PORTRAIT_PX, SELECTION_PANEL_RECT,
+    TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, command_slots,
+    fmt_ratio, fmt_u32, kind_label, pack_hud,
 };
+pub use minimap::{HudHit, MinimapProjection, hud_hit_test, minimap_projection};
 pub use orders::{
     GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
     WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,

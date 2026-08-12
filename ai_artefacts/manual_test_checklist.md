@@ -117,3 +117,17 @@
 - [ ] With a single finished Barracks selected: confirm the command grid shows a Train-Soldier icon top-left and the same Rally icon bottom-right.
 - [ ] Select nothing, then select a worker and a building together: confirm the command grid goes fully blank in both cases.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the HUD renders throughout without visual corruption (no wrong-sheet sampling, no panel z-fighting with world sprites).
+
+## T12 hud-routing-and-minimap
+
+- [ ] Launch `cargo run -- rts` and confirm the minimap panel (`[32,872]..[384,1048]`) shows a filled diamond frame and a small bright outlined quad (the camera's own footprint) somewhere inside it — not entities, resources, fog, or terrain detail.
+- [ ] Hold an arrow key to pan the camera: confirm the camera-polygon quad on the minimap moves and reshapes to track the live view, staying inside the map diamond.
+- [ ] Click inside the minimap's map area, off-centre: confirm the main camera recentres on roughly that part of the map, clamped the same way keyboard/edge panning is (no dead space past the map edge).
+- [ ] Click a point inside the minimap's pixel box but outside the actual diamond (e.g. one of its four corners): confirm nothing happens — no camera jump, no crash.
+- [ ] Try a click-drag starting on the minimap: confirm it does not pan/select/drag anything — the minimap has no drag gesture.
+- [ ] Select several units (more than one, drawn as the icon grid in the selection card): click one icon plainly — confirm the selection collapses to just that unit. Shift-click a still-selected icon — confirm it drops out of the selection while the rest stay selected.
+- [ ] With a worker selected, click the BuildHq icon in the command grid (top-left cell): confirm a build ghost opens, identical to pressing `Q`.
+- [ ] With nothing selected (command grid fully blank/disabled), click anywhere in the 3x3 command-grid area: confirm nothing happens — no ghost opens, no order issues.
+- [ ] Select a finished HQ or Barracks, click the Rally icon (bottom-right, slot 8), then click on the gear icon in the top bar: confirm nothing about the rally arming state changes (no rally set from the gear click). Then click a valid point on the map: confirm the rally point is set there (visible as `RALLY x,y` in the selection card's detail text next time that building is selected).
+- [ ] Click repeatedly inside the gaps of the bottom HUD panel (between the minimap/selection/command cards, and in the panel's own margins) and inside the top bar away from the gear icon: confirm none of these ever select a unit, issue a move/gather/build order, or otherwise change world state — every one of them is silently absorbed by the HUD.
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm it still completes cleanly (same milestones: select → gather → build → produce) with the new HUD-first pointer routing in place.

@@ -704,6 +704,29 @@ impl RtsWorld {
         pick
     }
 
+    /// Replace the selection with exactly `id` — a HUD selection-icon click,
+    /// not a screen pick. `false` (a no-op) for a stale `id`: a click on an
+    /// icon that died the same tick must not wipe an otherwise-live
+    /// selection.
+    pub fn select_only(&mut self, id: EntityId) -> bool {
+        if !self.entities.contains(id) {
+            return false;
+        }
+        self.selection.clear();
+        self.selection.insert(id);
+        true
+    }
+
+    /// Toggle exactly `id` in the selection — a shift-click on a HUD
+    /// selection icon. `false` (a no-op) for a stale `id`.
+    pub fn toggle_selection(&mut self, id: EntityId) -> bool {
+        if !self.entities.contains(id) {
+            return false;
+        }
+        self.selection.toggle(id);
+        true
+    }
+
     /// Apply a drag rectangle: replace the selection with every own unit inside.
     /// An empty box clears the selection.
     pub fn box_select_into_selection(&mut self, view: &IsoView, a: [f32; 2], b: [f32; 2]) -> usize {

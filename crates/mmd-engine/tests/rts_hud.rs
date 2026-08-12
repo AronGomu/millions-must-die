@@ -10,11 +10,12 @@ use mmd_engine::render::{
     glyph_uv_rect,
 };
 use mmd_engine::rts::{
-    BuildingKind, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y, EntityId, EntityKind, GEAR_RECT,
-    HudLayout, MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF,
-    OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, Prop, ResourceKind,
-    RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv,
-    command_slots, fmt_ratio, fmt_u32, kind_label, node_uv, pack_frame, pack_hud, prop_uv,
+    BuildingKind, COMMAND_GRID_RECT, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y, EntityId, EntityKind,
+    GEAR_RECT, HudHit, HudLayout, MINIMAP_MAP_RECT, MULTI_ICON_COLS, MULTI_ICON_GAP_PX,
+    MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE,
+    PORTRAIT_POS, PORTRAIT_PX, Prop, ResourceKind, RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED,
+    TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slots, fmt_ratio, fmt_u32,
+    hud_hit_test, kind_label, minimap_projection, node_uv, pack_frame, pack_hud, prop_uv,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -663,4 +664,225 @@ fn pack_hud_does_not_mutate_the_world() {
         before,
         "packing the HUD is a read of world state"
     );
+}
+
+// --- hud_hit_test / minimap: HUD ownership (T12) ------------------------------
+
+#[test]
+fn hit_gear_is_gear() {
+    let h = scene();
+    let p = [HudLayout::GEAR[0] + 8.0, HudLayout::GEAR[1] + 8.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Gear));
+}
+
+#[test]
+fn hit_top_bar_gap_is_background_not_world() {
+    let h = scene();
+    // Well clear of the gear, still inside the top bar.
+    let p = [800.0, TOP_BAR_RECT[1] + 20.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Background));
+}
+
+#[test]
+fn hit_minimap_map_area_carries_the_raw_point() {
+    let h = scene();
+    let p = [
+        MINIMAP_MAP_RECT[0] + MINIMAP_MAP_RECT[2] * 0.5,
+        MINIMAP_MAP_RECT[1] + MINIMAP_MAP_RECT[3] * 0.5,
+    ];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Minimap(p)));
+}
+
+#[test]
+fn hit_minimap_panel_margin_is_background() {
+    let h = scene();
+    // Inside MINIMAP_PANEL, outside MINIMAP_MAP.
+    let p = [20.0, 860.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Background));
+}
+
+#[test]
+fn hit_minimap_click_recentres_and_clamps() {
+    let mut h = scene();
+    let before = h.world().camera().center();
+
+    let p = [
+        MINIMAP_MAP_RECT[0] + MINIMAP_MAP_RECT[2] * 0.75,
+        MINIMAP_MAP_RECT[1] + MINIMAP_MAP_RECT[3] * 0.5,
+    ];
+    let Some(HudHit::Minimap(raw)) = hud_hit_test(h.world(), p) else {
+        panic!("expected a Minimap hit at {p:?}");
+    };
+    let origin = [MINIMAP_MAP_RECT[0], MINIMAP_MAP_RECT[1]];
+    let local = [raw[0] - origin[0], raw[1] - origin[1]];
+    let projection = minimap_projection(h.world());
+    let map_point = projection
+        .minimap_to_map(local)
+        .expect("a point inside the minimap map area must resolve to a map cell");
+
+    h.world_mut().look_at_map_point(map_point);
+    let after = h.world().camera().center();
+    assert_ne!(after, before, "a valid minimap click must move the camera");
+
+    // The frontier clamps the camera's *projected* centre, not its cell
+    // coordinates directly — project the same way `Camera::clamp_to_frontier`
+    // does before comparing.
+    let view = h.world().iso_view();
+    let projected =
+        mmd_engine::render::iso_project(after[0], after[1], view.tile_w, view.tile_h, [0.0, 0.0]);
+    let frontier = h.world().camera().frontier();
+    assert!(
+        projected[0] >= frontier.x[0] && projected[0] <= frontier.x[1],
+        "camera projected x {} escaped the frontier {:?}",
+        projected[0],
+        frontier.x
+    );
+    assert!(
+        projected[1] >= frontier.y[0] && projected[1] <= frontier.y[1],
+        "camera projected y {} escaped the frontier {:?}",
+        projected[1],
+        frontier.y
+    );
+}
+
+#[test]
+fn hit_outside_the_minimap_diamond_is_consumed_with_no_move() {
+    let h = scene();
+    // The minimap pixel box's own corner: inside MINIMAP_MAP, outside the
+    // map's projected diamond.
+    let p = [MINIMAP_MAP_RECT[0], MINIMAP_MAP_RECT[1]];
+    let Some(HudHit::Minimap(raw)) = hud_hit_test(h.world(), p) else {
+        panic!("expected a Minimap hit at {p:?}");
+    };
+    let origin = [MINIMAP_MAP_RECT[0], MINIMAP_MAP_RECT[1]];
+    let local = [raw[0] - origin[0], raw[1] - origin[1]];
+    let projection = minimap_projection(h.world());
+    assert_eq!(
+        projection.minimap_to_map(local),
+        None,
+        "the minimap's own pixel-box corner must fall outside the map diamond"
+    );
+}
+
+#[test]
+fn hit_selection_icon_click_isolates() {
+    let mut h = scene();
+    let ids = workers(&h);
+    for &id in &ids[..3] {
+        h.world_mut().selection_mut().insert(id);
+    }
+    assert_eq!(h.world().selection().len(), 3);
+    let sorted = h.world().selection().ids().to_vec();
+
+    // The second (index 1) drawn icon.
+    let p = [
+        MULTI_ICON_ORIGIN[0] + (MULTI_ICON_PX + MULTI_ICON_GAP_PX) + 4.0,
+        MULTI_ICON_ORIGIN[1] + 4.0,
+    ];
+    let hit = hud_hit_test(h.world(), p);
+    assert_eq!(hit, Some(HudHit::SelectionIcon(sorted[1])));
+
+    let HudHit::SelectionIcon(id) = hit.unwrap() else {
+        unreachable!()
+    };
+    assert!(h.world_mut().select_only(id));
+    assert_eq!(h.world().selection().ids(), &[id]);
+}
+
+#[test]
+fn hit_shift_icon_click_toggles() {
+    let mut h = scene();
+    let ids = workers(&h);
+    for &id in &ids[..3] {
+        h.world_mut().selection_mut().insert(id);
+    }
+    let sorted = h.world().selection().ids().to_vec();
+
+    let p = [MULTI_ICON_ORIGIN[0] + 4.0, MULTI_ICON_ORIGIN[1] + 4.0];
+    let hit = hud_hit_test(h.world(), p);
+    assert_eq!(hit, Some(HudHit::SelectionIcon(sorted[0])));
+
+    let HudHit::SelectionIcon(id) = hit.unwrap() else {
+        unreachable!()
+    };
+    assert!(h.world_mut().toggle_selection(id));
+    assert!(!h.world().selection().contains(id), "toggled off");
+    assert_eq!(
+        h.world().selection().len(),
+        2,
+        "the other two stay selected"
+    );
+}
+
+#[test]
+fn hit_stale_selection_icon_id_is_a_world_no_op() {
+    let mut h = scene();
+    let ids = workers(&h);
+    for &id in &ids[..2] {
+        h.world_mut().selection_mut().insert(id);
+    }
+    let sorted = h.world().selection().ids().to_vec();
+    let stale = sorted[0];
+    assert!(h.world_mut().entities_mut().despawn(stale));
+
+    // select_only/toggle_selection on a now-stale id must not touch the
+    // rest of the selection (despawn alone does not prune it — that
+    // happens at the next tick).
+    let before = h.world().selection().len();
+    assert!(!h.world_mut().select_only(stale));
+    assert_eq!(h.world().selection().len(), before);
+    assert!(!h.world_mut().toggle_selection(stale));
+    assert_eq!(h.world().selection().len(), before);
+}
+
+#[test]
+fn hit_command_grid_maps_to_the_clicked_slot() {
+    let h = scene();
+    let p = [COMMAND_GRID_RECT[0] + 4.0, COMMAND_GRID_RECT[1] + 4.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::CommandSlot(0)));
+
+    // Bottom-right cell of the 3x3 grid.
+    let p8 = [
+        COMMAND_GRID_RECT[0] + COMMAND_GRID_RECT[2] - 4.0,
+        COMMAND_GRID_RECT[1] + COMMAND_GRID_RECT[3] - 4.0,
+    ];
+    assert_eq!(hud_hit_test(h.world(), p8), Some(HudHit::CommandSlot(8)));
+}
+
+#[test]
+fn hit_disabled_command_slot_is_still_a_hit_caller_must_gate_enabled() {
+    let h = scene(); // empty selection: every command_slots() entry is disabled
+    let slots = command_slots(h.world());
+    assert!(slots.iter().all(|s| !s.enabled));
+
+    let p = [COMMAND_GRID_RECT[0] + 4.0, COMMAND_GRID_RECT[1] + 4.0];
+    assert_eq!(
+        hud_hit_test(h.world(), p),
+        Some(HudHit::CommandSlot(0)),
+        "hud_hit_test reports the geometric slot regardless of enabled state; \
+         the caller consumes it without acting"
+    );
+}
+
+#[test]
+fn hit_hud_background_never_orders_world() {
+    let h = scene();
+    let before = h.state_hash();
+
+    // A gap in the bottom panel: clear of the minimap, selection and
+    // command cards.
+    let p = [410.0, 900.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Background));
+    assert_eq!(
+        h.state_hash(),
+        before,
+        "a hit test alone must never mutate world state"
+    );
+}
+
+#[test]
+fn hit_a_point_off_the_hud_is_the_world() {
+    let h = scene();
+    let p = [960.0, 400.0];
+    assert_eq!(hud_hit_test(h.world(), p), None);
 }

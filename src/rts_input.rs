@@ -1,7 +1,7 @@
 //! RTS keyboard + pan bindings: the live SDL path and the `--inject-input`
 //! script path resolve through the same tables, so the two cannot drift.
 
-use mmd_engine::rts::{BuildingKind, UnitKind};
+use mmd_engine::rts::CommandId;
 use sdl3::keyboard::Keycode;
 
 /// RTS commands, produced by both the live SDL path and the script path.
@@ -16,12 +16,10 @@ pub enum RtsCommand {
     TogglePause,
     ToggleOverlay,
     CancelPlacement,
-    /// Open a build ghost.
-    Build(BuildingKind),
-    /// Queue a unit at the primary selected building.
-    Produce(UnitKind),
-    /// Set the primary selected building's rally point to the cursor's cell.
-    SetRally,
+    /// Run one command through the shared executor — the same one a
+    /// command-grid click runs, so a hotkey and its card icon can never
+    /// drift (`T12`).
+    Execute(CommandId),
     /// Begin holding a pan direction. Components in `-1..=1`, screen space.
     PanStart([f32; 2]),
     /// Stop holding it.
@@ -47,12 +45,20 @@ const KEY_BINDINGS: &[(Keycode, &str, RtsCommand)] = &[
     (Keycode::Space, "space", RtsCommand::TogglePause),
     (Keycode::F1, "f1", RtsCommand::ToggleOverlay),
     (Keycode::X, "x", RtsCommand::CancelPlacement),
-    (Keycode::Q, "q", RtsCommand::Build(BuildingKind::Hq)),
-    (Keycode::W, "w", RtsCommand::Build(BuildingKind::Depot)),
-    (Keycode::E, "e", RtsCommand::Build(BuildingKind::Barracks)),
-    (Keycode::A, "a", RtsCommand::Produce(UnitKind::Worker)),
-    (Keycode::S, "s", RtsCommand::Produce(UnitKind::Soldier)),
-    (Keycode::R, "r", RtsCommand::SetRally),
+    (Keycode::Q, "q", RtsCommand::Execute(CommandId::BuildHq)),
+    (Keycode::W, "w", RtsCommand::Execute(CommandId::BuildDepot)),
+    (
+        Keycode::E,
+        "e",
+        RtsCommand::Execute(CommandId::BuildBarracks),
+    ),
+    (Keycode::A, "a", RtsCommand::Execute(CommandId::TrainWorker)),
+    (
+        Keycode::S,
+        "s",
+        RtsCommand::Execute(CommandId::TrainSoldier),
+    ),
+    (Keycode::R, "r", RtsCommand::Execute(CommandId::SetRally)),
 ];
 
 /// Held pan keys. **Arrow keys only** — `W`, `A`, `S` and `E` are already
@@ -131,7 +137,17 @@ pub fn window_banner() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mmd_engine::rts::BUILD_MENU;
+    use mmd_engine::rts::{BUILD_MENU, CommandId};
+
+    /// The `CommandId::BuildXxx` that matches a `BUILD_MENU` building kind.
+    fn build_command(kind: mmd_engine::rts::BuildingKind) -> CommandId {
+        use mmd_engine::rts::BuildingKind;
+        match kind {
+            BuildingKind::Hq => CommandId::BuildHq,
+            BuildingKind::Depot => CommandId::BuildDepot,
+            BuildingKind::Barracks => CommandId::BuildBarracks,
+        }
+    }
 
     /// The keyboard and the injection script must resolve to the same
     /// command for the same binding.
@@ -196,7 +212,7 @@ mod tests {
             let name = (letter.to_ascii_lowercase() as char).to_string();
             assert_eq!(
                 command_from_name(&name),
-                Some(RtsCommand::Build(kind)),
+                Some(RtsCommand::Execute(build_command(kind))),
                 "BUILD_MENU letter `{letter}` does not match KEY_BINDINGS"
             );
         }

@@ -1054,3 +1054,188 @@ fn the_window_is_released_before_it_drops() {
         other => panic!("{cli}\nunknown run mode `{other}`"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// 6. HUD routing and the minimap (T12)
+// ---------------------------------------------------------------------------
+
+/// A point inside the top-right settings gear — HUD chrome, no world
+/// meaning.
+fn gear_click_screen() -> [f32; 2] {
+    [1888.0, 24.0]
+}
+
+/// The first (`BuildHq`) command-grid cell.
+fn command_slot0_screen() -> [f32; 2] {
+    [1706.0, 866.0]
+}
+
+/// A minimap point well off-centre, so a valid click visibly moves the
+/// camera rather than landing near its own start position.
+fn minimap_click_screen() -> [f32; 2] {
+    [296.0, 960.0]
+}
+
+/// A gap in the bottom HUD panel: clear of the minimap, selection and
+/// command cards.
+fn hud_background_gap_screen() -> [f32; 2] {
+    [410.0, 900.0]
+}
+
+#[test]
+fn hud_command_grid_click_shares_the_keyboard_executor() {
+    let p = fmt_xy(worker_screen());
+    let slot = fmt_xy(command_slot0_screen());
+    let mouse_script = format!("1:move:{p};2:lclick:{p};4:lclick:{slot}");
+    let key_script = format!("1:move:{p};2:lclick:{p};4:key:q");
+
+    let Some(mouse) = or_skip(
+        "hud_command_grid_click_shares_the_keyboard_executor",
+        rts(&["--frames", "10", "--inject-input", &mouse_script]),
+    ) else {
+        return;
+    };
+    let Some(key) = or_skip(
+        "hud_command_grid_click_shares_the_keyboard_executor",
+        rts(&["--frames", "10", "--inject-input", &key_script]),
+    ) else {
+        return;
+    };
+    mouse.assert_success();
+    key.assert_success();
+    assert_eq!(
+        mouse.final_hash(),
+        key.final_hash(),
+        "{mouse}\n{key}\na command-grid click on BuildHq must match pressing `q`"
+    );
+}
+
+#[test]
+fn hud_disabled_command_slot_is_consumed_without_action() {
+    // Default selection is empty, so every command_slots() entry is
+    // disabled: a click on slot 0 must not touch world state at all.
+    let slot = fmt_xy(command_slot0_screen());
+    let script = format!("2:lclick:{slot}");
+    let Some(clicked) = or_skip(
+        "hud_disabled_command_slot_is_consumed_without_action",
+        rts(&["--frames", "5", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    let Some(baseline) = or_skip(
+        "hud_disabled_command_slot_is_consumed_without_action",
+        rts(&["--frames", "5"]),
+    ) else {
+        return;
+    };
+    clicked.assert_success();
+    baseline.assert_success();
+    assert_eq!(
+        clicked.final_hash(),
+        baseline.final_hash(),
+        "{clicked}\n{baseline}\na disabled command slot must never mutate world state"
+    );
+}
+
+#[test]
+fn hud_rally_arms_and_waits_for_the_next_world_click() {
+    let hq = fmt_xy(hq_click_screen());
+    let gear = fmt_xy(gear_click_screen());
+    let target = fmt_xy(clear_build_site_screen());
+
+    // Select the HQ, arm rally, click the gear (HUD — must not consume the
+    // pending rally), then click a world cell — rally must land there.
+    let via_gear = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:lclick:{target}");
+    // Same, without the intervening HUD click.
+    let direct = format!("1:move:{hq};2:lclick:{hq};3:key:r;5:lclick:{target}");
+    // Arm rally, but only click the gear — no world click ever arrives.
+    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear}");
+
+    let Some(via_gear) = or_skip(
+        "hud_rally_arms_and_waits_for_the_next_world_click",
+        rts(&["--frames", "10", "--inject-input", &via_gear]),
+    ) else {
+        return;
+    };
+    let Some(direct) = or_skip(
+        "hud_rally_arms_and_waits_for_the_next_world_click",
+        rts(&["--frames", "10", "--inject-input", &direct]),
+    ) else {
+        return;
+    };
+    let Some(armed_only) = or_skip(
+        "hud_rally_arms_and_waits_for_the_next_world_click",
+        rts(&["--frames", "10", "--inject-input", &armed_only]),
+    ) else {
+        return;
+    };
+    via_gear.assert_success();
+    direct.assert_success();
+    armed_only.assert_success();
+
+    assert_eq!(
+        via_gear.final_hash(),
+        direct.final_hash(),
+        "{via_gear}\n{direct}\na HUD click while rally is armed must be a pure no-op"
+    );
+    assert_ne!(
+        via_gear.final_hash(),
+        armed_only.final_hash(),
+        "{via_gear}\n{armed_only}\nrally must still be waiting until an actual world click arrives"
+    );
+}
+
+#[test]
+fn hud_minimap_click_recentres_the_camera() {
+    let p = fmt_xy(minimap_click_screen());
+    let script = format!("2:lclick:{p}");
+    let Some(clicked) = or_skip(
+        "hud_minimap_click_recentres_the_camera",
+        rts(&["--frames", "5", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    let Some(baseline) = or_skip(
+        "hud_minimap_click_recentres_the_camera",
+        rts(&["--frames", "5"]),
+    ) else {
+        return;
+    };
+    clicked.assert_success();
+    baseline.assert_success();
+    assert_ne!(
+        clicked.exit_field("camera"),
+        baseline.exit_field("camera"),
+        "{clicked}\n{baseline}\na valid minimap click must move the camera"
+    );
+    assert_eq!(
+        clicked.exit_field("selected"),
+        baseline.exit_field("selected"),
+        "{clicked}\na minimap click must not also change the selection"
+    );
+}
+
+#[test]
+fn hud_background_click_never_reaches_the_world() {
+    let p = fmt_xy(hud_background_gap_screen());
+    let script = format!("2:lclick:{p};3:rclick:{p}");
+    let Some(clicked) = or_skip(
+        "hud_background_click_never_reaches_the_world",
+        rts(&["--frames", "5", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    let Some(baseline) = or_skip(
+        "hud_background_click_never_reaches_the_world",
+        rts(&["--frames", "5"]),
+    ) else {
+        return;
+    };
+    clicked.assert_success();
+    baseline.assert_success();
+    assert_eq!(
+        clicked.final_hash(),
+        baseline.final_hash(),
+        "{clicked}\n{baseline}\na click/right-click on a HUD background gap must never order the world"
+    );
+}

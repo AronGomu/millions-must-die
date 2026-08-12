@@ -13,6 +13,7 @@
 use crate::render::{DrawGroup, GLYPH_H_PX, SpriteInstance, frame_uv_rect, push_text};
 
 use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
+use super::minimap::minimap_projection;
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
 use super::world::RtsWorld;
 
@@ -349,11 +350,42 @@ fn push_top_bar(world: &RtsWorld, props: &mut Vec<SpriteInstance>, font: &mut Ve
     );
 }
 
-/// Section: the minimap frame and its (currently static) map area.
+/// Camera-polygon edge tint — the minimap's only "live" element.
+pub const CAMERA_POLY_TINT: [f32; 4] = [0.95, 0.85, 0.30, 1.0];
+/// Edge stamp size, in pixels — the minimap's camera polygon is drawn as a
+/// run of small squares along each edge (no rotated-quad support in this
+/// renderer), not a single line primitive.
+pub const CAMERA_POLY_PX: f32 = 2.0;
+
+/// Stamp one polygon edge (`a` to `b`, minimap-local, offset onto screen by
+/// the caller) as a run of [`CAMERA_POLY_PX`] squares.
+fn push_camera_edge(props: &mut Vec<SpriteInstance>, a: [f32; 2], b: [f32; 2]) {
+    let dx = b[0] - a[0];
+    let dy = b[1] - a[1];
+    let len = (dx * dx + dy * dy).sqrt();
+    let steps = ((len / CAMERA_POLY_PX).ceil() as usize).max(1);
+    for s in 0..=steps {
+        let t = s as f32 / steps as f32;
+        let pos = [
+            a[0] + dx * t - CAMERA_POLY_PX * 0.5,
+            a[1] + dy * t - CAMERA_POLY_PX * 0.5,
+        ];
+        props.push(SpriteInstance::new(
+            pos,
+            [CAMERA_POLY_PX, CAMERA_POLY_PX],
+            prop_uv(Prop::PanelFill),
+            CAMERA_POLY_TINT,
+        ));
+    }
+}
+
+/// Section: the minimap frame, its map area, and the camera's footprint.
 ///
-/// Projection and clicking are out of scope for this slice (`T12`/`T13`);
-/// this only paints the two nested rects the design reserves.
-fn push_minimap(props: &mut Vec<SpriteInstance>) {
+/// Draws no entities, resources, fog or terrain detail (`T12`'s scope): only
+/// the map diamond's chrome and a projected outline of what the camera can
+/// currently see. Clicking/dragging the minimap is the app's pointer router,
+/// not this packer — see `mmd_engine::rts::hud_hit_test`.
+fn push_minimap(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
     push_panel(props, HudLayout::MINIMAP_PANEL, PANEL_TINT);
     props.push(SpriteInstance::new(
         [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]],
@@ -361,6 +393,19 @@ fn push_minimap(props: &mut Vec<SpriteInstance>) {
         prop_uv(Prop::MinimapFrame),
         PANEL_TINT,
     ));
+
+    let projection = minimap_projection(world);
+    let origin = [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]];
+    let corners = projection.camera_polygon(&world.iso_view());
+    for i in 0..corners.len() {
+        let a = corners[i];
+        let b = corners[(i + 1) % corners.len()];
+        push_camera_edge(
+            props,
+            [a[0] + origin[0], a[1] + origin[1]],
+            [b[0] + origin[0], b[1] + origin[1]],
+        );
+    }
 }
 
 /// Which UI draw group a portrait/icon for `kind` belongs in.
@@ -638,7 +683,7 @@ pub fn pack_hud(world: &RtsWorld, frame: &mut RtsFrame) {
 
     push_top_bar(world, &mut props.instances, &mut font.instances);
     push_panel(&mut props.instances, HudLayout::BOTTOM_PANEL, PANEL_TINT);
-    push_minimap(&mut props.instances);
+    push_minimap(world, &mut props.instances);
     push_selection_card(
         world,
         &mut props.instances,

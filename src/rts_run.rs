@@ -84,7 +84,7 @@ pub struct RtsOptions {
 }
 
 /// Per-frame interactive state the world does not own.
-struct RtsSession {
+pub(crate) struct RtsSession {
     cursor: [f32; 2],
     /// Left button pressed at this position, if it is down.
     press: Option<[f32; 2]>,
@@ -96,6 +96,9 @@ struct RtsSession {
     quit: bool,
     /// Reused scratch for `RtsWorld::issue_context_order_at`.
     receipts: OrderReceiptBuffer,
+    /// Armed by `CommandId::SetRally`: the building whose rally point the
+    /// *next* world left-click (not one over the HUD) sets.
+    pub(crate) pending_rally: Option<EntityId>,
 }
 
 impl Default for RtsSession {
@@ -109,6 +112,7 @@ impl Default for RtsSession {
             overlay_visible: false,
             quit: false,
             receipts: OrderReceiptBuffer::new(),
+            pending_rally: None,
         }
     }
 }
@@ -157,23 +161,7 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
         RtsCommand::TogglePause => session.paused = !session.paused,
         RtsCommand::ToggleOverlay => session.overlay_visible = !session.overlay_visible,
         RtsCommand::CancelPlacement => world.cancel_placement(),
-        RtsCommand::Build(kind) => {
-            let _ = world.begin_placement(kind);
-        }
-        RtsCommand::Produce(unit) => {
-            if let Some(id) = world.selection().primary() {
-                let _ = world.enqueue_unit(id, unit);
-            }
-        }
-        RtsCommand::SetRally => {
-            if let Some(id) = world.selection().primary() {
-                let view = world.iso_view();
-                let width = world.scenario().width();
-                let height = world.scenario().height();
-                let cell = view.cell_at(session.cursor[0], session.cursor[1], width, height);
-                let _ = world.set_rally(id, cell);
-            }
-        }
+        RtsCommand::Execute(id) => crate::rts_ui::execute_command(world, session, id),
         RtsCommand::PanStart(d) => {
             session.keyboard_held = clamp_axes(add2(session.keyboard_held, d));
             world.set_keyboard_pan_dir(session.keyboard_held);
@@ -193,7 +181,20 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             world.set_edge_pan_dir(edge);
         }
         RtsCommand::LeftClick(p) => {
-            if let Placement::Pending { kind } = world.placement() {
+            // The HUD owns any click inside its own chrome — it never falls
+            // through to placement/select/rally, per T12's hard constraint.
+            if let crate::rts_ui::PointerOwner::Hud(hit) = crate::rts_ui::owner_for_point(world, p)
+            {
+                crate::rts_ui::handle_hud_click(world, session, hit, false);
+            } else if let Some(building) = session.pending_rally.take() {
+                // A `SetRally`-armed pending action: this is the next world
+                // click, so it sets the cell instead of selecting/placing.
+                let view = world.iso_view();
+                let width = world.scenario().width();
+                let height = world.scenario().height();
+                let cell = view.cell_at(p[0], p[1], width, height);
+                let _ = world.set_rally(building, cell);
+            } else if let Placement::Pending { kind } = world.placement() {
                 let view = world.iso_view();
                 let width = world.scenario().width();
                 let height = world.scenario().height();
@@ -209,16 +210,34 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             }
         }
         RtsCommand::ShiftClick(p) => {
-            // A shift-click never confirms a placement.
-            let view = world.iso_view();
-            world.shift_click_select(&view, p);
+            // A shift-click never confirms a placement, and the HUD still
+            // owns its own chrome first.
+            if let crate::rts_ui::PointerOwner::Hud(hit) = crate::rts_ui::owner_for_point(world, p)
+            {
+                crate::rts_ui::handle_hud_click(world, session, hit, true);
+            } else {
+                let view = world.iso_view();
+                world.shift_click_select(&view, p);
+            }
         }
         RtsCommand::Drag(a, b) => {
-            let view = world.iso_view();
-            world.box_select_into_selection(&view, a, b);
+            // A drag that started on the HUD is consumed, not a box select —
+            // the minimap and cards have no drag gesture of their own.
+            if matches!(
+                crate::rts_ui::owner_for_point(world, a),
+                crate::rts_ui::PointerOwner::World
+            ) {
+                let view = world.iso_view();
+                world.box_select_into_selection(&view, a, b);
+            }
         }
         RtsCommand::RightClick(p) => {
-            if matches!(world.placement(), Placement::Pending { .. }) {
+            if matches!(
+                crate::rts_ui::owner_for_point(world, p),
+                crate::rts_ui::PointerOwner::Hud(_)
+            ) {
+                // Consumed: a right click over the HUD is never a world order.
+            } else if matches!(world.placement(), Placement::Pending { .. }) {
                 // A right click while a ghost is pending cancels it instead
                 // of issuing an order.
                 world.cancel_placement();
