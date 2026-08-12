@@ -1,7 +1,8 @@
 # ADR 016: Phase-1.1 scope and input geometry
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
+- Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 013](013_ADR_phase1_scope_and_rts_entity_model.md), [ADR 014](014_ADR_movable_camera_texture_table_and_ui_layer.md), [ADR 015](015_ADR_economy_construction_and_production_determinism.md)
 - Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 - Source: `feedback.md`; confirmed interview at `ai-artifacts/GRILL_2026_08_10_rts-feedback/ANSWERS.md`
@@ -81,6 +82,31 @@ RTS map engine cap becomes 512×512 cells. Current tracked scene remains 320×32
 - Type priority (unit before building/node): disagrees with rendered frontmost choice.
 - App-private right-click router: recreates headless/live drift.
 - Triple horde speed: violates frozen phase-0 behavior.
+
+## Implementation (as landed, T1–T2)
+
+The decision shipped as written. Two corrections to this record, both found by
+the code rather than by review:
+
+1. **`clicking_a_node_one_cell_off_misses_it` is not obsolete.** Consequences
+   above predicted the full-quad picker would delete it. It survives unchanged:
+   the point it clicks (one cell off along the projected axis) lands outside
+   the 48×48 quad as well, so it still proves a miss. What replaced the old
+   one-cell picker is the pair `every_resource_quad_corner_is_pickable` and
+   `sprite_screen_rect_is_forty_eight_pixels_square`.
+2. **The context-order entry point is `RtsWorld::issue_context_order_at`**,
+   returning a `ContextOrderResult` of sorted `IssuedOrder` receipts plus
+   `ContextOrderReason`. One API for live SDL, scripts and `RtsHarness`, as
+   decided; the name is recorded here because the plan did not fix one.
+
+The geometry helpers landed as `sprite_screen_rect`, `unit_pick_contains` and
+`entity_pick_depth` in `crates/mmd-engine/src/rts/selection.rs`, all called by
+`pick_at` and provably the same rect/depth `pack_frame` draws
+(`entity_pick_depth_matches_the_render_ground_y`). Tuning landed as
+`RTS_MAX_MAP_EDGE = 512` in `scenario.rs` (`rts_map_edge_cap_is_512`,
+`tracked_rts_scene_remains_320_by_320`) with 30/24 cells/s unit speeds
+(`rts_unit_speeds_are_tripled`, `worker_outruns_soldier`) and the horde's
+8 cells/s untouched.
 
 ## Validation contract
 

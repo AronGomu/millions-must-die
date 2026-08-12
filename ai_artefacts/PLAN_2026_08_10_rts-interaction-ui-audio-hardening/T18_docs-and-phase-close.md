@@ -64,14 +64,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add red validation-contract cases for docs/ADRs/gate/system map.
-- [ ] 2. Promote ADR 016–020 status; add actual consequences/corrections.
-- [ ] 3. Write phase1.1 functional close from landed evidence.
-- [ ] 4. Update status/design/testing/nav/glossary/root agent docs surgically.
-- [ ] 5. Update planned/new + existing architecture HTML with exact implementation refs.
-- [ ] 6. Add audio check to required gate mirrors; keep 1,600-frame RTS command.
-- [ ] 7. Run doc/link/no-perf tests; inspect HTML manually.
-- [ ] 8. Run entire merge gate exactly below; record no perf numbers.
+- [x] 1. Add red validation-contract cases for docs/ADRs/gate/system map. — validate: `cargo test -p millions_must_die --test validation_contract` fails naming the missing phase-1.1 docs/gate entries before any doc is written.
+- [x] 2. Promote ADR 016–020 status; add actual consequences/corrections. — validate: `grep -c 'Status: Accepted' docs/ADR/01[6-9]*.md docs/ADR/020*.md` is 1 per file, each landed deviation (adaptive reach, push chain, slot arrival, `ProductionQueue` self-methods, Escape→pause menu) named in the owning record.
+- [x] 3. Write phase1.1 functional close from landed evidence. — validate: `docs/rts-interaction-ui-audio-hardening-functional-close.md` exists and `phase1_1_close_names_only_real_tests` passes against it.
+- [x] 4. Update status/design/testing/nav/glossary/root agent docs surgically. — validate: every required glossary word present with a resolvable code ref; `AGENT.md`/`README.md`/`docs/CONTEXT.md`/`docs/DESIGN.md`/`docs/README.md` name phase 1.1 and no longer state a superseded phase-1 constraint.
+- [x] 5. Update planned/new + existing architecture HTML with exact implementation refs. — validate: phase-1.1 page says Implemented (no "NOT IMPLEMENTED"), all three HTML pages cross-link, `every_doc_link_resolves` passes.
+- [x] 6. Add audio check to required gate mirrors; keep 1,600-frame RTS command. — validate: `required_gate_contains_audio_check` + `required_gate_keeps_phase_smokes` pass on `docs/05-testing.md` and `README.md`.
+- [x] 7. Run doc/link/no-perf tests; inspect HTML manually. — validate: `cargo test -p millions_must_die --test validation_contract` green; each HTML page read end to end for stale "proposed" wording.
+- [x] 8. Run entire merge gate exactly below; record no perf numbers. — validate: every Validation command below reports success and no command output is quoted as a speed number.
 
 ## Outputs
 
@@ -82,19 +82,19 @@
 
 ## Validation
 
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo test --workspace --locked`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `nix flake check`
-- [ ] `cargo run -p xtask -- bootstrap --check`
-- [ ] `cargo run -p xtask -- shaders --check`
-- [ ] `cargo run -p xtask -- atlases --check`
-- [ ] `cargo run -p xtask -- audio --check`
-- [ ] `cargo run -- run --agents 5000 --frames 300`
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300`
-- [ ] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300`
-- [ ] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
-- [ ] `test "$(cargo tree -e features | grep -c testkit)" -eq 0`
-- [ ] manual check: open all 3 architecture HTML pages; verify diagrams/labels current
-- [ ] app functional: exact tested commit hash passes all commands; no golden regeneration
-- [ ] commit msg draft: `docs(rts): close phase 1.1 on functional interaction scope`
+- [x] `cargo fmt --all -- --check` — validate: exit 0, no diff printed.
+- [x] `cargo test --workspace --locked` — validate: every binary reports `test result: ok`.
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings` — validate: exit 0, zero warnings.
+- [x] `nix flake check` — validate: exit 0.
+- [x] `cargo run -p xtask -- bootstrap --check` — validate: exit 0.
+- [x] `cargo run -p xtask -- shaders --check` — validate: exit 0.
+- [x] `cargo run -p xtask -- atlases --check` — validate: exit 0.
+- [x] `cargo run -p xtask -- audio --check` — validate: prints `audio: ok (7 wav + manifest)`, exit 0.
+- [x] `cargo run -- run --agents 5000 --frames 300` — validate: prints `run: clean exit`, exit 0.
+- [x] `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` — validate: prints `run: clean exit`, exit 0. (Run under `SDL_VIDEODRIVER=offscreen`: an agent may not open a window on this live desktop.)
+- [x] `cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300` — validate: prints `run: clean exit`, exit 0. (Same offscreen constraint.)
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — validate: exit line ends `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. (Run under `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy`: the windowed form grabs the pointer and plays audio, so it stays a human checklist item.)
+- [x] `test "$(cargo tree -e features | grep -c testkit)" -eq 0` — validate: exit 0.
+- [x] manual check: open all 3 architecture HTML pages; verify diagrams/labels current — validated at source level (agent may not drive this desktop's browser): each page read in full, HTML parses, every relative `href`/`src` resolves, no "proposed/not implemented" label survives on the phase-1.1 page, cross-links present on the other two. Visual rendering stays a human checklist item (`T18` section of `ai_artefacts/manual_test_checklist.md`).
+- [x] app functional: exact tested commit hash passes all commands; no golden regeneration — validate: `git status --porcelain lab/goldens` empty after the gate.
+- [ ] commit msg draft: `docs(rts): close phase 1.1 on functional interaction scope` — validate: commit subject matches verbatim.

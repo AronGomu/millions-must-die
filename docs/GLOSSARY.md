@@ -44,6 +44,22 @@
 | scenepass | One frame's three layers handed to the renderer          | `crates/mmd-engine/src/render/renderer.rs`, `struct ScenePass`               |
 | uilayer   | Depth-off *textured* groups: HUD, ghost, flags, glyphs   | `crates/mmd-engine/src/render/renderer.rs`, `ScenePass::ui`                  |
 
+## RTS (phase 1.1)
+
+| word        | short description                                            | ref in code                                                                  |
+| ----------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| pickshape   | Clickable geometry of an entity: sprite quad ∪ body circle     | `crates/mmd-engine/src/rts/selection.rs`, `fn unit_pick_contains`             |
+| body        | Hard 3-cell collision circle of an RTS unit (never the horde)  | `crates/mmd-engine/src/rts/entity.rs`, `fn body_radius_cells`                 |
+| staticnav   | Body-inflated blocked-centre mask + continuous sweeps          | `crates/mmd-engine/src/rts/static_nav.rs`, `struct StaticNav`                 |
+| formation   | Per-member deterministic lattice slot around one group anchor  | `crates/mmd-engine/src/rts/formation.rs`, `struct FormationGoal`              |
+| frontier    | Projected-map camera bound, inset by half the logical view     | `crates/mmd-engine/src/render/camera.rs`, `struct CameraFrontier`             |
+| canvas      | Fixed 1920×1080 logical surface mapped to a centred 16:9 rect  | `crates/mmd-engine/src/render/viewport.rs`, `struct DisplayViewport`          |
+| commandcard | Context-driven 3×3 action grid on the right of the HUD         | `crates/mmd-engine/src/rts/hud.rs`, `fn command_slots`                        |
+| minimap     | Isometric map diamond plus the projected camera polygon        | `crates/mmd-engine/src/rts/minimap.rs`, `struct MinimapProjection`            |
+| windowmode  | Borderless-desktop / exclusive / windowed presentation choice  | `src/rts_settings.rs`, `enum WindowMode`                                     |
+| audiosink   | Where semantic audio events go: SDL device, buffer, or fake    | `src/rts_feedback.rs`, `trait AudioSink`                                     |
+| audiobus    | Music / Voice / SFX gain lane under the master scalar          | `src/rts_feedback.rs`, `enum AudioBus`                                       |
+
 ## Render
 
 | word      | short description                              | ref in code                                                             |

@@ -25,6 +25,10 @@ const CLOSE_DOC: &str = "docs/technical-prototype-functional-close.md";
 const PHASE1_CLOSE_DOC: &str = "docs/rts-engine-prototype-functional-close.md";
 /// Phase-1 architecture page. A live doc: it describes what shipped.
 const PHASE1_ARCH_DOC: &str = "docs/rts-engine-prototype-architecture.html";
+/// Doc that closes phase 1.1 on functional evidence (T18).
+const PHASE1_1_CLOSE_DOC: &str = "docs/rts-interaction-ui-audio-hardening-functional-close.md";
+/// Phase-1.1 architecture page. A live doc: it describes what shipped.
+const PHASE1_1_ARCH_DOC: &str = "docs/rts-interaction-ui-audio-hardening-architecture.html";
 /// Doc that states what each phase claims (roadmap + vision + MVP scope, consolidated).
 const ROADMAP_DOC: &str = "docs/CONTEXT.md";
 
@@ -69,6 +73,23 @@ const REQUIRED_COMMANDS: &[&str] = &[
     "cargo test --workspace --locked",
     "cargo clippy --workspace --all-targets --all-features -- -D warnings",
     "nix flake check",
+];
+
+/// The deterministic audio-asset check phase 1.1 added to the gate (T18). Its
+/// own test, because the generated WAVs are the only tracked binary content a
+/// contributor can regenerate by accident: dropping the check from the gate
+/// would let drifted audio bytes merge unreviewed.
+const AUDIO_GATE_COMMAND: &str = "cargo run -p xtask -- audio --check";
+
+/// The interactive smokes, exactly as documented. The RTS one carries its
+/// frame budget and its tracked script inline: a smoke silently shortened to
+/// 160 frames, or pointed at an untracked script, still exits 0 while proving
+/// far less than the close doc claims.
+const PHASE_SMOKE_COMMANDS: &[&str] = &[
+    "cargo run -- run --agents 5000 --frames 300",
+    "cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300",
+    "cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300",
+    "cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script",
 ];
 
 fn repo_root() -> PathBuf {
@@ -915,12 +936,13 @@ fn table_cells(line: &str) -> Vec<String> {
     inner.split('|').map(|c| c.trim().to_string()).collect()
 }
 
-/// `(system, test binary, named tests)` rows of the phase-1 close doc's map.
+/// `(system, test binary, named tests)` rows of a close doc's coverage map.
 ///
-/// Parsed rather than duplicated in Rust: the point of the test below is that
+/// Parsed rather than duplicated in Rust: the point of the tests below is that
 /// the *published* table is resolvable, so re-typing it here would only prove
-/// the copy agrees with itself.
-fn phase1_close_rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
+/// the copy agrees with itself. `rel` names the doc for the failure messages —
+/// phases 1 and 1.1 publish the same table shape on separate pages.
+fn close_doc_rows(rel: &str, doc: &str) -> Vec<(String, String, Vec<String>)> {
     let lines = scan(doc);
     let header = lines
         .iter()
@@ -932,7 +954,7 @@ fn phase1_close_rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
         })
         .unwrap_or_else(|| {
             panic!(
-                "{PHASE1_CLOSE_DOC} must publish a `{}` table",
+                "{rel} must publish a `{}` table",
                 PHASE1_TABLE_HEADER.join(" | ")
             )
         });
@@ -947,7 +969,7 @@ fn phase1_close_rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
         assert_eq!(
             cells.len(),
             3,
-            "{PHASE1_CLOSE_DOC}: coverage row has {} cells, expected 3:\n  {}",
+            "{rel}: coverage row has {} cells, expected 3:\n  {}",
             cells.len(),
             line.text
         );
@@ -955,7 +977,7 @@ fn phase1_close_rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
         assert_eq!(
             file.len(),
             1,
-            "{PHASE1_CLOSE_DOC}: row `{}` must name exactly one test binary in backticks",
+            "{rel}: row `{}` must name exactly one test binary in backticks",
             cells[0]
         );
         rows.push((
@@ -967,22 +989,22 @@ fn phase1_close_rows(doc: &str) -> Vec<(String, String, Vec<String>)> {
     rows
 }
 
-/// Every test the phase-1 close document maps to a system must exist.
+/// Resolve one close doc's published coverage table against the source tree.
 ///
-/// The close doc's `System -> Test binary -> Named tests` table is a claim
-/// about the repo, and a claim nothing checks rots within a ticket. This
-/// parses that table out of the markdown and resolves every name against a
-/// scan of `#[test]` functions in the named binary.
-#[test]
-fn phase1_close_doc_names_only_real_tests() {
-    let doc = read_doc(PHASE1_CLOSE_DOC);
-    let rows = phase1_close_rows(&doc);
+/// A close doc's `System -> Test binary -> Named tests` table is a claim about
+/// the repo, and a claim nothing checks rots within a ticket. This parses the
+/// table out of the markdown, resolves every name against a scan of `#[test]`
+/// functions in the named file, and then runs the reverse check: prose may not
+/// advertise a test no mapped file declares.
+fn resolve_close_doc(rel: &str, min_rows: usize, min_mapped: usize) {
+    let doc = read_doc(rel);
+    let rows = close_doc_rows(rel, &doc);
 
     assert!(
-        rows.len() >= PHASE1_MIN_ROWS,
-        "{PHASE1_CLOSE_DOC} maps {} systems, expected at least {PHASE1_MIN_ROWS}; \
-         phase 1 closed on more evidence than that, and the map may not shrink \
-         without the claim shrinking with it",
+        rows.len() >= min_rows,
+        "{rel} maps {} systems, expected at least {min_rows}; \
+         the phase closed on more evidence than that, and the map may not \
+         shrink without the claim shrinking with it",
         rows.len()
     );
 
@@ -991,23 +1013,20 @@ fn phase1_close_doc_names_only_real_tests() {
     for (system, file, names) in &rows {
         assert!(
             repo_root().join(file).is_file(),
-            "{PHASE1_CLOSE_DOC}: system `{system}` names `{file}`, which is not a file"
+            "{rel}: system `{system}` names `{file}`, which is not a file"
         );
         let declared = declared_tests(file);
         assert!(
             !declared.is_empty(),
             "{file} declares no #[test] fn at all; system `{system}` has no proof"
         );
-        assert!(
-            !names.is_empty(),
-            "{PHASE1_CLOSE_DOC}: system `{system}` names no test"
-        );
+        assert!(!names.is_empty(), "{rel}: system `{system}` names no test");
         for name in names {
             let found = declared.iter().find(|d| d.name == *name);
             let Some(found) = found else {
                 let all: Vec<&str> = declared.iter().map(|d| d.name.as_str()).collect();
                 panic!(
-                    "{PHASE1_CLOSE_DOC}: system `{system}` maps to `{name}`, which \
+                    "{rel}: system `{system}` maps to `{name}`, which \
                      does not exist in {file}. Found there: {all:?}. A renamed, \
                      moved or deleted test must fail the close, not silently \
                      shrink the claim."
@@ -1015,8 +1034,8 @@ fn phase1_close_doc_names_only_real_tests() {
             };
             assert!(
                 !found.ignored,
-                "{PHASE1_CLOSE_DOC}: `{name}` ({file}) is #[ignore]d, so it does \
-                 not run on a plain `cargo test`; phase 1 maps no ignored test"
+                "{rel}: `{name}` ({file}) is #[ignore]d, so it does \
+                 not run on a plain `cargo test`; this map takes no ignored test"
             );
             mapped += 1;
         }
@@ -1024,9 +1043,9 @@ fn phase1_close_doc_names_only_real_tests() {
     }
 
     assert!(
-        mapped >= PHASE1_MIN_MAPPED_TESTS,
-        "{PHASE1_CLOSE_DOC} maps {mapped} tests, expected at least \
-         {PHASE1_MIN_MAPPED_TESTS}; the table thinned out instead of the claim"
+        mapped >= min_mapped,
+        "{rel} maps {mapped} tests, expected at least {min_mapped}; \
+         the table thinned out instead of the claim"
     );
 
     // Reverse direction, as for phase 0: prose must not advertise a test that
@@ -1037,9 +1056,178 @@ fn phase1_close_doc_names_only_real_tests() {
         }
         assert!(
             corpus.contains(&quoted),
-            "{PHASE1_CLOSE_DOC} advertises test `{quoted}`, which no binary in \
+            "{rel} advertises test `{quoted}`, which no binary in \
              its own map declares; the close doc must not outlive its evidence"
         );
+    }
+}
+
+/// Every test the phase-1 close document maps to a system must exist.
+#[test]
+fn phase1_close_doc_names_only_real_tests() {
+    resolve_close_doc(PHASE1_CLOSE_DOC, PHASE1_MIN_ROWS, PHASE1_MIN_MAPPED_TESTS);
+}
+
+// ---------------------------------------------------------------------------
+// T18 phase-1.1 close: the hardening slice's own coverage map and system list.
+// ---------------------------------------------------------------------------
+
+/// Floor on the rows of the phase-1.1 coverage table.
+const PHASE1_1_MIN_ROWS: usize = 14;
+
+/// Floor on the total test names that table maps, set at what it maps today.
+const PHASE1_1_MIN_MAPPED_TESTS: usize = 120;
+
+/// The systems phase 1.1 claims, and one representative test each.
+///
+/// As with `SCOPE_SYSTEMS`, this list — not the document — is the source of
+/// truth for what the phase claims. The close doc is checked against it.
+/// Unlike phase 0's list, the files here include app-crate modules: half of
+/// phase 1.1 is app-side (settings, window, menu, audio), and mapping only the
+/// engine binaries would leave that half unclaimed.
+const PHASE1_1_SYSTEMS: &[(&str, &str, &str)] = &[
+    (
+        "pick geometry",
+        "crates/mmd-engine/tests/rts_selection.rs",
+        "unit_pick_is_sprite_rect_union_body_circle",
+    ),
+    (
+        "hard bodies",
+        "crates/mmd-engine/tests/rts_collision.rs",
+        "head_on_units_never_penetrate",
+    ),
+    (
+        "static navigation",
+        "crates/mmd-engine/tests/rts_radius_nav.rs",
+        "body_clears_static_rectangles",
+    ),
+    (
+        "formations",
+        "crates/mmd-engine/tests/rts_formation.rs",
+        "formation_slots_are_six_cells_apart",
+    ),
+    (
+        "settings",
+        "src/rts_settings.rs",
+        "malformed_file_warns_and_uses_defaults",
+    ),
+    (
+        "logical canvas",
+        "crates/mmd-engine/tests/display_viewport.rs",
+        "round_trip_inverts_render_transform_pillarbox_and_letterbox",
+    ),
+    (
+        "window modes",
+        "src/rts_window.rs",
+        "failed_mode_change_rolls_back_before_reclaim",
+    ),
+    (
+        "camera frontier",
+        "crates/mmd-engine/tests/camera.rs",
+        "camera_cannot_cross_any_frontier_edge",
+    ),
+    (
+        "HUD",
+        "crates/mmd-engine/tests/rts_hud.rs",
+        "hud_regions_cover_bottom_without_overlap",
+    ),
+    (
+        "minimap",
+        "crates/mmd-engine/tests/rts_minimap.rs",
+        "minimap_projection_round_trips_map_corners",
+    ),
+    (
+        "audio",
+        "src/rts_feedback.rs",
+        "selection_batch_is_sorted_and_capped",
+    ),
+];
+
+/// Every test the phase-1.1 close document maps to a system must exist.
+#[test]
+fn phase1_1_close_names_only_real_tests() {
+    resolve_close_doc(
+        PHASE1_1_CLOSE_DOC,
+        PHASE1_1_MIN_ROWS,
+        PHASE1_1_MIN_MAPPED_TESTS,
+    );
+}
+
+/// Every system phase 1.1 claims owns a live behavioural test, and the close
+/// doc names both the system and the file that proves it.
+///
+/// `phase1_1_close_names_only_real_tests` resolves whatever the doc happens to
+/// publish; this one resolves what the phase *claims*, so a system quietly
+/// dropped from the page fails instead of passing by omission.
+#[test]
+fn phase1_1_systems_have_behavioral_tests() {
+    let close = read_doc(PHASE1_1_CLOSE_DOC);
+    assert_eq!(
+        PHASE1_1_SYSTEMS.len(),
+        11,
+        "phase 1.1 claims 11 systems; adding one is fine — bump this number. \
+         Removing one shrinks a closed phase's claim and must be deliberate."
+    );
+
+    for (system, file, representative) in PHASE1_1_SYSTEMS {
+        let declared = declared_tests(file);
+        let found = declared
+            .iter()
+            .find(|d| d.name == *representative)
+            .unwrap_or_else(|| {
+                let all: Vec<&str> = declared.iter().map(|d| d.name.as_str()).collect();
+                panic!(
+                    "system `{system}` maps to `{representative}`, which does not \
+                     exist in {file}. Found there: {all:?}"
+                )
+            });
+        assert!(
+            !found.ignored,
+            "`{representative}` ({file}) is #[ignore]d; an ignored test proves \
+             nothing about system `{system}` on the merge gate"
+        );
+        assert!(
+            close.contains(system),
+            "{PHASE1_1_CLOSE_DOC} does not name system `{system}` in its map"
+        );
+        assert!(
+            close.contains(file),
+            "{PHASE1_1_CLOSE_DOC} does not name `{file}` as the file proving `{system}`"
+        );
+        assert!(
+            close.contains(representative),
+            "{PHASE1_1_CLOSE_DOC} omits `{representative}`, which system `{system}` relies on"
+        );
+    }
+}
+
+/// The generated-audio check is on the required gate, in both mirrors.
+#[test]
+fn required_gate_contains_audio_check() {
+    for rel in [CONTRACT_DOC, README_DOC] {
+        let gate = gate_section(rel);
+        assert!(
+            gate.commands.iter().any(|c| c == AUDIO_GATE_COMMAND),
+            "{rel} '{GATE_HEADING}' does not list `{AUDIO_GATE_COMMAND}`; the \
+             tracked audio bytes would then be the only generated assets no \
+             gate regenerates and compares"
+        );
+    }
+}
+
+/// The interactive smokes stay on the gate, verbatim — same scenes, same
+/// frame budgets, same tracked RTS script.
+#[test]
+fn required_gate_keeps_phase_smokes() {
+    for rel in [CONTRACT_DOC, README_DOC] {
+        let gate = gate_section(rel);
+        for smoke in PHASE_SMOKE_COMMANDS {
+            assert!(
+                gate.commands.iter().any(|c| c == smoke),
+                "{rel} '{GATE_HEADING}' no longer lists smoke `{smoke}` \
+                 (compared after whitespace normalization)"
+            );
+        }
     }
 }
 
@@ -1059,6 +1247,8 @@ const LIVE_DOCS: &[&str] = &[
     CLOSE_DOC,
     PHASE1_CLOSE_DOC,
     PHASE1_ARCH_DOC,
+    PHASE1_1_CLOSE_DOC,
+    PHASE1_1_ARCH_DOC,
     "CONTRIBUTING.md",
 ];
 
@@ -1282,8 +1472,9 @@ fn adr_index_lists_every_adr_file() {
     files.sort();
 
     assert!(
-        files.len() >= 15,
-        "docs/ADR holds {} records, expected at least 15; the scan is broken",
+        files.len() >= 20,
+        "docs/ADR holds {} records, expected at least 20 (001-020, phase 1.1 \
+         included); the scan is broken",
         files.len()
     );
 

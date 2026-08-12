@@ -1,7 +1,8 @@
 # ADR 018: Settings, window modes, logical canvas, and camera frontier
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
+- Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supersedes in part: [ADR 014](014_ADR_movable_camera_texture_table_and_ui_layer.md) — fixed 24-cell/s camera and raw grid-edge clamp only
 - Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
@@ -85,6 +86,36 @@ Current `IsoView::frame_uniforms()` travels with each RTS scene pass so depth bi
 - Raw-grid center clamp: exposes off-map view.
 - Release pointer in menus: conflicts confirmed focused confinement.
 - Settings inside engine world/hash: environment state would poison determinism.
+
+## Implementation (as landed, T7–T10)
+
+Shipped as decided. Three record-level clarifications:
+
+1. **"Visible warning" is a stdout line at startup, not a HUD element.** A
+   missing, malformed, out-of-range or wrong-schema file falls back to defaults
+   and prints `rts: settings warning=<escaped>`; the effective values are then
+   echoed on the `rts: settings mode=… keyboard_pan=… master=…` line, which is
+   also what the tests assert against. The in-panel `SETTINGS NOT SAVED:…`
+   warning (ADR 019) covers *live edit* failures; these two are different
+   surfaces and both landed.
+2. **The offscreen path never looks at the pref path at all** — not "loads
+   defaults after reading". There is therefore no warning line offscreen, and a
+   malformed real file is left byte-identical
+   (`offscreen_run_does_not_touch_settings`,
+   `offscreen_settings_run_does_not_touch_settings`).
+3. **One canvas degenerate case the decision did not name.** A drawable smaller
+   than a single 16×9 unit has no exact aspect-fit rect, so the viewport falls
+   back to identity rather than refusing to draw
+   (`refresh_viewport_falls_back_to_identity_below_one_16x9_unit`,
+   `too_small_drawable_has_no_fit`).
+
+Code: `src/rts_settings.rs` (`RtsSettings`, `WindowMode`), `src/rts_window.rs`
+(mode/focus/grab sequences and rollback),
+`crates/mmd-engine/src/render/viewport.rs` (`aspect_fit_16_9`,
+`DisplayViewport`), `crates/mmd-engine/src/render/camera.rs`
+(`CameraFrontier`). The engine mirrors the settings default as
+`rts::DEFAULT_CAMERA_PAN_SPEED = 48.0`, so a world built without an app still
+pans at the documented speed.
 
 ## Validation contract
 

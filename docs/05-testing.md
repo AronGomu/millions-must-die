@@ -35,6 +35,29 @@ doc and the phase-1 architecture page as well. `adr_index_lists_every_adr_file`
 and `every_doc_link_resolves` keep the record navigable — an unlisted ADR or a
 rotted link is a failure, not a nuisance.
 
+## Phase 1.1 scope
+
+Phase 1.1 (interaction, UI and audio hardening) closes on the same terms:
+**functional scope only.** Eleven systems — pick geometry, hard bodies, static
+navigation, formations, settings, logical canvas, window modes, camera
+frontier, HUD, minimap, audio — each covered by named automated tests, plus the
+same 1,600-frame scripted run, now driving the HUD, the menu and the audio
+events as well. Performance stays unmeasured.
+
+The map, what landed differently from the ADRs, the proof boundaries and every
+known gap are in the
+[phase 1.1 functional close](rts-interaction-ui-audio-hardening-functional-close.md).
+Four more tests in `tests/validation_contract.rs` hold that page to the code:
+`phase1_1_close_names_only_real_tests`,
+`phase1_1_systems_have_behavioral_tests`,
+`required_gate_contains_audio_check` and `required_gate_keeps_phase_smokes`.
+
+What phase 1.1 does **not** gate is as load-bearing as what it does. The gate
+runs offscreen: it opens no window, grabs no pointer and opens no audio device.
+Window modes, pointer confinement and audible output are proven as state
+sequences and API calls only, and are checked by hand against
+`ai_artefacts/manual_test_checklist.md`.
+
 ## Required merge gate
 
 Every command here is deterministic and behavioural. None consumes a
@@ -48,17 +71,27 @@ nix flake check
 cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
+cargo run -p xtask -- audio --check
 cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
 
-The last command is the phase-1 interactive smoke: one tracked script selects
-the starting workers, puts them on a crystal node, builds a Depot and a
-Barracks and produces a Worker and a Soldier. It asserts behaviour and an exit
-code — it consumes no measurement number, and a scripted event that never fires
-fails it.
+The last command is the interactive RTS smoke: one tracked script selects the
+starting workers, puts them on a crystal and a gas node by clicking the visible
+sprite, builds a Depot and a Barracks through the command card, produces a
+Worker and a Soldier, jumps the camera from the minimap, opens the pause menu
+and Settings, edits a slider and quits through the `quit` script token. It
+asserts behaviour, an exit line and an exit code — it consumes no measurement
+number, and a scripted event that never fires fails it. The frame budget is
+part of the contract: `required_gate_keeps_phase_smokes` refuses a shortened
+run or an untracked script.
+
+`cargo run -p xtask -- audio --check` (phase 1.1) regenerates every tracked
+WAV and its manifest from integer code and byte-compares them, so drifted audio
+bytes cannot merge unreviewed. `required_gate_contains_audio_check` keeps it on
+this list.
 
 The three `run` commands before it are the phase-0 interactive smokes: the
 5 000-agent gate scene and both collision demo scenes must start, tick and exit

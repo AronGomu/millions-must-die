@@ -32,12 +32,26 @@ same `atlas_count: 4` scenario contract. No combat, no enemy AI, no zoom, no
 balance pass, and performance is still unmeasured. What it proves and does not:
 `docs/rts-engine-prototype-functional-close.md`; decisions in ADR 013, 014, 015.
 
+Phase 1.1 (interaction/UI/audio hardening, branch
+`plan/rts-interaction-ui-audio-hardening`) is closed on functional scope:
+visible pick geometry, hard RTS bodies (radius 3 cells) with radius-aware
+static navigation and formations, persistent settings, three window modes, an
+aspect-fit logical canvas, a projected camera frontier, a StarCraft-shaped HUD
+with minimap and command card, a pause/settings menu, and deterministic
+generated audio. Same 1,600-frame gate smoke, now driving all of it. Hard
+collision is **RTS-only**; the horde keeps ADR 009's soft separation. Nothing
+on the gate claims a window appeared or a sound was heard — those are human
+checklist items (`ai_artefacts/manual_test_checklist.md`). What it proves and
+does not: `docs/rts-interaction-ui-audio-hardening-functional-close.md`;
+decisions in ADR 016–020.
+
 ## Workspace layout
 
 - `.` (root) — app binary crate: `cargo run -- run` (game), `bench` (frozen, non-gating). Entry `src/main.rs`.
 - `crates/mmd-engine` — engine library: sim, nav (flow fields, `nav/field_pool.rs`), render (SDL3/GPU sprite renderer, `render/camera.rs`, `render/text.rs`), `runtime.rs`, `scenario.rs`, `alloc_guard.rs`, `testkit/` (headless deterministic test harness, excluded from shipping build).
-- `crates/mmd-engine/src/rts/` — phase-1 RTS world: `entity.rs` (SoA store, generational ids), `orders.rs`, `economy.rs`, `build.rs`, `production.rs`, `selection.rs`, `pack.rs`, `hud.rs`, `world.rs` (`RtsWorld::tick`'s fixed system order). Separate from `sim/`, which stays frozen.
-- `src/rts_*.rs` — the app's `rts` subcommand: input table, script injection, overlay, run loop.
+- `crates/mmd-engine/src/rts/` — the RTS world: `entity.rs` (SoA store, generational ids), `orders.rs`, `economy.rs`, `build.rs`, `production.rs`, `selection.rs` (pick geometry), `static_nav.rs` (body-inflated navigation mask + sweeps), `collision.rs`, `formation.rs`, `pack.rs`, `hud.rs`, `minimap.rs` (minimap projection + `hud_hit_test`), `world.rs` (`RtsWorld::tick`'s fixed system order). Separate from `sim/`, which stays frozen.
+- `src/rts_*.rs` — the app's `rts` subcommand: input table, script injection (incl. the `quit` token), overlay, run loop, plus phase-1.1's app-side halves: `rts_settings.rs` (persisted schema-1 settings), `rts_window.rs` (window modes, focus, pointer grab), `rts_ui.rs` (pause/settings menu FSM), `rts_feedback.rs` (audio events + buses), `rts_audio.rs` (SDL audio sink).
+- `assets/audio/generated/` — seven generated MIT-0 placeholder WAVs + manifest, produced and verified by `cargo run -p xtask -- audio [--check]`. No copyrighted audio may enter this repo.
 - `tools/mmd-lab` — trusted local lab CLI (`doctor`, `validate`, plus frozen cross-host validation/calibration/release code). Frozen/non-gating since phase-0 close but still builds.
 - `xtask` — bootstrap/reproducibility tasks: `bootstrap`, `shaders`, `atlases` (each has a `--check` mode used as a merge gate).
 - `lab/` — data for lab tooling: `baselines`, `fixtures`, `goldens/` (host-scoped render goldens), `manifests`, `provision`, `releases`.
@@ -57,12 +71,13 @@ nix flake check
 cargo run -p xtask -- bootstrap --check
 cargo run -p xtask -- shaders --check
 cargo run -p xtask -- atlases --check
+cargo run -p xtask -- audio --check
 cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
-- The `rts` line is the phase-1 interactive smoke: one tracked script drives select → gather → build → produce and asserts an exit line. Single source of truth for the gate: `docs/05-testing.md`.
+- The `rts` line is the interactive RTS smoke: one tracked script drives select → gather → build (command card) → produce → minimap jump → pause menu → settings edit → `quit`, and asserts an exit line ending `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. `audio --check` regenerates every tracked WAV + manifest and byte-compares. Single source of truth for the gate: `docs/05-testing.md`.
 - Toolchain: Rust 1.95.0 pinned via `rust-toolchain.toml`. Linux/NixOS: `nix develop` / `nix flake check`. Windows/macOS: rustup from `rust-toolchain.toml`.
 - On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip.
 - Golden regeneration (explicit, reviewed): `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine --test gpu_golden -- --ignored update_host_golden`.
@@ -71,7 +86,8 @@ cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptan
 ## Architectural constraints (load-bearing — don't break these)
 
 - No per-frame allocations in simulation (enforced by `alloc_guard.rs`, per-thread `MeasureGuard`).
-- No per-enemy pathfinding — navigation via flow fields. **This extends to player units**: they descend a pooled field from `nav::FieldPool` (`NAV_FIELD_SLOTS = 8`, exact LRU, ties to the lowest slot), never a per-unit path. Agent-agent collision is *soft separation steering* layered on top: a repulsion sum bends the descent vector, it never resolves an overlap, and no code or doc may claim agents cannot overlap.
+- No per-enemy pathfinding — navigation via flow fields. **This extends to player units**: they descend a pooled field from `nav::FieldPool` (`NAV_FIELD_SLOTS = 8`, exact LRU, ties to the lowest slot), never a per-unit path. Formation slots are bounded terminal steering around one anchor field, not pathfinding.
+- Collision is **two different contracts, and every doc must name which**. Horde `sim/`: *soft separation steering* — a repulsion sum bends the descent vector, never resolves an overlap, and no code or doc may claim horde agents cannot overlap (ADR 009). RTS `rts/`: **hard bodies** — radius 3 cells, contact distance 6, sequential proposal/commit with a continuous sweep, plus bounded push-aside (`MAX_PUSH_DEPTH = 3`, `MAX_PUSHED_BODIES = 8`, one push per body per tick, all-or-nothing) and a ±45°/±90° deflection fallback; no completed tick leaves two RTS unit bodies merged (ADR 017).
 - Supply is **reserved at enqueue**, never charged at completion, and `Supply::used` is **recomputed** every tick from live units plus queue reservations — never incremented at a call site.
 - Render layers: `ScenePass::overlay` is depth-off and binds texture slot 0, so it is honest **only for procedural rings**. Every textured depth-off element — placement tiles, drag box, rally flag, icons, panel fill, glyphs — must be a `ui` draw group, or it samples the zombie atlas.
 - `sim/` is frozen for phase 1. Its entire phase-1 diff is two visibility keywords (`dir_from_vector` → `pub`, `step_admissible` → `pub(crate)`) plus one `#[cfg(test)]` re-export; the 5 000-agent exit-line hash must not move.

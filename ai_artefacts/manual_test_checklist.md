@@ -5,7 +5,7 @@
 - [ ] Launch `cargo run -- rts` and confirm the tracked map still renders at the same 320×320 scale it did before this change (no visual resize).
 - [ ] Select a worker and a soldier, issue a move order across open ground, and confirm both units now visibly move noticeably faster than before (workers ~30 cells/sec, soldiers ~24 cells/sec — roughly 3x the old pace).
 - [ ] Confirm the worker still clearly outruns the soldier when both are sent to the same distant point together.
-- [ ] Click-select a unit at its edge (near the current selection ring) and confirm picking still feels correct — the pick radius now reflects a 3-cell body instead of 6-cell.
+- [ ] Click-select a unit at its edge (near the current selection ring) and confirm picking still feels correct — the pick radius now reflects a 3-cell body instead of 6-cell. (Widened by `T2`: a unit is now hit by its full 48×48 sprite quad *or* that body circle, whichever contains the click.)
 - [ ] Confirm no visual or behavioral regression in building placement, gather, or production flows during a few minutes of normal play.
 
 ## T2 picking-and-context-orders
@@ -15,7 +15,7 @@
 - [ ] Select a mixed group (some workers, one soldier) and right-click a resource node: confirm the workers start gathering and the soldier instead walks toward the node instead of being ignored.
 - [ ] Select a mixed group and right-click a building under construction (a site): confirm only workers attend it; the soldier does not move toward it and is not given any order.
 - [ ] Right-click a finished (non-site) building or empty ground with units selected: confirm the whole selection walks to the clicked point as before.
-- [ ] Stand a worker exactly on top of the HQ (drag it there or park it) and click precisely on the shared spot: confirm the click now selects the HQ, not the worker, when their sprites are drawn at the same depth (this is an intentional behavior change from the old "units always win" rule).
+- [ ] Overlap a worker's *sprite* with the HQ's (park it against the HQ's front edge — since `T3`/`T4` a body can no longer stand inside a finished footprint) and click precisely where the two drawn sprites coincide: confirm the frontmost-by-depth entity wins, not "units always win". At equal depth the lower entity slot wins.
 - [ ] Click a worker that is standing slightly in front of (further down-screen than) another overlapping unit or the HQ: confirm the frontmost (visually on-top) unit is the one selected.
 - [ ] Right-click while a build-placement ghost is showing: confirm it still cancels the ghost instead of issuing a move/gather/build order.
 
@@ -69,7 +69,7 @@
 
 ## T7 persistent-settings
 
-- [ ] Launch `cargo run -- rts`, quit immediately, then inspect `${SDL pref path}/AronGomu/MillionsMustDie/settings-v1.json` (Linux: `~/.local/share/AronGomu/MillionsMustDie/settings-v1.json`): confirm nothing was created there yet — this slice only loads settings, T13 is the first slice that saves from a real edit.
+- [ ] On a machine that has never run this build: launch `cargo run -- rts`, quit immediately, then inspect `${SDL pref path}/AronGomu/MillionsMustDie/settings-v1.json` (Linux: `~/.local/share/AronGomu/MillionsMustDie/settings-v1.json`): confirm nothing was created there — loading alone never writes. (Once you have committed a settings edit in the `T13` panel the file exists from then on; that is the only thing that creates it.)
 - [ ] Hand-write a `settings-v1.json` at that path with legal non-default values (e.g. `camera.keyboard_pan: 24`, `audio.master: 65`, `display.mode: "windowed1280x720"`) and launch `cargo run -- rts`: confirm the startup `rts: settings mode=... keyboard_pan=24 ... master=65 ...` line matches exactly what you wrote, with no `rts: settings warning=` line.
 - [ ] Corrupt that file (e.g. truncate it to `{`) and relaunch: confirm the run still starts cleanly, prints an `rts: settings warning=` line naming the file path, and the settings debug line falls back to the documented defaults (`mode=BorderlessDesktop confine_pointer=true keyboard_pan=48 edge_pan=48 pause_on_focus_loss=false master=80 music=35 voice=70 sfx=60`) rather than crashing or silently keeping stale values.
 - [ ] Set an out-of-range value by hand (e.g. `audio.master: 101`, or `camera.keyboard_pan: 50` which is not a multiple of 6) and relaunch: confirm the same warn-and-default behavior as the corrupt-file case.
@@ -196,3 +196,17 @@ or play audio on a live desktop — so everything below is human-only.
 - [ ] Confirm the scripted settings edit did **not** persist: after the acceptance run, relaunch `cargo run -- rts` and check the `rts: settings ...` startup line still shows your own `keyboard_pan`, not 78. A scripted click commits in memory only.
 - [ ] Play for a few minutes and try to force two units into each other (order a large group through a one-unit-wide gap, park units on a build site as it completes, push a group into a corner): confirm no two unit sprites ever visually interpenetrate, matching the `body_overlaps=0` the exit line reports.
 - [ ] Window mode, pointer confinement and Alt-Tab behaviour are still window/OS evidence only (see the `T10` and `T13` sections) — the offscreen acceptance run claims nothing about them.
+
+## T18 docs-and-phase-close
+
+Docs-only slice: no game behaviour changed. The offscreen gate proved every
+command below except what a browser or a human eye must judge.
+
+- [ ] Open `docs/rts-interaction-ui-audio-hardening-architecture.html` in a browser: confirm the badge reads `IMPLEMENTED · CLOSED ON FUNCTIONAL SCOPE`, every SVG diagram (system map, collision tick, HUD regions, audio pipeline) still renders and is legible at desktop width, the new "Where it lives" and "As built" tables lay out without overflow, and the worker sprite thumbnail loads.
+- [ ] From that page, click each link in the header and footer (functional close, phase 1 architecture, horde collision, gate, ADR 016–020): confirm all open the intended file.
+- [ ] Open `docs/rts-engine-prototype-architecture.html`: confirm the new "Superseded in part by phase 1.1" paragraph reads as a forward pointer, not as a rewrite of what phase 1 claimed, and the footer's "Next:" link works.
+- [ ] Open `docs/agent-collision-architecture.html`: confirm the new scope paragraph makes it unmistakable that the page is horde-only and that nothing on it claims hard collision for the horde.
+- [ ] Read `docs/rts-interaction-ui-audio-hardening-functional-close.md` end to end and confirm nothing in it overstates what you have actually seen on this machine — in particular that no claim of audible sound, of a real window, or of a pointer grab appears outside the "proof boundaries" table.
+- [ ] Run the merge gate's RTS smoke in its real windowed form — `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — and confirm it exits 0 with the exit line ending `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. The agent ran this offscreen only; the windowed run is the one that proves window + pointer + audio.
+- [ ] Run `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` and the `collision_sprite_v1` twin in their real windowed form and confirm both exit cleanly; the agent ran them offscreen.
+- [ ] Confirm `cargo run -p xtask -- audio --check` prints `audio: ok (7 wav + manifest)` on your machine, and that `git status` is clean afterwards.

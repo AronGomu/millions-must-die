@@ -1,7 +1,8 @@
 # ADR 017: RTS hard collision, radius-aware navigation, and formations
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
+- Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 013](013_ADR_phase1_scope_and_rts_entity_model.md), [ADR 015](015_ADR_economy_construction_and_production_determinism.md)
 - Scoped contrast: [ADR 009](009_ADR_agent_separation_and_collision.md) remains authoritative for horde `sim/`
 - Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
@@ -133,3 +134,46 @@ non-displaced body and every other displaced body; one illegal link rejects the
 mover's whole step and nothing moves. The invariant, its induction and the
 no-epsilon rule are unchanged: no completed tick leaves two RTS unit bodies
 merged.
+
+## Amendment (T3, T5, T6 implementation)
+
+Three further corrections to the decision text above, all forced by landed
+code and all narrower than what they replace.
+
+1. **Interaction reach is adaptive, not fixed.** "Reach = body radius +
+   0.5-cell tolerance" is a floor, not the rule. Dense inflated terrain can
+   push *every* legal ring cell past that flat distance, and a unit routed to
+   such a cell would then never finish its order. The landed rule is
+   `adaptive_reach(kind, chosen_cell_dist) = max(interaction_reach(kind),
+   chosen_cell_dist + NAV_CENTER_TOLERANCE_CELLS)` in
+   `crates/mmd-engine/src/rts/orders.rs`, where `interaction_reach` is still
+   `body_radius + NAV_CENTER_TOLERANCE_CELLS` (3.0 + 0.5) and
+   `entity_approach_cell` returns `(Cell, distance)` so the chosen cell's own
+   rect distance is available to widen it. Workers still never enter a target
+   solid: the reach widens toward the cell the router actually picked, it does
+   not move the cell.
+2. **Arrival is slot-based.** The RTS `ARRIVAL_RADIUS_CELLS` constant is gone.
+   A unit stops when it is within `FORMATION_ARRIVAL_CELLS = 0.25` of *its own*
+   formation slot centre (`crates/mmd-engine/src/rts/formation.rs`,
+   `arrival_is_measured_from_the_slot_centre`). A shared radius around a shared
+   destination cannot express "six units arrived" once each of them owns a
+   distinct slot. The horde's `sim::ARRIVAL_RADIUS` is untouched.
+3. **Production drains through `ProductionQueue` self-methods.** The queue owns
+   `tick_head`, `head_ready` and `pop_ready`; the world asks the queue, and
+   only pops when a legal body position exists. There is no EntityId-keyed
+   production API: the queue is per-building state in `ProductionTable`, and
+   keying the drain by entity would have put the wait/resume decision outside
+   the type that holds the payment (`production_waits_when_no_spawn_is_free`,
+   `waiting_production_resumes_once`).
+
+### Known defect, pinned not fixed
+
+`StaticNav::center_blocked` marks a 1–2 cell diagonal channel of the tracked
+scene (y ≈ 172..174, x ≈ 190..199) as legal centres, but no step through it
+survives `sweep_clear` + `step_admissible`: the field claims the channel is
+reachable and a 3-cell body wedges in it. The two tests disagree by
+construction — the centre mask is a per-cell circle test, the sweep is
+continuous — and reconciling them is a navigation change, not a docs one. It
+is pinned as an `#[ignore]`d reproducer,
+`rts_nav_staleness::a_body_wedges_in_the_narrow_eastern_channel`, and carried
+forward in the phase-1.1 close's known gaps.

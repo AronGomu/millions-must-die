@@ -27,8 +27,13 @@ Detailed phase-0 designs:
 
 Detailed phase-1 designs:
 - [RTS engine prototype](rts-engine-prototype-architecture.html)
+- [RTS interaction, UI and audio hardening](rts-interaction-ui-audio-hardening-architecture.html) (phase 1.1)
 
 ## Agent collision
+
+This section is about the **horde** (`crates/mmd-engine/src/sim`) only. Player
+RTS units have hard bodies and a different contract entirely — see
+[RTS bodies, navigation and formations](#rts-bodies-navigation-and-formations).
 
 Bodies are scenario data: each scenario declares a collision radius and a
 separation strength in Q8 fixed point. The model is soft separation
@@ -71,9 +76,10 @@ digests.
 - **Orders.** One `Order` value per unit, hashed: `Move`, `Gather` (with its
   `ToNode` / `Mining` / `Returning` phase) or `Build`. The whole worker loop is
   therefore pinned by `RtsWorld::state_hash` rather than by tests poking at
-  booleans. Only `Order::Move` stops on the arrival radius; `Gather` and
-  `Build` complete on their own reach tests, measured against a *footprint
-  rectangle* rather than a centre.
+  booleans. `Order::Move` stops on its own formation slot centre (phase 1.1:
+  `FORMATION_ARRIVAL_CELLS = 0.25`, replacing the old shared arrival radius);
+  `Gather` and `Build` complete on their own reach tests, measured against a
+  *footprint rectangle* rather than a centre.
 - **Flow-field pool.** The "no per-enemy pathfinding" rule extends to player
   units. `nav::FieldPool` holds `NAV_FIELD_SLOTS = 8` preallocated fields keyed
   by destination cell, evicted exact-LRU with ties to the lowest slot. Units
@@ -100,6 +106,76 @@ Shape of the slice: the
 [RTS engine prototype architecture](rts-engine-prototype-architecture.html)
 page. What it proves and does not:
 [functional close](rts-engine-prototype-functional-close.md).
+
+## RTS bodies, navigation and formations
+
+Phase 1.1. Everything here is **RTS-only**; the horde section above still
+describes `sim/`, and no document may merge the two claims.
+
+- **Hard bodies.** `UnitKind::body_radius_cells` returns 3.0 for both Worker
+  and Soldier, so contact distance is 6.0 and penetration is a strict `<` with
+  no epsilon. Movement is a rotated sequential proposal/commit: units are taken
+  in ascending slot order rotated by tick index, each candidate step is swept
+  continuously against the static world and every other body, and it is
+  accepted whole or not at all. A mover may displace bodies along their contact
+  normals through a bounded chain (`MAX_PUSH_DEPTH = 3`,
+  `MAX_PUSHED_BODIES = 8`, one displacement per body per tick, all-or-nothing);
+  only after a chain is rejected does it try its descent rotated ±45° then
+  ±90°. Nothing relaxes an existing overlap: every displaced position is proven
+  legal before anything commits.
+- **Static navigation.** `rts::StaticNav` holds the raw solids (terrain,
+  resource footprints, finished buildings) and a *centre-blocked* mask of the
+  positions a 3-cell circle cannot occupy. Pooled fields rebuild over the mask;
+  building **placement** keeps the raw rules, so body clearance never widens
+  the exclusion a player sees.
+- **Interaction reach is adaptive.** `orders::interaction_reach` (body radius +
+  `NAV_CENTER_TOLERANCE_CELLS`) is a floor. The reach an order actually needs
+  is `max(that, chosen approach-cell distance + tolerance)`, because dense
+  inflated terrain can push every legal approach cell past the flat distance.
+- **Formations.** One group order takes one pooled anchor field and assigns
+  each member a distinct deterministic 6-cell lattice slot; insufficient slots
+  reject the whole order rather than moving some of it. Terminal steering to a
+  slot is bounded local placement, not per-unit pathfinding — `NAV_FIELD_SLOTS
+  = 8` stands.
+- **Body-safe transitions.** Production spawns on the nearest legal free
+  position or waits with the unit paid and its supply reserved; a finishing
+  site atomically preplans every evacuation before stamping itself solid, or
+  stays walkable one more tick.
+
+Decisions: [ADR 016](ADR/016_ADR_phase1_1_scope_and_input_geometry.md),
+[ADR 017](ADR/017_ADR_rts_hard_collision_navigation_and_formations.md),
+[ADR 018](ADR/018_ADR_settings_window_canvas_and_camera.md),
+[ADR 019](ADR/019_ADR_hud_minimap_and_input_routing.md),
+[ADR 020](ADR/020_ADR_audio_events_buses_and_generated_assets.md). Shape of the
+slice: the
+[phase 1.1 architecture](rts-interaction-ui-audio-hardening-architecture.html)
+page. What it proves and does not:
+[phase 1.1 functional close](rts-interaction-ui-audio-hardening-functional-close.md).
+
+## App shell, HUD and audio
+
+Also phase 1.1, and deliberately **app-side**: `RtsWorld` stays clock-free,
+deterministic and audio-free.
+
+- **Settings** are one per-user schema-1 JSON file under the SDL pref path.
+  Missing, malformed, out-of-range or wrong-schema loads fall back to defaults
+  with a warning on stdout. Offscreen runs never read or write it, so a test
+  run can never depend on the developer's own configuration.
+- **Logical canvas.** World and UI are always 1920 × 1080. The destination is
+  the largest centred exact 16:9 integer rect (`render::DisplayViewport`);
+  everything outside it is a cleared bar that rejects clicks and clamps motion
+  to the content edge.
+- **Camera frontier.** The camera clamps to the *projected* map AABB inset by
+  half the logical view, not to the raw grid edge, so no pan can show dead
+  space. Keyboard and edge pan carry independent speeds.
+- **HUD first, world second.** A fixed pointer-owner order — lifecycle, Escape,
+  modal, gear, minimap, selection icons, command card, HUD background, world —
+  is chosen at mouse-down and retained through the gesture. Every textured HUD
+  element is a `ui` draw group; `overlay` stays procedural rings only.
+- **Audio derives from receipts.** Accepted-action receipts become semantic
+  `AudioEvent`s (music, select/move/gather/build/reject voice, UI click),
+  capped and sorted, weighted by Music/Voice/SFX buses under a master scalar,
+  and handed to a sink. Offscreen runs use a fake sink and open no device.
 
 ## Design Decisions
 

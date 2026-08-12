@@ -1,7 +1,8 @@
 # ADR 019: HUD, minimap, menu, and input routing
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
+- Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 014](014_ADR_movable_camera_texture_table_and_ui_layer.md), [ADR 018](018_ADR_settings_window_canvas_and_camera.md)
 - Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
@@ -101,6 +102,30 @@ Settings edits validate, apply runtime, persist, publish. Failure rolls runtime/
 - Unlimited visible portraits: 2,048 IDs cannot fit.
 - Top-down square minimap: user chose isometric diamond.
 - UI click then world fallback: creates accidental orders.
+
+## Implementation (as landed, T11–T13)
+
+Shipped as decided, with two consequences this record has to carry because
+they change contracts outside the HUD:
+
+1. **Escape no longer quits.** In gameplay it opens the paused menu; from
+   Settings it returns to the menu; from the menu it returns to gameplay,
+   preserving a manual pause. That removed the only way a scripted run had to
+   end itself, so `src/rts_script.rs` gained a **`quit` script token** — a bare
+   verb taking no arguments — and the tracked acceptance script terminates with
+   it instead of `key:esc` (`quit_parses_bare`, `quit_takes_no_arguments`,
+   `quit_stops_the_frames_sweep`,
+   `menu_escape_opens_the_pause_menu_without_quitting`). Any script still
+   pressing Escape to exit now opens a menu and runs to its frame budget.
+2. **Hit testing lives in `crates/mmd-engine/src/rts/minimap.rs`**, not in
+   `hud.rs`: `HudHit` and `hud_hit_test` resolve a logical point against the
+   same `MinimapProjection` the minimap draws with, and splitting them across
+   two modules would have duplicated that projection. `hud.rs` still owns the
+   layout rects both of them read.
+
+The menu FSM is `src/rts_ui.rs` (`UiPage` = `gameplay | pause_menu |
+settings`, reported on the exit line as `ui_page=`), and the gear opens exactly
+what Escape opens (`menu_gear_click_opens_the_menu_exactly_like_escape`).
 
 ## Validation contract
 

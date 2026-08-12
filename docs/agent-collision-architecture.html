@@ -3,7 +3,8 @@
 <span class="eyebrow">Architecture · Collision</span>
 <h1>Soft Separation Steering</h1>
 <p class="lede"><strong>Nonnormative visualization.</strong> <a href="ADR/009_ADR_agent_separation_and_collision.md">ADR 009</a> owns the collision decision and its constraints; <a href="ADR/003_ADR_simulation_and_flow_field.md">ADR 003</a> still owns movement and navigation. This page shows data flow and the shape of the claim only.</p>
-<p class="nav"><a href="technical-prototype-architecture.html">← System architecture</a> · <a href="simulation-navigation-architecture.html">Simulation + navigation</a></p>
+<p class="lede"><strong>Scope: the horde only.</strong> Everything on this page is <code>crates/mmd-engine/src/sim</code>, where 5&nbsp;000 agents may overlap and separation only bends a heading. Player RTS units are a different contract entirely — hard 3-cell bodies that no completed tick leaves merged (<a href="ADR/017_ADR_rts_hard_collision_navigation_and_formations.md">ADR 017</a>, <a href="rts-interaction-ui-audio-hardening-architecture.html">phase 1.1 architecture</a>). Neither claim may be read onto the other: nothing here makes the horde non-overlapping, and the RTS bodies do not soften.</p>
+<p class="nav"><a href="technical-prototype-architecture.html">← System architecture</a> · <a href="simulation-navigation-architecture.html">Simulation + navigation</a> · <a href="rts-interaction-ui-audio-hardening-architecture.html">RTS hard bodies (contrast)</a></p>
 
 <section class="grid">
 <div class="card good"><h3>What holds</h3><ul>

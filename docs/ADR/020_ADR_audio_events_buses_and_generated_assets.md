@@ -1,7 +1,8 @@
 # ADR 020: Audio events, buses, runtime, and generated assets
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-08-10
+- Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 019](019_ADR_hud_minimap_and_input_routing.md)
 - Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
@@ -91,6 +92,27 @@ Pre-window buffered sink records frame1 events. Interactive sink replays once af
 - One mixed stream callback: more thread/unsafe/mixer complexity.
 - Per-unit >8 voice stacking: clipping/cacophony.
 - Pause music on focus/menu: contradicts confirmed continuous lifecycle.
+
+## Implementation (as landed, T14–T16)
+
+Shipped as decided. `cargo run -p xtask -- audio --check` is now on the
+required merge gate (`docs/05-testing.md`), printing
+`audio: ok (7 wav + manifest)`; the generator is `xtask/src/audio.rs`, the
+semantic layer `src/rts_feedback.rs` (`AudioEvent`, `AudioBus`, `AudioSink`,
+`effective_gains`) and the device layer `src/rts_audio.rs` (`SdlAudioSink`,
+14 streams, `BufferedAudioSink` for pre-window frame-1 events).
+
+One addition to the observation surface: the counters this record specified are
+reported twice — as `rts: audio music=… voice=… cues=… reject=… ui=…
+gains=…/…/…`, and split by meaning on the exit line as `music_starts`,
+`voice_select`, `voice_order`, `voice_reject`, `sfx_ui`, so the 1,600-frame
+acceptance run can assert selection cues apart from order cues.
+
+The audible claim boundary is unchanged and load-bearing: no automated test on
+this gate proves anything was heard. Dummy-driver tests prove API and lifecycle
+(`dummy_driver_starts_and_maintains`,
+`audio_device_open_failure_is_actionable`); hearing it is a human checklist
+item.
 
 ## Validation contract
 

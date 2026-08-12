@@ -2,6 +2,13 @@
 
 **Status: closed on functional evidence, 2026-08-10.**
 
+> **Followed by phase 1.1** (interaction, UI and audio hardening,
+> [functional close](rts-interaction-ui-audio-hardening-functional-close.md)),
+> which changed several of the gaps recorded below — units now have hard
+> bodies, and a minimap, menus and sound exist. Nothing on this page has been
+> rewritten to pretend it included any of that: it is the record of what phase
+> 1 closed on, and it stays that way.
+
 Phase 1 asked whether this engine can run an RTS: a camera you move, units you
 select, workers that gather, an economy that banks, buildings you place, and
 units you produce — all on a horde-free scene, without disturbing anything
@@ -311,4 +318,6 @@ Carried forward, in no committed order:
   gate.
 - [Phase 0 functional close](technical-prototype-functional-close.md) — what
   the horde engine proved, and the gaps phase 1 inherited.
+- [Phase 1.1 functional close](rts-interaction-ui-audio-hardening-functional-close.md)
+  — the hardening pass that followed this one.
 </content>

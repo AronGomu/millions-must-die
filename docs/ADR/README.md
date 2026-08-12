@@ -27,12 +27,21 @@ ADR 003 is **supplemented** by ADR 013 (2026-08-10): the horde simulation is
 unchanged and player units still never path per-unit — they descend a pooled
 flow field keyed by destination cell.
 
-Proposed phase-1.1 records 016–020 (2026-08-10) harden the RTS-only control
-slice. ADR 017 gives RTS units hard bodies while ADR 009 remains authoritative
-for overlap-capable horde `sim/`. ADR 018 proposes replacing ADR 014's fixed
-24-cell/s camera + raw-grid clamp; ADR 014's texture/depth/UI-layer decisions
-stand. Proposed means planned, not shipped; T18 promotes status only after
-matching evidence lands.
+Phase-1.1 records 016–020 are **accepted** (2026-08-12, T18): the RTS-only
+control slice shipped and each record carries an implementation section naming
+what landed differently from its own proposal. ADR 017 gives RTS units hard
+bodies while ADR 009 remains authoritative for overlap-capable horde `sim/` —
+no document may claim hard collision for the horde. ADR 018 **supersedes in
+part** ADR 014: its fixed 24-cell/s camera and raw grid-edge clamp are gone,
+replaced by split keyboard/edge speeds and a projected-map frontier; ADR 014's
+texture-table, depth and UI-layer decisions stand. ADR 019 supersedes ADR 014's
+output-only HUD and, with it, phase 1's Escape-quits binding: Escape opens the
+pause menu and a script ends with the `quit` token. ADR 013's phase-1 scope
+line "no minimap, no menus, no sound" is superseded by 019 and 020 for phase
+1.1 only; everything else in ADR 013 stands.
+
+What those records claim is closed against real tests in the
+[phase-1.1 functional close](../rts-interaction-ui-audio-hardening-functional-close.md).
 
 Accepted phase-0 decisions:
 
@@ -55,7 +64,7 @@ Accepted phase-1 decisions:
 14. [Movable camera, texture table + the UI layer](014_ADR_movable_camera_texture_table_and_ui_layer.md)
 15. [Economy, construction + production determinism](015_ADR_economy_construction_and_production_determinism.md)
 
-Proposed phase-1.1 decisions:
+Accepted phase-1.1 decisions:
 
 16. [Phase-1.1 scope + input geometry](016_ADR_phase1_1_scope_and_input_geometry.md)
 17. [RTS hard collision, radius-aware navigation + formations](017_ADR_rts_hard_collision_navigation_and_formations.md)

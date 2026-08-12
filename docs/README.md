@@ -26,12 +26,15 @@
   — what phase 1 proves, what it does not, and every known gap
 - [Architecture decision records](ADR/README.md) — 013, 014, 015
 
-## Proposed phase 1.1 architecture
+## Phase 1.1 architecture
 
 - [RTS interaction, UI + audio hardening](rts-interaction-ui-audio-hardening-architecture.html)
-  — planned pick/body/nav/settings/window/HUD/minimap/audio architecture; not yet implemented
-- [Architecture decision records](ADR/README.md) — proposed 016–020
-- Plan: `../ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
+  — the implemented pick/body/nav/settings/window/HUD/minimap/audio
+  architecture, with the files and tests that back each part
+- [RTS interaction, UI + audio hardening functional close](rts-interaction-ui-audio-hardening-functional-close.md)
+  — what phase 1.1 proves, what no offscreen test can claim, and every known gap
+- [Architecture decision records](ADR/README.md) — 016–020
+- Manual (human-only) checks: `../ai_artefacts/manual_test_checklist.md`
 
 ## Implementation plan
 

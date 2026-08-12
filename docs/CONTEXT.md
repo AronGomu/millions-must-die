@@ -62,6 +62,25 @@ Consolidated from former `00-vision.md`, `02-prototype-roadmap.md`, `03-mvp.md`.
      [ADR 015](ADR/015_ADR_economy_construction_and_production_determinism.md),
      with the shape of the slice on the
      [architecture page](rts-engine-prototype-architecture.html).
+   - Status (2026-08-12), phase **1.1** interaction/UI/audio hardening:
+     **closed on functional scope.** Eleven further systems ship on the same
+     scene — visible pick geometry, hard RTS bodies with radius-aware static
+     navigation and formations, persistent settings, an aspect-fit logical
+     canvas, three window modes, a projected camera frontier, a HUD with
+     minimap and command card, a pause/settings menu, and deterministic
+     generated audio — all joined by the same 1,600-frame scripted run. Hard
+     collision is RTS-only: the horde keeps its soft separation and may still
+     overlap. Nothing on the gate claims a window appeared or a sound was
+     heard. Performance stays **unmeasured**. What it proves, what it does
+     not, and every known gap:
+     [phase 1.1 functional close](rts-interaction-ui-audio-hardening-functional-close.md).
+     The decisions behind it: [ADR 016](ADR/016_ADR_phase1_1_scope_and_input_geometry.md),
+     [ADR 017](ADR/017_ADR_rts_hard_collision_navigation_and_formations.md),
+     [ADR 018](ADR/018_ADR_settings_window_canvas_and_camera.md),
+     [ADR 019](ADR/019_ADR_hud_minimap_and_input_routing.md),
+     [ADR 020](ADR/020_ADR_audio_events_buses_and_generated_assets.md), with
+     the shape of the slice on the
+     [architecture page](rts-interaction-ui-audio-hardening-architecture.html).
 2. **Combat Prototype** — weapons, damage, turrets, enemy AI.
 3. **Horde Prototype** — tens of thousands of enemies.
 4. **Defense Prototype** — walls, waves, multiple entrances.
