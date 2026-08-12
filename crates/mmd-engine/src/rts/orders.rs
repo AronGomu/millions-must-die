@@ -275,15 +275,29 @@ pub(crate) fn rect_distance(p: [f32; 2], center: [f32; 2], edge: u32) -> f32 {
 /// The footprint's own cells (and everything within one body radius of it)
 /// are blocked in the centre mask once a building finishes, so a field
 /// cannot target them and a mover cannot stand inside another body's
-/// clearance either. This expands a 4-connected ring around the footprint —
-/// the cells directly north, east, south and west of it, offset outward one
-/// grid step at a time, never a diagonal corner cell, matching the no-corner-
-/// cut rule the field descent itself obeys — and, at the first ring radius
-/// that contains at least one legal cell, returns the one with the least
-/// [`rect_distance`] to the footprint, ties broken by the lower flat cell
-/// index. A legal cell at ring radius `r` is never farther from the
-/// footprint than one at `r + 1`, so the first non-empty ring already holds
-/// the answer.
+/// clearance either. This expands the **full** square ring around the
+/// footprint — every cell on the border of the footprint box grown by `r`,
+/// corners included — and returns the legal cell with the least
+/// [`rect_distance`] to the footprint, ties broken by scan order (which is
+/// fixed, so the answer is deterministic).
+///
+/// It cannot stop at the first non-empty ring: the closest cell on ring `r`
+/// is the on-axis one at `r - 0.5`, but its corners sit at `√2 (r - 0.5)`, so
+/// a corner found on ring `r` can be farther than an on-axis cell on ring
+/// `r + 1`. `r - 0.5` is the least any cell on ring `r` can be, so the scan
+/// stops as soon as that floor reaches the best distance found — at most one
+/// ring past the first hit, and still allocation-free.
+///
+/// The ring used to be the four axis-aligned rays only — the cells directly
+/// north, east, south and west of the footprint. That declared a target
+/// unreachable whenever its only body-legal centres were off-axis, and on a
+/// hauler's return leg [`super::world::RtsWorld`] then clears the order,
+/// stranding a loaded worker for good. Widening it cannot change any case the
+/// narrow scan already answered: an off-axis cell on ring `r` is strictly
+/// farther from the footprint rectangle than any on-axis cell on the same
+/// ring, so it can only win when the four rays hold nothing legal at all.
+///
+/// Allocation-free: two fixed loops per ring, no collection anywhere.
 ///
 /// Returns the footprint's own cell when no ring out to the grid's own size
 /// ever finds one, which then makes `FieldPool::acquire` fail cleanly rather
@@ -313,9 +327,14 @@ pub(crate) fn entity_approach_cell(
     let e = edge as i64;
     let max_radius = width.max(height);
 
+    let mut best: Option<(f32, u32, u32)> = None;
     for r in 1..=max_radius {
+        // Nothing on this ring, or any ring beyond it, can beat what is
+        // already held.
+        if best.is_some_and(|(bd, _, _)| (r as f32 - 0.5) >= bd) {
+            break;
+        }
         let rr = r as i64;
-        let mut best: Option<(f32, u32, u32)> = None;
         let consider = |x: i64, y: i64, best: &mut Option<(f32, u32, u32)>| {
             if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
                 return;
@@ -330,24 +349,31 @@ pub(crate) fn entity_approach_cell(
                 *best = Some((d, x as u32, y as u32));
             }
         };
-        for x in min_x..min_x + e {
-            consider(x, min_y - rr, &mut best);
+        // The border of the footprint box grown by `rr`, each cell visited
+        // exactly once: the two full horizontal runs, then the two vertical
+        // runs with the corners already taken.
+        let x0 = min_x - rr;
+        let x1 = min_x + e - 1 + rr;
+        let y0 = min_y - rr;
+        let y1 = min_y + e - 1 + rr;
+        for x in x0..=x1 {
+            consider(x, y0, &mut best);
         }
-        for y in min_y..min_y + e {
-            consider(min_x + e - 1 + rr, y, &mut best);
+        for y in (y0 + 1)..y1 {
+            consider(x1, y, &mut best);
         }
-        for x in min_x..min_x + e {
-            consider(x, min_y + e - 1 + rr, &mut best);
+        for x in x0..=x1 {
+            consider(x, y1, &mut best);
         }
-        for y in min_y..min_y + e {
-            consider(min_x - rr, y, &mut best);
-        }
-        if let Some((d, x, y)) = best {
-            return (Cell { x, y }, d);
+        for y in (y0 + 1)..y1 {
+            consider(x0, y, &mut best);
         }
     }
 
-    (node_cell(pos), 0.0)
+    match best {
+        Some((d, x, y)) => (Cell { x, y }, d),
+        None => (node_cell(pos), 0.0),
+    }
 }
 
 /// The cell a node occupies.
@@ -481,7 +507,8 @@ mod tests {
     // in-crate instead of from outside.
 
     use super::super::entity::{
-        BuildingKind, EntityKind, OWNER_PLAYER, RTS_UNIT_BODY_RADIUS_CELLS,
+        BuildingKind, EntityKind, OWNER_NEUTRAL, OWNER_PLAYER, RTS_UNIT_BODY_RADIUS_CELLS,
+        ResourceKind,
     };
     use super::super::static_nav::StaticNav;
 
@@ -521,6 +548,65 @@ mod tests {
             "approach cell {a:?} must lie outside the footprint"
         );
         assert!(!nav.center_blocked()[(a.x + a.y * W) as usize]);
+    }
+
+    /// A target whose only body-legal centres are **off-axis** must still get
+    /// an approach cell, and a near one.
+    ///
+    /// Four small plugs, one on each cardinal side of a node at `(20, 20)`,
+    /// inflate just far enough to blank every cell the old four-ray scan ever
+    /// looked at, out to ring radius 10 — while the diagonal quadrants stay
+    /// wide open one ring out. The narrow scan walked six rings past a legal
+    /// centre 3.8 cells from the node to land on one 9.5 cells away; on a
+    /// hauler's return leg an answer that far out (or none at all) is what
+    /// strands a loaded worker.
+    #[test]
+    fn the_approach_cell_finds_an_off_axis_only_target() {
+        let mut store = EntityStore::new();
+        let id = store
+            .spawn(
+                EntityKind::Node(ResourceKind::Crystal),
+                OWNER_NEUTRAL,
+                [20.5, 20.5],
+            )
+            .expect("spawn node");
+        let mut solids = vec![false; (W * H) as usize];
+        // The node's own cell, as `StaticNav::new` would stamp it.
+        solids[(20 + 20 * W) as usize] = true;
+        // One plug per cardinal side, 7 cells out: a body's 3-cell clearance
+        // then covers every on-axis ring cell between the node and the plug.
+        for (x, y) in [(20u32, 13u32), (27, 20), (20, 27), (13, 20)] {
+            solids[(x + y * W) as usize] = true;
+        }
+        let nav = StaticNav::from_raw(W, H, solids, RTS_UNIT_BODY_RADIUS_CELLS);
+
+        // Every cell the four-ray scan would ever have considered, out past
+        // the plugs, really is illegal — otherwise this case proves nothing.
+        for r in 1..=10u32 {
+            for (x, y) in [(20, 20 - r), (20 + r, 20), (20, 20 + r), (20 - r, 20)] {
+                assert!(
+                    nav.center_blocked()[(x + y * W) as usize],
+                    "on-axis cell ({x}, {y}) at ring {r} must be illegal for this case"
+                );
+            }
+        }
+
+        let (cell, d) = entity_approach_cell(&nav, &store, id, UnitKind::Worker);
+        let (again, _) = entity_approach_cell(&nav, &store, id, UnitKind::Worker);
+        assert_eq!(cell, again, "the approach cell must be stable");
+        assert!(
+            cell.x != 20 && cell.y != 20,
+            "the answer must be an off-axis cell, got {cell:?}"
+        );
+        assert!(
+            !nav.center_blocked()[(cell.x + cell.y * W) as usize],
+            "the approach cell {cell:?} must be a legal body centre"
+        );
+        assert!(
+            d < 4.5,
+            "an off-axis cell one ring out is {d} cells from the node; the \
+             four-ray scan's own answer was 9.5"
+        );
     }
 
     #[test]
