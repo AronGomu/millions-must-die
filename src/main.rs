@@ -7,6 +7,7 @@ mod rts_input;
 mod rts_overlay;
 mod rts_run;
 mod rts_script;
+mod rts_settings;
 mod run;
 
 use std::path::PathBuf;
@@ -129,6 +130,7 @@ fn main() -> ExitCode {
                 frames,
                 inject_input,
                 inject_input_file,
+                settings_store: None,
             };
             if let Err(e) = rts_run::run(opts) {
                 eprintln!("rts failed: {e}");

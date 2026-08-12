@@ -8,7 +8,10 @@
 //! # stdout contract
 //!
 //! ```text
+//! rts: settings warning=<escaped>                                                   (d)
 //! rts: backend=<b> adapter=<a> view=<w>x<h> scenario=<path> (engine <v>)
+//! rts: settings mode=<m> confine_pointer=<bool> keyboard_pan=<n> edge_pan=<n> \
+//!      pause_on_focus_loss=<bool> master=<n> music=<n> voice=<n> sfx=<n>
 //! rts: frame0 tick=<t> hash=<64 hex> world=[<n>,<n>,<n>] overlay=<n> ui=[<n>,<n>]   (a)
 //! rts: offscreen draw ok (backend=<b>)                                              (a)
 //! rts: window <w>x<h> claimed; Esc quit, Space pause, F1 overlay, X cancel, ...      (b)
@@ -23,6 +26,11 @@
 //! - (a) absent when a scripted quit lands on frame 1.
 //! - (b) printed whenever a window was claimed.
 //! - (c) from [`crate::rts_overlay::format_rts_overlay`].
+//! - (d) printed only when persisted settings are missing/malformed/out of
+//!   range/unsupported schema and this run fell back to
+//!   [`crate::rts_settings::RtsSettings::default`]; absent on a clean load
+//!   and always absent under `SDL_VIDEODRIVER=offscreen` (settings lookup is
+//!   skipped entirely, so there is nothing to warn about).
 //!
 //! The `frame0` and `clean exit` lines are strictly `key=value` separated by
 //! single spaces, with no spaces inside a value.
@@ -52,6 +60,7 @@ use sdl3::mouse::MouseButton;
 use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
+use crate::rts_settings::{RtsSettings, SettingsStore, escape_warning};
 use crate::run::RunError;
 
 /// Frames rendered when neither `--frames` nor `MMD_RTS_FRAMES` is given and
@@ -67,6 +76,10 @@ pub struct RtsOptions {
     /// A script file, read with [`RtsScript::parse_file_text`]. Mutually
     /// exclusive with [`Self::inject_input`] at the clap layer.
     pub inject_input_file: Option<PathBuf>,
+    /// Internal/test injection seam only — never set by the clap surface.
+    /// When absent, an interactive run resolves
+    /// [`SettingsStore::pref_path`] itself.
+    pub settings_store: Option<SettingsStore>,
 }
 
 /// Per-frame interactive state the world does not own.
@@ -260,8 +273,52 @@ fn from_render(e: RenderError) -> RunError {
     }
 }
 
+/// Resolves validated settings once, before interactive window init.
+///
+/// An offscreen/deterministic run (`SDL_VIDEODRIVER=offscreen`) always uses
+/// [`RtsSettings::default`] and never resolves [`SettingsStore::pref_path`]
+/// (which creates the real per-user pref directory as a side effect of being
+/// called) — the hard isolation constraint this ticket exists to prove.
+fn load_settings(opts: &RtsOptions, offscreen_driver: bool) -> RtsSettings {
+    if offscreen_driver {
+        return RtsSettings::default();
+    }
+
+    let store = match opts.settings_store.clone() {
+        Some(store) => Ok(store),
+        None => SettingsStore::pref_path().map(SettingsStore::at),
+    };
+
+    match store {
+        Ok(store) => {
+            let loaded = store.load();
+            if let Some(warning) = loaded.warning {
+                println!("rts: settings warning={}", escape_warning(&warning));
+            }
+            loaded.value
+        }
+        Err(e) => {
+            println!(
+                "rts: settings warning={}",
+                escape_warning(&format!("pref path unavailable: {e}"))
+            );
+            RtsSettings::default()
+        }
+    }
+}
+
 /// Run the `rts` subcommand.
 pub fn run(opts: RtsOptions) -> Result<(), RunError> {
+    // Detected once, up front, and reused for both the settings lookup below
+    // and the later window-vs-offscreen fork: an offscreen/deterministic run
+    // must never resolve the real per-user pref path (`SettingsStore::pref_path`
+    // creates it as a side effect of being called), so this check has to gate
+    // the settings lookup, not just window creation.
+    let offscreen_driver = std::env::var_os("SDL_VIDEODRIVER")
+        .map(|v| v == "offscreen")
+        .unwrap_or(false);
+    let settings = load_settings(&opts, offscreen_driver);
+
     let root = workspace_root_or_cwd();
     let scenario_path = opts
         .scenario
@@ -308,6 +365,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         scenario_path.display(),
         mmd_engine::version()
     );
+    println!("{}", settings.debug_line());
 
     let mut session = RtsSession::default();
     let mut scratch = Scratch {
@@ -347,10 +405,6 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         fmt_counts(&frame0.ui_lens),
     );
     println!("rts: offscreen draw ok (backend={backend})");
-
-    let offscreen_driver = std::env::var_os("SDL_VIDEODRIVER")
-        .map(|v| v == "offscreen")
-        .unwrap_or(false);
 
     // Acquired before the window is claimed: every `?` between a claim and
     // the matching `release_window` would drop a still-claimed window,

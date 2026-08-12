@@ -855,7 +855,50 @@ fn the_exit_line_reports_every_counter() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Failure and CLI surface
+// 4. Settings isolation
+// ---------------------------------------------------------------------------
+
+/// Hard isolation constraint (T7): an offscreen run must never resolve,
+/// read, or write the real per-user settings path. `SDL_GetPrefPath`
+/// creates its directory as a side effect of being *called* at all
+/// (`src/rts_settings.rs`'s module doc), so this proves the call itself
+/// never happens under `SDL_VIDEODRIVER=offscreen` — not just that no file
+/// happens to land in it.
+#[test]
+fn offscreen_settings_run_does_not_touch_settings() {
+    let data_home = tmp_dir("offscreen_settings_run_does_not_touch_settings");
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "3"]);
+    cmd.env("SDL_VIDEODRIVER", "offscreen");
+    // Both env vars SDL's `SDL_GetPrefPath` may consult on this platform,
+    // pointed at one throwaway sentinel directory the assertion below owns.
+    cmd.env("XDG_DATA_HOME", &data_home);
+    cmd.env("HOME", &data_home);
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    let cli = run_to_completion(
+        cmd,
+        "XDG_DATA_HOME=<sentinel> HOME=<sentinel> rts --frames 3 (offscreen settings isolation)"
+            .to_string(),
+    );
+    cli.assert_success();
+
+    assert!(
+        !cli.combined().contains("rts: settings warning="),
+        "{cli}\noffscreen run must never look up settings, so it can never warn about them"
+    );
+
+    let entries: Vec<_> = std::fs::read_dir(&data_home)
+        .expect("read sentinel pref dir")
+        .collect();
+    assert!(
+        entries.is_empty(),
+        "{cli}\noffscreen run created something under the sentinel pref dir: {entries:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 5. Failure and CLI surface
 // ---------------------------------------------------------------------------
 
 /// `VK_DRIVER_FILES` pointed at a nonexistent ICD directory reliably yields

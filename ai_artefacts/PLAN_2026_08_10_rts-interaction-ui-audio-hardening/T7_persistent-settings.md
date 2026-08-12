@@ -74,13 +74,13 @@
 
 ## Impl steps
 
-- [ ] 1. Add `serde` root dep + module test skeleton.
-- [ ] 2. Write red model validation/default tests.
-- [ ] 3. Write red temp-dir load/save/recovery tests.
-- [ ] 4. Implement `WindowMode`, nested settings structs, `Default`, `validate`.
-- [ ] 5. Implement pref path + recoverable store protocol.
-- [ ] 6. Load settings in interactive RTS path; bypass in offscreen path.
-- [ ] 7. Add warning stdout contract + CLI no-I/O test.
+- [x] 1. Add `serde` root dep + module test skeleton.
+- [x] 2. Write red model validation/default tests.
+- [x] 3. Write red temp-dir load/save/recovery tests.
+- [x] 4. Implement `WindowMode`, nested settings structs, `Default`, `validate`.
+- [x] 5. Implement pref path + recoverable store protocol.
+- [x] 6. Load settings in interactive RTS path; bypass in offscreen path.
+- [x] 7. Add warning stdout contract + CLI no-I/O test.
 
 ## Outputs
 
@@ -92,9 +92,9 @@
 
 ## Validation
 
-- [ ] `cargo test -p millions_must_die --locked rts_settings`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract offscreen_settings`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: launch, create cfg via test helper, relaunch → loaded values printed in debug overlay
-- [ ] app functional: `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3`
-- [ ] commit msg draft: `feat(app): persist validated RTS settings outside deterministic runs`
+- [x] `cargo test -p millions_must_die --locked rts_settings`
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract offscreen_settings`
+- [x] `cargo check --workspace --all-targets --all-features --locked`
+- [x] manual check: launch, create cfg via test helper, relaunch → loaded values printed in debug overlay
+- [x] app functional: `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3`
+- [x] commit msg draft: `feat(app): persist validated RTS settings outside deterministic runs`

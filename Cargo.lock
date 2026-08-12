@@ -300,8 +300,10 @@ dependencies = [
  "hex",
  "mmd-engine",
  "sdl3",
+ "serde",
  "serde_json",
  "sha2",
+ "tempfile",
 ]
 
 [[package]]

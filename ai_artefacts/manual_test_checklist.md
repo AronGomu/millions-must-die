@@ -66,3 +66,11 @@
 - [ ] Walk that trapped worker out of the pocket (or cancel the site): confirm the site finishes normally on the following tick once its bodies can be moved clear.
 - [ ] Finish two buildings on nearly the same tick with workers standing between them: confirm no worker is left inside either finished footprint, and no two workers end up merged.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole gather → build Depot → produce Worker → build Barracks → produce Soldier flow still completes visibly, with the produced units appearing clear of every other body.
+
+## T7 persistent-settings
+
+- [ ] Launch `cargo run -- rts`, quit immediately, then inspect `${SDL pref path}/AronGomu/MillionsMustDie/settings-v1.json` (Linux: `~/.local/share/AronGomu/MillionsMustDie/settings-v1.json`): confirm nothing was created there yet — this slice only loads settings, T13 is the first slice that saves from a real edit.
+- [ ] Hand-write a `settings-v1.json` at that path with legal non-default values (e.g. `camera.keyboard_pan: 24`, `audio.master: 65`, `display.mode: "windowed1280x720"`) and launch `cargo run -- rts`: confirm the startup `rts: settings mode=... keyboard_pan=24 ... master=65 ...` line matches exactly what you wrote, with no `rts: settings warning=` line.
+- [ ] Corrupt that file (e.g. truncate it to `{`) and relaunch: confirm the run still starts cleanly, prints an `rts: settings warning=` line naming the file path, and the settings debug line falls back to the documented defaults (`mode=BorderlessDesktop confine_pointer=true keyboard_pan=48 edge_pan=48 pause_on_focus_loss=false master=80 music=35 voice=70 sfx=60`) rather than crashing or silently keeping stale values.
+- [ ] Set an out-of-range value by hand (e.g. `audio.master: 101`, or `camera.keyboard_pan: 50` which is not a multiple of 6) and relaunch: confirm the same warn-and-default behavior as the corrupt-file case.
+- [ ] Run `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` with a *malformed* settings file already on disk at the real pref path: confirm the offscreen run never prints an `rts: settings warning=` line and the file on disk is left untouched (byte-for-byte) — the offscreen path must never look at it at all.
