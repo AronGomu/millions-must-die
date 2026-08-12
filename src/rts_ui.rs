@@ -18,6 +18,7 @@ use mmd_engine::rts::{
     UnitKind, command_slots, hud_hit_test, minimap_projection, modal_hit_test,
 };
 
+use crate::rts_feedback::{AudioEvent, AudioSink, UiCue, effective_gains};
 use crate::rts_run::RtsSession;
 use crate::rts_settings::{RtsSettings, SettingsStore, WindowMode};
 use crate::rts_window::{self, ModeChangeOutcome, WindowOps};
@@ -250,6 +251,7 @@ pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: Hud
     match hit {
         HudHit::Gear => {
             session.ui.open_menu();
+            session.emit_audio(AudioEvent::Ui(UiCue::Menu));
         }
         HudHit::Minimap(point) => {
             let origin = [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]];
@@ -257,8 +259,10 @@ pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: Hud
             let projection = minimap_projection(world);
             if let Some(map_point) = projection.minimap_to_map(local) {
                 world.look_at_map_point(map_point);
+                session.emit_audio(AudioEvent::Ui(UiCue::Minimap));
             }
-            // Outside the map diamond: consumed, no move — per T12's spec.
+            // Outside the map diamond: consumed, no move, no cue — per T12's
+            // spec.
         }
         HudHit::SelectionIcon(id) => {
             if shift {
@@ -274,8 +278,11 @@ pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: Hud
                 && let Some(cmd) = slot.command
             {
                 execute_command(world, session, cmd);
+                session.emit_audio(AudioEvent::Ui(UiCue::CommandGrid));
             }
-            // Disabled/empty: consumed, no action — per T12's spec.
+            // Disabled/empty: consumed, no action, no cue — per T12's spec.
+            // The keyboard hotkey path never reaches here, so a hotkey never
+            // makes a pointer-click sound.
         }
         HudHit::Background => {}
     }
@@ -287,23 +294,26 @@ pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: Hud
 /// [`commit_setting_change`] — this function never touches disk or a window,
 /// so it stays usable from the scripted/offscreen path too.
 pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
-    let settings = &session.settings;
+    // Copied out rather than borrowed: the arms below emit audio through
+    // `session`, which needs the whole struct mutably.
+    let confine_pointer = session.settings.display.confine_pointer;
+    let pause_on_focus_loss = session.settings.gameplay.pause_on_focus_loss;
     let change = match hit {
         ModalHit::OpenSettings => {
             session.ui.open_settings();
+            session.emit_audio(AudioEvent::Ui(UiCue::Menu));
             None
         }
         ModalHit::Back => {
             session.ui.settings_back();
+            session.emit_audio(AudioEvent::Ui(UiCue::Menu));
             None
         }
         ModalHit::WindowMode(idx) => Some(SettingsChange::WindowMode(window_mode_from_index(idx))),
         ModalHit::KeyboardPan(v) => Some(SettingsChange::KeyboardPan(v)),
         ModalHit::EdgePan(v) => Some(SettingsChange::EdgePan(v)),
-        ModalHit::Confine => Some(SettingsChange::Confine(!settings.display.confine_pointer)),
-        ModalHit::Focus => Some(SettingsChange::PauseOnFocusLoss(
-            !settings.gameplay.pause_on_focus_loss,
-        )),
+        ModalHit::Confine => Some(SettingsChange::Confine(!confine_pointer)),
+        ModalHit::Focus => Some(SettingsChange::PauseOnFocusLoss(!pause_on_focus_loss)),
         ModalHit::Master(v) => Some(SettingsChange::Master(v)),
         ModalHit::Music(v) => Some(SettingsChange::Music(v)),
         ModalHit::Voice(v) => Some(SettingsChange::Voice(v)),
@@ -311,6 +321,10 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
         ModalHit::Consumed => None,
     };
     if let Some(change) = change {
+        // A control that accepted a new value is a successful, enabled
+        // pointer action — the cue belongs here, on the shared path both the
+        // live and the scripted click take, not on the live-only commit.
+        session.emit_audio(AudioEvent::Ui(UiCue::Settings));
         session.pending_setting_change = Some(change);
     }
 }
@@ -356,9 +370,11 @@ pub fn pack_hud(world: &RtsWorld, session: &RtsSession, frame: &mut mmd_engine::
 /// The transactional settings commit, `T13`'s hard contract:
 /// 1. clone current settings, apply the change, validate it;
 /// 2. apply the runtime adapter (window mode / pointer confinement; camera
-///    speeds always apply in-memory; the audio hook is a no-op until `T16`);
-/// 3. save through the `T7` store;
-/// 4. publish the candidate into `*settings` only once every prior step
+///    speeds always apply in-memory);
+/// 3. push the candidate's effective gains at the sink (`T15`), so a volume
+///    edit is heard immediately rather than at the next restart;
+/// 4. save through the `T7` store;
+/// 5. publish the candidate into `*settings` only once every prior step
 ///    succeeded.
 ///
 /// `window` is `None` for an offscreen/headless run — window-mode and
@@ -368,16 +384,17 @@ pub fn pack_hud(world: &RtsWorld, session: &RtsSession, frame: &mut mmd_engine::
 /// then still applies runtime + publishes in-memory, but cannot persist —
 /// this is the same degraded mode `load_settings` already warns about.
 ///
-/// Any runtime or save failure restores the old runtime values (window mode
-/// rolls back through [`rts_window::transition_window_mode`]'s own rollback,
-/// confinement is re-applied directly) and returns the failure reason —
-/// `*settings` is left untouched, and the caller is expected to show
-/// `SETTINGS NOT SAVED: <reason>`.
+/// Any runtime, gain or save failure restores the old runtime values (window
+/// mode rolls back through [`rts_window::transition_window_mode`]'s own
+/// rollback, confinement is re-applied directly, gains are re-pushed at the
+/// old value) and returns the failure reason — `*settings` is left untouched,
+/// and the caller is expected to show `SETTINGS NOT SAVED: <reason>`.
 pub fn commit_setting_change<W: WindowOps>(
     world: &mut RtsWorld,
     mut window: Option<&mut W>,
     store: Option<&SettingsStore>,
     settings: &mut RtsSettings,
+    audio: &mut dyn AudioSink,
     change: SettingsChange,
 ) -> Result<(), String> {
     let old = settings.clone();
@@ -389,12 +406,19 @@ pub fn commit_setting_change<W: WindowOps>(
 
     apply_runtime(window.as_deref_mut(), &old, &candidate, change)?;
 
+    if let Err(e) = audio.set_gains(effective_gains(&candidate.audio)) {
+        let _ = apply_runtime(window, &candidate, &old, change);
+        return Err(format!("audio gain failed: {e}"));
+    }
+
     if let Some(store) = store
         && let Err(e) = store.save(&candidate)
     {
         // Runtime already moved to the candidate's values — roll it back to
         // the old ones before reporting the failure, so a failed save never
-        // leaves the window in a state the (unsaved) config disagrees with.
+        // leaves the window (or the mixer) in a state the (unsaved) config
+        // disagrees with.
+        let _ = audio.set_gains(effective_gains(&old.audio));
         let _ = apply_runtime(window, &candidate, &old, change);
         return Err(format!("save failed: {e}"));
     }
@@ -438,6 +462,7 @@ fn apply_runtime<W: WindowOps>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rts_feedback::FakeAudioSink;
 
     #[test]
     fn default_pointer_owner_is_none() {
@@ -655,12 +680,14 @@ mod tests {
         let store = SettingsStore::at(dir.path().join("settings-v1.json"));
         let mut settings = RtsSettings::default();
         let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
 
         let result = commit_setting_change::<FakeWindow>(
             &mut world,
             None,
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::Master(55),
         );
         assert!(result.is_ok(), "{result:?}");
@@ -677,6 +704,7 @@ mod tests {
             None,
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::Sfx(45),
         )
         .expect("second legal change commits");
@@ -704,6 +732,7 @@ mod tests {
         let store = SettingsStore::at(path);
         let mut settings = RtsSettings::default();
         let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
         let mut window = FakeWindow::default();
 
         let result = commit_setting_change(
@@ -711,6 +740,7 @@ mod tests {
             Some(&mut window),
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::Confine(false),
         );
 
@@ -732,6 +762,7 @@ mod tests {
     fn window_mode_change_uses_safe_transition() {
         let mut settings = RtsSettings::default();
         let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
         let dir = tempfile::tempdir().expect("tempdir");
         let store = SettingsStore::at(dir.path().join("settings-v1.json"));
         let mut window = FakeWindow::default();
@@ -741,6 +772,7 @@ mod tests {
             Some(&mut window),
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::WindowMode(WindowMode::Windowed1280x720),
         );
 
@@ -768,6 +800,7 @@ mod tests {
         // before `apply_runtime`/`save` run at all.
         let mut settings = RtsSettings::default();
         let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
         let dir = tempfile::tempdir().expect("tempdir");
         let store = SettingsStore::at(dir.path().join("settings-v1.json"));
         let mut window = FakeWindow::default();
@@ -777,6 +810,7 @@ mod tests {
             Some(&mut window),
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::KeyboardPan(97), // > PAN_MAX, not a legal step
         );
 
@@ -795,12 +829,14 @@ mod tests {
         let store = SettingsStore::at(dir.path().join("settings-v1.json"));
         let mut settings = RtsSettings::default();
         let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
 
         let result = commit_setting_change::<FakeWindow>(
             &mut world,
             None,
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::WindowMode(WindowMode::Windowed1280x720),
         );
 
@@ -818,17 +854,106 @@ mod tests {
         let store = SettingsStore::at(dir.path().join("settings-v1.json"));
         let mut settings = RtsSettings::default();
         let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
 
         commit_setting_change::<FakeWindow>(
             &mut world,
             None,
             Some(&store),
             &mut settings,
+            &mut audio,
             SettingsChange::KeyboardPan(24),
         )
         .expect("legal change commits");
 
         assert_eq!(settings.camera.keyboard_pan, 24);
+    }
+
+    // -- Audio gain hook (T15) -------------------------------------------
+
+    #[test]
+    fn a_committed_volume_edit_pushes_new_gains() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SettingsStore::at(dir.path().join("settings-v1.json"));
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+
+        commit_setting_change::<FakeWindow>(
+            &mut world,
+            None,
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::Master(50),
+        )
+        .expect("a legal volume edit commits");
+
+        assert_eq!(audio.gain_calls(), 1, "one gain push per commit");
+        assert_eq!(
+            audio.gains(),
+            effective_gains(&settings.audio),
+            "the sink must hear the committed value, not the old one"
+        );
+        assert_eq!(audio.gains().music_basis_points, 50 * 35);
+    }
+
+    #[test]
+    fn a_failed_gain_push_rolls_back_like_a_failed_save() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings-v1.json");
+        let store = SettingsStore::at(path.clone());
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut window = FakeWindow::default();
+        let mut audio = FakeAudioSink::new();
+        audio.set_fail_set_gains(true);
+
+        let result = commit_setting_change(
+            &mut world,
+            Some(&mut window),
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::Confine(false),
+        );
+
+        let reason = result.expect_err("a failing gain push must fail the commit");
+        assert!(reason.contains("audio gain failed"), "{reason}");
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+        assert!(window.grabbed, "runtime must roll back to the old value");
+        assert!(!path.exists(), "a failed gain push must never reach disk");
+    }
+
+    #[test]
+    fn a_failed_save_restores_the_old_gains() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings-v1.json");
+        // Same trick as `failed_save_rolls_back_runtime_and_cfg`: a
+        // directory in place of the target makes the final rename fail.
+        std::fs::create_dir(&path).expect("seed a directory in place of the file");
+        let store = SettingsStore::at(path);
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        let old_gains = effective_gains(&settings.audio);
+
+        let result = commit_setting_change::<FakeWindow>(
+            &mut world,
+            None,
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::Music(5),
+        );
+
+        assert!(result.is_err(), "{result:?}");
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+        assert_eq!(
+            audio.gains(),
+            old_gains,
+            "a failed save must put the old gains back"
+        );
     }
 
     // Keeps mmd-engine's duplicated pan/volume bounds honest against T7's

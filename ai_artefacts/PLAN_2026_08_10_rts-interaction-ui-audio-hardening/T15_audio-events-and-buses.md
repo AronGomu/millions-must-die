@@ -72,14 +72,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add `rts_feedback.rs` tests + fixed fake sink.
-- [ ] 2. Implement volume validation conversion/effective basis points.
-- [ ] 3. Add selection before/after delta derivation.
-- [ ] 4. Convert T2/T5 receipts to sorted capped voice batch + reject.
-- [ ] 5. Emit UI events from T12/T13 accepted pointer actions.
-- [ ] 6. Queue one StartMusic + maintain hook each rendered frame.
-- [ ] 7. Connect settings gain hook + rollback error.
-- [ ] 8. Add offscreen trace counters to test observation seam; do not add audio to world hash.
+- [x] 1. Add `rts_feedback.rs` tests + fixed fake sink. — validate: `src/rts_feedback.rs` exists with the Requirements types; `cargo test -p millions_must_die --locked rts_feedback` runs the new module's tests (red first, then green); `FakeAudioSink` capacity is unchanged after a full trace (asserted in a test).
+- [x] 2. Implement volume validation conversion/effective basis points. — validate: `default_effective_gains_are_exact` passes (80/35/70/60 → 2800/5600/4800).
+- [x] 3. Add selection before/after delta derivation. — validate: `selection_cues_only_new_player_units` + `selection_batch_is_sorted_and_capped` pass.
+- [x] 4. Convert T2/T5 receipts to sorted capped voice batch + reject. — validate: `mixed_resource_order_uses_one_global_cap`, `partial_success_emits_voice_and_one_reject`, `total_rejection_emits_one_reject`, `accepted_overflow_is_not_rejection` pass.
+- [x] 5. Emit UI events from T12/T13 accepted pointer actions. — validate: `ui_actions_map_to_sfx_sources` + `disabled_or_keyboard_action_has_no_ui_sfx` pass.
+- [x] 6. Queue one StartMusic + maintain hook each rendered frame. — validate: `music_starts_once_and_survives_focus` passes and an offscreen CLI run reports `music=1` on the `rts: audio` line.
+- [x] 7. Connect settings gain hook + rollback error. — validate: a `rts_ui` test proves a committed volume edit calls `set_gains` with the new basis points and that a failed save/gain hook leaves the old gains in place.
+- [x] 8. Add offscreen trace counters to test observation seam; do not add audio to world hash. — validate: `cargo test -p millions_must_die --locked --test rts_cli_contract audio_events_` passes and `audio_events_do_not_change_world_hash` proves fake vs null sink hash equality.
 
 ## Outputs
 
@@ -91,9 +91,9 @@
 
 ## Validation
 
-- [ ] `cargo test -p millions_must_die --locked rts_feedback`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract audio_events_`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] app functional: offscreen script emits StartMusic once; world hash matches null-sink run
-- [ ] manual check: none; no physical playback yet
-- [ ] commit msg draft: `feat(app): derive deterministic RTS audio feedback from accepted actions`
+- [x] `cargo test -p millions_must_die --locked rts_feedback` — validate: command exits 0, every Test-plan row has a passing case.
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract audio_events_` — validate: command exits 0 with at least one `audio_events_` case run.
+- [x] `cargo check --workspace --all-targets --all-features --locked` — validate: command exits 0.
+- [x] app functional: offscreen script emits StartMusic once; world hash matches null-sink run — validate: `rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` prints `music=1` and the same `hash=` as the pre-ticket binary on the same script.
+- [x] manual check: none; no physical playback yet — validate: manual checklist entry states no audible check exists yet (T16 owns playback).
+- [x] commit msg draft: `feat(app): derive deterministic RTS audio feedback from accepted actions` — validate: committed subject line matches.

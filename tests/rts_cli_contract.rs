@@ -1403,3 +1403,275 @@ fn menu_modal_consumes_clicks_outside_its_own_controls() {
          selection"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 8. Deterministic audio events and buses (T15)
+// ---------------------------------------------------------------------------
+
+impl Cli {
+    /// The `rts: audio ...` line — the semantic audio trace's counters.
+    fn audio_line(&self) -> &str {
+        self.stdout
+            .lines()
+            .find(|l| l.starts_with("rts: audio "))
+            .unwrap_or_else(|| panic!("{self}\nno `rts: audio` line"))
+    }
+
+    fn audio_field(&self, key: &str) -> u32 {
+        let raw = self.field(self.audio_line(), key);
+        raw.parse()
+            .unwrap_or_else(|_| panic!("{self}\n`{key}={raw}` is not a count"))
+    }
+}
+
+/// One `StartMusic` per session, exact default gains, and silence for a run
+/// that never acts — the whole no-input baseline.
+#[test]
+fn audio_events_start_music_once_with_exact_default_gains() {
+    let Some(cli) = or_skip(
+        "audio_events_start_music_once_with_exact_default_gains",
+        rts(&["--frames", "10"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.stdout
+            .lines()
+            .filter(|l| l.starts_with("rts: audio "))
+            .count(),
+        1,
+        "{cli}\nexactly one audio line per run"
+    );
+    assert_eq!(cli.audio_field("music"), 1, "{cli}\nmusic starts once");
+    assert_eq!(cli.audio_field("voice"), 0, "{cli}");
+    assert_eq!(cli.audio_field("cues"), 0, "{cli}");
+    assert_eq!(cli.audio_field("reject"), 0, "{cli}");
+    assert_eq!(cli.audio_field("ui"), 0, "{cli}");
+    assert_eq!(
+        cli.field(cli.audio_line(), "gains"),
+        "2800/5600/4800",
+        "{cli}\ndefault 80/35/70/60 must resolve to exact basis points"
+    );
+}
+
+/// The menu and a focus-losing pause never restart or stop music.
+#[test]
+fn audio_events_music_survives_the_pause_menu() {
+    let Some(cli) = or_skip(
+        "audio_events_music_survives_the_pause_menu",
+        rts(&[
+            "--frames",
+            "8",
+            "--inject-input",
+            "2:key:esc;4:key:space;6:key:esc",
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.audio_field("music"),
+        1,
+        "{cli}\nstill exactly one start"
+    );
+}
+
+/// A selection voices only the units it newly selected; re-selecting the
+/// same units again is silence.
+#[test]
+fn audio_events_voice_new_selection_only_once() {
+    let (a, b) = spawn_group_drag();
+    let script = format!("1:drag:{a},{b};4:drag:{a},{b}");
+    let Some(cli) = or_skip(
+        "audio_events_voice_new_selection_only_once",
+        rts(&["--frames", "8", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("selected"), "6", "{cli}");
+    assert_eq!(
+        cli.audio_field("voice"),
+        1,
+        "{cli}\nthe second, identical drag selects nothing new"
+    );
+    assert_eq!(
+        cli.audio_field("cues"),
+        6,
+        "{cli}\nsix newly selected workers, under the eight-cue cap"
+    );
+    assert_eq!(cli.audio_field("reject"), 0, "{cli}");
+}
+
+/// An accepted context order voices one capped batch and no reject; the
+/// same click with nothing selected is fully silent.
+#[test]
+fn audio_events_order_batch_is_capped_and_rejectless() {
+    let (a, b) = spawn_group_drag();
+    let dest = fmt_xy(far_move_target_screen());
+    let script = format!("1:drag:{a},{b};4:rclick:{dest}");
+    let Some(ordered) = or_skip(
+        "audio_events_order_batch_is_capped_and_rejectless",
+        rts(&["--frames", "8", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    let Some(unselected) = or_skip(
+        "audio_events_order_batch_is_capped_and_rejectless",
+        rts(&[
+            "--frames",
+            "8",
+            "--inject-input",
+            &format!("4:rclick:{dest}"),
+        ]),
+    ) else {
+        return;
+    };
+    ordered.assert_success();
+    unselected.assert_success();
+
+    assert_eq!(
+        ordered.audio_field("voice"),
+        2,
+        "{ordered}\none selection batch plus one order batch"
+    );
+    assert_eq!(
+        ordered.audio_field("cues"),
+        12,
+        "{ordered}\nsix selected plus six ordered, both under the cap"
+    );
+    assert_eq!(
+        ordered.audio_field("reject"),
+        0,
+        "{ordered}\nevery selected worker accepted the move"
+    );
+
+    assert_eq!(
+        unselected.audio_field("voice"),
+        0,
+        "{unselected}\nan empty selection voices nothing"
+    );
+    assert_eq!(
+        unselected.audio_field("reject"),
+        0,
+        "{unselected}\nan empty selection is not a rejection"
+    );
+}
+
+/// An enabled command card is one UI SFX; the same command from its
+/// keyboard hotkey is silent, and a disabled card is silent too.
+#[test]
+fn audio_events_only_pointer_ui_actions_click() {
+    let p = fmt_xy(worker_screen());
+    let slot = fmt_xy(command_slot0_screen());
+    let card = format!("1:move:{p};2:lclick:{p};4:lclick:{slot}");
+    let hotkey = format!("1:move:{p};2:lclick:{p};4:key:q");
+    let disabled = format!("4:lclick:{slot}");
+
+    let Some(card) = or_skip(
+        "audio_events_only_pointer_ui_actions_click",
+        rts(&["--frames", "8", "--inject-input", &card]),
+    ) else {
+        return;
+    };
+    let Some(hotkey) = or_skip(
+        "audio_events_only_pointer_ui_actions_click",
+        rts(&["--frames", "8", "--inject-input", &hotkey]),
+    ) else {
+        return;
+    };
+    let Some(disabled) = or_skip(
+        "audio_events_only_pointer_ui_actions_click",
+        rts(&["--frames", "8", "--inject-input", &disabled]),
+    ) else {
+        return;
+    };
+    card.assert_success();
+    hotkey.assert_success();
+    disabled.assert_success();
+
+    assert_eq!(
+        card.audio_field("ui"),
+        1,
+        "{card}\nan enabled command card clicks exactly once"
+    );
+    assert_eq!(
+        hotkey.audio_field("ui"),
+        0,
+        "{hotkey}\na keyboard hotkey never makes a pointer-click sound"
+    );
+    assert_eq!(
+        disabled.audio_field("ui"),
+        0,
+        "{disabled}\na disabled card is consumed silently"
+    );
+    // The two paths still drive the same world (T12's shared executor).
+    assert_eq!(card.final_hash(), hotkey.final_hash(), "{card}\n{hotkey}");
+}
+
+/// The gear and a valid minimap recentre each click once; a minimap click
+/// outside the map diamond is consumed silently.
+#[test]
+fn audio_events_map_gear_and_minimap_sources() {
+    let gear = fmt_xy(gear_click_screen());
+    let minimap = fmt_xy(minimap_click_screen());
+    // One pixel inside the minimap's map box (`MINIMAP_MAP` starts at
+    // `[32, 872]`), which is a *corner* of that box and so outside the map
+    // diamond drawn in it.
+    let corner = fmt_xy([33.0, 873.0]);
+    let script = format!("2:lclick:{minimap};3:lclick:{corner};4:lclick:{gear}");
+    let Some(cli) = or_skip(
+        "audio_events_map_gear_and_minimap_sources",
+        rts(&["--frames", "8", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.audio_field("ui"),
+        2,
+        "{cli}\nminimap recentre + gear, but not the off-diamond corner"
+    );
+    assert_eq!(
+        cli.exit_field("paused"),
+        "true",
+        "{cli}\nthe gear opened the menu"
+    );
+}
+
+/// Audio derivation is a read-only observer of the shared action path: the
+/// same scripted actions must leave exactly the same world state hash as a
+/// run whose events go nowhere. Proven here against the *emitting* run's own
+/// exit hash, which the unit test `audio_events_do_not_change_world_hash`
+/// pins against a null sink in-process.
+#[test]
+fn audio_events_keep_the_world_hash_stable() {
+    let (a, b) = spawn_group_drag();
+    let dest = fmt_xy(far_move_target_screen());
+    let script = format!("1:drag:{a},{b};4:rclick:{dest}");
+    let Some(first) = or_skip(
+        "audio_events_keep_the_world_hash_stable",
+        rts(&["--frames", "60", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    let Some(second) = or_skip(
+        "audio_events_keep_the_world_hash_stable",
+        rts(&["--frames", "60", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    first.assert_success();
+    second.assert_success();
+    assert_eq!(
+        first.final_hash(),
+        second.final_hash(),
+        "{first}\n{second}\nemitting audio must stay deterministic"
+    );
+    assert_eq!(
+        first.audio_line(),
+        second.audio_line(),
+        "{first}\n{second}\nthe same script must hear exactly the same events"
+    );
+}

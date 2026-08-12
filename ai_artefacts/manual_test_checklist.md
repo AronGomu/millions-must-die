@@ -158,3 +158,14 @@
 - [ ] Open `music_placeholder.wav` in any PCM-capable player/tool (e.g. `ffprobe`): confirm 48,000 Hz, 16-bit, stereo, ~8s duration, and that it loops without an audible click (first/last sample are silence by construction).
 - [ ] Play each `voice_*.wav`/`ui_click.wav`: confirm each is a short (60-180ms) clean tone with an audible fade-in/out, not a click/pop, and that no two cues sound identical.
 - [ ] Read `assets/audio/README.md`: confirm it documents the generated provenance, the WAV replacement contract (source/license/attribution/checksum), and contains no StarCraft/Blizzard/Terran audio file or URL — only the negative statement disclaiming them.
+
+## T15 audio-events-and-buses
+
+- [ ] No audible check exists yet: `T15` derives semantic audio events only, and every run (interactive included) still uses the fixed fake sink, so nothing is played and no audio device is ever opened. Physical playback arrives with `T16`; re-run this section then.
+- [ ] Launch `cargo run -- rts`, play for a few seconds (select units, right-click to move/gather, click a command card, click the minimap, open the gear menu), quit, and read the `rts: audio ...` line printed just above `rts: clean exit`: confirm `music=1`, that `voice`/`cues` grew with the selections and orders you actually made, that `ui` grew by exactly one per pointer click on the gear/menu/settings control/command card/valid minimap point, and `gains=2800/5600/4800` for default volumes.
+- [ ] Repeat a selection you already have selected (drag the same box twice, or click a unit that is already the whole selection): confirm `cues` does not grow the second time — only newly selected units voice.
+- [ ] Select more than eight units and give them one move order: confirm `cues` grows by at most 8 for that order and `reject` stays at 0 — the cap is not a rejection.
+- [ ] Right-click somewhere no selected unit can take the order (e.g. a build site with only soldiers selected, or a target with no formation space): confirm `reject` grows by exactly one for that click, not one per unit.
+- [ ] Press a build/produce hotkey (`Q`/`W`/`E`/`A`/`S`) instead of clicking its card: confirm `ui` does not grow — keyboard actions never make a pointer-click sound.
+- [ ] Open Settings, drag a volume slider, then quit and relaunch: confirm the new `gains=` values on the `rts: audio` line match `master% * bus%` for the values shown in the settings panel (e.g. master 50 / music 35 → `1750`).
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) twice: confirm both runs print an identical `rts: audio` line and an identical `hash=` on the exit line.

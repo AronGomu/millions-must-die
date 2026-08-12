@@ -17,6 +17,7 @@
 //! rts: window <w>x<h> claimed; Esc quit, Space pause, F1 overlay, X cancel, ...      (b)
 //! <one HUD line per frame while the overlay is on>                                  (c)
 //! rts: released window                                                              (b)
+//! rts: audio music=<n> voice=<n> cues=<n> reject=<n> ui=<n> gains=<m>/<v>/<s>       (e)
 //! rts: clean exit mode=<offscreen|window> backend=<b> tick=<t> frames=<n> \
 //!      hash=<64 hex> quit=<bool> paused=<bool> crystal=<n> gas=<n> \
 //!      supply=<used>/<cap> units=<n> buildings=<n> nodes=<n> selected=<n> \
@@ -31,6 +32,12 @@
 //!   [`crate::rts_settings::RtsSettings::default`]; absent on a clean load
 //!   and always absent under `SDL_VIDEODRIVER=offscreen` (settings lookup is
 //!   skipped entirely, so there is nothing to warn about).
+//! - (e) the deterministic semantic audio trace (`T15`): one `StartMusic`
+//!   per session, one `voice` batch per action that voiced anything (`cues`
+//!   counts the individual unit cues inside them), one `reject` per refused
+//!   action, one `ui` per successful enabled pointer activation, and the
+//!   effective per-bus gains in basis points. No physical device is ever
+//!   opened by this line's sink.
 //!
 //! The `frame0` and `clean exit` lines are strictly `key=value` separated by
 //! single spaces, with no spaces inside a value.
@@ -49,14 +56,18 @@ use mmd_engine::render::{
     RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
-    DragBox, EntityId, EntityKind, OWNER_PLAYER, OrderReceiptBuffer, Placement, RtsFrame, RtsWorld,
-    RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame,
+    DragBox, EntityId, EntityKind, MAX_SELECTION, OWNER_PLAYER, OrderReceiptBuffer, Placement,
+    RtsFrame, RtsWorld, RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Scancode;
 use sdl3::mouse::MouseButton;
 
+use crate::rts_feedback::{
+    AudioBus, AudioCounters, AudioEvent, AudioSink, FakeAudioSink, effective_gains, order_cues,
+    reject_cue, selection_cues, snapshot_selected_units,
+};
 use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
@@ -110,10 +121,33 @@ pub(crate) struct RtsSession {
     /// Armed by `CommandId::SetRally`: the building whose rally point the
     /// *next* world left-click (not one over the HUD) sets.
     pub(crate) pending_rally: Option<EntityId>,
+    /// Where every derived [`AudioEvent`] goes (`T15`). Established once at
+    /// startup; the scripted and live paths share it, so the two cannot emit
+    /// different sound for the same action. Never a physical device in an
+    /// offscreen run — `T16` owns the SDL sink.
+    pub(crate) audio: Box<dyn AudioSink>,
+    /// Sink-independent tally of what this run emitted, reported on the
+    /// `rts: audio` line so a headless run can be asserted against.
+    pub(crate) audio_counters: AudioCounters,
+    /// Guards the one-per-session `StartMusic`.
+    music_started: bool,
+    /// Fixed scratch for the selection delta: the selected player units
+    /// before and after one pointer action. Reserved to the selection's own
+    /// cap, so a delta allocates nothing.
+    selection_before: Vec<EntityId>,
+    selection_after: Vec<EntityId>,
 }
 
 impl Default for RtsSession {
     fn default() -> Self {
+        Self::with_sink(Box::new(FakeAudioSink::new()))
+    }
+}
+
+impl RtsSession {
+    /// A session wired to `audio`. The only constructor: the sink is
+    /// established once, at startup, and never swapped mid-run.
+    pub(crate) fn with_sink(audio: Box<dyn AudioSink>) -> Self {
         Self {
             cursor: [0.0, 0.0],
             press: None,
@@ -126,7 +160,49 @@ impl Default for RtsSession {
             quit: false,
             receipts: OrderReceiptBuffer::new(),
             pending_rally: None,
+            audio,
+            audio_counters: AudioCounters::default(),
+            music_started: false,
+            selection_before: Vec::with_capacity(MAX_SELECTION),
+            selection_after: Vec::with_capacity(MAX_SELECTION),
         }
+    }
+
+    /// Count and forward one derived event. A sink failure is reported and
+    /// dropped here; `T16` owns the interactive fatal-exit policy.
+    pub(crate) fn emit_audio(&mut self, event: AudioEvent) {
+        self.audio_counters.record(&event);
+        if let Err(e) = self.audio.emit(event) {
+            eprintln!("rts: audio event failed ({e})");
+        }
+    }
+
+    /// The one music start of this session. Idempotent: nothing — menu,
+    /// focus loss, a second call — ever restarts or stops it.
+    pub(crate) fn start_music(&mut self) {
+        if self.music_started {
+            return;
+        }
+        self.music_started = true;
+        self.emit_audio(AudioEvent::StartMusic);
+    }
+
+    /// Push the current effective gains at the sink.
+    fn publish_gains(&mut self) {
+        let gains = effective_gains(&self.settings.audio);
+        if let Err(e) = self.audio.set_gains(gains) {
+            eprintln!("rts: audio gain update failed ({e})");
+        }
+    }
+}
+
+#[cfg(test)]
+impl RtsSession {
+    /// A session plus a handle on the recording sink it was built with, for
+    /// app unit tests.
+    pub(crate) fn for_test() -> (Self, crate::rts_feedback::FakeSinkHandle) {
+        let handle = crate::rts_feedback::FakeSinkHandle::new();
+        (Self::with_sink(handle.boxed()), handle)
     }
 }
 
@@ -166,9 +242,25 @@ fn find_builder(world: &RtsWorld) -> Option<EntityId> {
     None
 }
 
+/// Snapshot the selected player units before a selection-capable action.
+fn selection_snapshot(world: &RtsWorld, session: &mut RtsSession) {
+    snapshot_selected_units(world, &mut session.selection_before);
+}
+
+/// Voice whatever that action newly selected (`T15`): the sorted set
+/// difference against [`selection_snapshot`]'s snapshot, capped globally.
+fn emit_selection_cues(world: &RtsWorld, session: &mut RtsSession) {
+    snapshot_selected_units(world, &mut session.selection_after);
+    let batch = selection_cues(&session.selection_before, &session.selection_after);
+    if let Some(batch) = batch {
+        session.emit_audio(AudioEvent::Voice(batch));
+    }
+}
+
 /// Apply one [`RtsCommand`] to `world`/`session`. Shared by the live SDL path
-/// and the scripted path, so the two cannot drift.
-fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
+/// and the scripted path, so the two cannot drift — including the audio
+/// events derived from each command's own receipts (`T15`).
+pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
     match cmd {
         RtsCommand::Quit => session.quit = true,
         RtsCommand::Escape => session.ui.handle_escape(),
@@ -195,6 +287,7 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             world.set_edge_pan_dir(edge);
         }
         RtsCommand::LeftClick(p) => {
+            selection_snapshot(world, session);
             // An open modal owns every point first (`T13`) — even outside
             // its own controls; then the HUD owns any click inside its own
             // chrome — neither ever falls through to placement/select/rally,
@@ -226,8 +319,10 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
                 let view = world.iso_view();
                 world.click_select(&view, p);
             }
+            emit_selection_cues(world, session);
         }
         RtsCommand::ShiftClick(p) => {
+            selection_snapshot(world, session);
             // A shift-click never confirms a placement, and an open
             // modal/the HUD still own their own chrome first.
             let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
@@ -239,8 +334,10 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
                 let view = world.iso_view();
                 world.shift_click_select(&view, p);
             }
+            emit_selection_cues(world, session);
         }
         RtsCommand::Drag(a, b) => {
+            selection_snapshot(world, session);
             // A drag that started on a modal/the HUD is consumed, not a box
             // select — none of those have a drag gesture of their own.
             if matches!(
@@ -250,6 +347,7 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
                 let view = world.iso_view();
                 world.box_select_into_selection(&view, a, b);
             }
+            emit_selection_cues(world, session);
         }
         RtsCommand::RightClick(p) => {
             let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
@@ -262,7 +360,17 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
                 world.cancel_placement();
             } else {
                 let view = world.iso_view();
-                let _ = world.issue_context_order_at(&view, p, &mut session.receipts);
+                let result = world.issue_context_order_at(&view, p, &mut session.receipts);
+                // One batch for every accepted order and at most one reject
+                // for the whole action — accepted overflow past the cap is a
+                // cap, not a rejection.
+                let batch = order_cues(session.receipts.as_slice());
+                if let Some(batch) = batch {
+                    session.emit_audio(AudioEvent::Voice(batch));
+                }
+                if let Some(event) = reject_cue(&result) {
+                    session.emit_audio(event);
+                }
             }
         }
     }
@@ -422,6 +530,11 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         settings: settings.clone(),
         ..RtsSession::default()
     };
+    // Gains before the first event, and the one music start of this session
+    // before frame 1 — music then runs logically forever: nothing (menu,
+    // pause, focus loss, window loss) ever stops it.
+    session.publish_gains();
+    session.start_music();
     let mut scratch = Scratch {
         frame_buf: RtsFrame::new(),
         cmd_buf: Vec::with_capacity(8),
@@ -686,6 +799,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                                     Some(&mut ops),
                                     settings_store.as_ref(),
                                     &mut session.settings,
+                                    session.audio.as_mut(),
                                     change,
                                 )
                             };
@@ -826,6 +940,12 @@ where
 
     draw(frame_buf.scene())?;
 
+    // Per-rendered-frame sink upkeep (music refill in `T16`); never emits,
+    // so it cannot change what a run heard.
+    if let Err(e) = session.audio.maintain() {
+        eprintln!("rts: audio maintain failed ({e})");
+    }
+
     let hash = world.state_hash();
     if frame == 1 {
         state.first_hash = hash;
@@ -897,6 +1017,20 @@ fn finish(
             state.expected_ticks
         )));
     }
+
+    let counters = session.audio_counters;
+    let gains = effective_gains(&session.settings.audio);
+    println!(
+        "rts: audio music={} voice={} cues={} reject={} ui={} gains={}/{}/{}",
+        counters.music,
+        counters.voice,
+        counters.cues,
+        counters.reject,
+        counters.ui,
+        gains.for_bus(AudioBus::Music),
+        gains.for_bus(AudioBus::Voice),
+        gains.for_bus(AudioBus::Sfx),
+    );
 
     let res = world.resources();
     let supply = world.supply();
