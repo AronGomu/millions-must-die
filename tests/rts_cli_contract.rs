@@ -607,6 +607,30 @@ fn a_click_selects_a_worker() {
 }
 
 #[test]
+fn script_coordinates_remain_logical() {
+    // T8 routes *live* SDL mouse events through `DisplayViewport::map_pointer`
+    // before they reach `RtsCommand`. Scripted `--inject-input` commands never
+    // go near that path — `RtsScript` builds `RtsCommand`s straight from the
+    // coordinates a script names, offscreen driver or not — so the same fixed
+    // 1920x1080 logical coordinate this file has always clicked with must
+    // still select the same worker after T8 lands.
+    let p = fmt_xy(worker_screen());
+    let Some(cli) = or_skip(
+        "script_coordinates_remain_logical",
+        rts(&[
+            "--frames",
+            "5",
+            "--inject-input",
+            &format!("1:move:{p};2:lclick:{p}"),
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("selected"), "1", "{cli}");
+}
+
+#[test]
 fn a_drag_selects_the_group() {
     let (a, b) = spawn_group_drag();
     let Some(cli) = or_skip(

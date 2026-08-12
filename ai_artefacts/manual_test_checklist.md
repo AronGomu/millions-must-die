@@ -74,3 +74,10 @@
 - [ ] Corrupt that file (e.g. truncate it to `{`) and relaunch: confirm the run still starts cleanly, prints an `rts: settings warning=` line naming the file path, and the settings debug line falls back to the documented defaults (`mode=BorderlessDesktop confine_pointer=true keyboard_pan=48 edge_pan=48 pause_on_focus_loss=false master=80 music=35 voice=70 sfx=60`) rather than crashing or silently keeping stale values.
 - [ ] Set an out-of-range value by hand (e.g. `audio.master: 101`, or `camera.keyboard_pan: 50` which is not a multiple of 6) and relaunch: confirm the same warn-and-default behavior as the corrupt-file case.
 - [ ] Run `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` with a *malformed* settings file already on disk at the real pref path: confirm the offscreen run never prints an `rts: settings warning=` line and the file on disk is left untouched (byte-for-byte) — the offscreen path must never look at it at all.
+
+## T8 aspect-fit-canvas
+
+- [ ] Launch `cargo run -- rts` in windowed mode (or resize the claimed window on a host/compositor that honours it) to a non-16:9 size, e.g. 1280x1024 or an ultrawide 3440x1440: confirm the rendered scene keeps its correct aspect ratio inside a centred region — no stretch, no squash — and the leftover area (left/right or top/bottom bars) is a flat clear colour, not part of the scene.
+- [ ] With that same non-16:9 window, click in one of the clear-colour bars: confirm nothing happens — no selection, no order, no placement — while a click on the actual scene content still works normally.
+- [ ] Move the mouse from inside the scene content out into a bar and hold it against the physical edge of the window: confirm the camera still edge-pans (the clamp-to-edge behavior), the same as parking the pointer against the content edge on an exact-16:9 window.
+- [ ] Run a scripted session (`cargo run -- rts --frames 5 --inject-input "1:move:960,540;2:lclick:960,540"`) and confirm clicks/moves still land on the same logical cell they always have — scripted coordinates are unaffected by the live aspect-fit transform.

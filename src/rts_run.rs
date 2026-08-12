@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use mmd_engine::render::{
-    RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
+    DisplayViewport, RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
     DragBox, EntityId, EntityKind, OWNER_PLAYER, OrderReceiptBuffer, Placement, RtsFrame, RtsWorld,
@@ -122,6 +122,15 @@ fn sub2(a: [f32; 2], b: [f32; 2]) -> [f32; 2] {
 
 fn clamp_axes(v: [f32; 2]) -> [f32; 2] {
     [v[0].clamp(-1.0, 1.0), v[1].clamp(-1.0, 1.0)]
+}
+
+/// Fallback viewport for the degenerate case a drawable cannot fit even one
+/// `16x9` unit: an exact 1:1 identity over the fixed logical canvas, so a
+/// resize that momentarily shrinks the drawable below that floor cannot stop
+/// input dead.
+fn identity_viewport() -> DisplayViewport {
+    DisplayViewport::new([VIEW_WIDTH, VIEW_HEIGHT], [VIEW_WIDTH, VIEW_HEIGHT])
+        .expect("1920x1080 always fits an exact 16:9 rect")
 }
 
 /// The first live player [`UnitKind::Worker`] in the selection, else the
@@ -485,6 +494,18 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
             break;
         }
 
+        // Refreshed once per event batch rather than cached across frames: a
+        // resize/display-move can change either `size()` (window units) or
+        // `size_in_pixels()` (drawable px, HiDPI) between batches, and every
+        // mouse event in this batch must map through the shape the window
+        // actually has *now*. Falls back to an identity 1920x1080 viewport
+        // (never `None`) if the drawable is ever too small to hold one 16:9
+        // unit — degenerate, but must not stop input dead.
+        let (win_w, win_h) = window.size();
+        let (px_w, px_h) = window.size_in_pixels();
+        let viewport =
+            DisplayViewport::new([win_w, win_h], [px_w, px_h]).unwrap_or_else(identity_viewport);
+
         // Collected rather than iterated live: `pump.keyboard_state()` below
         // needs an immutable borrow of `pump`, which cannot coexist with the
         // mutable borrow `pump.poll_iter()` holds for the loop's duration.
@@ -521,7 +542,12 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     }
                 }
                 Event::MouseMotion { x, y, .. } => {
-                    apply(&mut world, &mut session, RtsCommand::Move([x, y]));
+                    // Motion always updates the clamped logical cursor, even
+                    // in a bar: that clamp-to-edge is what lets a pointer
+                    // parked against the drawable's physical border still
+                    // edge-pan the camera.
+                    let mapped = viewport.map_pointer([x, y]);
+                    apply(&mut world, &mut session, RtsCommand::Move(mapped.logical));
                 }
                 Event::MouseButtonDown {
                     mouse_btn: MouseButton::Left,
@@ -529,7 +555,11 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     y,
                     ..
                 } => {
-                    session.press = Some([x, y]);
+                    let mapped = viewport.map_pointer([x, y]);
+                    // A press that starts in a bar leaves `press` unset, so a
+                    // release anywhere cannot read it as a drag/click origin
+                    // — the bar press did nothing, per contract.
+                    session.press = mapped.inside_content.then_some(mapped.logical);
                 }
                 Event::MouseButtonUp {
                     mouse_btn: MouseButton::Left,
@@ -537,22 +567,28 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     y,
                     ..
                 } => {
-                    let end = [x, y];
-                    let shift = {
-                        let ks = pump.keyboard_state();
-                        ks.is_scancode_pressed(Scancode::LShift)
-                            || ks.is_scancode_pressed(Scancode::RShift)
-                    };
-                    let cmd = if shift {
-                        RtsCommand::ShiftClick(end)
-                    } else if session.press.is_some_and(|a| is_drag(a, end)) {
-                        RtsCommand::Drag(session.press.unwrap(), end)
-                    } else {
-                        RtsCommand::LeftClick(end)
-                    };
-                    session.press = None;
+                    let mapped = viewport.map_pointer([x, y]);
                     session.drag = None;
-                    apply(&mut world, &mut session, cmd);
+                    if mapped.inside_content {
+                        let end = mapped.logical;
+                        let shift = {
+                            let ks = pump.keyboard_state();
+                            ks.is_scancode_pressed(Scancode::LShift)
+                                || ks.is_scancode_pressed(Scancode::RShift)
+                        };
+                        let cmd = if shift {
+                            RtsCommand::ShiftClick(end)
+                        } else if session.press.is_some_and(|a| is_drag(a, end)) {
+                            RtsCommand::Drag(session.press.unwrap(), end)
+                        } else {
+                            RtsCommand::LeftClick(end)
+                        };
+                        session.press = None;
+                        apply(&mut world, &mut session, cmd);
+                    } else {
+                        // Release in a bar: no click/drag/order, per contract.
+                        session.press = None;
+                    }
                 }
                 Event::MouseButtonUp {
                     mouse_btn: MouseButton::Right,
@@ -560,7 +596,14 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     y,
                     ..
                 } => {
-                    apply(&mut world, &mut session, RtsCommand::RightClick([x, y]));
+                    let mapped = viewport.map_pointer([x, y]);
+                    if mapped.inside_content {
+                        apply(
+                            &mut world,
+                            &mut session,
+                            RtsCommand::RightClick(mapped.logical),
+                        );
+                    }
                 }
                 _ => {}
             }

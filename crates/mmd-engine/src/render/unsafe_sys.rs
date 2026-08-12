@@ -38,6 +38,8 @@ use sdl3_sys::gpu::{
 use sdl3_sys::pixels::SDL_FColor;
 use sdl3_sys::surface::SDL_FLIP_NONE;
 
+use super::viewport::aspect_fit_16_9;
+
 /// Raw per-frame GPU fence, released on drop via C call only.
 ///
 /// Why: sdl3 0.18.4's safe `Fence` wraps `Arc<FenceContainer>` — `Arc::new`
@@ -262,10 +264,21 @@ pub fn present_clear(
     Ok(())
 }
 
-/// Acquire swapchain, blit `source` (full `src_w`×`src_h`) into it, submit.
+/// Acquire swapchain, blit `source` (full `src_w`×`src_h`) into the largest
+/// centred exact-16:9 rect the acquired swapchain pixels can hold, submit.
 ///
-/// Scales with nearest filter when swapchain size ≠ source. Must not run inside
-/// another pass. `source` needs `SAMPLER` usage.
+/// The destination rect is derived from the *acquired* swapchain pixel size
+/// (never a size the caller guesses), via [`aspect_fit_16_9`] — the same pure
+/// function [`super::DisplayViewport`] uses to invert live pointer input, so
+/// the two directions cannot drift apart. `load_op` clears the whole
+/// swapchain target first, so any letterbox/pillarbox bar outside the
+/// destination rect ends up the clear colour; the blit then writes only the
+/// content rect. Scales with nearest filter when the rect size ≠ source. Must
+/// not run inside another pass. `source` needs `SAMPLER` usage.
+///
+/// A drawable too small to hold even one `16×9` unit (`aspect_fit_16_9`
+/// returns `None`) still submits a cleared, content-free frame rather than
+/// failing the present.
 ///
 /// # Safety invariants
 /// - `device` claimed `window` via `ClaimWindowForGPUDevice`.
@@ -301,6 +314,39 @@ pub fn present_blit(
         return Ok(());
     }
 
+    let clear_color = SDL_FColor {
+        r: 12.0 / 255.0,
+        g: 16.0 / 255.0,
+        b: 28.0 / 255.0,
+        a: 1.0,
+    };
+
+    let Some(dest) = aspect_fit_16_9([width, height]) else {
+        // Drawable smaller than one 16x9 unit: nothing honest to blit, but a
+        // cleared frame beats cancelling the present outright.
+        let mut info = SDL_GPUColorTargetInfo::default();
+        info.texture = swapchain;
+        info.clear_color = clear_color;
+        info.load_op = SDL_GPU_LOADOP_CLEAR;
+        info.store_op = SDL_GPU_STOREOP_STORE;
+        info.cycle = false;
+        unsafe {
+            let pass = SDL_BeginGPURenderPass(cmd.raw(), &info, 1, ptr::null());
+            if pass.is_null() {
+                SDL_CancelGPUCommandBuffer(cmd.raw());
+                std::mem::forget(cmd);
+                return Err("BeginGPURenderPass failed".into());
+            }
+            SDL_EndGPURenderPass(pass);
+            if !SDL_SubmitGPUCommandBuffer(cmd.raw()) {
+                std::mem::forget(cmd);
+                return Err("SubmitGPUCommandBuffer failed".into());
+            }
+        }
+        std::mem::forget(cmd);
+        return Ok(());
+    };
+
     let info = SDL_GPUBlitInfo {
         source: SDL_GPUBlitRegion {
             texture: source.raw(),
@@ -315,18 +361,13 @@ pub fn present_blit(
             texture: swapchain,
             mip_level: 0,
             layer_or_depth_plane: 0,
-            x: 0,
-            y: 0,
-            w: width,
-            h: height,
+            x: dest.x,
+            y: dest.y,
+            w: dest.w,
+            h: dest.h,
         },
         load_op: SDL_GPU_LOADOP_CLEAR,
-        clear_color: SDL_FColor {
-            r: 12.0 / 255.0,
-            g: 16.0 / 255.0,
-            b: 28.0 / 255.0,
-            a: 1.0,
-        },
+        clear_color,
         flip_mode: SDL_FLIP_NONE,
         filter: SDL_GPU_FILTER_NEAREST,
         cycle: false,

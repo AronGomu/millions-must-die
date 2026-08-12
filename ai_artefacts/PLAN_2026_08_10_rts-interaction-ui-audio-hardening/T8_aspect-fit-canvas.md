@@ -71,13 +71,13 @@
 
 ## Impl steps
 
-- [ ] 1. Add `display_viewport.rs` red tests.
-- [ ] 2. Implement viewport structs/math; export from `render/mod.rs`.
-- [ ] 3. Change present destination region; assert bars clear in renderer test seam.
-- [ ] 4. Store/refresh viewport in RTS live path.
-- [ ] 5. Map all live mouse motion/button coordinates; reject bar button events.
-- [ ] 6. Keep scripted input untouched; add CLI regression proving canonical script coords.
-- [ ] 7. Run host golden comparison without regeneration.
+- [x] 1. Add `display_viewport.rs` red tests.
+- [x] 2. Implement viewport structs/math; export from `render/mod.rs`.
+- [x] 3. Change present destination region; assert bars clear in renderer test seam.
+- [x] 4. Store/refresh viewport in RTS live path.
+- [x] 5. Map all live mouse motion/button coordinates; reject bar button events.
+- [x] 6. Keep scripted input untouched; add CLI regression proving canonical script coords.
+- [x] 7. Run host golden comparison without regeneration.
 
 ## Outputs
 
@@ -89,10 +89,10 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test display_viewport`
-- [ ] `cargo test -p mmd-engine --locked --test render_correctness golden_frame_matches`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract script_coordinates_remain_logical`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: resize non-16:9 window → no stretch; bar click causes no world action
-- [ ] app functional: `cargo run -- rts --frames 60`
-- [ ] commit msg draft: `feat(render): preserve logical RTS canvas across window shapes`
+- [x] `cargo test -p mmd-engine --locked --test display_viewport`
+- [x] `cargo test -p mmd-engine --locked --test render_correctness golden_frame_matches`
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract script_coordinates_remain_logical`
+- [x] `cargo check --workspace --all-targets --all-features --locked`
+- [x] manual check: resize non-16:9 window → no stretch; bar click causes no world action
+- [x] app functional: `cargo run -- rts --frames 60`
+- [x] commit msg draft: `feat(render): preserve logical RTS canvas across window shapes`

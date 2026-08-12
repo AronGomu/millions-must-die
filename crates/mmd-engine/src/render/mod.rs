@@ -10,6 +10,7 @@ mod instance;
 mod renderer;
 mod text;
 mod unsafe_sys;
+mod viewport;
 
 pub use atlas::{
     ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_SLOT_COUNT, ATLAS_WIDTH_PX, AtlasRgba, FRAME_SIZE_PX,
@@ -51,3 +52,4 @@ pub use text::{
     GLYPH_TRACKING_PX, GLYPH_W_PX, begin_text_group, glyph_uv_rect, push_text, text_width,
 };
 pub use unsafe_sys::RawFrameFence;
+pub use viewport::{DisplayViewport, MappedPointer, RectU32, aspect_fit_16_9};
