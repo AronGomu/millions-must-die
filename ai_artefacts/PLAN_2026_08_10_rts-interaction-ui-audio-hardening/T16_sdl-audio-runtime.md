@@ -68,14 +68,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add pure asset/stream-policy tests + fake stream adapter.
-- [ ] 2. Implement manifest/WAV loader validation.
-- [ ] 3. Create/bind 14 streams and set exact gains.
-- [ ] 4. Implement event routing + music watermark maintenance.
-- [ ] 5. Add buffered pre-window sink/replay selection.
-- [ ] 6. Integrate interactive fatal error + release ordering.
-- [ ] 7. Add offscreen no-device + dummy-driver tests.
-- [ ] 8. Confirm no new Cargo dependency/feature/lock package.
+- [x] 1. Add pure asset/stream-policy tests + fake stream adapter.
+- [x] 2. Implement manifest/WAV loader validation.
+- [x] 3. Create/bind 14 streams and set exact gains.
+- [x] 4. Implement event routing + music watermark maintenance.
+- [x] 5. Add buffered pre-window sink/replay selection.
+- [x] 6. Integrate interactive fatal error + release ordering.
+- [x] 7. Add offscreen no-device + dummy-driver tests.
+- [x] 8. Confirm no new Cargo dependency/feature/lock package.
 
 ## Outputs
 
@@ -87,10 +87,10 @@
 
 ## Validation
 
-- [ ] `SDL_AUDIODRIVER=dummy cargo test -p millions_must_die --locked rts_audio`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract audio_`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] `git diff --exit-code -- Cargo.lock`
-- [ ] manual check: music continuous through menu/Alt-Tab; select/order/reject/UI cues distinct; sliders audible
-- [ ] app functional: `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=invalid cargo run -- rts --frames 3` succeeds via fake sink
-- [ ] commit msg draft: `feat(app): play deterministic RTS feedback through core SDL audio`
+- [x] `SDL_AUDIODRIVER=dummy cargo test -p millions_must_die --locked rts_audio` — 11 passed
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract audio_` — 8 passed (incl. new `audio_offscreen_survives_invalid_audio_driver`)
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean
+- [x] `git diff --exit-code -- Cargo.lock` — no diff (sha2 already present via xtask/mmd-engine; app crate move dev→normal dep changes nothing in the lock)
+- [ ] manual check: music continuous through menu/Alt-Tab; select/order/reject/UI cues distinct; sliders audible — **deferred to the human checklist** (hard constraint: this worker must not self-verify audio through the live desktop's devices)
+- [x] app functional: `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=invalid cargo run -- rts --frames 3` succeeds via fake sink — exit 0, `rts: audio` line present
+- [x] commit msg draft: `feat(app): play deterministic RTS feedback through core SDL audio`

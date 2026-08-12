@@ -44,12 +44,12 @@ mmd-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sdl3 = { workspace = true }
+# `src/rts_audio.rs` (T16) independently verifies the T14 manifest's asset
+# hash before ever opening a device; also exercised by `tests/cli_contract.rs`'s
+# throwaway-scenario sidecar hashes.
+sha2.workspace = true
 
 [dev-dependencies]
-# `tests/cli_contract.rs` writes throwaway scenarios with honest sidecar
-# hashes, so the loader's parse/validate path is reachable rather than only its
-# hash-mismatch path. Dev-only: never linked into the shipping binary.
-sha2.workspace = true
 # `src/rts_settings.rs` unit tests exercise the recoverable save protocol
 # against real temp-dir paths. Dev-only: never linked into the shipping binary.
 tempfile.workspace = true

@@ -161,7 +161,7 @@
 
 ## T15 audio-events-and-buses
 
-- [ ] No audible check exists yet: `T15` derives semantic audio events only, and every run (interactive included) still uses the fixed fake sink, so nothing is played and no audio device is ever opened. Physical playback arrives with `T16`; re-run this section then.
+- [x] Superseded by `T16`: interactive runs now play through a real SDL audio device (`SdlAudioSink`). See the `T16 sdl-audio-runtime` section below for the audible checks; offscreen/test runs still use the fixed fake sink and never open a device.
 - [ ] Launch `cargo run -- rts`, play for a few seconds (select units, right-click to move/gather, click a command card, click the minimap, open the gear menu), quit, and read the `rts: audio ...` line printed just above `rts: clean exit`: confirm `music=1`, that `voice`/`cues` grew with the selections and orders you actually made, that `ui` grew by exactly one per pointer click on the gear/menu/settings control/command card/valid minimap point, and `gains=2800/5600/4800` for default volumes.
 - [ ] Repeat a selection you already have selected (drag the same box twice, or click a unit that is already the whole selection): confirm `cues` does not grow the second time — only newly selected units voice.
 - [ ] Select more than eight units and give them one move order: confirm `cues` grows by at most 8 for that order and `reject` stays at 0 — the cap is not a rejection.
@@ -169,3 +169,15 @@
 - [ ] Press a build/produce hotkey (`Q`/`W`/`E`/`A`/`S`) instead of clicking its card: confirm `ui` does not grow — keyboard actions never make a pointer-click sound.
 - [ ] Open Settings, drag a volume slider, then quit and relaunch: confirm the new `gains=` values on the `rts: audio` line match `master% * bus%` for the values shown in the settings panel (e.g. master 50 / music 35 → `1750`).
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) twice: confirm both runs print an identical `rts: audio` line and an identical `hash=` on the exit line.
+
+## T16 sdl-audio-runtime
+
+- [ ] Launch `cargo run -- rts` on real hardware with a real audio device (no `SDL_AUDIODRIVER` override): confirm placeholder music starts immediately and loops continuously with no audible click at the loop boundary.
+- [ ] Alt-tab away from the window (with or without `pause_on_focus_loss` on) and back: confirm the music keeps playing the whole time, including while the T13 paused menu is open.
+- [ ] Select a unit, then give it a move/gather/build order: confirm you hear a short, distinct voice cue for the selection and a different distinct cue for the order (select/move/gather/build all sound different).
+- [ ] Select up to eight units and give them a mixed batch of orders in one action: confirm you hear up to eight overlapping cues, and that a second action's cues fully replace the first's (no leftover cue from the previous action lingering).
+- [ ] Right-click an invalid target (e.g. a build site with only soldiers selected): confirm a distinct reject sound plays, and it never cuts off or is cut off by a simultaneous accepted unit cue.
+- [ ] Click the gear icon, a settings control, a command-grid card, and a valid minimap point in quick succession (5+ clicks within about a second): confirm each produces a short UI click sound, and the fifth-and-later clicks still produce a click (the 4-lane round robin steals the oldest slot rather than going silent).
+- [ ] Open Settings and drag the Master/Music/Voice/SFX sliders one at a time while music/voice/UI sounds are playing: confirm each slider's bus changes volume live and independently (e.g. Music to 0 silences only the music, not the voice cues).
+- [ ] With `SDL_AUDIODRIVER` set to a nonexistent driver name and a real (non-offscreen) window, run `cargo run -- rts`: confirm the process exits with a nonzero code and an actionable message naming the audio failure, rather than falling back to silent/offscreen play.
+- [ ] Confirm `SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=invalid cargo run -- rts --frames 3` still exits 0 and prints an `rts: audio` line — an offscreen run must never depend on (or be broken by) a real audio device.

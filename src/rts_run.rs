@@ -64,9 +64,10 @@ use sdl3::event::{Event, WindowEvent};
 use sdl3::keyboard::Scancode;
 use sdl3::mouse::MouseButton;
 
+use crate::rts_audio::{BufferedAudioSink, SdlAudioSink};
 use crate::rts_feedback::{
-    AudioBus, AudioCounters, AudioEvent, AudioSink, FakeAudioSink, effective_gains, order_cues,
-    reject_cue, selection_cues, snapshot_selected_units,
+    AudioBus, AudioCounters, AudioError, AudioEvent, AudioSink, FakeAudioSink, effective_gains,
+    order_cues, reject_cue, selection_cues, snapshot_selected_units,
 };
 use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
@@ -131,6 +132,13 @@ pub(crate) struct RtsSession {
     pub(crate) audio_counters: AudioCounters,
     /// Guards the one-per-session `StartMusic`.
     music_started: bool,
+    /// Set by [`Self::emit_audio`]/[`Self::publish_gains`]/[`Self::maintain_audio`]
+    /// when the live sink itself failed (never [`BufferedAudioSink`] or
+    /// [`FakeAudioSink`], which cannot). The interactive loop treats this as
+    /// fatal (T16): release the window, exit 1 with `e`'s operation/asset
+    /// context. Latched, not overwritten, so the *first* failure is the one
+    /// reported.
+    pub(crate) audio_fatal: Option<AudioError>,
     /// Fixed scratch for the selection delta: the selected player units
     /// before and after one pointer action. Reserved to the selection's own
     /// cap, so a delta allocates nothing.
@@ -163,18 +171,34 @@ impl RtsSession {
             audio,
             audio_counters: AudioCounters::default(),
             music_started: false,
+            audio_fatal: None,
             selection_before: Vec::with_capacity(MAX_SELECTION),
             selection_after: Vec::with_capacity(MAX_SELECTION),
         }
     }
 
-    /// Count and forward one derived event. A sink failure is reported and
-    /// dropped here; `T16` owns the interactive fatal-exit policy.
+    /// Count and forward one derived event. A sink failure latches into
+    /// [`Self::audio_fatal`] (T16 owns the interactive fatal-exit policy);
+    /// [`FakeAudioSink`]/[`BufferedAudioSink`] never fail, so this is only
+    /// ever reachable with a live `SdlAudioSink`.
     pub(crate) fn emit_audio(&mut self, event: AudioEvent) {
         self.audio_counters.record(&event);
         if let Err(e) = self.audio.emit(event) {
-            eprintln!("rts: audio event failed ({e})");
+            self.audio_fatal.get_or_insert(e);
         }
+    }
+
+    /// Per-rendered-frame sink upkeep (music refill, T16). Same fatal-latch
+    /// discipline as [`Self::emit_audio`].
+    pub(crate) fn maintain_audio(&mut self) {
+        if let Err(e) = self.audio.maintain() {
+            self.audio_fatal.get_or_insert(e);
+        }
+    }
+
+    /// Take the latched fatal sink error, if any, clearing it.
+    pub(crate) fn take_audio_fatal(&mut self) -> Option<AudioError> {
+        self.audio_fatal.take()
     }
 
     /// The one music start of this session. Idempotent: nothing — menu,
@@ -191,7 +215,7 @@ impl RtsSession {
     fn publish_gains(&mut self) {
         let gains = effective_gains(&self.settings.audio);
         if let Err(e) = self.audio.set_gains(gains) {
-            eprintln!("rts: audio gain update failed ({e})");
+            self.audio_fatal.get_or_insert(e);
         }
     }
 }
@@ -526,9 +550,15 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     );
     println!("{}", settings.debug_line());
 
+    // Before frame 1's window-vs-offscreen decision, every audio call goes
+    // through a `BufferedAudioSink` (T16 startup ordering, ADR 018/020):
+    // `audio_replay` is a second owner of the same recorded log, replayed
+    // once into whichever real sink the fork below picks.
+    let buffered_audio = BufferedAudioSink::new();
+    let audio_replay = buffered_audio.handle();
     let mut session = RtsSession {
         settings: settings.clone(),
-        ..RtsSession::default()
+        ..RtsSession::with_sink(Box::new(buffered_audio))
     };
     // Gains before the first event, and the one music start of this session
     // before frame 1 — music then runs logically forever: nothing (menu,
@@ -601,6 +631,15 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     };
 
     let Some(mut window) = window else {
+        // No real window: fold the buffered startup log into a
+        // `FakeAudioSink` (T16) — no physical device, no user audio config,
+        // ever touched on this path. `FakeAudioSink::emit`/`maintain` never
+        // fail, so this replay cannot fail either.
+        let mut fake = FakeAudioSink::new();
+        audio_replay
+            .replay_into(&mut fake)
+            .expect("FakeAudioSink never fails a replay");
+        session.audio = Box::new(fake);
         run_offscreen(
             &mut world,
             &mut renderer,
@@ -632,6 +671,29 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         focused: true,
         viewport: rts_window::refresh_viewport(&window)?,
     };
+
+    // A real window is claimed: build the SDL sink and replay the buffered
+    // startup log into it before the first present (T16 startup ordering).
+    // Any load/open/create/bind/gain/queue failure here releases the
+    // already-claimed window and exits 1 — no offscreen fallback for an
+    // audio failure on the interactive path.
+    match SdlAudioSink::open(&renderer.ctx.sdl, &root.join("assets/audio/generated")) {
+        Ok(mut sdl_sink) => {
+            if let Err(e) = audio_replay.replay_into(&mut sdl_sink) {
+                release_window(&renderer, window);
+                return Err(RunError::Failed(format!(
+                    "interactive audio startup failed (replay): {e}"
+                )));
+            }
+            session.audio = Box::new(sdl_sink);
+        }
+        Err(e) => {
+            release_window(&renderer, window);
+            return Err(RunError::Failed(format!(
+                "interactive audio startup failed (device init): {e}"
+            )));
+        }
+    }
 
     if let Err(e) = renderer.draw_to_swapchain_scene(&window, scratch.frame_buf.scene()) {
         eprintln!("rts: present failed ({e}); offscreen-only");
@@ -838,6 +900,15 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
             }
         }
 
+        // A live `SdlAudioSink` call inside the event handling above (e.g.
+        // a UI click's cue) can fail; that is a fatal interactive error
+        // (T16) — release the window and exit 1 with the sink's own
+        // operation/asset context.
+        if let Some(e) = session.take_audio_fatal() {
+            release_window(&renderer, window);
+            return Err(RunError::Failed(format!("interactive audio failure: {e}")));
+        }
+
         let frame_start = Instant::now();
         match step_frame(
             &mut world,
@@ -848,7 +919,12 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
             |scene| renderer.draw_to_swapchain_scene(&window, scene),
         ) {
             Ok(None) => break 'running,
-            Ok(Some(_)) => {}
+            Ok(Some(_)) => {
+                if let Some(e) = session.take_audio_fatal() {
+                    release_window(&renderer, window);
+                    return Err(RunError::Failed(format!("interactive audio failure: {e}")));
+                }
+            }
             Err(e) => {
                 present_error = Some(e);
                 break 'running;
@@ -942,9 +1018,7 @@ where
 
     // Per-rendered-frame sink upkeep (music refill in `T16`); never emits,
     // so it cannot change what a run heard.
-    if let Err(e) = session.audio.maintain() {
-        eprintln!("rts: audio maintain failed ({e})");
-    }
+    session.maintain_audio();
 
     let hash = world.state_hash();
     if frame == 1 {

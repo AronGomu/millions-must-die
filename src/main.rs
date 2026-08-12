@@ -3,6 +3,7 @@
 mod bench;
 mod input;
 mod overlay;
+mod rts_audio;
 mod rts_feedback;
 mod rts_input;
 mod rts_overlay;

@@ -1675,3 +1675,27 @@ fn audio_events_keep_the_world_hash_stable() {
         "{first}\n{second}\nthe same script must hear exactly the same events"
     );
 }
+
+/// T16's hard isolation constraint: an offscreen run must never open a
+/// physical audio device, so a broken `SDL_AUDIODRIVER` must never abort it
+/// — the `rts: audio` line still comes from the (always-fake) sink. This is
+/// the ticket's own app-functional validation line, pinned as a regression
+/// test rather than only a manual `cargo run` check.
+#[test]
+fn audio_offscreen_survives_invalid_audio_driver() {
+    let mut cmd = app_bin();
+    cmd.args(["rts", "--frames", "3"]);
+    cmd.env("SDL_VIDEODRIVER", "offscreen");
+    cmd.env("SDL_AUDIODRIVER", "mmd-nonexistent-driver");
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    let cli = run_to_completion(
+        cmd,
+        "audio_offscreen_survives_invalid_audio_driver".to_string(),
+    );
+    cli.assert_success();
+    assert!(
+        cli.stdout.lines().any(|l| l.starts_with("rts: audio ")),
+        "{cli}\nan offscreen run must still report the (fake-sink) audio trace"
+    );
+}
