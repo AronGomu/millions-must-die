@@ -97,4 +97,4 @@
 - [x] `test "$(cargo tree -e features | grep -c testkit)" -eq 0` — validate: exit 0.
 - [x] manual check: open all 3 architecture HTML pages; verify diagrams/labels current — validated at source level (agent may not drive this desktop's browser): each page read in full, HTML parses, every relative `href`/`src` resolves, no "proposed/not implemented" label survives on the phase-1.1 page, cross-links present on the other two. Visual rendering stays a human checklist item (`T18` section of `ai_artefacts/manual_test_checklist.md`).
 - [x] app functional: exact tested commit hash passes all commands; no golden regeneration — validate: `git status --porcelain lab/goldens` empty after the gate.
-- [ ] commit msg draft: `docs(rts): close phase 1.1 on functional interaction scope` — validate: commit subject matches verbatim.
+- [x] commit msg draft: `docs(rts): close phase 1.1 on functional interaction scope` — validate: commit subject matches verbatim.
