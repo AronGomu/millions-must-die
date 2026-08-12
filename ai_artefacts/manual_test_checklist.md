@@ -151,6 +151,7 @@
 - [ ] After changing several settings, quit and relaunch `cargo run -- rts`: confirm every changed value (window mode, pan speeds, confine/focus toggles, volumes) is exactly what was last set — the `rts: settings mode=... ...` startup line should match.
 - [ ] Force a save failure (e.g. remove write permission on the settings directory, or point `SDL_VIDEODRIVER`'s pref dir at a read-only path) and change a setting: confirm a `SETTINGS NOT SAVED: <reason>` line appears in the settings panel and the control visibly reverts to its old value.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm it still completes cleanly and quits at the same milestone (now via the `quit` script token instead of `Escape`).
+- [ ] With a non-default `camera.keyboard_pan` (e.g. 24) persisted, run that same tracked script *windowed* (no `SDL_VIDEODRIVER`) and again with `SDL_VIDEODRIVER=offscreen`: confirm both exit lines carry the **same** `hash=` and the same `camera=`, and that your persisted `camera.keyboard_pan` is unchanged on disk afterward. A scripted run is a replay: it takes the default camera speeds and never writes settings.
 
 ## T14 generated-audio-assets
 

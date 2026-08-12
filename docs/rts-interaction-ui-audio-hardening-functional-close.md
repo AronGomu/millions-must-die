@@ -288,18 +288,30 @@ It proves the documented loop, now including HUD, menu, minimap and audio. It
 does not explore alternative orders, mid-flight cancellations or contention.
 Each of those has unit coverage; none has an end-to-end run.
 
-### 8. Determinism is same-host, same-binary
+### 8. Determinism is same-host, same-binary — and settings-independent
 
 Unchanged from phases 0 and 1. `phase1_1_run_is_cross_process_deterministic`
 proves this binary reproduces itself across processes; it claims nothing about
 another compiler, optimization level or architecture.
 
+One phase-1.1 addition was needed to keep that true. `RtsWorld::state_hash`
+covers the camera centre, and the camera's pan speeds feed it, so a windowed
+run that loaded this machine's persisted `camera.keyboard_pan` /
+`camera.edge_pan` hashed differently from the offscreen gate run of the *same*
+script, which has always used the defaults. A run carrying an injected script
+is therefore treated as a replay: it takes the default camera speeds whatever
+is persisted, and has no settings store, so it can neither read a
+machine-specific speed into hashed world state nor write a replay's own values
+back over the user's file. Every setting that reaches no hashed state —
+display, gameplay, audio — is still the user's.
+
 ## Phase-2 backlog
 
 Carried forward, in no committed order:
 
-- Reconcile `StaticNav::center_blocked` with `StaticNav::sweep_clear`, and
-  un-ignore the pinned reproducer.
+- Push-through along the mover's heading when the contact-normal push target
+  is statically illegal, so a parked body cannot plug a single-file corridor
+  for good (known gap 1 above). Re-bases the tracked acceptance script.
 - Combat, enemy AI, fog of war, zoom — unchanged from the phase-1 backlog.
 - A real art pass, and a licensed soundtrack with its provenance contract.
 - Broaden the acceptance matrix beyond one scripted path.

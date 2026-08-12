@@ -861,6 +861,42 @@ fn state_hash_sees_the_camera() {
     assert_ne!(still.state_hash(), panning.state_hash());
 }
 
+/// The camera's *pan speed* reaches the state hash, not just its pan
+/// direction: the same pan input at two speeds ends at two centres.
+///
+/// This is why an app run whose hash is compared to anything may not take its
+/// camera speeds from per-user settings — see `src/rts_run.rs`'s
+/// `replay_settings`, which forces the defaults on any scripted run so a
+/// windowed replay and the offscreen gate run of the same script agree.
+#[test]
+fn camera_speed_reaches_the_state_hash() {
+    let mut slow = scene();
+    let mut fast = scene();
+    slow.world_mut().set_camera_speeds(24.0, 24.0);
+    fast.world_mut().set_camera_speeds(96.0, 96.0);
+    assert_eq!(
+        slow.state_hash(),
+        fast.state_hash(),
+        "the speed alone is not hashed state; only where it takes the camera is"
+    );
+
+    slow.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
+    fast.world_mut().set_keyboard_pan_dir([1.0, 0.0]);
+    slow.step_exact(1);
+    fast.step_exact(1);
+    assert_ne!(
+        slow.world().camera().center(),
+        fast.world().camera().center(),
+        "two pan speeds must move the camera by two different amounts"
+    );
+    assert_ne!(
+        slow.state_hash(),
+        fast.state_hash(),
+        "the camera centre is hashed, so a settings-derived pan speed would make \
+         the same script hash differently on different machines"
+    );
+}
+
 #[test]
 fn look_at_map_point_moves_the_camera_and_hashes() {
     let mut h = scene();

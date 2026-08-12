@@ -84,7 +84,7 @@ use crate::rts_feedback::{
 use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
-use crate::rts_settings::{RtsSettings, SettingsStore, escape_warning};
+use crate::rts_settings::{CameraSettings, RtsSettings, SettingsStore, escape_warning};
 use crate::rts_ui::{PointerOwner, RtsUiState, SettingsChange};
 use crate::rts_window::{
     self, ClaimedWindow, FocusAction, ModeCandidate, RtsWindowState, SdlWindowOps, WindowOps,
@@ -497,6 +497,41 @@ fn load_settings(opts: &RtsOptions, headless_driver: bool) -> (RtsSettings, Opti
     }
 }
 
+/// Strip the parts of a loaded settings value a **deterministic replay** must
+/// not depend on.
+///
+/// [`RtsWorld::state_hash`] covers the camera centre, and the camera's pan
+/// speeds feed it through the world's own camera system. A non-interactive run
+/// always uses [`RtsSettings::default`] (48/48), so a windowed run of the same
+/// script that read *this machine's* persisted `camera.keyboard_pan` /
+/// `camera.edge_pan` ended at a different centre and therefore a different
+/// state hash — for the same script. The tracked acceptance run's whole claim
+/// is that it is live-equivalent (ADR 016), and a hash that depends on whose
+/// machine it ran on is not.
+///
+/// So a scripted run:
+/// - takes the **default** camera speeds, whatever is persisted — the only
+///   settings that reach hashed world state;
+/// - keeps every other setting (display, gameplay, audio), which reach no
+///   hashed state, so a windowed replay still honours this user's window mode
+///   and pointer confinement;
+/// - has **no store**, so a replay's own scripted settings edits are never
+///   written back over the user's file.
+///
+/// An interactive (unscripted) run is untouched: nothing compares its hash to
+/// anything, and the persisted camera speed is the point of the setting.
+fn replay_settings(
+    mut settings: RtsSettings,
+    store: Option<SettingsStore>,
+    scripted: bool,
+) -> (RtsSettings, Option<SettingsStore>) {
+    if !scripted {
+        return (settings, store);
+    }
+    settings.camera = CameraSettings::default();
+    (settings, None)
+}
+
 /// SDL video drivers that never drive a real display, and therefore never a
 /// real user: `offscreen` (the deterministic gate driver) and `dummy` (SDL's
 /// own no-op driver, which CI images and `nix flake check` sandboxes pick up).
@@ -556,6 +591,11 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     };
 
     let (settings, settings_store) = load_settings(&opts, headless_driver);
+    let (settings, settings_store) = replay_settings(
+        settings,
+        settings_store,
+        opts.inject_input.is_some() || opts.inject_input_file.is_some(),
+    );
 
     let mut world = RtsWorld::load(&scenario_path).map_err(|e| load_error(&scenario_path, e))?;
     world.set_camera_speeds(
@@ -1366,5 +1406,56 @@ fn workspace_root_or_cwd() -> PathBuf {
         root
     } else {
         std::env::current_dir().unwrap_or(root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn persisted_non_default() -> RtsSettings {
+        let mut s = RtsSettings::default();
+        s.camera.keyboard_pan = 24;
+        s.camera.edge_pan = 96;
+        s.display.mode = crate::rts_settings::WindowMode::Windowed1280x720;
+        s.audio.master = 55;
+        s
+    }
+
+    /// The determinism hole this closes: a scripted run's camera speeds are
+    /// the only settings that reach `RtsWorld::state_hash`, and an offscreen
+    /// run has always used the defaults. A windowed replay of the same script
+    /// that read this machine's persisted speeds hashed differently.
+    #[test]
+    fn a_scripted_run_takes_the_default_camera_speeds() {
+        let (settings, store) = replay_settings(persisted_non_default(), None, true);
+        assert_eq!(
+            settings.camera,
+            CameraSettings::default(),
+            "a replay's camera speeds must not depend on whose machine it runs on"
+        );
+        assert!(
+            store.is_none(),
+            "a replay must not write its own scripted values back over the user's file"
+        );
+    }
+
+    /// Everything that reaches no hashed state stays the user's, so a windowed
+    /// replay still honours their window mode, confinement and volumes.
+    #[test]
+    fn a_scripted_run_keeps_every_setting_that_reaches_no_hashed_state() {
+        let (settings, _) = replay_settings(persisted_non_default(), None, true);
+        let persisted = persisted_non_default();
+        assert_eq!(settings.display, persisted.display);
+        assert_eq!(settings.gameplay, persisted.gameplay);
+        assert_eq!(settings.audio, persisted.audio);
+    }
+
+    /// An interactive run is untouched: nothing compares its hash to anything,
+    /// and the persisted pan speed is the whole point of the setting.
+    #[test]
+    fn an_unscripted_run_keeps_the_persisted_camera_speeds() {
+        let (settings, _) = replay_settings(persisted_non_default(), None, false);
+        assert_eq!(settings.camera, persisted_non_default().camera);
     }
 }
