@@ -72,21 +72,35 @@ fn fmt_xy(p: [f32; 2]) -> String {
     format!("{},{}", p[0], p[1])
 }
 
-/// One worker's spawn point (`spawn_cells` entry `162..167 @ y=178`, worker
-/// position `cell + 0.5`).
+/// One worker's spawn point. `spawn_cells` names six cells one apart
+/// (`162..167 @ y=178`), but T3's radius-aware initial spawn relocates every
+/// worker but the first (a 3-cell-radius body cannot share a cell that close
+/// with another) — the first cell is still legal on its own, so it is the one
+/// entry this helper can still name directly.
 fn worker_screen() -> [f32; 2] {
     screen_of(162.5, 178.5)
 }
 
-/// A drag rectangle in screen space covering every one of the six spawn
-/// cells' projected worker positions.
+/// A drag rectangle in screen space covering every one of the six
+/// (T3-relocated) starting workers' projected positions:
+/// `(162.5, 178.5)`, `(168.5, 178.5)`, `(164.5, 184.5)`, `(170.5, 184.5)`,
+/// `(174.5, 178.5)`, `(175.5, 172.5)` — the same box
+/// `crates/mmd-engine/tests/rts_acceptance.rs`'s `DRAG_A`/`DRAG_B` use, for
+/// the same reason.
 fn spawn_group_drag() -> (String, String) {
-    (fmt_xy([880.0, 540.0]), fmt_xy([940.0, 590.0]))
+    (fmt_xy([850.0, 520.0]), fmt_xy([1000.0, 600.0]))
 }
 
-/// The HQ's centre — also the camera's start focus, so this is screen centre.
-fn hq_screen() -> [f32; 2] {
-    screen_of(166.0, 166.0)
+/// A point inside the HQ's own footprint that picks the HQ.
+///
+/// Not [`hq_screen`]: T3's radius-aware initial spawn happens to leave one
+/// relocated worker (whose rendered sprite quad is far larger than its own
+/// body — `RTS_SPRITE_SIZE_PX` is 12 cells across) with a screen-space hit
+/// region that reaches back over the HQ's own screen centre and outranks it
+/// on pick depth. The HQ's own footprint corner is clear of every worker's
+/// hit region and still resolves to `Pick::Building`.
+fn hq_click_screen() -> [f32; 2] {
+    screen_of(160.5, 160.5)
 }
 
 /// The nearest crystal node (`crystal_nodes[0] = (140, 150)`).
@@ -800,7 +814,7 @@ fn a_right_click_cancels_the_ghost_without_ordering() {
 
 #[test]
 fn a_produces_a_worker_at_the_hq() {
-    let p = fmt_xy(hq_screen());
+    let p = fmt_xy(hq_click_screen());
     let script = format!("1:move:{p};2:lclick:{p};3:key:a");
     let Some(cli) = or_skip(
         "a_produces_a_worker_at_the_hq",

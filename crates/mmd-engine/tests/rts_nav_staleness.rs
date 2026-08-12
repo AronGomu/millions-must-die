@@ -68,16 +68,25 @@ fn place_depot(h: &mut RtsHarness) -> EntityId {
 /// A decoy worker takes the orders: `order_move` acquires, and acquiring
 /// `NAV_FIELD_SLOTS` fresh destinations evicts the lot.
 fn evict_every_field(h: &mut RtsHarness) {
-    let decoy = spawn_worker(h, [40.5, 260.5]);
-    for i in 0..NAV_FIELD_SLOTS as u32 {
+    // Fixed, hand-verified legal (unblocked in the tracked scene's
+    // radius-inflated navigation mask) cells — not a diagonal `(40+i, 260+i)`
+    // stride, which lands on a solid cell for roughly half of `i` in this
+    // scene's terrain and would make `order_move` refuse the decoy order
+    // outright instead of evicting a slot.
+    const DESTS: [Cell; NAV_FIELD_SLOTS] = [
+        Cell { x: 44, y: 264 },
+        Cell { x: 47, y: 267 },
+        Cell { x: 54, y: 274 },
+        Cell { x: 57, y: 277 },
+        Cell { x: 64, y: 284 },
+        Cell { x: 67, y: 287 },
+        Cell { x: 73, y: 293 },
+        Cell { x: 76, y: 296 },
+    ];
+    let decoy = spawn_worker(h, [44.5, 264.5]);
+    for dest in DESTS {
         assert!(
-            h.world_mut().order_move(
-                decoy,
-                Cell {
-                    x: 40 + i,
-                    y: 260 + i,
-                }
-            ),
+            h.world_mut().order_move(decoy, dest),
             "the decoy move order was refused"
         );
     }

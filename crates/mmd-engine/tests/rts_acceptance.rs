@@ -57,8 +57,13 @@ const START_GAS: u32 = 100;
 // --- the run's geometry, shared with the tracked script ---------------------
 
 /// Box-select corners, in screen pixels at the starting camera.
-const DRAG_A: [f32; 2] = [860.0, 530.0];
-const DRAG_B: [f32; 2] = [950.0, 600.0];
+///
+/// T3's radius-aware initial spawn scatters the scene's six workers across a
+/// wider area than the old one-cell-apart spawn row, so this box is wider
+/// than the pre-T3 one — it must still enclose every relocated worker's
+/// ground point.
+const DRAG_A: [f32; 2] = [850.0, 520.0];
+const DRAG_B: [f32; 2] = [1000.0, 600.0];
 /// Depot footprint min corner (ghost cell `(184, 180)`, edge 8).
 const DEPOT_MIN: Cell = Cell { x: 180, y: 176 };
 /// Barracks footprint min corner (ghost cell `(151, 181)`, edge 10).
@@ -73,13 +78,13 @@ const BARRACKS_MIN: Cell = Cell { x: 146, y: 176 };
 const SCRIPT_COORDS: &[([f32; 2], Cell, &str)] = &[
     ([960.0, 540.0], Cell { x: 166, y: 166 }, "HQ centre"),
     (
-        [860.0, 530.0],
-        Cell { x: 151, y: 176 },
+        [850.0, 520.0],
+        Cell { x: 147, y: 174 },
         "worker box, top-left",
     ),
     (
-        [950.0, 600.0],
-        Cell { x: 179, y: 182 },
+        [1000.0, 600.0],
+        Cell { x: 186, y: 176 },
         "worker box, bottom-right",
     ),
     (

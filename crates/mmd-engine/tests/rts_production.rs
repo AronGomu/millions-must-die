@@ -392,8 +392,12 @@ fn a_produced_unit_spawns_beside_its_building() {
         !inside,
         "must not spawn inside the HQ footprint, got {cell:?}"
     );
-    let adjacent = cell.x >= 159 && cell.x <= 172 && cell.y >= 159 && cell.y <= 172;
-    assert!(adjacent, "must spawn beside the HQ footprint, got {cell:?}");
+    // T3: the approach cell is a *legal* (radius-clear) centre, not
+    // necessarily one cell off the footprint — dense terrain can push it
+    // several cells out. Generously bounded rather than pinned to a single
+    // ring.
+    let near = cell.x + 10 >= 160 && cell.x <= 172 + 10 && cell.y + 10 >= 160 && cell.y <= 172 + 10;
+    assert!(near, "must spawn near the HQ footprint, got {cell:?}");
 
     let width = h.world().scenario().width();
     let blocked = h.world().nav().blocked();
@@ -587,6 +591,21 @@ fn a_barracks_can_be_queued_the_tick_it_finishes() {
 
     let slot = h.world().entities().slot(barracks).expect("barracks slot");
     h.world_mut().entities_mut().set_progress(slot, 0, 1);
+    // `w0`'s resting position from the original walk satisfied the *site's*
+    // adaptive reach at the moment it finished — computed against the
+    // pre-finish mask, one tick before the Barracks's own footprint became a
+    // solid that mask reads. Re-marking it a site here does not un-stamp
+    // that footprint (a real completion never un-stamps), so every
+    // recomputation of its approach cell from now on scores against the
+    // wider post-finish mask, and `w0`'s old resting spot is not guaranteed
+    // to still be inside it. Standing `w0` on the footprint boundary itself
+    // (`rect_distance == 0`) sidesteps that mask-timing gap outright, which
+    // is what this test needs to isolate — the reordering pin between
+    // construction and production, not the approach-cell search.
+    let worker_slot = h.world().entities().slot(w0).expect("worker slot");
+    h.world_mut()
+        .entities_mut()
+        .set_position(worker_slot, [198.0, 181.0]);
     assert!(h.world_mut().order_build(w0, barracks));
     h.step_exact(1);
 

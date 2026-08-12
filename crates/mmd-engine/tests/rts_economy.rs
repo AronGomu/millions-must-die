@@ -27,13 +27,51 @@ fn position_of(h: &RtsHarness, id: EntityId) -> [f32; 2] {
     h.world().entities().position(slot)
 }
 
-/// Teleport `w0` onto `node`'s cell and order it gathering — skips the walk
-/// so a test can drive the mining/return machinery directly.
+/// The nearest legal (unblocked in the pool's own navigation mask) cell
+/// centre to `target`, by expanding Chebyshev rings — a local, test-only
+/// re-implementation of the engine's own nearest-legal-cell search, kept
+/// separate because the engine's is `pub(crate)`.
+fn nearest_legal_cell_near(h: &RtsHarness, target: [f32; 2]) -> [f32; 2] {
+    let blocked = h.world().nav().blocked();
+    let width = h.world().scenario().width() as i32;
+    let height = h.world().scenario().height() as i32;
+    let tx = target[0].floor() as i32;
+    let ty = target[1].floor() as i32;
+    for r in 0..32i32 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                }
+                let x = tx + dx;
+                let y = ty + dy;
+                if x < 0 || y < 0 || x >= width || y >= height {
+                    continue;
+                }
+                let idx = (x as u32 + y as u32 * width as u32) as usize;
+                if !blocked[idx] {
+                    return [x as f32 + 0.5, y as f32 + 0.5];
+                }
+            }
+        }
+    }
+    target
+}
+
+/// Teleport `w0` onto the nearest legal cell to `node` and order it
+/// gathering — skips the walk so a test can drive the mining/return
+/// machinery directly.
+///
+/// Not `node`'s own cell: a resource node is itself a static solid (T3), so
+/// its own cell is never a legal body position — a real gatherer always mines
+/// from just outside it, and this helper must land somewhere that same
+/// gatherer could actually stand.
 fn park_and_order_gather(h: &mut RtsHarness, w0: EntityId, node: EntityId) -> usize {
     let node_slot = h.world().entities().slot(node).expect("node slot");
     let node_pos = h.world().entities().position(node_slot);
+    let park_pos = nearest_legal_cell_near(h, node_pos);
     let w0_slot = h.world().entities().slot(w0).expect("worker slot");
-    h.world_mut().entities_mut().set_position(w0_slot, node_pos);
+    h.world_mut().entities_mut().set_position(w0_slot, park_pos);
     assert!(h.world_mut().order_gather(w0, node));
     w0_slot
 }
@@ -430,11 +468,15 @@ fn delivery_one_cell_further_does_not_fire() {
         })
     ));
 
-    // 1.1 cells outside the footprint edge: past `DROP_OFF_REACH_CELLS`.
-    let just_outside = [173.1, 166.0];
+    // Reach is adaptive (T3): it widens to whatever the HQ's own chosen
+    // approach cell needs, not a flat constant, so "one cell past the
+    // footprint" is no longer guaranteed to be outside it. 8 cells clear of
+    // the footprint edge is comfortably past any approach cell this scene's
+    // terrain could ever produce.
+    let far_outside = [180.0, 166.0];
     h.world_mut()
         .entities_mut()
-        .set_position(w0_slot, just_outside);
+        .set_position(w0_slot, far_outside);
     let before_crystal = h.world().resources().crystal;
 
     h.step_exact(1);
@@ -442,7 +484,7 @@ fn delivery_one_cell_further_does_not_fire() {
     assert_eq!(
         h.world().entities().carry(w0_slot),
         Some((ResourceKind::Crystal, WORKER_CARRY_CAPACITY)),
-        "cargo must not bank one cell past the reach"
+        "cargo must not bank while far outside reach"
     );
     assert_eq!(h.world().resources().crystal, before_crystal);
     assert!(matches!(

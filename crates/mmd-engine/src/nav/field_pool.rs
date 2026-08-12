@@ -7,7 +7,7 @@
 
 use crate::scenario::Cell;
 
-use super::flow_field::{FieldScratch, FlowField, FlowFieldError};
+use super::flow_field::{COST_UNREACHABLE, FieldScratch, FlowField, FlowFieldError};
 
 /// Flow fields held simultaneously. Eight is the working set an RTS actually
 /// needs: a player rarely has more than a handful of distinct live
@@ -108,8 +108,77 @@ impl FieldPool {
             epoch_clock: 0,
             clock: 0,
             rebuilds: 0,
-            scratch: FieldScratch::with_capacity(n),
+            scratch: FieldScratch::reserve_worst_case(n),
         })
+    }
+
+    /// Build a pool over a grid from a caller-owned `blocked` mask directly —
+    /// `width * height` long, one bool per cell — rather than a sparse
+    /// obstacle-index list. This is how the RTS world feeds a pool the
+    /// radius-inflated centre mask [`crate::rts::StaticNav::center_blocked`]
+    /// produces, which has no sparse-index representation.
+    pub fn from_blocked_mask(
+        width: u32,
+        height: u32,
+        blocked: &[bool],
+    ) -> Result<Self, FieldPoolError> {
+        if width == 0 || height == 0 {
+            return Err(FieldPoolError::Field(FlowFieldError::EmptyGrid));
+        }
+        let n = (width as usize)
+            .checked_mul(height as usize)
+            .ok_or(FieldPoolError::Field(FlowFieldError::EmptyGrid))?;
+        if blocked.len() != n {
+            return Err(FieldPoolError::MaskLength {
+                got: blocked.len(),
+                expected: n,
+            });
+        }
+
+        let mut fields = Vec::with_capacity(NAV_FIELD_SLOTS);
+        for _ in 0..NAV_FIELD_SLOTS {
+            fields.push(FlowField::blank(width, height).map_err(FieldPoolError::Field)?);
+        }
+
+        Ok(Self {
+            width,
+            height,
+            blocked: blocked.to_vec(),
+            fields,
+            keys: [None; NAV_FIELD_SLOTS],
+            last_used: [0; NAV_FIELD_SLOTS],
+            epochs: [0; NAV_FIELD_SLOTS],
+            epoch_clock: 0,
+            clock: 0,
+            rebuilds: 0,
+            scratch: FieldScratch::reserve_worst_case(n),
+        })
+    }
+
+    /// Replace the whole blocked mask in place and invalidate every cached
+    /// field, without allocating: `blocked` must already be this pool's
+    /// `width * height` length, and the copy writes into the mask's existing
+    /// buffer.
+    pub fn replace_blocked_mask(&mut self, blocked: &[bool]) -> Result<(), FieldPoolError> {
+        if blocked.len() != self.blocked.len() {
+            return Err(FieldPoolError::MaskLength {
+                got: blocked.len(),
+                expected: self.blocked.len(),
+            });
+        }
+        self.blocked.copy_from_slice(blocked);
+        self.keys = [None; NAV_FIELD_SLOTS];
+        Ok(())
+    }
+
+    /// Whether `cell` has a finite integration cost in the field held at
+    /// `field_slot` — reachable from that field's destination, as opposed to
+    /// blocked or disconnected. Out-of-bounds is unreachable.
+    pub fn reachable(&self, field_slot: usize, cell: Cell) -> bool {
+        if field_slot >= NAV_FIELD_SLOTS || cell.x >= self.width || cell.y >= self.height {
+            return false;
+        }
+        self.fields[field_slot].cost_at(cell.x, cell.y) < COST_UNREACHABLE
     }
 
     /// Slot holding a field to `dest`, rebuilding into the least-recently-used

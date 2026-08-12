@@ -70,6 +70,18 @@ impl FieldScratch {
         }
     }
 
+    /// Reserve for the worst case a rebuild can ever push: every one of a
+    /// cell's up to 8 neighbours relaxes it once, so `8 * cells + 1` heap
+    /// entries is an upper bound no rebuild, at any obstacle layout, can
+    /// exceed. A pool built with this reservation never grows its scratch
+    /// heap again after construction — the first rebuild is a true zero-alloc
+    /// hit, not just a bounded one.
+    pub fn reserve_worst_case(cells: usize) -> Self {
+        Self {
+            heap: BinaryHeap::with_capacity(8 * cells + 1),
+        }
+    }
+
     /// Heap capacity, for the allocation-invariant test.
     pub fn capacity(&self) -> usize {
         self.heap.capacity()

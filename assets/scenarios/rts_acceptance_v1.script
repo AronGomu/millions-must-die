@@ -2,7 +2,7 @@
 # Frames are 1-based. Coordinates are screen pixels at the starting camera.
 
 1:move:960,540
-5:drag:860,530,950,600         # box-select the six starting workers
+5:drag:850,520,1000,600        # box-select the six starting workers (T3: radius-aware spawn scatters them wider)
 10:rclick:920,458              # send them all to the crystal node
 12:lclick:916,568              # re-select one of them (spawn cell 167,178)
 16:rclick:1072,606             # put that one on the gas node (196,168) instead

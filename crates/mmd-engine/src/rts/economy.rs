@@ -13,17 +13,6 @@ pub const WORKER_CARRY_CAPACITY: u32 = 8;
 /// decision the economy exists to pose.
 pub const GATHER_TICKS: u32 = 60;
 
-/// How close a worker's centre must come to a node's centre to start mining.
-pub const GATHER_REACH_CELLS: f32 = 2.0;
-
-/// How close a worker's centre must come to a drop-off building's **footprint
-/// rectangle** to bank its load.
-///
-/// Measured to the rectangle, not to the centre: an HQ is 12 cells across, and
-/// a centre-distance rule would make a worker walk into the middle of its own
-/// base to deliver.
-pub const DROP_OFF_REACH_CELLS: f32 = 1.0;
-
 /// Starting amount in a freshly seeded node, by kind.
 pub fn node_amount(kind: ResourceKind) -> u32 {
     match kind {

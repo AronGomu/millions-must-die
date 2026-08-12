@@ -330,8 +330,10 @@ fn construction_does_not_advance_without_a_worker() {
         .confirm_placement(CLEAR_CORNER, w0)
         .expect("confirm");
 
-    // Send the worker far away instead of letting it attend.
-    assert!(h.world_mut().order_move(w0, Cell { x: 20, y: 20 }));
+    // Send the worker far away instead of letting it attend. (50, 50) is a
+    // legal (radius-clear) cell in the tracked scene's inflated navigation
+    // mask, unlike a bare unblocked-terrain cell such as (20, 20).
+    assert!(h.world_mut().order_move(w0, Cell { x: 50, y: 50 }));
     h.step_exact(600);
 
     assert!(
@@ -582,13 +584,19 @@ fn cancel_of_a_stale_id_is_refused() {
 #[test]
 fn a_builder_walks_to_a_far_site() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    // (298.5, 298.5), not the raw (300.5, 300.5): the direct entity-store
+    // spawn below bypasses `RtsWorld`'s own collision-safe placement search,
+    // so it must land on a cell that is itself legal in the inflated
+    // navigation mask, or the mover never takes its first step — its own
+    // cell would sample as blocked, which `FieldPool::reachable` correctly
+    // reports as unreachable.
     let far = h
         .world_mut()
         .entities_mut()
         .spawn(
             EntityKind::Unit(UnitKind::Worker),
             OWNER_PLAYER,
-            [300.5, 300.5],
+            [298.5, 298.5],
         )
         .expect("spawn a far worker");
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));

@@ -8,24 +8,24 @@ use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
 use super::build::{
-    BUILD_REACH_CELLS, Placement, PlacementError, build_ticks, building_cost, footprint_cells,
-    placement_valid, supply_grant,
+    Placement, PlacementError, build_ticks, building_cost, placement_valid, supply_grant,
 };
 use super::economy::{
-    DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, Supply,
-    WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount, supply_cost,
+    GATHER_TICKS, Resources, Supply, WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
+    supply_cost,
 };
 use super::entity::{
     BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
-    ResourceKind, UnitKind,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
 };
 use super::orders::{
-    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, building_approach_cell, dist2,
-    drop_off_approach_cell, nearest_unblocked_cell, node_cell, rect_distance, step_admissible,
+    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, adaptive_reach, dist2,
+    entity_approach_cell, nearest_unblocked_cell, node_cell, rect_distance, step_admissible,
     unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
-use super::selection::{MAX_SELECTION, Pick, Selection, box_select, pick_at};
+use super::selection::{MAX_SELECTION, Pick, Selection, box_select, footprint_min, pick_at};
+use super::static_nav::StaticNav;
 
 /// What kind of order a context click resolved a unit into. See
 /// [`RtsWorld::issue_context_order_at`].
@@ -127,6 +127,10 @@ pub enum RtsWorldError {
     StoreFull { what: String },
     #[error("navigation pool: {0}")]
     Nav(#[from] FieldPoolError),
+    #[error("static navigation: {0}")]
+    StaticNav(#[from] super::static_nav::StaticNavError),
+    #[error("no legal collision-free position exists for a starting unit")]
+    NoFreeUnitPosition,
 }
 
 /// The phase-1 RTS game state.
@@ -138,6 +142,7 @@ pub struct RtsWorld {
     supply: Supply,
     tick_index: u64,
     start_hq: Option<EntityId>,
+    static_nav: StaticNav,
     nav: FieldPool,
     orders: OrderTable,
     /// Live-slot buffer the per-tick sweeps reuse. Reserved to
@@ -164,6 +169,43 @@ pub struct RtsWorld {
     /// Screen-space pan direction applied every tick, set by the input layer.
     /// Each component in `-1.0..=1.0`.
     pan_dir: [f32; 2],
+}
+
+/// The nearest legal cell centre to `preferred`: a cell whose centre is
+/// clear per `static_nav.center_blocked()` and does not overlap any
+/// already-`placed` body (two bodies overlap when their centres are closer
+/// than one body diameter — touching is legal). Ties (equal squared distance
+/// to `preferred`) go to the lower flat cell index, so relocation never
+/// depends on scan order. `None` only when the grid has no such cell.
+fn nearest_legal_free_center(
+    static_nav: &StaticNav,
+    placed: &[[f32; 2]],
+    preferred: [f32; 2],
+) -> Option<[f32; 2]> {
+    let width = static_nav.width();
+    let height = static_nav.height();
+    let cb = static_nav.center_blocked();
+    let diam2 = RTS_UNIT_BODY_DIAMETER_CELLS * RTS_UNIT_BODY_DIAMETER_CELLS;
+
+    let mut best: Option<(f32, u32)> = None;
+    for y in 0..height {
+        for x in 0..width {
+            let idx = (x + y * width) as usize;
+            if cb[idx] {
+                continue;
+            }
+            let p = [x as f32 + 0.5, y as f32 + 0.5];
+            if placed.iter().any(|&q| dist2(p, q) < diam2) {
+                continue;
+            }
+            let d = dist2(p, preferred);
+            let idx = idx as u32;
+            if best.is_none_or(|(bd, bi)| d < bd || (d == bd && idx < bi)) {
+                best = Some((d, idx));
+            }
+        }
+    }
+    best.map(|(_, idx)| [(idx % width) as f32 + 0.5, (idx / width) as f32 + 0.5])
 }
 
 impl RtsWorld {
@@ -212,15 +254,34 @@ impl RtsWorld {
             entities.set_amount(id.index as usize, node_amount(ResourceKind::Gas));
         }
 
-        // 3. One worker per scenario spawn cell.
+        // 3. `StaticNav`: terrain, resource nodes and the finished HQ. Built
+        // now, before any unit exists, because units are placed *against*
+        // it — the collision-free spawn search below reads its
+        // `center_blocked` mask, and folding a unit's own body into that mask
+        // would make it obstruct its own search.
+        let static_nav = StaticNav::new(&scenario, &entities)?;
+
+        // 4. One worker per scenario spawn cell, in scenario order, each
+        // relocated to the nearest legal (collision-free, in-bounds) cell
+        // centre — the preferred cell itself, when it is already legal.
+        // Scenario spawn cells are historically packed one cell apart, far
+        // closer than two 3-cell-radius bodies can share, so a body-blind
+        // placement would seed the world with overlapping units before a
+        // single tick ever ran. Ties (equal squared distance to the
+        // preferred cell) go to the lower flat cell index, so relocation is
+        // reproducible independent of scan order.
         let mut worker_count: u32 = 0;
+        let mut placed: Vec<[f32; 2]> = Vec::with_capacity(scenario.spawn_cells().len());
         for c in scenario.spawn_cells() {
-            let pos = [c.x as f32 + 0.5, c.y as f32 + 0.5];
+            let preferred = [c.x as f32 + 0.5, c.y as f32 + 0.5];
+            let pos = nearest_legal_free_center(&static_nav, &placed, preferred)
+                .ok_or(RtsWorldError::NoFreeUnitPosition)?;
             entities
                 .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)
                 .ok_or_else(|| RtsWorldError::StoreFull {
                     what: "worker".to_string(),
                 })?;
+            placed.push(pos);
             worker_count += 1;
         }
 
@@ -231,20 +292,15 @@ impl RtsWorld {
         let mut supply = Supply::new(rts.start_supply_cap);
         supply.add_used(WORKER_SUPPLY_COST * worker_count);
 
-        let mut nav = FieldPool::new(
+        // The seeded HQ is already stamped into `static_nav.solids` (it was
+        // spawned before `StaticNav::new` ran), so the pool is built straight
+        // from the inflated centre mask — units, not raw terrain, is what a
+        // pooled field must never route a body's centre across.
+        let nav = FieldPool::from_blocked_mask(
             scenario.width(),
             scenario.height(),
-            scenario.obstacle_cells(),
+            static_nav.center_blocked(),
         )?;
-
-        // The seeded HQ is a *finished* building, and a finished building
-        // blocks navigation — the rule `construction` applies to every
-        // building the player finishes. Stamping it here is what makes that
-        // rule true of the one building that exists at t=0, instead of leaving
-        // fields routing straight through the base.
-        for cell in footprint_cells(hq_pos, BuildingKind::Hq.footprint_cells()) {
-            nav.set_blocked(cell, true);
-        }
 
         // Opens on the base: the HQ's footprint centre is what a player wants
         // to see on frame 1, not the map's geometric middle.
@@ -263,6 +319,7 @@ impl RtsWorld {
             supply,
             tick_index: 0,
             start_hq: Some(start_hq),
+            static_nav,
             nav,
             orders: OrderTable::new(),
             live_scratch: Vec::with_capacity(MAX_ENTITIES),
@@ -318,6 +375,12 @@ impl RtsWorld {
     /// The navigation pool. Buildings stamp obstacles into it (T10).
     pub fn nav(&self) -> &FieldPool {
         &self.nav
+    }
+
+    /// The static (terrain, nodes, finished buildings) world geometry every
+    /// body-radius clearance check and approach-cell search reads.
+    pub fn static_nav(&self) -> &StaticNav {
+        &self.static_nav
     }
 
     /// Direct navigation mutation. A test hook: phase 1 has no gameplay path
@@ -486,7 +549,8 @@ impl RtsWorld {
         if self.entities.amount(node_slot) == 0 {
             return 0;
         }
-        let cell = node_cell(self.entities.position(node_slot));
+        let (cell, _) =
+            entity_approach_cell(&self.static_nav, &self.entities, node, UnitKind::Worker);
         let Ok(field) = self.nav.acquire(cell) else {
             return 0;
         };
@@ -670,9 +734,8 @@ impl RtsWorld {
         if self.entities.progress_target(site_slot) == 0 {
             return false;
         }
-        let width = self.scenario.width();
-        let height = self.scenario.height();
-        let cell = building_approach_cell(&self.entities, self.nav.blocked(), width, height, site);
+        let (cell, _) =
+            entity_approach_cell(&self.static_nav, &self.entities, site, UnitKind::Worker);
         let Ok(field) = self.nav.acquire(cell) else {
             return false;
         };
@@ -727,7 +790,8 @@ impl RtsWorld {
         match pick {
             Pick::Node(n) => {
                 if let Some(node_slot) = self.entities.slot(n) {
-                    let cell = node_cell(self.entities.position(node_slot));
+                    let (cell, _) =
+                        entity_approach_cell(&self.static_nav, &self.entities, n, UnitKind::Worker);
                     match self.nav.acquire(cell) {
                         Ok(field) => {
                             let depleted = self.entities.amount(node_slot) == 0;
@@ -765,10 +829,8 @@ impl RtsWorld {
                 }
             }
             Pick::Building(b) if self.is_site(b) => {
-                let width = self.scenario.width();
-                let height = self.scenario.height();
-                let cell =
-                    building_approach_cell(&self.entities, self.nav.blocked(), width, height, b);
+                let (cell, _) =
+                    entity_approach_cell(&self.static_nav, &self.entities, b, UnitKind::Worker);
                 match self.nav.acquire(cell) {
                     Ok(field) => {
                         for &id in &scratch {
@@ -1008,11 +1070,13 @@ impl RtsWorld {
                 self.orders.clear(slot);
                 continue;
             }
+            let (_, cell_dist) =
+                entity_approach_cell(&self.static_nav, &self.entities, site, UnitKind::Worker);
             if rect_distance(
                 self.entities.position(slot),
                 self.entities.position(site_slot),
                 b.footprint_cells(),
-            ) <= BUILD_REACH_CELLS
+            ) <= adaptive_reach(UnitKind::Worker, cell_dist)
             {
                 self.build_attend[site_slot] = true;
             }
@@ -1039,12 +1103,26 @@ impl RtsWorld {
                 // Finish.
                 self.entities.set_progress(slot, 0, 0);
                 let center = self.entities.position(slot);
-                for cell in footprint_cells(center, b.footprint_cells()) {
-                    self.nav.set_blocked(cell, true);
-                }
+                let min = footprint_min(center, b.footprint_cells());
+                self.static_nav
+                    .stamp_finished_building(min, b.footprint_cells());
                 self.supply.grant_cap(supply_grant(b));
                 self.finished.push(self.entities.id_at(slot).expect("live"));
             }
+        }
+        // Every finish above only touched `solids`; recompute the inflated
+        // centre mask once for the whole batch, then hand it to the pool in
+        // one replacement — not once per finished building this tick.
+        if !self.finished.is_empty() {
+            self.static_nav
+                .rebuild_center_blocked(RTS_UNIT_BODY_RADIUS_CELLS);
+            let replaced = self
+                .nav
+                .replace_blocked_mask(self.static_nav.center_blocked());
+            debug_assert!(
+                replaced.is_ok(),
+                "pool and static_nav grids must agree in size"
+            );
         }
 
         // Clear the orders of every worker that was building something now
@@ -1101,8 +1179,6 @@ impl RtsWorld {
     /// already hold a queue, and before orders, so a unit produced this tick
     /// can be given its rally order in the same tick.
     fn production_system(&mut self) {
-        let width = self.scenario.width();
-        let height = self.scenario.height();
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
             if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
@@ -1119,13 +1195,8 @@ impl RtsWorld {
             };
 
             let building_id = self.entities.id_at(slot).expect("live");
-            let cell = building_approach_cell(
-                &self.entities,
-                self.nav.blocked(),
-                width,
-                height,
-                building_id,
-            );
+            let (cell, _) =
+                entity_approach_cell(&self.static_nav, &self.entities, building_id, done);
             let pos = [cell.x as f32 + 0.5, cell.y as f32 + 0.5];
             let Some(id) = self
                 .entities
@@ -1168,9 +1239,6 @@ impl RtsWorld {
     /// on this same tick — otherwise the round trip would lag its own state
     /// by one frame.
     fn gather(&mut self) {
-        let width = self.scenario.width();
-        let height = self.scenario.height();
-
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
             let Order::Gather { node, phase } = self.orders.get(slot) else {
@@ -1195,7 +1263,15 @@ impl RtsWorld {
                         self.orders.clear(slot);
                         continue;
                     }
-                    if dist2(p, node_pos) <= GATHER_REACH_CELLS * GATHER_REACH_CELLS {
+                    let (_, node_cell_dist) = entity_approach_cell(
+                        &self.static_nav,
+                        &self.entities,
+                        node,
+                        UnitKind::Worker,
+                    );
+                    if rect_distance(p, node_pos, 1)
+                        <= adaptive_reach(UnitKind::Worker, node_cell_dist)
+                    {
                         self.orders.set(
                             slot,
                             Order::Gather {
@@ -1232,12 +1308,11 @@ impl RtsWorld {
                         self.entities.set_carry(slot, Some((res, take)));
                         match self.nearest_drop_off(p) {
                             Some(d) => {
-                                let cell = drop_off_approach_cell(
+                                let (cell, _) = entity_approach_cell(
+                                    &self.static_nav,
                                     &self.entities,
-                                    self.nav.blocked(),
-                                    width,
-                                    height,
                                     d,
+                                    UnitKind::Worker,
                                 );
                                 match self.nav.acquire(cell) {
                                     Ok(field) => self.orders.set(
@@ -1264,8 +1339,14 @@ impl RtsWorld {
                         self.orders.clear(slot);
                         continue;
                     };
+                    let (_, drop_off_cell_dist) = entity_approach_cell(
+                        &self.static_nav,
+                        &self.entities,
+                        drop_off,
+                        UnitKind::Worker,
+                    );
                     if rect_distance(p, self.entities.position(d_slot), b.footprint_cells())
-                        <= DROP_OFF_REACH_CELLS
+                        <= adaptive_reach(UnitKind::Worker, drop_off_cell_dist)
                     {
                         if let Some((kind, amount)) = self.entities.carry(slot) {
                             match kind {
@@ -1284,7 +1365,13 @@ impl RtsWorld {
                             self.orders.clear(slot);
                             continue;
                         }
-                        match self.nav.acquire(node_cell(node_pos)) {
+                        let (cell, _) = entity_approach_cell(
+                            &self.static_nav,
+                            &self.entities,
+                            node,
+                            UnitKind::Worker,
+                        );
+                        match self.nav.acquire(cell) {
                             Ok(field) => self.orders.set(
                                 slot,
                                 Order::Gather {
@@ -1312,7 +1399,6 @@ impl RtsWorld {
     fn movement(&mut self) {
         let width = self.scenario.width();
         let height = self.scenario.height();
-
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
             let EntityKind::Unit(kind) = self.entities.kind(slot) else {
@@ -1325,10 +1411,12 @@ impl RtsWorld {
                     node,
                     phase: GatherPhase::ToNode { field },
                 } => {
-                    let Some(node_slot) = self.entities.slot(node) else {
+                    if self.entities.slot(node).is_none() {
                         continue;
-                    };
-                    (node_cell(self.entities.position(node_slot)), field)
+                    }
+                    let (cell, _) =
+                        entity_approach_cell(&self.static_nav, &self.entities, node, kind);
+                    (cell, field)
                 }
                 Order::Gather {
                     phase: GatherPhase::Returning { drop_off, field },
@@ -1337,16 +1425,9 @@ impl RtsWorld {
                     if self.entities.slot(drop_off).is_none() {
                         continue;
                     }
-                    (
-                        drop_off_approach_cell(
-                            &self.entities,
-                            self.nav.blocked(),
-                            width,
-                            height,
-                            drop_off,
-                        ),
-                        field,
-                    )
+                    let (cell, _) =
+                        entity_approach_cell(&self.static_nav, &self.entities, drop_off, kind);
+                    (cell, field)
                 }
                 Order::Build { site, field } => {
                     let Some(site_slot) = self.entities.slot(site) else {
@@ -1355,6 +1436,8 @@ impl RtsWorld {
                     let EntityKind::Building(b) = self.entities.kind(site_slot) else {
                         continue;
                     };
+                    let (approach_cell, cell_dist) =
+                        entity_approach_cell(&self.static_nav, &self.entities, site, kind);
                     // A worker that has reached the site stops and attends it;
                     // it does not clear the order, since the construction
                     // system — not the mover — decides when a `Build` order ends.
@@ -1362,20 +1445,11 @@ impl RtsWorld {
                         self.entities.position(slot),
                         self.entities.position(site_slot),
                         b.footprint_cells(),
-                    ) <= BUILD_REACH_CELLS
+                    ) <= adaptive_reach(kind, cell_dist)
                     {
                         continue;
                     }
-                    (
-                        building_approach_cell(
-                            &self.entities,
-                            self.nav.blocked(),
-                            width,
-                            height,
-                            site,
-                        ),
-                        field,
-                    )
+                    (approach_cell, field)
                 }
                 // Idle, and Mining (a mining worker stands still).
                 _ => continue,
@@ -1389,7 +1463,7 @@ impl RtsWorld {
             //    Only `Order::Move` stops here. A gathering or building worker's
             //    real completion condition is a *reach* test against a
             //    footprint rectangle (the gather system's drop-off check, or the
-            //    `BUILD_REACH_CELLS` guard above), not proximity to the approach
+            //    `Order::Build` guard above), not proximity to the approach
             //    cell's own centre — and since T10 an approach cell sits just
             //    outside that footprint, `ARRIVAL_RADIUS_CELLS` alone can no
             //    longer be trusted to fall inside the reach threshold. Freezing
@@ -1438,14 +1512,26 @@ impl RtsWorld {
             }
             let (vx, vy) = self.nav.field(field.slot).vector_at(cx as u32, cy as u32);
             if vx == 0.0 && vy == 0.0 {
-                // The field is the live one and it still bottoms out here, so
-                // `dest` is genuinely unreachable from this cell. Stop rather
-                // than spin on an order that can never complete — for every
-                // order kind, not just `Order::Move`: the reach tests above
-                // (the gather system's, and `BUILD_REACH_CELLS`) have already
-                // taken the "standing on it" case out, so what is left here is
-                // no route.
-                self.orders.clear(slot);
+                // A zero vector means one of two things: this cell is the
+                // field's own sink (cost 0 — the unit already stands on `dest`
+                // itself, which an approach cell close to its adaptive reach
+                // can leave the unit sitting on exactly), or `dest` is
+                // genuinely unreachable from here (cost never resolved).
+                // `FieldPool::reachable` is the one source of truth for which:
+                // only the second case is a dead order. The first is not a
+                // failure to stop on — the reach tests above (the gather
+                // system's, and the `Order::Build` guard above) own completion
+                // and will see it next tick from wherever this cell leaves the
+                // unit.
+                if !self.nav.reachable(
+                    field.slot as usize,
+                    Cell {
+                        x: cx as u32,
+                        y: cy as u32,
+                    },
+                ) {
+                    self.orders.clear(slot);
+                }
                 continue;
             }
 

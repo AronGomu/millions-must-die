@@ -59,10 +59,6 @@ pub fn supply_grant(kind: BuildingKind) -> u32 {
     }
 }
 
-/// How close a worker's centre must be to a site's footprint rectangle to count
-/// as building it.
-pub const BUILD_REACH_CELLS: f32 = 1.5;
-
 /// Whether extra workers speed a site up.
 ///
 /// They do not. One attending worker advances construction by exactly one tick
@@ -133,8 +129,11 @@ pub fn placement_valid(
     }
 
     // 2. no terrain, and no already-finished building (both live in the same
-    // blocked mask).
-    let blocked = world.nav().blocked();
+    // mask). Deliberately the *raw* mask, not the radius-inflated navigation
+    // mask `world.nav()` now serves: a body clearance requirement is not a
+    // placement exclusion rule, and inflating this check would refuse a
+    // building the raw terrain has room for.
+    let blocked = world.static_nav().placement_solids();
     for y in min.y..min.y + edge {
         for x in min.x..min.x + edge {
             let idx = (x + y * width) as usize;

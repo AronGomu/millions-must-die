@@ -712,6 +712,19 @@ fn selection_operations_allocate_nothing() {
     let a = view.project(162.5, 178.5);
     let b = view.project(167.5, 178.5);
 
+    // T3's radius-aware initial spawn scatters the scene's six workers well
+    // outside this box (they cannot share a cell one apart at a 3-cell body
+    // radius); re-park them in a row first — this case means to measure box
+    // select's own allocation behaviour, not depend on the scenario's default
+    // spawn layout.
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    for (i, id) in workers.iter().enumerate() {
+        let slot = h.world().entities().slot(*id).expect("live worker");
+        h.world_mut()
+            .entities_mut()
+            .set_position(slot, [162.5 + i as f32, 178.5]);
+    }
+
     // Warm-up outside the scope: whatever the selection/scratch buffers grow
     // to on their first use happens now.
     let warm = h.world_mut().box_select_into_selection(&view, a, b);
@@ -843,5 +856,36 @@ fn production_allocates_nothing() {
         h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier)).len(),
         1,
         "queued Soldier must complete"
+    );
+}
+
+/// T3: `FieldPool::from_blocked_mask` reserves its scratch heap to the true
+/// worst case (`8 * cells + 1`), so the very first field build after load — a
+/// guaranteed cold miss, since nothing has ever called `acquire` on a freshly
+/// seeded world — allocates nothing at all. Previously only the *second*
+/// rebuild at a grid size was guaranteed not to grow the heap; this is the
+/// stronger, ticket-mandated bound: not even the first one may.
+#[test]
+fn cold_field_acquire_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
+
+    let guard = MeasureGuard::enter();
+    let ok = h.world_mut().order_move(worker, Cell { x: 50, y: 50 });
+    std::hint::black_box(ok);
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "the first cold field acquire after load allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    assert!(
+        ok,
+        "the destination must have been legal, or this measured nothing"
     );
 }

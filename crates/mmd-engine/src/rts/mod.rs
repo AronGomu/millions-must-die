@@ -8,17 +8,18 @@ mod orders;
 mod pack;
 mod production;
 mod selection;
+mod static_nav;
 mod world;
 
 pub use build::{
-    BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, BUILD_REACH_CELLS,
-    DEPOT_BUILD_TICKS, DEPOT_COST, DEPOT_SUPPLY_GRANT, EXTRA_BUILDERS_SPEED_UP, HQ_BUILD_TICKS,
-    HQ_COST, HQ_SUPPLY_GRANT, Placement, PlacementError, build_ticks, building_cost,
-    footprint_cells, placement_valid, supply_grant,
+    BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, DEPOT_BUILD_TICKS, DEPOT_COST,
+    DEPOT_SUPPLY_GRANT, EXTRA_BUILDERS_SPEED_UP, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
+    Placement, PlacementError, build_ticks, building_cost, footprint_cells, placement_valid,
+    supply_grant,
 };
 pub use economy::{
-    DROP_OFF_REACH_CELLS, GATHER_REACH_CELLS, GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply,
-    WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount, supply_cost,
+    GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply, WORKER_CARRY_CAPACITY,
+    WORKER_SUPPLY_COST, node_amount, supply_cost,
 };
 pub use entity::{
     BuildingKind, CARRY_NONE, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL,
@@ -30,8 +31,8 @@ pub use hud::{
     TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, fmt_ratio, fmt_u32, kind_label, pack_hud,
 };
 pub use orders::{
-    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
-    WORKER_SPEED_CELLS_PER_SEC, unit_speed,
+    ARRIVAL_RADIUS_CELLS, GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable,
+    SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
 };
 pub use pack::{
     DRAG_BOX_THICKNESS_PX, DRAG_BOX_TINT, DragBox, GHOST_TINT, Prop, RtsFrame,
@@ -48,6 +49,7 @@ pub use selection::{
     footprint_contains, footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect,
     unit_pick_contains,
 };
+pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
     ContextOrderReason, ContextOrderResult, IssuedOrder, NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT,
     OrderReceiptBuffer, RtsWorld, RtsWorldError, UnitOrderReceipt,

@@ -6,6 +6,7 @@ use crate::nav::field_pool::FieldRef;
 use crate::scenario::Cell;
 
 use super::entity::{EntityId, EntityStore, MAX_ENTITIES, UnitKind};
+use super::static_nav::StaticNav;
 
 /// Walk speed in cells per second, per unit kind.
 ///
@@ -33,6 +34,32 @@ pub fn unit_speed(kind: UnitKind) -> f32 {
 /// order still completes. Arrival is checked against the destination cell, not
 /// against a per-unit goal, so the whole group clears its order together.
 pub const ARRIVAL_RADIUS_CELLS: f32 = 1.5;
+
+/// Slack added to a unit's own body radius to get its interaction reach: a
+/// unit standing at a legal approach cell (whose centre already sits at least
+/// one body radius clear of the target) needs this much more play to close
+/// the last gap to the target's footprint rectangle without another step.
+pub const NAV_CENTER_TOLERANCE_CELLS: f32 = 0.5;
+
+/// How close a unit of `kind` must get — to a target's footprint rectangle —
+/// to gather, build or drop off. Replaces the old independent
+/// `BUILD_REACH_CELLS` / `GATHER_REACH_CELLS` / `DROP_OFF_REACH_CELLS`
+/// constants: those were tuned for a point-sized unit, and a 3-cell-radius
+/// body needs a reach that scales with its own hull.
+pub const fn interaction_reach(kind: UnitKind) -> f32 {
+    kind.body_radius_cells() + NAV_CENTER_TOLERANCE_CELLS
+}
+
+/// The reach an order actually completing against a specific approach cell
+/// needs: [`interaction_reach`] is a floor, not a ceiling. Dense inflated
+/// terrain can push every legal ring cell [`entity_approach_cell`] can find
+/// past the flat-ground `interaction_reach` distance — a unit standing at the
+/// approach cell it was actually routed to must still be able to finish its
+/// order, so the reach widens to cover that cell's own distance (plus the same
+/// tolerance) whenever it is the larger of the two.
+pub(crate) fn adaptive_reach(kind: UnitKind, chosen_cell_dist: f32) -> f32 {
+    interaction_reach(kind).max(chosen_cell_dist + NAV_CENTER_TOLERANCE_CELLS)
+}
 
 /// Where a gathering worker is in its round trip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -228,67 +255,90 @@ pub(crate) fn rect_distance(p: [f32; 2], center: [f32; 2], edge: u32) -> f32 {
     (cx * cx + cy * cy).sqrt()
 }
 
-/// The cell a unit is routed to when heading for a building.
+/// The cell a unit of `mover_kind` is routed to when heading for `target` (a
+/// building or a resource node) — a legal centre (per
+/// [`StaticNav::center_blocked`]) for the mover's own body, scored by
+/// distance to `target`'s footprint rectangle.
 ///
-/// The footprint's own cells are blocked once the building finishes, so a field
-/// cannot target them. This walks the one-cell, 4-connected ring around the
-/// rectangle (the cells directly north, east, south and west of it — no
-/// diagonal corners, which sit up to `sqrt(2)` cells from the rectangle and
-/// would blow past a 1-cell-scale reach test) in a fixed order — top edge
-/// left→right, right edge top→bottom, bottom edge right→left, left edge
-/// bottom→top — and returns the first unblocked, in-bounds cell. Fixed order,
-/// not "nearest", because two equally near cells would make the choice depend
-/// on float comparison and the state hash would stop being reproducible across
-/// a refactor.
+/// The footprint's own cells (and everything within one body radius of it)
+/// are blocked in the centre mask once a building finishes, so a field
+/// cannot target them and a mover cannot stand inside another body's
+/// clearance either. This expands a 4-connected ring around the footprint —
+/// the cells directly north, east, south and west of it, offset outward one
+/// grid step at a time, never a diagonal corner cell, matching the no-corner-
+/// cut rule the field descent itself obeys — and, at the first ring radius
+/// that contains at least one legal cell, returns the one with the least
+/// [`rect_distance`] to the footprint, ties broken by the lower flat cell
+/// index. A legal cell at ring radius `r` is never farther from the
+/// footprint than one at `r + 1`, so the first non-empty ring already holds
+/// the answer.
 ///
-/// Returns the footprint's centre cell when the ring is entirely blocked, which
-/// then makes `FieldPool::acquire` fail cleanly rather than silently routing
-/// somewhere else.
-pub(crate) fn building_approach_cell(
+/// Returns the footprint's own cell when no ring out to the grid's own size
+/// ever finds one, which then makes `FieldPool::acquire` fail cleanly rather
+/// than silently routing somewhere else.
+///
+/// Returns the cell and its own [`rect_distance`] to `target`'s footprint —
+/// the second half is what lets a caller compute [`adaptive_reach`] instead of
+/// trusting a flat-ground constant that dense terrain can push the chosen
+/// cell past.
+pub(crate) fn entity_approach_cell(
+    static_nav: &StaticNav,
     store: &EntityStore,
-    blocked: &[bool],
-    width: u32,
-    height: u32,
-    id: EntityId,
-) -> Cell {
-    let slot = store.slot(id).expect("live building");
+    target: EntityId,
+    mover_kind: UnitKind,
+) -> (Cell, f32) {
+    let slot = store.slot(target).expect("live target");
     let pos = store.position(slot);
-    let edge = store.kind(slot).footprint_cells() as i64;
-    let min = super::selection::footprint_min(pos, edge as u32);
+    let edge = store.kind(slot).footprint_cells();
+    let min = super::selection::footprint_min(pos, edge);
+    let width = static_nav.width();
+    let height = static_nav.height();
+    let cb = static_nav.center_blocked();
+    let _ = mover_kind; // every current unit kind shares one body radius
+
     let min_x = min.x as i64;
     let min_y = min.y as i64;
-    let max_x = min_x + edge;
-    let max_y = min_y + edge;
+    let e = edge as i64;
+    let max_radius = width.max(height);
 
-    // top edge, left -> right
-    for x in min_x..max_x {
-        if let Some(c) = ring_try(x, min_y - 1, width, height, blocked) {
-            return c;
+    for r in 1..=max_radius {
+        let rr = r as i64;
+        let mut best: Option<(f32, u32, u32)> = None;
+        let consider = |x: i64, y: i64, best: &mut Option<(f32, u32, u32)>| {
+            if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
+                return;
+            }
+            let idx = (x as u32 + y as u32 * width) as usize;
+            if cb[idx] {
+                return;
+            }
+            let p = [x as f32 + 0.5, y as f32 + 0.5];
+            let d = rect_distance(p, pos, edge);
+            if best.is_none_or(|(bd, _, _)| d < bd) {
+                *best = Some((d, x as u32, y as u32));
+            }
+        };
+        for x in min_x..min_x + e {
+            consider(x, min_y - rr, &mut best);
         }
-    }
-    // right edge, top -> bottom
-    for y in min_y..max_y {
-        if let Some(c) = ring_try(max_x, y, width, height, blocked) {
-            return c;
+        for y in min_y..min_y + e {
+            consider(min_x + e - 1 + rr, y, &mut best);
         }
-    }
-    // bottom edge, right -> left
-    for x in (min_x..max_x).rev() {
-        if let Some(c) = ring_try(x, max_y, width, height, blocked) {
-            return c;
+        for x in min_x..min_x + e {
+            consider(x, min_y + e - 1 + rr, &mut best);
         }
-    }
-    // left edge, bottom -> top
-    for y in (min_y..max_y).rev() {
-        if let Some(c) = ring_try(min_x - 1, y, width, height, blocked) {
-            return c;
+        for y in min_y..min_y + e {
+            consider(min_x - rr, y, &mut best);
+        }
+        if let Some((d, x, y)) = best {
+            return (Cell { x, y }, d);
         }
     }
 
-    node_cell(pos)
+    (node_cell(pos), 0.0)
 }
 
-/// One cell of [`building_approach_cell`]'s ring scan: `None` when out of
+/// One cell of [`entity_approach_cell`]'s ring scan: `None` when out of
 /// bounds or blocked, `Some` otherwise.
 fn ring_try(x: i64, y: i64, width: u32, height: u32, blocked: &[bool]) -> Option<Cell> {
     if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
@@ -305,26 +355,13 @@ fn ring_try(x: i64, y: i64, width: u32, height: u32, blocked: &[bool]) -> Option
     }
 }
 
-/// The cell a worker should be routed to when heading for a drop-off building.
-///
-/// A thin, semantically-named alias for [`building_approach_cell`].
-pub(crate) fn drop_off_approach_cell(
-    store: &EntityStore,
-    blocked: &[bool],
-    width: u32,
-    height: u32,
-    id: EntityId,
-) -> Cell {
-    building_approach_cell(store, blocked, width, height, id)
-}
-
 /// The nearest unblocked, in-bounds cell to `from`, or `None` when the grid
 /// has no unblocked cell.
 ///
 /// Scanned as squares of growing Chebyshev radius, and inside a ring in a
 /// fixed row-major order — "nearest" by float distance would make the choice
 /// depend on a float comparison and stop the state hash reproducing across a
-/// refactor, exactly as [`building_approach_cell`] argues.
+/// refactor, exactly as [`entity_approach_cell`] argues.
 ///
 /// This is how a unit gets out of a cell that was stamped blocked underneath
 /// it: every field's descent vector at a blocked cell is zero, so a unit left
@@ -492,18 +529,29 @@ mod tests {
         assert_eq!(t.get(MAX_ENTITIES - 1), Order::Idle);
     }
 
-    // --- building_approach_cell ------------------------------------------------
+    // --- entity_approach_cell ------------------------------------------------
     //
-    // `building_approach_cell` is `pub(crate)`, so these two cases live here as
-    // unit tests rather than in `tests/rts_build.rs` (an external integration
-    // test cannot see a crate-private item) — the same reason
+    // `entity_approach_cell` is `pub(crate)`, so these cases live here as unit
+    // tests rather than in `tests/rts_build.rs` (an external integration test
+    // cannot see a crate-private item) — the same reason
     // `rts_step_admissible_agrees_with_the_sim` above tests `step_admissible`
     // in-crate instead of from outside.
 
-    use super::super::entity::{BuildingKind, EntityKind, OWNER_PLAYER};
+    use super::super::entity::{
+        BuildingKind, EntityKind, OWNER_PLAYER, RTS_UNIT_BODY_RADIUS_CELLS,
+    };
+    use super::super::static_nav::StaticNav;
 
     const W: u32 = 320;
     const H: u32 = 320;
+
+    fn stamp(solids: &mut [bool], min: Cell, edge: u32) {
+        for dy in 0..edge {
+            for dx in 0..edge {
+                solids[((min.x + dx) + (min.y + dy) * W) as usize] = true;
+            }
+        }
+    }
 
     #[test]
     fn the_approach_cell_rings_a_finished_building() {
@@ -515,19 +563,21 @@ mod tests {
                 [166.0, 166.0],
             )
             .expect("spawn hq");
-        let blocked = vec![false; (W * H) as usize];
+        let mut solids = vec![false; (W * H) as usize];
+        stamp(&mut solids, Cell { x: 160, y: 160 }, 12);
+        let nav = StaticNav::from_raw(W, H, solids, RTS_UNIT_BODY_RADIUS_CELLS);
 
-        let a = building_approach_cell(&store, &blocked, W, H, id);
-        let b = building_approach_cell(&store, &blocked, W, H, id);
+        let (a, _) = entity_approach_cell(&nav, &store, id, UnitKind::Worker);
+        let (b, _) = entity_approach_cell(&nav, &store, id, UnitKind::Worker);
         assert_eq!(a, b, "the approach cell must be the same on every call");
 
-        // The HQ footprint is [160, 172) x [160, 172); the ring cell must be
-        // outside it and unblocked.
+        // The HQ footprint is [160, 172) x [160, 172); the approach cell must
+        // lie outside it and outside the mask's inflated clearance.
         assert!(
             a.x < 160 || a.x >= 172 || a.y < 160 || a.y >= 172,
             "approach cell {a:?} must lie outside the footprint"
         );
-        assert!(!blocked[(a.x + a.y * W) as usize]);
+        assert!(!nav.center_blocked()[(a.x + a.y * W) as usize]);
     }
 
     #[test]
@@ -565,17 +615,22 @@ mod tests {
                 [20.0, 20.0],
             )
             .expect("spawn depot");
-        let mut blocked = vec![false; (W * H) as usize];
+        let mut solids = vec![false; (W * H) as usize];
+        stamp(&mut solids, Cell { x: 16, y: 16 }, 8);
 
-        // Block the whole top edge of the ring: y = 15, x in 16..24.
+        // A 3-cell body needs its centre 3 cells clear of the footprint, so
+        // the first ring radius with any legal cell is r=4 (dist = r - 0.5
+        // >= 3). Blocking the top edge's r=4 candidates (y=12, x in 16..24)
+        // forces the scan to the next edge scored at the same radius.
         for x in 16..24u32 {
-            blocked[(x + 15 * W) as usize] = true;
+            solids[(x + 12 * W) as usize] = true;
         }
 
-        let cell = building_approach_cell(&store, &blocked, W, H, id);
+        let nav = StaticNav::from_raw(W, H, solids, RTS_UNIT_BODY_RADIUS_CELLS);
+        let (cell, _) = entity_approach_cell(&nav, &store, id, UnitKind::Worker);
 
         // The scan must then move to the right edge, top -> bottom, whose
-        // first cell is (24, 16).
-        assert_eq!(cell, Cell { x: 24, y: 16 });
+        // first legal cell at r=4 is (27, 16).
+        assert_eq!(cell, Cell { x: 27, y: 16 });
     }
 }

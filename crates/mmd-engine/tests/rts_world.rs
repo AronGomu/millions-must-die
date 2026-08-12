@@ -304,25 +304,36 @@ fn the_hq_sits_at_its_footprint_centre() {
 fn the_seeded_hq_is_stamped_into_navigation() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
     let width = h.world().scenario().width();
-    let blocked = h.world().nav().blocked();
+    // The *raw* solid mask (what placement validity reads) is exact-footprint:
+    // no more, no less.
+    let solids = h.world().static_nav().placement_solids();
     // The tracked scene's HQ footprint is [160, 172) x [160, 172).
     for y in 160..172u32 {
         for x in 160..172u32 {
             assert!(
-                blocked[(x + y * width) as usize],
-                "HQ footprint cell ({x}, {y}) is walkable: a field routes straight \
+                solids[(x + y * width) as usize],
+                "HQ footprint cell ({x}, {y}) is not solid: a field routes straight \
                  through the base"
             );
         }
     }
-    // ...and only the footprint: the ring around it must stay walkable, or a
-    // worker could never reach the drop-off.
+    // ...and only the footprint: the raw mask's own ring around it must stay
+    // clear, or placement would refuse a building next to a finished one for
+    // no reason.
     for x in 159..173u32 {
         assert!(
-            !blocked[(x + 159 * width) as usize],
-            "cell ({x}, 159) is blocked; the stamp spilled past the footprint"
+            !solids[(x + 159 * width) as usize],
+            "cell ({x}, 159) is solid; the stamp spilled past the footprint"
         );
     }
+    // The *navigation* mask a pooled field reads is deliberately wider: a
+    // 3-cell-radius body's own clearance from the footprint blocks its centre
+    // well outside the footprint's own cells.
+    let nav_blocked = h.world().nav().blocked();
+    assert!(
+        nav_blocked[(159 + 159 * width) as usize],
+        "a body's own clearance from the HQ footprint must reach (159, 159)"
+    );
 }
 
 #[test]
@@ -341,13 +352,20 @@ fn nodes_carry_their_starting_amount() {
 #[test]
 fn workers_start_on_the_scenario_spawn_cells() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    let expected: Vec<[f32; 2]> = h
-        .world()
-        .scenario()
-        .spawn_cells()
-        .iter()
-        .map(|c| [c.x as f32 + 0.5, c.y as f32 + 0.5])
-        .collect();
+    // The scenario's 6 spawn cells sit one cell apart (162..167 @ y=178), far
+    // closer than two 3-cell-radius bodies can share, so every worker but the
+    // first is relocated to the nearest legal, non-overlapping cell centre.
+    // Deterministic and pinned here so a regression in the relocation search
+    // shows up as a diff against a known-good layout, not a vague "positions
+    // changed".
+    let expected: Vec<[f32; 2]> = vec![
+        [162.5, 178.5],
+        [168.5, 178.5],
+        [164.5, 184.5],
+        [170.5, 184.5],
+        [174.5, 178.5],
+        [175.5, 172.5],
+    ];
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     assert_eq!(workers.len(), expected.len());
     for (id, want) in workers.into_iter().zip(expected) {
@@ -542,21 +560,31 @@ fn rts_spec(obstacles: Vec<u32>, spawns: Vec<Cell>, destination: Cell) -> Scenar
     }
 }
 
-/// Full wall at `x == 16` with a single gap at `y == 8`.
+/// Full wall at `x == 16` with a gap centred on `y == 8`.
+///
+/// The gap must be wide enough for a 3-cell-radius body to clear both
+/// flanking wall segments at once (each flanking segment must sit at least a
+/// body radius from the gap's own centre): `y` in `2..=14` leaves the centre
+/// cell `(16, 8)` six cells clear of the nearest wall cell on either side, well
+/// past the 3-cell radius this fixture exists to exercise.
 fn wall_with_a_gap() -> Vec<u32> {
     (0..320u32)
-        .filter(|y| *y != 8)
+        .filter(|y| !(2..=14).contains(y))
         .map(|y| 16 + y * 320)
         .collect()
 }
 
-/// A sealed 3x3 chamber of free ground at (200..=202, 200..=202).
+/// A sealed chamber of free ground, fully enclosed (no gap at all), large
+/// enough that its own centre sits well past a 3-cell-radius body's own
+/// clearance from every wall — unlike the destination itself, which must
+/// stay legal, or `order_move` would refuse the order before the field ever
+/// got a chance to prove it unreachable.
 fn sealed_chamber() -> Vec<u32> {
     let mut out = Vec::new();
-    for y in 199..=203u32 {
-        for x in 199..=203u32 {
-            let inside = (200..=202).contains(&x) && (200..=202).contains(&y);
-            if !inside {
+    for y in 193..=207u32 {
+        for x in 193..=207u32 {
+            let on_border = x == 193 || x == 207 || y == 193 || y == 207;
+            if on_border {
                 out.push(x + y * 320);
             }
         }
@@ -680,8 +708,8 @@ fn a_unit_reaches_its_destination() {
     let worker = h
         .ids_of_kind(EntityKind::Unit(UnitKind::Worker))
         .into_iter()
-        .find(|id| position_of(&h, *id) == [165.5, 178.5])
-        .expect("the worker spawned at (165, 178)");
+        .find(|id| position_of(&h, *id) == [174.5, 178.5])
+        .expect("a worker spawned near (174, 178) after relocation");
     let dest = Cell { x: 200, y: 200 };
     assert!(h.world_mut().order_move(worker, dest));
 
@@ -714,9 +742,12 @@ fn a_unit_walks_around_an_obstacle() {
     for _ in 0..1_200 {
         h.step_exact(1);
         let p = position_of(&h, worker);
-        let cy = p[1].floor() as i32;
         let cx = p[0].floor() as i32;
-        if cx == 16 && (cy - 8).abs() <= 2 {
+        // The wall is solid at every other cell of `x == 16`, so crossing at
+        // `x == 16` at all proves the gap was used — the destination sits at
+        // `y == 20`, well outside the `2..=14` gap window, so the walk's
+        // actual crossing row is not pinned to the gap's own centre.
+        if cx == 16 {
             near_the_gap = true;
         }
         if h.world().order_of(worker) == Some(Order::Idle) {

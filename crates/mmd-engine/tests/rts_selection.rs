@@ -196,7 +196,14 @@ fn the_pick_radius_is_the_body_radius() {
 
 #[test]
 fn clicking_the_hq_selects_it_when_no_unit_is_near() {
-    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    // Radius-aware initial spawn (T3) can scatter a worker close enough to
+    // the HQ's ground point that its own (12-cell) sprite quad reaches back
+    // over it; park every worker well clear first so this case is actually
+    // testing "no unit is near".
+    for id in workers(&h) {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
     let hq = h.world().start_hq().expect("start hq");
     let screen = view().project(166.0, 166.0);
     assert_eq!(pick_at(h.world(), &view(), screen), Pick::Building(hq));
@@ -211,6 +218,13 @@ fn equal_depth_ties_go_to_the_lower_entity_slot() {
     // — here, the HQ — is what is actually on top of the pixel.
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
+    // Park every other worker well clear — T3's radius-aware spawn can
+    // otherwise leave one close enough to the HQ's ground point to outrank
+    // both tied entities on depth alone, which would test nothing about the
+    // tie-break this case exists to pin.
+    for &id in &ids[1..] {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
     let target = ids[0];
     let hq = h.world().start_hq().expect("start hq");
     set_pos(&mut h, target, [166.0, 166.0]);
@@ -416,15 +430,31 @@ fn shift_click_on_nothing_keeps_the_selection() {
 
 // --- box_select ----------------------------------------------------------------
 
-/// Screen extent of the six spawn-cell workers (162..=167, 178).
+/// Screen extent of a row of six cells (162..=167, 178). Radius-aware initial
+/// spawn (T3) scatters the tracked scene's own six workers well outside this
+/// box, so every test below explicitly re-parks them into it first — the box
+/// itself, not the scenario's default spawn layout, is what these cases mean
+/// to exercise.
 fn six_worker_box() -> ([f32; 2], [f32; 2]) {
     (view().project(162.5, 178.5), view().project(167.5, 178.5))
+}
+
+/// Re-park `ids` one cell apart along `(162..=167, 178)`, matching
+/// [`six_worker_box`]. Ignores body-radius overlap deliberately: box select
+/// only reads ground points, never clearance, so a tight test row is a valid
+/// fixture even though six live 3-cell-radius bodies could never really stand
+/// there at once.
+fn park_workers_in_a_row(h: &mut RtsHarness, ids: &[EntityId]) {
+    for (i, &id) in ids.iter().enumerate() {
+        set_pos(h, id, [162.5 + i as f32, 178.5]);
+    }
 }
 
 #[test]
 fn box_selects_every_own_unit_inside() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
+    park_workers_in_a_row(&mut h, &ids);
     let (a, b) = six_worker_box();
 
     let n = h.world_mut().box_select_into_selection(&view(), a, b);
@@ -436,6 +466,7 @@ fn box_selects_every_own_unit_inside() {
 fn box_excludes_units_outside() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
+    park_workers_in_a_row(&mut h, &ids);
     let a = view().project(162.5, 178.5);
     let b = view().project(164.5, 178.5);
 
@@ -499,6 +530,7 @@ fn box_ignores_a_degenerate_rectangle() {
 fn box_works_dragged_in_any_direction() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
+    park_workers_in_a_row(&mut h, &ids);
     let (a, b) = six_worker_box();
     let corners = [
         (a, b),
