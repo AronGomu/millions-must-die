@@ -83,11 +83,15 @@ const V1_DEST_Y: u32 = 135;
 /// The phase-1 RTS prototype scene family: a horde-free base-building map.
 pub const RTS_PROTOTYPE_V1: &str = "rts_prototype_v1";
 
-/// Locked geometry for [`RTS_PROTOTYPE_V1`].
-const RTS_WIDTH: u32 = 320;
-const RTS_HEIGHT: u32 = 320;
+/// Locked non-dimension geometry for [`RTS_PROTOTYPE_V1`]. Width/height are
+/// bounded, not exact-locked; see [`RTS_MAX_MAP_EDGE`].
 const RTS_CELL_PX: u32 = 4;
 const RTS_SPRITE_PX: u32 = 48;
+
+/// Largest width or height an RTS-family map may declare, in cells.
+pub const RTS_MAX_MAP_EDGE: u32 = 512;
+/// Largest cell count (`width * height`) an RTS-family map may declare.
+pub const RTS_MAX_MAP_CELLS: u32 = 262_144;
 
 /// Footprint edge of the HQ, in cells. The validator needs it to prove the HQ
 /// site is buildable; the build system reuses the same constant.
@@ -741,17 +745,38 @@ fn validate_collision_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError
     Ok(())
 }
 
-/// Geometry lock for the RTS prototype family.
+/// Geometry bound for the RTS prototype family.
 ///
+/// Width and height are a range, not a lock: phase-1.1 maps grow up to
+/// [`RTS_MAX_MAP_EDGE`] per side and [`RTS_MAX_MAP_CELLS`] total, so later
+/// slices can ship bigger maps without touching this contract again. Cell
+/// and sprite pixel size stay exact — they are the shared atlas contract.
 /// The population fields are required to be **exactly zero**: this family is
 /// horde-free by construction, and a nonzero count would silently seed a
 /// flow-field crowd into a base-building scene. `validate_counts` skips the
 /// phase-0 workload lock for this family precisely so this stricter rule can
 /// replace it.
 fn validate_rts_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
+    for (got, name) in [(doc.width, "width"), (doc.height, "height")] {
+        if got == 0 || got > RTS_MAX_MAP_EDGE {
+            return Err(ScenarioError::InvalidDimension(format!(
+                "{name}: got {got}, want 1..={RTS_MAX_MAP_EDGE}"
+            )));
+        }
+    }
+    let cells = doc.width.checked_mul(doc.height).ok_or_else(|| {
+        ScenarioError::InvalidDimension(format!(
+            "width {} * height {} overflows",
+            doc.width, doc.height
+        ))
+    })?;
+    if cells > RTS_MAX_MAP_CELLS {
+        return Err(ScenarioError::InvalidDimension(format!(
+            "width {} * height {} = {cells} cells exceeds cap {RTS_MAX_MAP_CELLS}",
+            doc.width, doc.height
+        )));
+    }
     for (got, want, name) in [
-        (doc.width, RTS_WIDTH, "width"),
-        (doc.height, RTS_HEIGHT, "height"),
         (doc.cell_size_px, RTS_CELL_PX, "cell_size_px"),
         (doc.sprite_size_px, RTS_SPRITE_PX, "sprite_size_px"),
         (doc.hard_agent_count, 0, "hard_agent_count"),

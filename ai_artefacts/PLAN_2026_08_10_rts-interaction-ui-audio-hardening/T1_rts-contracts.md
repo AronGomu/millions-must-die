@@ -60,13 +60,13 @@
 
 ## Impl steps
 
-- [ ] 1. Add red scenario cap/current-scene tests in `crates/mmd-engine/tests/scenario_contract.rs`.
-- [ ] 2. Add red body/speed tests in `crates/mmd-engine/tests/rts_world.rs`.
-- [ ] 3. Add `RTS_MAX_MAP_EDGE`/`RTS_MAX_MAP_CELLS`; generalize only RTS-family dimension validation.
-- [ ] 4. Add RTS body constants + exhaustive `UnitKind::body_radius_cells`.
-- [ ] 5. Change only RTS unit speed constants to 30/24.
-- [ ] 6. Update scenegen radius field to 0; regenerate RON + SHA-256 using existing scenegen workflow.
-- [ ] 7. Run targeted tests; confirm `git diff -- crates/mmd-engine/src/sim` empty.
+- [x] 1. Add red scenario cap/current-scene tests in `crates/mmd-engine/tests/scenario_contract.rs`. Validated: `cargo test -p mmd-engine --locked --test scenario_contract rts_` showed `rts_map_edge_cap_is_512` and `rts_scene_compat_radius_matches_three_cells` FAILED before impl (compile succeeded, assertions failed).
+- [x] 2. Add red body/speed tests in `crates/mmd-engine/tests/rts_world.rs`. Validated: `cargo test -p mmd-engine --locked --test rts_world rts_unit_` failed to compile (`RTS_UNIT_BODY_RADIUS_CELLS` / `body_radius_cells` not found) before impl.
+- [x] 3. Add `RTS_MAX_MAP_EDGE`/`RTS_MAX_MAP_CELLS`; generalize only RTS-family dimension validation. Validated: `rts_map_edge_cap_is_512` passes (512x512 accepted, 513x320 rejected).
+- [x] 4. Add RTS body constants + exhaustive `UnitKind::body_radius_cells`. Validated: `rts_unit_body_radius_is_three_cells` passes.
+- [x] 5. Change only RTS unit speed constants to 30/24. Validated: `rts_unit_speeds_are_tripled` passes.
+- [x] 6. Update scenegen `collision_radius_q8` field to 768 (3 cells, per Requirements/Test-plan); regenerate RON + SHA-256 using existing scenegen workflow. Validated: `python3 tools/scenegen/gen_rts_scene.py` rerun is idempotent (no further diff); `rts_scene_compat_radius_matches_three_cells` passes.
+- [x] 7. Run targeted tests; confirm `git diff -- crates/mmd-engine/src/sim` empty. Validated: `git diff --exit-code -- crates/mmd-engine/src/sim` exit 0; `cargo test --workspace --locked` all green (two downstream tests — `rts_nav_staleness::a_walking_unit_re_paths_when_a_building_blocks_its_route`, `rts_selection::the_pick_radius_is_the_body_radius` — updated to match the intentional speed/radius constants).
 
 ## Outputs
 
@@ -77,9 +77,9 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test scenario_contract rts_`
-- [ ] `cargo test -p mmd-engine --locked --test rts_world rts_unit_`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] `git diff --exit-code -- crates/mmd-engine/src/sim`
-- [ ] app functional: `cargo run -- rts --frames 3`
-- [ ] commit msg draft: `feat(rts): separate player body and map contracts from horde sim`
+- [x] `cargo test -p mmd-engine --locked --test scenario_contract rts_` — 15 passed.
+- [x] `cargo test -p mmd-engine --locked --test rts_world rts_unit_` — 2 passed.
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean.
+- [x] `git diff --exit-code -- crates/mmd-engine/src/sim` — exit 0, empty.
+- [x] app functional: `cargo run -- rts --frames 3` — clean exit, tick=3 frames=3.
+- [x] commit msg draft: `feat(rts): separate player body and map contracts from horde sim`

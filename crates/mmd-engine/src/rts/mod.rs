@@ -22,7 +22,7 @@ pub use economy::{
 };
 pub use entity::{
     BuildingKind, CARRY_NONE, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL,
-    OWNER_PLAYER, ResourceKind, UnitKind,
+    OWNER_PLAYER, RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
 };
 pub use hud::{
     BOTTOM_PANEL_RECT, BUILD_MENU, BUILD_MENU_RECT, ICON_PX, NUM_BUF, PANEL_LINE_PX,

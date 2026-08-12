@@ -18,12 +18,29 @@ pub const OWNER_PLAYER: u8 = 0;
 /// Owner id of unowned world objects (resource nodes).
 pub const OWNER_NEUTRAL: u8 = 255;
 
+/// Body radius shared by every current RTS unit kind, in cells.
+pub const RTS_UNIT_BODY_RADIUS_CELLS: f32 = 3.0;
+/// See [`RTS_UNIT_BODY_RADIUS_CELLS`].
+pub const RTS_UNIT_BODY_DIAMETER_CELLS: f32 = 6.0;
+
 /// Producible unit kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum UnitKind {
     Worker = 0,
     Soldier = 1,
+}
+
+impl UnitKind {
+    /// Body radius, in cells. Player/future-enemy units share one hard-body
+    /// radius; the exhaustive match forces a future kind to decide its own
+    /// value instead of silently inheriting one.
+    pub const fn body_radius_cells(self) -> f32 {
+        match self {
+            Self::Worker => RTS_UNIT_BODY_RADIUS_CELLS,
+            Self::Soldier => RTS_UNIT_BODY_RADIUS_CELLS,
+        }
+    }
 }
 
 /// Placeable building kinds.

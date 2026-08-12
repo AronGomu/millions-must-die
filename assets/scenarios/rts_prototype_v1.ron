@@ -19,7 +19,7 @@
   atlas_count: 4,
   direction_count: 8,
   frame_count: 4,
-  collision_radius_q8: 1536,
+  collision_radius_q8: 768,
   separation_strength_q8: 256,
   separation_phases: 1,
   mass_class_count: 1,

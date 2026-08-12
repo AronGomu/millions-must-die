@@ -96,7 +96,10 @@ fn arrived(p: [f32; 2], dest: Cell) -> bool {
 #[test]
 fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    let walker = spawn_worker(&mut h, [260.5, 180.5]);
+    // Far enough that even at the tripled worker speed the walker is still
+    // in flight when the Depot's build timer lands the stamp, not already
+    // idle at its destination.
+    let walker = spawn_worker(&mut h, [310.5, 180.5]);
     let dest = Cell { x: 170, y: 180 };
     assert!(h.world_mut().order_move(walker, dest));
 

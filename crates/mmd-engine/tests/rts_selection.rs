@@ -179,7 +179,7 @@ fn the_pick_radius_is_the_body_radius() {
     let target = ids[0];
     set_pos(&mut h, target, [50.0, 50.0]);
     let r = h.world().scenario().collision_radius_cells();
-    assert_eq!(r, 6.0, "the tracked scene's body radius");
+    assert_eq!(r, 3.0, "the tracked scene's body radius");
 
     let hit_screen = view().project(50.0 + r, 50.0);
     assert_eq!(pick_at(h.world(), &view(), hit_screen), Pick::Unit(target));

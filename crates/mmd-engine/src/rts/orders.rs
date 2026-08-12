@@ -9,12 +9,13 @@ use super::entity::{EntityId, EntityStore, MAX_ENTITIES, UnitKind};
 
 /// Walk speed in cells per second, per unit kind.
 ///
-/// The worker outruns the horde's 8.0 so a base can be re-tasked faster than it
-/// can be walked across; the soldier matches the horde exactly, because a phase-2
-/// fight between the two must not be decided by a speed nobody chose.
-pub const WORKER_SPEED_CELLS_PER_SEC: f32 = 10.0;
+/// Phase-1.1 triples both from their phase-1 values (10.0/8.0) so movement
+/// reads at RTS pace on the larger maps this slice unlocks; the worker still
+/// outruns the soldier so a base can be re-tasked faster than it can be
+/// walked across.
+pub const WORKER_SPEED_CELLS_PER_SEC: f32 = 30.0;
 /// See [`WORKER_SPEED_CELLS_PER_SEC`].
-pub const SOLDIER_SPEED_CELLS_PER_SEC: f32 = 8.0;
+pub const SOLDIER_SPEED_CELLS_PER_SEC: f32 = 24.0;
 
 /// Walk speed of a unit kind, in cells per second.
 pub fn unit_speed(kind: UnitKind) -> f32 {

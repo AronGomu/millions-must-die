@@ -1102,6 +1102,39 @@ fn rts_scene_geometry_is_locked() {
 }
 
 #[test]
+fn tracked_rts_scene_remains_320_by_320() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    assert_eq!(scene.width(), 320);
+    assert_eq!(scene.height(), 320);
+}
+
+#[test]
+fn rts_scene_compat_radius_matches_three_cells() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    // Compatibility metadata only: shipping RTS collision reads
+    // `UnitKind::body_radius_cells`, not this scenario radius.
+    assert_eq!(scene.collision_radius_q8(), 768);
+}
+
+#[test]
+fn rts_map_edge_cap_is_512() {
+    let mut big = rts_spec();
+    big.width = 512;
+    big.height = 512;
+    big.spawn_cells = vec![Cell { x: 0, y: 0 }];
+    big.destination = Cell { x: 10, y: 10 };
+    big.rts.as_mut().unwrap().hq_cell = Cell { x: 400, y: 400 };
+    big.rts.as_mut().unwrap().crystal_nodes = vec![Cell { x: 5, y: 5 }];
+    big.rts.as_mut().unwrap().gas_nodes = vec![Cell { x: 6, y: 6 }];
+    Scenario::from_spec(big).expect("512x512 rts spec must validate");
+
+    let mut too_wide = rts_spec();
+    too_wide.width = 513;
+    too_wide.height = 320;
+    expect_invalid_dimension(too_wide, "width");
+}
+
+#[test]
 fn rts_scene_carries_its_block() {
     let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
     let rts = scene.rts().expect("rts block must be present");

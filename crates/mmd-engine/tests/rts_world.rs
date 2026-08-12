@@ -7,7 +7,7 @@ use std::collections::HashSet;
 
 use mmd_engine::rts::{
     ARRIVAL_RADIUS_CELLS, BuildingKind, EntityKind, EntityStore, MAX_ENTITIES, OWNER_PLAYER, Order,
-    ResourceKind, Resources, RtsWorldError, Supply, UnitKind,
+    ResourceKind, Resources, RtsWorldError, Supply, UnitKind, unit_speed,
 };
 use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
@@ -184,6 +184,20 @@ fn kind_tags_are_distinct() {
     ];
     let tags: HashSet<u8> = kinds.iter().map(|k| k.tag()).collect();
     assert_eq!(tags.len(), 7, "every kind must have a distinct tag byte");
+}
+
+#[test]
+fn rts_unit_body_radius_is_three_cells() {
+    assert_eq!(UnitKind::Worker.body_radius_cells(), 3.0);
+    assert_eq!(UnitKind::Soldier.body_radius_cells(), 3.0);
+    assert_eq!(mmd_engine::rts::RTS_UNIT_BODY_RADIUS_CELLS, 3.0);
+    assert_eq!(mmd_engine::rts::RTS_UNIT_BODY_DIAMETER_CELLS, 6.0);
+}
+
+#[test]
+fn rts_unit_speeds_are_tripled() {
+    assert_eq!(unit_speed(UnitKind::Worker), 30.0);
+    assert_eq!(unit_speed(UnitKind::Soldier), 24.0);
 }
 
 // --- economy -----------------------------------------------------------------
