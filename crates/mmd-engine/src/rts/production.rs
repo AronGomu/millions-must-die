@@ -138,22 +138,6 @@ impl ProductionQueue {
         true
     }
 
-    /// Push at the front — a private helper used only by the production
-    /// system's store-full recovery path, where a slot was just freed by
-    /// [`Self::advance`].
-    pub(crate) fn push_front(&mut self, kind: UnitKind) {
-        debug_assert!(
-            (self.len as usize) < PRODUCTION_QUEUE_CAP,
-            "push_front is only ever called right after advance() freed a slot"
-        );
-        let len = self.len as usize;
-        for i in (1..=len).rev() {
-            self.entries[i] = self.entries[i - 1];
-        }
-        self.entries[0] = kind;
-        self.len += 1;
-    }
-
     /// Remove entry `index` (0 = the one in progress). Returns what was
     /// removed. Removing the head resets `progress` to zero — a partly built
     /// unit is not carried over to the next entry.
@@ -174,17 +158,42 @@ impl ProductionQueue {
         Some(removed)
     }
 
-    /// Advance the head by one tick; returns the finished unit when it
-    /// completes.
-    pub fn advance(&mut self) -> Option<UnitKind> {
+    /// Advance the head by one tick, **saturating** at its build time.
+    ///
+    /// Ticking never removes an entry. A finished head sits at
+    /// [`produce_ticks`] and waits to be taken by [`Self::pop_ready`], which
+    /// the production system only calls once the unit has actually been
+    /// placed on the grid: a building with nowhere legal to put a finished
+    /// unit must keep it — the player has already paid for it and its supply
+    /// is already reserved — rather than drop it or produce it into another
+    /// body. Saturating (not free-running) progress is what makes that wait a
+    /// stable state: a blocked head hashes the same every tick it waits.
+    pub fn tick_head(&mut self) {
         if self.len == 0 {
+            return;
+        }
+        let need = produce_ticks(self.entries[0]);
+        if self.progress < need {
+            self.progress += 1;
+        }
+    }
+
+    /// Whether the head has served its full build time and is waiting to be
+    /// placed.
+    pub fn head_ready(&self) -> bool {
+        self.head()
+            .is_some_and(|kind| self.progress >= produce_ticks(kind))
+    }
+
+    /// Take a ready head, resetting progress for the next entry. `None` when
+    /// the queue is empty or its head is not ready — so a caller that could
+    /// not place the unit simply does not call this, and the entry stays
+    /// exactly where it was.
+    pub fn pop_ready(&mut self) -> Option<UnitKind> {
+        if !self.head_ready() {
             return None;
         }
         let kind = self.entries[0];
-        self.progress += 1;
-        if self.progress < produce_ticks(kind) {
-            return None;
-        }
         self.progress = 0;
         let len = self.len as usize;
         for i in 0..len - 1 {

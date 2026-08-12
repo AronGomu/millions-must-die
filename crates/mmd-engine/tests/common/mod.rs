@@ -351,3 +351,113 @@ impl Tracker {
         worst
     }
 }
+
+// ---------------------------------------------------------------------------
+// RTS pocket scenes (T6)
+// ---------------------------------------------------------------------------
+//
+// Body-safe production and construction only *wait* when the grid holds no
+// legal free body centre at all, and the tracked 320 x 320 scene is far too
+// open for that: there is always somewhere else to put a unit. These synthetic
+// scenes are the smallest shapes that pin the waiting branches — a pocket with
+// exactly one legal body centre, and a pocket a finished Depot swallows whole.
+
+/// Grid edge of every pocket scene below.
+pub const POCKET_GRID: u32 = 48;
+
+/// Half-open cell rectangle `[x0, x1) x [y0, y1)`.
+pub type OpenRect = (u32, u32, u32, u32);
+
+/// The HQ's own 12 x 12 footprint, which `StaticNav` stamps solid at load.
+const POCKET_HQ: OpenRect = (4, 16, 4, 16);
+/// A 4-cell corridor: raw-walkable, so validation's point-agent reachability
+/// passes, but far too narrow for a 3-cell body centre.
+const POCKET_CORRIDOR: OpenRect = (16, 20, 8, 12);
+
+/// A valid RTS scenario whose only open ground is `open`, plus one spawn cell
+/// and one destination.
+fn pocket_spec(
+    open: &[OpenRect],
+    spawn: mmd_engine::scenario::Cell,
+    destination: mmd_engine::scenario::Cell,
+) -> mmd_engine::scenario::ScenarioSpec {
+    use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
+
+    let mut obstacle_cells = Vec::new();
+    for y in 0..POCKET_GRID {
+        for x in 0..POCKET_GRID {
+            let inside = open
+                .iter()
+                .any(|&(x0, x1, y0, y1)| x >= x0 && x < x1 && y >= y0 && y < y1);
+            if !inside {
+                obstacle_cells.push(x + y * POCKET_GRID);
+            }
+        }
+    }
+    ScenarioSpec {
+        version: "rts_prototype_v1".to_string(),
+        width: POCKET_GRID,
+        height: POCKET_GRID,
+        cell_size_px: 4,
+        sprite_size_px: 48,
+        hard_agent_count: 0,
+        stretch_agent_count: 0,
+        seed: 1,
+        destination,
+        spawn_cells: vec![spawn],
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        collision_radius_q8: 0,
+        separation_strength_q8: 0,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
+        obstacle_cells,
+        rts: Some(RtsSpec {
+            start_crystal: 500,
+            start_gas: 100,
+            start_supply_cap: 10,
+            hq_cell: Cell { x: 4, y: 4 },
+            // Both nodes sit in the corridor: raw-walkable and reachable, and
+            // no body can stand there anyway, so they never add or remove a
+            // legal centre.
+            crystal_nodes: vec![Cell { x: 17, y: 9 }],
+            gas_nodes: vec![Cell { x: 18, y: 10 }],
+        }),
+    }
+}
+
+/// A scene whose grid holds **exactly one** legal body centre, `(23.5, 9.5)`,
+/// which the single seeded worker occupies: a 7 x 7 pocket is the smallest
+/// open square a 3-cell body fits in, and it fits in exactly one place.
+///
+/// Production at the HQ therefore has nowhere at all to put a finished unit
+/// until that worker is despawned.
+pub fn one_free_centre_spec() -> mmd_engine::scenario::ScenarioSpec {
+    use mmd_engine::scenario::Cell;
+    pocket_spec(
+        &[POCKET_HQ, POCKET_CORRIDOR, (20, 27, 6, 13)],
+        Cell { x: 22, y: 9 },
+        Cell { x: 23, y: 9 },
+    )
+}
+
+/// The one legal body centre of [`one_free_centre_spec`].
+pub const ONE_FREE_CENTRE: [f32; 2] = [23.5, 9.5];
+
+/// A scene with a 9 x 9 pocket — nine legal body centres, every one of them
+/// inside the 8 x 8 footprint a Depot at [`SEALED_SITE_MIN`] would occupy. The
+/// site is walkable while it builds and swallows every legal centre on the
+/// grid the moment it finishes, so its completion can never be evacuated.
+pub fn sealed_site_spec() -> mmd_engine::scenario::ScenarioSpec {
+    use mmd_engine::scenario::Cell;
+    pocket_spec(
+        &[POCKET_HQ, POCKET_CORRIDOR, (20, 29, 6, 15)],
+        Cell { x: 24, y: 10 },
+        Cell { x: 24, y: 10 },
+    )
+}
+
+/// Minimum corner of the Depot footprint [`sealed_site_spec`] is shaped for.
+pub const SEALED_SITE_MIN: mmd_engine::scenario::Cell = mmd_engine::scenario::Cell { x: 20, y: 6 };

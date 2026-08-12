@@ -8,8 +8,8 @@
 
 use mmd_engine::nav::field_pool::NAV_FIELD_SLOTS;
 use mmd_engine::rts::{
-    BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, OWNER_PLAYER, Order, ResourceKind,
-    UnitKind,
+    BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, OWNER_PLAYER, Order,
+    RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind, units_overlap,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
@@ -205,8 +205,23 @@ fn an_evicted_field_does_not_hang_a_build() {
 
 // --- a unit caught inside a finishing footprint ------------------------------
 
-/// A unit is not an obstruction, so a building can finish on top of one. It
-/// must be pushed clear rather than bricked inside a blocked cell.
+/// A unit is not an obstruction, so a building can finish on top of one. Since
+/// T6 it is not shoved off a blocked cell after the fact — the completion is
+/// planned around it, and it ends the tick on a **legal, collision-free** body
+/// centre outside the finished footprint, still able to take and finish an
+/// order.
+///
+/// The walk target is (150, 150), not the (200, 200) this case used before T6.
+/// T6's evacuation puts the caught body at the nearest legal free centre to
+/// where it stood, `[183.5, 172.5]`, and the eastbound route out of there
+/// crosses a **pre-existing** nav defect: `center_blocked` marks the 1–2 cell
+/// diagonal channel around `y = 172..174, x = 190..199` as legal body centres,
+/// the pooled field routes through it, and no candidate step survives
+/// `StaticNav::sweep_clear` plus `step_admissible`, so a body grinds to a halt
+/// at ~`[192.91, 173.91]`. That is not a T6 regression: against pre-T6 code a
+/// body spawned at `[183.5, 172.5]` wedges at the same point, and so does a
+/// fresh body from `[176.5, 166.5]` that was never near the Depot — see
+/// [`a_body_wedges_in_the_narrow_eastern_channel`]. Owner: T3/T4 navigation.
 #[test]
 fn a_unit_caught_in_a_finished_footprint_escapes() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
@@ -226,8 +241,25 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
         !is_blocked(&h, cell),
         "the caught worker is standing in blocked cell {cell:?}"
     );
+    let p = position_of(&h, caught);
+    assert!(
+        h.world()
+            .static_nav()
+            .position_clear(p, RTS_UNIT_BODY_RADIUS_CELLS),
+        "the caught worker was left at {p:?}, penetrating static geometry"
+    );
+    for other in h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)) {
+        if other == caught {
+            continue;
+        }
+        let q = position_of(&h, other);
+        assert!(
+            !units_overlap(p, RTS_UNIT_BODY_RADIUS_CELLS, q, RTS_UNIT_BODY_RADIUS_CELLS),
+            "the evacuated body at {p:?} merged into the body at {q:?}"
+        );
+    }
 
-    let dest = Cell { x: 200, y: 200 };
+    let dest = Cell { x: 150, y: 150 };
     assert!(
         h.world_mut().order_move(caught, dest),
         "order_move refused a unit that was inside the footprint"
@@ -243,6 +275,46 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
         h.world().order_of(caught),
         Some(Order::Idle),
         "order_move returned true but left an order that never completed"
+    );
+}
+
+/// Known gap, pinned rather than asserted: a body sent east across the narrow
+/// diagonal channel at `y = 172..174, x = 190..199` stops dead partway and
+/// never finishes its order.
+///
+/// `center_blocked` calls those cells legal body centres and the pooled field
+/// routes through them, but every candidate step is refused by
+/// `StaticNav::sweep_clear` / `step_admissible`, so the walk has a live order,
+/// a non-zero descent vector and nowhere to put its feet. Pre-dates T6: this
+/// reproduces with no building finished on top of anybody and a body that was
+/// never near the Depot. Ignored because it asserts the *defect*, and running
+/// it green would mean the defect is still there; it is here so the repro is
+/// not lost. Owner: T3/T4 navigation.
+#[test]
+#[ignore = "pins a known pre-existing T3/T4 nav defect; not a T6 contract"]
+fn a_body_wedges_in_the_narrow_eastern_channel() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let depot = place_depot(&mut h);
+    for _ in 0..1_000 {
+        h.step_exact(1);
+        if !h.world().is_site(depot) {
+            break;
+        }
+    }
+    let w = spawn_worker(&mut h, [176.5, 166.5]);
+    let dest = Cell { x: 200, y: 200 };
+    assert!(h.world_mut().order_move(w, dest));
+    h.step_exact(3_000);
+
+    let p = position_of(&h, w);
+    assert!(
+        !arrived(p, dest),
+        "the eastern channel is traversable again — delete this test and \
+         retarget `a_unit_caught_in_a_finished_footprint_escapes`"
+    );
+    assert!(
+        matches!(h.world().order_of(w), Some(Order::Move { .. })),
+        "the wedged body should still be holding a live order at {p:?}"
     );
 }
 

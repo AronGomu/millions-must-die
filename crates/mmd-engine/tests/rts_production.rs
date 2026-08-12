@@ -5,12 +5,16 @@
 
 use mmd_engine::rts::{
     BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_NEUTRAL,
-    Order, PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ResourceKind, SOLDIER_COST,
+    OWNER_PLAYER, Order, PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, SOLDIER_COST,
     SOLDIER_PRODUCE_TICKS, UnitKind, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce, produce_ticks,
-    unit_cost,
+    unit_cost, units_overlap,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
+
+mod common;
+use common::{ONE_FREE_CENTRE, one_free_centre_spec};
 
 fn first_worker(h: &RtsHarness) -> EntityId {
     h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0]
@@ -106,7 +110,8 @@ fn queue_cancel_of_the_head_resets_progress() {
     assert!(q.push(UnitKind::Worker));
     assert!(q.push(UnitKind::Soldier));
     for _ in 0..100 {
-        assert_eq!(q.advance(), None);
+        q.tick_head();
+        assert!(!q.head_ready());
     }
     assert_eq!(q.progress(), 100);
 
@@ -122,7 +127,8 @@ fn queue_cancel_of_a_tail_entry_keeps_progress() {
     assert!(q.push(UnitKind::Soldier));
     assert!(q.push(UnitKind::Worker));
     for _ in 0..100 {
-        assert_eq!(q.advance(), None);
+        q.tick_head();
+        assert!(!q.head_ready());
     }
     assert_eq!(q.progress(), 100);
     let head_before = q.head();
@@ -137,9 +143,30 @@ fn queue_advance_completes_at_the_documented_tick() {
     let mut q = ProductionQueue::default();
     assert!(q.push(UnitKind::Worker));
     for i in 0..299 {
-        assert_eq!(q.advance(), None, "tick {i}");
+        q.tick_head();
+        assert!(!q.head_ready(), "tick {i}");
+        assert_eq!(q.pop_ready(), None, "tick {i}");
     }
-    assert_eq!(q.advance(), Some(UnitKind::Worker));
+    q.tick_head();
+    assert!(q.head_ready());
+    assert_eq!(q.pop_ready(), Some(UnitKind::Worker));
+    assert_eq!(q.progress(), 0);
+    assert!(q.is_empty());
+}
+
+/// A ready head that nothing pops must not run its progress on: it saturates
+/// at the unit's build time and stays there, tick after tick, so the queue
+/// state a blocked producer hashes is stable.
+#[test]
+fn queue_progress_saturates_on_a_ready_head() {
+    let mut q = ProductionQueue::default();
+    assert!(q.push(UnitKind::Worker));
+    for _ in 0..(WORKER_PRODUCE_TICKS + 50) {
+        q.tick_head();
+    }
+    assert_eq!(q.progress(), WORKER_PRODUCE_TICKS);
+    assert!(q.head_ready());
+    assert_eq!(q.len(), 1, "a ready head is not popped by ticking");
 }
 
 // --- enqueue_unit rejections --------------------------------------------------
@@ -704,4 +731,263 @@ fn state_hash_sees_a_rally_point() {
     let before = h.state_hash();
     assert!(h.world_mut().set_rally(hq, Some(Cell { x: 200, y: 200 })));
     assert_ne!(h.state_hash(), before);
+}
+
+// --- T6: body-safe production ---------------------------------------------------
+
+/// Every live unit body on the grid, ascending slot.
+fn unit_positions(h: &RtsHarness) -> Vec<[f32; 2]> {
+    let mut out = Vec::new();
+    let store = h.world().entities();
+    for slot in 0..store.slot_count() {
+        if store.alive(slot) && matches!(store.kind(slot), EntityKind::Unit(_)) {
+            out.push(store.position(slot));
+        }
+    }
+    out
+}
+
+/// Independent oracle for the spawn rule: the legal body centre nearest
+/// `preferred` that no live body already covers, ties broken by the lower flat
+/// cell index. Brute force over the whole grid, from public state only.
+fn nearest_free_centre(h: &RtsHarness, preferred: [f32; 2]) -> Option<[f32; 2]> {
+    let width = h.world().scenario().width();
+    let height = h.world().scenario().height();
+    let blocked = h.world().static_nav().center_blocked();
+    let bodies = unit_positions(h);
+    let diam2 = RTS_UNIT_BODY_DIAMETER_CELLS * RTS_UNIT_BODY_DIAMETER_CELLS;
+    let mut best: Option<(f32, u32)> = None;
+    for y in 0..height {
+        for x in 0..width {
+            let idx = x + y * width;
+            if blocked[idx as usize] {
+                continue;
+            }
+            let p = [x as f32 + 0.5, y as f32 + 0.5];
+            if bodies.iter().any(|&q| {
+                let dx = p[0] - q[0];
+                let dy = p[1] - q[1];
+                dx * dx + dy * dy < diam2
+            }) {
+                continue;
+            }
+            let d = {
+                let dx = p[0] - preferred[0];
+                let dy = p[1] - preferred[1];
+                dx * dx + dy * dy
+            };
+            if best.is_none_or(|(bd, bi)| d < bd || (d == bd && idx < bi)) {
+                best = Some((d, idx));
+            }
+        }
+    }
+    best.map(|(_, idx)| [(idx % width) as f32 + 0.5, (idx / width) as f32 + 0.5])
+}
+
+fn clear_the_starting_workers(h: &mut RtsHarness) {
+    for w in h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)) {
+        assert!(h.world_mut().entities_mut().despawn(w));
+    }
+}
+
+fn produce_one_worker(h: &mut RtsHarness) -> EntityId {
+    let hq = h.world().start_hq().expect("hq");
+    let before = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    h.step_exact(WORKER_PRODUCE_TICKS as u64);
+    let after = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    *after
+        .iter()
+        .find(|id| !before.contains(id))
+        .expect("a new worker exists")
+}
+
+fn position_of(h: &RtsHarness, id: EntityId) -> [f32; 2] {
+    let slot = h.world().entities().slot(id).expect("live entity");
+    h.world().entities().position(slot)
+}
+
+/// With the base empty, a produced unit stands exactly on the HQ's preferred
+/// approach centre. Park a body there instead and the next unit must take the
+/// nearest free legal centre to it — the exact cell the brute-force oracle
+/// names, not "somewhere near", and not on top of the body already standing
+/// there.
+#[test]
+fn production_uses_nearest_free_body_position() {
+    // 1. The preferred centre, observed on an empty base.
+    let mut control = RtsHarness::scene().build().expect("rts scene harness");
+    clear_the_starting_workers(&mut control);
+    let first = produce_one_worker(&mut control);
+    let preferred = position_of(&control, first);
+
+    // 2. The same production, with that exact centre occupied.
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    clear_the_starting_workers(&mut h);
+    let blocker = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, preferred)
+        .expect("park a body on the preferred centre");
+    let hq = h.world().start_hq().expect("hq");
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    h.step_exact(WORKER_PRODUCE_TICKS as u64 - 1);
+    // The oracle is computed one tick before the spawn, from the same state
+    // the production system will see.
+    let expected = nearest_free_centre(&h, preferred).expect("the grid has a free legal centre");
+    h.step_exact(1);
+
+    let produced = *h
+        .ids_of_kind(EntityKind::Unit(UnitKind::Worker))
+        .iter()
+        .find(|&&id| id != blocker)
+        .expect("the queued worker was produced");
+    assert_eq!(
+        position_of(&h, produced),
+        expected,
+        "the produced unit did not take the nearest free legal centre"
+    );
+    assert_ne!(position_of(&h, produced), preferred);
+    assert!(
+        !units_overlap(
+            position_of(&h, produced),
+            RTS_UNIT_BODY_RADIUS_CELLS,
+            preferred,
+            RTS_UNIT_BODY_RADIUS_CELLS
+        ),
+        "the produced body merged into the parked one"
+    );
+}
+
+/// A grid with exactly one legal body centre, and a worker standing on it: the
+/// finished head has nowhere to go, so it stays ready, paid for and reserved,
+/// and no unit appears.
+#[test]
+fn production_waits_when_no_spawn_is_free() {
+    let mut h = RtsHarness::spec(one_free_centre_spec())
+        .build()
+        .expect("one-free-centre scene");
+    assert_eq!(
+        h.world()
+            .static_nav()
+            .center_blocked()
+            .iter()
+            .filter(|b| !**b)
+            .count(),
+        1,
+        "the scene must hold exactly one legal body centre"
+    );
+    assert_eq!(h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(), 1);
+
+    let hq = h.world().start_hq().expect("hq");
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    let paid = h.world().resources();
+    let reserved = h.world().reserved_supply();
+
+    h.step_exact(WORKER_PRODUCE_TICKS as u64 + 300);
+
+    assert_eq!(
+        h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
+        1,
+        "a unit was produced with nowhere legal to stand"
+    );
+    let q = h.world().production_queue(hq).expect("hq queue");
+    assert_eq!(q.len(), 1, "the paid entry must stay in the queue");
+    assert!(q.head_ready(), "the head must be ready and waiting");
+    assert_eq!(q.progress(), WORKER_PRODUCE_TICKS, "progress must saturate");
+    assert_eq!(h.world().resources(), paid, "a waiting head charged again");
+    assert_eq!(
+        h.world().reserved_supply(),
+        reserved,
+        "a waiting head lost or doubled its supply reservation"
+    );
+    assert_eq!(
+        h.world().supply().used(),
+        2,
+        "one live worker plus one reservation"
+    );
+}
+
+/// The same wait, released: free the one legal centre and the head spawns
+/// exactly once, on the tick after it became free, without charging twice.
+#[test]
+fn waiting_production_resumes_once() {
+    let mut h = RtsHarness::spec(one_free_centre_spec())
+        .build()
+        .expect("one-free-centre scene");
+    let hq = h.world().start_hq().expect("hq");
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    let paid = h.world().resources();
+    h.step_exact(WORKER_PRODUCE_TICKS as u64 + 60);
+    assert_eq!(h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(), 1);
+
+    let squatter = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
+    assert!(h.world_mut().entities_mut().despawn(squatter));
+    h.step_exact(1);
+
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 1, "exactly one unit must be produced");
+    assert_eq!(
+        position_of(&h, workers[0]),
+        ONE_FREE_CENTRE,
+        "the released unit must take the freed centre"
+    );
+    assert!(
+        h.world().production_queue(hq).expect("hq queue").is_empty(),
+        "the head must be popped exactly once"
+    );
+    assert_eq!(h.world().resources(), paid, "the resume charged again");
+
+    h.step_exact(120);
+    assert_eq!(
+        h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
+        1,
+        "a second unit appeared from a queue that held one entry"
+    );
+    assert_eq!(
+        h.world().supply().used(),
+        1,
+        "one live worker, no reservation"
+    );
+}
+
+/// A unit produced this tick is a body for the rest of this tick: the whole
+/// base is ordered onto one cell, so the movement sweep is contended, and the
+/// tick still ends with no two bodies merged.
+#[test]
+fn new_spawn_joins_same_tick_collision() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 176, y: 184 })));
+    assert!(
+        h.world_mut()
+            .order_move_group(&workers, Cell { x: 176, y: 184 })
+            .is_ok()
+    );
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+
+    for _ in 0..(WORKER_PRODUCE_TICKS as u64 + 60) {
+        h.step_exact(1);
+        let bodies = unit_positions(&h);
+        for (i, a) in bodies.iter().enumerate() {
+            for b in &bodies[i + 1..] {
+                assert!(
+                    !units_overlap(
+                        *a,
+                        RTS_UNIT_BODY_RADIUS_CELLS,
+                        *b,
+                        RTS_UNIT_BODY_RADIUS_CELLS
+                    ),
+                    "tick {} ended with merged bodies {a:?} and {b:?}",
+                    h.tick_index()
+                );
+            }
+        }
+    }
+    assert_eq!(
+        h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
+        7,
+        "the queued worker never appeared"
+    );
 }

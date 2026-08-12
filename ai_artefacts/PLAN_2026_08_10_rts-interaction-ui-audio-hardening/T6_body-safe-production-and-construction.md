@@ -10,6 +10,13 @@
 - This slice: ready-but-blocked queues, nearest-free spawn, atomic completion evacuation + solid stamp.
 - Out of scope here: UI/settings/audio; combat/destruction.
 - Assumptions: sites walkable until complete; no legal evacuation → progress stays final pre-complete tick; no legal production spawn → paid/reserved head stays ready.
+- Implementation assumptions (T6, logged at execution):
+  1. The ticket's `tick_head/head_ready/pop_ready(building: EntityId)` signature is a plan defect: `production.rs` holds `ProductionQueue` (no id) and slot-keyed `ProductionTable`, neither of which can resolve an `EntityId` without the entity store. Implemented as `ProductionQueue` self-methods; call sites stay in `RtsWorld::production_system`. Behaviour contract unchanged. Supervisor-approved.
+  2. "Nearest legal center" is searched over the **whole grid**, exactly as scenario seeding and the tick's overlap repair already do — one shared planner, `nearest_free_body_center`. No search radius constant was invented, so "no space" means the grid holds no legal free body centre at all.
+  3. `StaticNav::position_clear` is read through its own precomputation, `center_blocked()` (same answer for the unit body radius, without recomputing it per candidate); the footprint a completion has not stamped yet is excluded separately via `circle_clear_of_cell_rect`.
+  4. Evacuation scores each evacuee's candidates by squared distance to **its own current position** (minimum displacement), then flat cell index.
+  5. The inflated centre mask is rebuilt per completed building rather than once per tick, so a later completion on the same tick sees an earlier one as solid; the pooled fields are still replaced once per batch.
+- Residual risk (pre-existing, not T6): `center_blocked` marks the 1–2 cell diagonal channel around `y = 172..174, x = 190..199` of the tracked scene as legal body centres and the pooled field routes through it, but no step there survives `sweep_clear` + `step_admissible`, so a body wedges (fresh body at `[176.5, 166.5]` ordered to `(200, 200)` stops at ~`[193.27, 174.27]`). Reproduces against pre-T6 code. Pinned by the ignored `rts_nav_staleness::a_body_wedges_in_the_narrow_eastern_channel`; owner T3/T4 navigation.
 - Decisions: `docs/ADR/017_ADR_rts_hard_collision_navigation_and_formations.md`, existing supply semantics in ADR 015.
 
 ## Requirements
@@ -70,14 +77,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add production ready/wait/retry red tests.
-- [ ] 2. Add construction atomic evacuation red tests.
-- [ ] 3. Split production queue advance from pop/reset.
-- [ ] 4. Add collision-safe nearest-free spawn search around producer footprint.
-- [ ] 5. Ensure spawned unit enters live/collision scratch before movement.
-- [ ] 6. Replace building push with preplanned atomic evacuation.
-- [ ] 7. Commit finish/stamp/mask invalidation/supply only after full plan succeeds.
-- [ ] 8. Add success/failure allocation cases; run supply/nav-staleness regressions.
+- [x] 1. Add production ready/wait/retry red tests. *Criterion:* `production_uses_nearest_free_body_position`, `production_waits_when_no_spawn_is_free`, `waiting_production_resumes_once`, `new_spawn_joins_same_tick_collision` exist in `tests/rts_production.rs` and fail against the pre-change code.
+- [x] 2. Add construction atomic evacuation red tests. *Criterion:* `completion_evacuates_every_overlapping_body`, `completion_waits_when_evacuation_impossible`, `later_completion_sees_earlier_building` exist in `tests/rts_build.rs` and fail against the pre-change code.
+- [x] 3. Split production queue advance from pop/reset. *Criterion:* `ProductionQueue::{tick_head, head_ready, pop_ready}` exist, `advance`/`push_front` are gone, and `cargo test -p mmd-engine --locked --test rts_production` queue-unit cases pass.
+- [x] 4. Add collision-safe nearest-free spawn search around producer footprint. *Criterion:* `production_uses_nearest_free_body_position` and `production_waits_when_no_spawn_is_free` pass.
+- [x] 5. Ensure spawned unit enters live/collision scratch before movement. *Criterion:* `new_spawn_joins_same_tick_collision` passes (no body overlap at the spawn tick's end).
+- [x] 6. Replace building push with preplanned atomic evacuation. *Criterion:* `push_units_off_blocked_cells` no longer exists in `rts/world.rs`; `completion_evacuates_every_overlapping_body` and `completion_waits_when_evacuation_impossible` pass.
+- [x] 7. Commit finish/stamp/mask invalidation/supply only after full plan succeeds. *Criterion:* `later_completion_sees_earlier_building` passes and `completion_waits_when_evacuation_impossible` observes an unchanged site (progress `build_ticks - 1`, still walkable, no supply grant).
+- [x] 8. Add success/failure allocation cases; run supply/nav-staleness regressions. *Criterion:* `cargo test -p mmd-engine --locked --test frame_allocations blocked_transitions_allocate_nothing` passes and `--test rts_nav_staleness` plus the supply cases of `--test rts_production` stay green.
 
 ## Outputs
 
@@ -88,10 +95,10 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test rts_production`
-- [ ] `cargo test -p mmd-engine --locked --test rts_build evacuation`
-- [ ] `cargo test -p mmd-engine --locked --test rts_nav_staleness`
-- [ ] `cargo test -p mmd-engine --locked --test frame_allocations blocked_transitions_allocate_nothing`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] app functional: tracked script produces Worker + Soldier by frame 1600
-- [ ] commit msg draft: `fix(rts): keep production and construction outside occupied bodies`
+- [x] `cargo test -p mmd-engine --locked --test rts_production`
+- [x] `cargo test -p mmd-engine --locked --test rts_build evacuation`
+- [x] `cargo test -p mmd-engine --locked --test rts_nav_staleness`
+- [x] `cargo test -p mmd-engine --locked --test frame_allocations blocked_transitions_allocate_nothing`
+- [x] `cargo check --workspace --all-targets --all-features --locked`
+- [x] app functional: tracked script produces Worker + Soldier by frame 1600. *Criterion:* `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` prints its exit line with a produced Worker and Soldier.
+- [x] commit msg draft: `fix(rts): keep production and construction outside occupied bodies`. *Criterion:* the commit landing this ticket carries that subject.

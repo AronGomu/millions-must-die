@@ -13,8 +13,8 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order, ResourceKind, RtsFrame,
-    UnitKind, pack_frame, pack_hud,
+    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order,
+    ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, pack_frame, pack_hud,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -23,6 +23,9 @@ use mmd_engine::testkit::{
     COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness, RtsHarness, ScenarioSource,
     scene_path,
 };
+
+mod common;
+use common::{SEALED_SITE_MIN, one_free_centre_spec, sealed_site_spec};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -999,4 +1002,69 @@ fn formation_planning_allocates_nothing() {
         })
         .collect();
     assert_eq!(slots.len(), 6, "the measured calls planned nothing");
+}
+
+/// T6: the two transitions that can be *refused* — a ready production head with
+/// nowhere legal to spawn, and a site completion whose evacuation cannot be
+/// planned — retry every tick, and every one of those retries runs out of the
+/// scratch `RtsWorld` reserves at load.
+///
+/// Both scenes are pockets with no spare legal body centre, so the two refusals
+/// are permanent for the measured window: 300 ticks of failed spawn search and
+/// 300 ticks of discarded evacuation plan.
+#[test]
+fn blocked_transitions_allocate_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    // A. A finished head with nowhere legal to stand.
+    let mut prod = RtsHarness::spec(one_free_centre_spec())
+        .build()
+        .expect("one-free-centre scene");
+    let hq = prod.world().start_hq().expect("hq");
+    assert!(prod.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    prod.step_exact(WORKER_PRODUCE_TICKS as u64 + 2);
+    assert!(
+        prod.world()
+            .production_queue(hq)
+            .expect("hq queue")
+            .head_ready(),
+        "the production head must be ready and blocked before measuring"
+    );
+
+    // B. A site whose completion can never evacuate its own builder.
+    let mut build = RtsHarness::spec(sealed_site_spec())
+        .build()
+        .expect("sealed-site scene");
+    let builder = build.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
+    assert!(build.world_mut().begin_placement(BuildingKind::Depot));
+    let site = build
+        .world_mut()
+        .confirm_placement(SEALED_SITE_MIN, builder)
+        .expect("confirm");
+    build.step_exact(DEPOT_BUILD_TICKS as u64 + 60);
+    assert!(
+        build.world().is_site(site),
+        "the site must be blocked at completion before measuring"
+    );
+
+    let guard = MeasureGuard::enter();
+    prod.step_exact(300);
+    build.step_exact(300);
+    std::hint::black_box((prod.tick_index(), build.tick_index()));
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "a blocked production or completion retry allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and both really did stay blocked for the whole measured window.
+    assert_eq!(
+        prod.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
+        1,
+        "the blocked head produced a unit after all"
+    );
+    assert!(build.world().is_site(site), "the sealed site finished");
 }

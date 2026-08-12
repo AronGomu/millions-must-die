@@ -796,3 +796,218 @@ fn a_group_of_builders_finishes_the_site() {
         "the group never finished the site"
     );
 }
+
+// --- T6: atomic completion evacuation -------------------------------------------
+
+mod common;
+use common::{SEALED_SITE_MIN, sealed_site_spec};
+
+use mmd_engine::rts::{RTS_UNIT_BODY_RADIUS_CELLS, units_overlap};
+
+/// Every live unit's slot and body position, ascending slot.
+fn unit_bodies(h: &RtsHarness) -> Vec<(usize, [f32; 2])> {
+    let store = h.world().entities();
+    (0..store.slot_count())
+        .filter(|&slot| store.alive(slot) && matches!(store.kind(slot), EntityKind::Unit(_)))
+        .map(|slot| (slot, store.position(slot)))
+        .collect()
+}
+
+fn position_of(h: &RtsHarness, id: EntityId) -> [f32; 2] {
+    let slot = h.world().entities().slot(id).expect("live entity");
+    h.world().entities().position(slot)
+}
+
+fn spawn_worker(h: &mut RtsHarness, pos: [f32; 2]) -> EntityId {
+    h.world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)
+        .expect("spawn a worker")
+}
+
+/// No live body may penetrate static geometry, and no two may be merged.
+fn assert_every_body_is_legal(h: &RtsHarness) {
+    let bodies = unit_bodies(h);
+    for &(slot, p) in &bodies {
+        assert!(
+            h.world()
+                .static_nav()
+                .position_clear(p, RTS_UNIT_BODY_RADIUS_CELLS),
+            "slot {slot} stands at {p:?}, inside static geometry"
+        );
+    }
+    for (i, &(sa, a)) in bodies.iter().enumerate() {
+        for &(sb, b) in &bodies[i + 1..] {
+            assert!(
+                !units_overlap(a, RTS_UNIT_BODY_RADIUS_CELLS, b, RTS_UNIT_BODY_RADIUS_CELLS),
+                "slots {sa} and {sb} are merged at {a:?} and {b:?}"
+            );
+        }
+    }
+}
+
+/// A building finishing on top of several bodies moves every one of them, to
+/// distinct legal positions, in the same tick it becomes solid.
+#[test]
+fn completion_evacuates_every_overlapping_body() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let builder = first_worker(&h);
+    // Two bodies inside the 8 x 8 footprint, one body diameter apart, plus the
+    // builder standing against its east edge — all three penetrate the
+    // footprint the finished Depot will occupy.
+    let inside_a = spawn_worker(&mut h, [180.5, 176.5]);
+    let inside_b = spawn_worker(&mut h, [186.5, 182.5]);
+    let caught = [inside_a, inside_b];
+
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(CLEAR_CORNER, builder)
+        .expect("confirm");
+    h.step_exact(2_000);
+    assert!(!h.world().is_site(site), "the Depot never finished");
+
+    let width = h.world().scenario().width();
+    for y in CLEAR_CORNER.y..CLEAR_CORNER.y + 8 {
+        for x in CLEAR_CORNER.x..CLEAR_CORNER.x + 8 {
+            assert!(
+                h.world().nav().blocked()[(x + y * width) as usize],
+                "the finished Depot did not stamp cell ({x},{y})"
+            );
+        }
+    }
+    let mut seen = HashSet::new();
+    for id in caught {
+        let p = position_of(&h, id);
+        assert!(
+            h.world()
+                .static_nav()
+                .position_clear(p, RTS_UNIT_BODY_RADIUS_CELLS),
+            "a caught body was left at {p:?}, inside the finished footprint"
+        );
+        assert!(
+            seen.insert((p[0].to_bits(), p[1].to_bits())),
+            "two evacuated bodies were given the same position {p:?}"
+        );
+    }
+    assert_every_body_is_legal(&h);
+}
+
+/// A site whose completion would leave a body with nowhere legal to stand does
+/// not finish: it holds at one tick short of complete, stays walkable, grants
+/// no supply, and moves nobody.
+#[test]
+fn completion_waits_when_evacuation_impossible() {
+    let mut h = RtsHarness::spec(sealed_site_spec())
+        .build()
+        .expect("sealed-site scene");
+    let builder = first_worker(&h);
+    let cap_before = h.world().supply().cap();
+
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(SEALED_SITE_MIN, builder)
+        .expect("confirm");
+    h.step_exact(DEPOT_BUILD_TICKS as u64 + 600);
+
+    assert!(h.world().is_site(site), "the sealed site must not finish");
+    let slot = h.world().entities().slot(site).expect("live site");
+    assert_eq!(
+        h.world().entities().progress(slot),
+        DEPOT_BUILD_TICKS - 1,
+        "a blocked completion must hold at one tick short of complete"
+    );
+    assert_eq!(
+        h.world().entities().progress_target(slot),
+        DEPOT_BUILD_TICKS
+    );
+    assert_eq!(
+        h.world().supply().cap(),
+        cap_before,
+        "a site that did not finish granted supply anyway"
+    );
+
+    // `nav().blocked()` is the radius-inflated centre mask, which a pocket's
+    // own walls already fill; the honest "was this stamped" question is asked
+    // of the raw solids a finished building writes into.
+    let width = h.world().scenario().width();
+    for y in SEALED_SITE_MIN.y..SEALED_SITE_MIN.y + 8 {
+        for x in SEALED_SITE_MIN.x..SEALED_SITE_MIN.x + 8 {
+            assert!(
+                !h.world().static_nav().placement_solids()[(x + y * width) as usize],
+                "an unfinished site stamped cell ({x},{y})"
+            );
+        }
+    }
+    assert!(
+        h.world()
+            .static_nav()
+            .position_clear(position_of(&h, builder), RTS_UNIT_BODY_RADIUS_CELLS),
+        "the builder was moved by a completion that never happened"
+    );
+    assert_every_body_is_legal(&h);
+}
+
+/// Two sites finishing on the same tick are processed ascending by slot, and
+/// the later one plans its evacuation against the earlier one as solid ground:
+/// either both finish legally, or the later waits — never a body left inside a
+/// finished footprint.
+#[test]
+fn later_completion_sees_earlier_building() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    h.world_mut().resources_mut().crystal = 10_000;
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+
+    // Two Depots, one body diameter apart, each attended by a builder standing
+    // on its own footprint edge (`rect_distance == 0`, so attendance needs no
+    // walk-in) and therefore caught by its own completion.
+    let first_min = Cell { x: 176, y: 176 };
+    let second_min = Cell { x: 187, y: 176 };
+    let mut sites = Vec::new();
+    for (min, builder) in [(first_min, workers[0]), (second_min, workers[1])] {
+        let slot = h.world().entities().slot(builder).expect("live worker");
+        h.world_mut()
+            .entities_mut()
+            .set_position(slot, [min.x as f32 + 4.5, min.y as f32 + 8.5]);
+        assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+        let site = h
+            .world_mut()
+            .confirm_placement(min, builder)
+            .expect("confirm");
+        sites.push(site);
+    }
+
+    // Drive both to exactly one tick short of complete, then let the single
+    // tick that finishes them both run.
+    for &site in &sites {
+        let slot = h.world().entities().slot(site).expect("live site");
+        h.world_mut()
+            .entities_mut()
+            .set_progress(slot, DEPOT_BUILD_TICKS - 1, DEPOT_BUILD_TICKS);
+    }
+    h.step_exact(1);
+
+    let width = h.world().scenario().width();
+    let finished: Vec<Cell> = [first_min, second_min]
+        .into_iter()
+        .zip(sites.iter())
+        .filter(|&(_, &site)| !h.world().is_site(site))
+        .map(|(min, _)| min)
+        .collect();
+    assert!(
+        finished.contains(&first_min),
+        "the lower-slot site must finish: nothing blocks its own evacuation"
+    );
+    for min in &finished {
+        for y in min.y..min.y + 8 {
+            for x in min.x..min.x + 8 {
+                assert!(
+                    h.world().static_nav().placement_solids()[(x + y * width) as usize],
+                    "a finished Depot did not stamp cell ({x},{y})"
+                );
+            }
+        }
+    }
+    assert_every_body_is_legal(&h);
+}

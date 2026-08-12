@@ -26,7 +26,7 @@
 - [ ] Right-click a resource node with a worker selected and watch the whole round trip: confirm the worker visibly stops walking *before* reaching the node's own tile (it mines from just outside the node, never standing on top of it) and the same holds on the return leg at the HQ.
 - [ ] Order a worker to walk close past a cluster of terrain obstacles and confirm it visibly keeps a small clearance gap from each obstacle's edge, rather than grazing or clipping through the corner of one.
 - [ ] Place a Depot or Barracks next to existing terrain and confirm the ghost still only rejects placement for genuinely overlapping/blocked footprints — a legal, terrain-clear spot right up against an obstacle should still be placeable (placement validity is intentionally *not* widened by the new body-clearance rule).
-- [ ] Queue and produce a Worker and a Soldier from the HQ/Barracks and confirm each newly spawned unit appears standing just outside the producing building's footprint, not overlapping it (since T4, a unit that would appear on top of another is moved clear on the next tick rather than left merged).
+- [ ] Queue and produce a Worker and a Soldier from the HQ/Barracks and confirm each newly spawned unit appears standing just outside the producing building's footprint, not overlapping it (since T6 a unit is never placed on top of another at all: production picks the nearest free spot, and waits with the unit paid for and queued if there is none).
 - [ ] Run the full tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) in a window and confirm it still completes the whole select → gather (crystal and gas) → build Depot → produce Worker → build Barracks → produce Soldier → pan-camera flow visibly, ending in a clean quit.
 
 ## T4 hard-unit-collision
@@ -53,3 +53,16 @@
 - [ ] Send a large group (a dozen or more, produced from the HQ) to one point: confirm the formation grows outward in rings and every member still finishes its walk rather than the outer ones grinding against the inner ones.
 - [ ] Order a group into a fully enclosed pocket that only one unit could stand in: confirm nothing moves at all (the whole order is refused) rather than one unit walking off alone.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole select → gather → build → produce flow still completes visibly, with the gathering workers visibly spread around their node.
+
+## T6 body-safe-production-and-construction
+
+- [ ] Launch `cargo run -- rts`, park several workers right outside the HQ's exit side, then queue a Worker: confirm the new unit appears on a free spot *near* that exit rather than on top of anybody, and that the standing workers are not shoved to make room for it.
+- [ ] Wall the HQ's exit in with idle units (queue and rally several units there, or walk the whole base into that corner) and queue one more Worker: confirm the production bar fills to 100% and then **waits** — no unit appears, no crystal is refunded, and the supply reading does not change while it waits.
+- [ ] Clear one body's worth of space near that blocked HQ: confirm the waiting unit appears on the next tick, exactly once, and the queue entry disappears (crystal is not charged a second time).
+- [ ] Queue two units back to back at one building with a crowded exit: confirm they come out one after the other, each on its own free spot, and none of them is ever drawn overlapping another.
+- [ ] Place a Depot so its footprint covers two or three of your own idle workers and let it finish: confirm every covered worker is moved clear on the completion tick, all to different spots, none of them left standing inside the finished building.
+- [ ] Watch the same completion closely: confirm the workers move *at the moment* the building becomes solid — not a beat later, and never visibly standing inside a finished building for a frame.
+- [ ] Box a worker into a dead-end pocket that a Depot's own footprint would fill entirely, and build that Depot with that worker: confirm the build bar reaches the end and **holds** just short of finishing (the site stays walkable, the supply cap does not rise) instead of finishing on top of the worker.
+- [ ] Walk that trapped worker out of the pocket (or cancel the site): confirm the site finishes normally on the following tick once its bodies can be moved clear.
+- [ ] Finish two buildings on nearly the same tick with workers standing between them: confirm no worker is left inside either finished footprint, and no two workers end up merged.
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole gather → build Depot → produce Worker → build Barracks → produce Soldier flow still completes visibly, with the produced units appearing clear of every other body.

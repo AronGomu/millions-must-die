@@ -254,6 +254,25 @@ impl StaticNav {
     }
 }
 
+/// Whether a circle of `radius` centred at `p` stays clear of the closed cell
+/// rectangle whose minimum corner is `min` and whose edge is `edge` cells.
+///
+/// The rectangle a building is *about to* occupy is not in [`StaticNav`]'s
+/// masks yet — a site is walkable until the tick it finishes — so a completion
+/// that must first plan where every body it covers will stand needs to treat
+/// that rectangle as solid without stamping it: the plan may still be
+/// discarded. Same rule as everywhere else here: touching is legal,
+/// penetration is strict `<`.
+pub(crate) fn circle_clear_of_cell_rect(p: [f32; 2], radius: f32, min: Cell, edge: u32) -> bool {
+    dist2_point_rect(
+        p,
+        min.x as f32,
+        (min.x + edge) as f32,
+        min.y as f32,
+        (min.y + edge) as f32,
+    ) >= radius * radius
+}
+
 /// Squared distance from a point to a closed interval `[a, b]`.
 fn dist2_point_interval(p: f32, a: f32, b: f32) -> f32 {
     let d = (a - p).max(p - b).max(0.0);

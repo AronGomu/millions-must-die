@@ -24,12 +24,12 @@ use super::formation::{
     nearest_body_clear_cell,
 };
 use super::orders::{
-    GatherPhase, Order, OrderTable, adaptive_reach, dist2, entity_approach_cell,
-    nearest_unblocked_cell, node_cell, rect_distance, step_admissible, unit_speed,
+    GatherPhase, Order, OrderTable, adaptive_reach, dist2, entity_approach_cell, rect_distance,
+    step_admissible, unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
 use super::selection::{MAX_SELECTION, Pick, Selection, box_select, footprint_min, pick_at};
-use super::static_nav::StaticNav;
+use super::static_nav::{StaticNav, circle_clear_of_cell_rect};
 
 /// What kind of order a context click resolved a unit into. See
 /// [`RtsWorld::issue_context_order_at`].
@@ -221,6 +221,16 @@ pub struct RtsWorld {
     /// Sites that finished this tick, reused every tick. Reserved to
     /// [`MAX_ENTITIES`] so construction never allocates.
     finished: Vec<EntityId>,
+    /// Body positions one placement plan must avoid: every live body a plan
+    /// does not move, plus the positions that plan has already handed out.
+    /// Reserved to [`MAX_ENTITIES`] so a blocked production spawn or a
+    /// discarded evacuation plan never allocates.
+    body_scratch: Vec<[f32; 2]>,
+    /// Slots of the bodies one finishing building would swallow, and where
+    /// each is planned to stand — parallel, both reserved to
+    /// [`MAX_ENTITIES`].
+    evac_units: Vec<usize>,
+    evac_to: Vec<[f32; 2]>,
     /// One production queue and rally point per entity slot.
     production: ProductionTable,
     /// The view every packer projects through. World state, not view state: a
@@ -308,19 +318,31 @@ enum BodySweep {
     TooMany,
 }
 
-/// The nearest legal cell centre to `preferred`: a cell whose centre is
-/// clear per `static_nav.center_blocked()` and does not overlap any
-/// already-`placed` body (two bodies overlap when their centres are closer
-/// than one body diameter — touching is legal). Ties (equal squared distance
-/// to `preferred`) go to the lower flat cell index, so relocation never
-/// depends on scan order. `None` only when the grid has no such cell.
+/// The nearest legal free body centre to `preferred`: a cell whose centre is
+/// clear per `static_nav.center_blocked()` (the precomputed
+/// [`StaticNav::position_clear`] answer for a unit's own body radius), is
+/// clear of `exclude` when one is given, and does not overlap any `placed`
+/// body (two bodies overlap when their centres are closer than one body
+/// diameter — touching is legal). Ties (equal squared distance to
+/// `preferred`) go to the lower flat cell index, so the choice never depends
+/// on scan order. `None` only when the grid has no such cell.
+///
+/// The one planner behind every body placement this world performs: seeding a
+/// scenario's starting workers, repairing a penetration the world was handed,
+/// placing a finished production unit, and evacuating the bodies a finishing
+/// building would swallow. Each caller differs only in the exclusion set it
+/// supplies.
 ///
 /// `ignore` names one index in `placed` that is not an obstacle to itself —
 /// the unit being relocated, when this runs as the tick's overlap repair.
-fn nearest_legal_free_center(
+/// `exclude` is a cell rectangle (minimum corner, edge) no candidate body may
+/// penetrate: the footprint a building is about to occupy, which is not in
+/// `static_nav` yet because the plan that would stamp it may still fail.
+fn nearest_free_body_center(
     static_nav: &StaticNav,
     placed: &[[f32; 2]],
     ignore: Option<usize>,
+    exclude: Option<(Cell, u32)>,
     preferred: [f32; 2],
 ) -> Option<[f32; 2]> {
     let width = static_nav.width();
@@ -336,6 +358,11 @@ fn nearest_legal_free_center(
                 continue;
             }
             let p = [x as f32 + 0.5, y as f32 + 0.5];
+            if exclude.is_some_and(|(min, edge)| {
+                !circle_clear_of_cell_rect(p, RTS_UNIT_BODY_RADIUS_CELLS, min, edge)
+            }) {
+                continue;
+            }
             if placed
                 .iter()
                 .enumerate()
@@ -419,7 +446,7 @@ impl RtsWorld {
         let mut placed: Vec<[f32; 2]> = Vec::with_capacity(scenario.spawn_cells().len());
         for c in scenario.spawn_cells() {
             let preferred = [c.x as f32 + 0.5, c.y as f32 + 0.5];
-            let pos = nearest_legal_free_center(&static_nav, &placed, None, preferred)
+            let pos = nearest_free_body_center(&static_nav, &placed, None, None, preferred)
                 .ok_or(RtsWorldError::NoFreeUnitPosition)?;
             entities
                 .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)
@@ -480,6 +507,9 @@ impl RtsWorld {
             placement: Placement::None,
             build_attend: vec![false; MAX_ENTITIES],
             finished: Vec::with_capacity(MAX_ENTITIES),
+            body_scratch: Vec::with_capacity(MAX_ENTITIES),
+            evac_units: Vec::with_capacity(MAX_ENTITIES),
+            evac_to: Vec::with_capacity(MAX_ENTITIES),
             production: ProductionTable::new(),
             camera,
             pan_dir: [0.0, 0.0],
@@ -1340,23 +1370,18 @@ impl RtsWorld {
             let p = self.entities.progress(slot) + 1;
             if p < target {
                 self.entities.set_progress(slot, p, target);
-            } else {
-                // Finish.
-                self.entities.set_progress(slot, 0, 0);
-                let center = self.entities.position(slot);
-                let min = footprint_min(center, b.footprint_cells());
-                self.static_nav
-                    .stamp_finished_building(min, b.footprint_cells());
-                self.supply.grant_cap(supply_grant(b));
+            } else if self.finish_site(slot, b) {
                 self.finished.push(self.entities.id_at(slot).expect("live"));
             }
+            // A completion that could not evacuate every body it covers is
+            // simply not applied: progress stays one tick short of its target,
+            // the site stays walkable, and the attempt is repeated next tick.
         }
-        // Every finish above only touched `solids`; recompute the inflated
-        // centre mask once for the whole batch, then hand it to the pool in
-        // one replacement — not once per finished building this tick.
+        // Each finish above rebuilt the inflated centre mask for itself (a
+        // later completion on the same tick has to see an earlier one as
+        // solid); the pooled fields are dropped once for the whole batch
+        // rather than once per finished building.
         if !self.finished.is_empty() {
-            self.static_nav
-                .rebuild_center_blocked(RTS_UNIT_BODY_RADIUS_CELLS);
             let replaced = self
                 .nav
                 .replace_blocked_mask(self.static_nav.center_blocked());
@@ -1375,10 +1400,6 @@ impl RtsWorld {
             {
                 self.orders.clear(slot);
             }
-        }
-
-        if !self.finished.is_empty() {
-            self.push_units_off_blocked_cells();
         }
     }
 
@@ -1410,43 +1431,120 @@ impl RtsWorld {
             || dist2(p, goal.slot_center()) <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS
     }
 
-    /// Move every unit standing in a blocked cell to the nearest open one.
+    /// Turn the site at `slot` into a finished building — but only if every
+    /// body its footprint would swallow can be given a legal place to stand
+    /// first. `false` leaves the world **exactly** as it was.
     ///
-    /// Runs only when a building finished this tick, which is the only thing
-    /// that blocks a cell during play. A unit is not an obstruction to
-    /// placement (see [`super::build::placement_valid`]), so a building may
-    /// well finish on top of one — and a unit left inside the footprint is
-    /// bricked: every field's descent vector at a blocked cell is zero, so it
-    /// could never walk out, and no order given to it could ever be honoured.
-    fn push_units_off_blocked_cells(&mut self) {
-        let width = self.scenario.width();
-        let height = self.scenario.height();
-        for i in 0..self.live_scratch.len() {
-            let slot = self.live_scratch[i];
-            if !matches!(self.entities.kind(slot), EntityKind::Unit(_)) {
+    /// A unit is not an obstruction to placement (see
+    /// [`super::build::placement_valid`]), so a building routinely finishes on
+    /// top of one, and a site is walkable until it finishes, so its own
+    /// builder is usually standing in it. Since T4 a body may never penetrate
+    /// static geometry, so "stamp the footprint, then shove whoever is inside"
+    /// is not available: it would create the illegal state it then tries to
+    /// repair, and a shove with nowhere to go would leave a body sealed inside
+    /// a solid.
+    ///
+    /// So the whole transition is planned before any of it is applied:
+    ///
+    /// 1. every live body the proposed footprint penetrates is an evacuee;
+    ///    every other live body is an obstacle to the plan, where it stands;
+    /// 2. evacuees are placed one at a time, in the same tick-rotated priority
+    ///    the movement sweep uses, each taking the nearest legal free centre
+    ///    to where it stands — with the proposed footprint excluded, since it
+    ///    is not in [`StaticNav`] yet, and with every centre already handed
+    ///    out in this plan counted as occupied;
+    /// 3. one evacuee with nowhere to go discards the whole plan, and the site
+    ///    holds at `build_ticks - 1` and stays walkable;
+    /// 4. only a complete plan is committed — and then, in the same tick, the
+    ///    building is marked finished, stamped into the static masks, and its
+    ///    supply granted.
+    ///
+    /// The centre mask is rebuilt here, per completed building rather than
+    /// once for the tick's batch, because two sites can finish on the same
+    /// tick: the second one's evacuation plan must see the first one as solid
+    /// ground, not as the walkable site it was at the top of the tick. The
+    /// pooled fields are still replaced once, by the caller, for the whole
+    /// batch.
+    fn finish_site(&mut self, slot: usize, b: BuildingKind) -> bool {
+        let edge = b.footprint_cells();
+        let min = footprint_min(self.entities.position(slot), edge);
+
+        // 1. Split every live body into "this footprint covers it" and "this
+        //    footprint does not", the second being the plan's fixed obstacles.
+        self.evac_units.clear();
+        self.body_scratch.clear();
+        for s in 0..self.entities.slot_count() {
+            if !self.entities.alive(s) {
                 continue;
             }
-            let cell = node_cell(self.entities.position(slot));
-            if cell.x >= width || cell.y >= height {
+            let EntityKind::Unit(kind) = self.entities.kind(s) else {
                 continue;
-            }
-            if !self.nav.blocked()[(cell.x + cell.y * width) as usize] {
-                continue;
-            }
-            if let Some(open) = nearest_unblocked_cell(self.nav.blocked(), width, height, cell) {
-                self.entities
-                    .set_position(slot, [open.x as f32 + 0.5, open.y as f32 + 0.5]);
+            };
+            let p = self.entities.position(s);
+            if circle_clear_of_cell_rect(p, kind.body_radius_cells(), min, edge) {
+                self.body_scratch.push(p);
+            } else {
+                self.evac_units.push(s);
             }
         }
+
+        // 2. Plan one destination per evacuee, whole or not at all.
+        let n = self.evac_units.len();
+        self.evac_to.clear();
+        self.evac_to.resize(n, [0.0, 0.0]);
+        if n > 0 {
+            let start = (self.tick_index % n as u64) as usize;
+            for k in 0..n {
+                let i = (start + k) % n;
+                let from = self.entities.position(self.evac_units[i]);
+                let Some(to) = nearest_free_body_center(
+                    &self.static_nav,
+                    &self.body_scratch,
+                    None,
+                    Some((min, edge)),
+                    from,
+                ) else {
+                    // 3. Nowhere to put this body: nothing has been mutated,
+                    //    so the site simply does not finish this tick.
+                    return false;
+                };
+                self.evac_to[i] = to;
+                // Every centre already handed out is occupied for the rest of
+                // this plan.
+                self.body_scratch.push(to);
+            }
+        }
+
+        // 4. Commit: the moves, then the building itself.
+        for i in 0..n {
+            self.entities
+                .set_position(self.evac_units[i], self.evac_to[i]);
+        }
+        self.entities.set_progress(slot, 0, 0);
+        self.static_nav.stamp_finished_building(min, edge);
+        self.static_nav
+            .rebuild_center_blocked(RTS_UNIT_BODY_RADIUS_CELLS);
+        self.supply.grant_cap(supply_grant(b));
+        true
     }
 
     /// System 4: advance every finished building's production queue by one
-    /// tick, spawning the unit beside the building and giving it its rally
-    /// order when its head completes.
+    /// tick, and place the head on the grid — outside every body already
+    /// standing there — once it is ready.
     ///
     /// Runs after construction, so a Barracks that finished this tick can
     /// already hold a queue, and before orders, so a unit produced this tick
-    /// can be given its rally order in the same tick.
+    /// can be given its rally order in the same tick. Buildings are processed
+    /// ascending by slot, so two producers finishing on the same tick resolve
+    /// in a fixed order and the second sees the first's unit as a body.
+    ///
+    /// Ticking and popping are separate ([`ProductionQueue::tick_head`] /
+    /// [`ProductionQueue::pop_ready`]) because placing a unit can fail: the
+    /// preferred spot may be occupied and every legal centre on the grid taken
+    /// or blocked, or the entity store may be full. A head that cannot be
+    /// placed stays ready — paid for, its supply still reserved — and is
+    /// retried next tick, rather than being spawned into another body or
+    /// silently dropped. The player keeps exactly what they bought.
     fn production_system(&mut self) {
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
@@ -1456,34 +1554,70 @@ impl RtsWorld {
             if self.entities.progress_target(slot) != 0 {
                 continue; // still a site
             }
-            let Some(_head) = self.production.queue(slot).head() else {
+            if self.production.queue(slot).head().is_none() {
                 continue;
-            };
-            let Some(done) = self.production.queue_mut(slot).advance() else {
+            }
+            self.production.queue_mut(slot).tick_head();
+            if !self.production.queue(slot).head_ready() {
                 continue;
-            };
+            }
+            let done = self
+                .production
+                .queue(slot)
+                .head()
+                .expect("a ready head is a head");
 
+            // The approach cell is where the player expects the unit: the
+            // spawn is the nearest legal free body centre to it, which is that
+            // cell itself whenever nothing is standing on it.
             let building_id = self.entities.id_at(slot).expect("live");
             let (cell, _) =
                 entity_approach_cell(&self.static_nav, &self.entities, building_id, done);
-            let pos = [cell.x as f32 + 0.5, cell.y as f32 + 0.5];
+            let preferred = [cell.x as f32 + 0.5, cell.y as f32 + 0.5];
+            self.collect_unit_bodies_into_scratch();
+            let Some(pos) = nearest_free_body_center(
+                &self.static_nav,
+                &self.body_scratch,
+                None,
+                None,
+                preferred,
+            ) else {
+                // Nowhere legal and free on the whole grid. The ready head
+                // waits.
+                continue;
+            };
             let Some(id) = self
                 .entities
                 .spawn(EntityKind::Unit(done), OWNER_PLAYER, pos)
             else {
-                // Store full: put the entry back at the front and stop. The
-                // player keeps what they paid for rather than losing it to a
-                // silent drop.
-                self.production.queue_mut(slot).push_front(done);
+                // Store full: same wait, same reason.
                 continue;
             };
+            let popped = self.production.queue_mut(slot).pop_ready();
+            debug_assert_eq!(popped, Some(done), "a ready head must pop what it produced");
             // `live_scratch` was collected before production. Include this unit
-            // in later systems and the same tick's supply recount.
+            // in later systems and the same tick's supply recount; the movement
+            // sweep collects it too, so it is a body from this tick on.
             self.live_scratch.push(id.index as usize);
             if let Some(rally) = self.production.rally(slot) {
                 // Ignores its own return; a blocked rally is a no-op.
                 self.order_move(id, rally);
             }
+        }
+    }
+
+    /// Fill [`Self::body_scratch`] with every live unit's body position,
+    /// ascending slot — the obstacle set a placement plan scores against.
+    fn collect_unit_bodies_into_scratch(&mut self) {
+        self.body_scratch.clear();
+        for slot in 0..self.entities.slot_count() {
+            if !self.entities.alive(slot) {
+                continue;
+            }
+            if !matches!(self.entities.kind(slot), EntityKind::Unit(_)) {
+                continue;
+            }
+            self.body_scratch.push(self.entities.position(slot));
         }
     }
 
@@ -1759,10 +1893,11 @@ impl RtsWorld {
                 continue;
             }
             let preferred = self.candidate_pos[i];
-            match nearest_legal_free_center(
+            match nearest_free_body_center(
                 &self.static_nav,
                 &self.candidate_pos,
                 Some(i),
+                None,
                 preferred,
             ) {
                 Some(p) => {

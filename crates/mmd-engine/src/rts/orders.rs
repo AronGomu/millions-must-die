@@ -350,75 +350,6 @@ pub(crate) fn entity_approach_cell(
     (node_cell(pos), 0.0)
 }
 
-/// One cell of [`entity_approach_cell`]'s ring scan: `None` when out of
-/// bounds or blocked, `Some` otherwise.
-fn ring_try(x: i64, y: i64, width: u32, height: u32, blocked: &[bool]) -> Option<Cell> {
-    if x < 0 || y < 0 || x >= width as i64 || y >= height as i64 {
-        return None;
-    }
-    let idx = (x as u32 + y as u32 * width) as usize;
-    if blocked[idx] {
-        None
-    } else {
-        Some(Cell {
-            x: x as u32,
-            y: y as u32,
-        })
-    }
-}
-
-/// The nearest unblocked, in-bounds cell to `from`, or `None` when the grid
-/// has no unblocked cell.
-///
-/// Scanned as squares of growing Chebyshev radius, and inside a ring in a
-/// fixed row-major order — "nearest" by float distance would make the choice
-/// depend on a float comparison and stop the state hash reproducing across a
-/// refactor, exactly as [`entity_approach_cell`] argues.
-///
-/// This is how a unit gets out of a cell that was stamped blocked underneath
-/// it: every field's descent vector at a blocked cell is zero, so a unit left
-/// standing in one could never walk out again.
-pub(crate) fn nearest_unblocked_cell(
-    blocked: &[bool],
-    width: u32,
-    height: u32,
-    from: Cell,
-) -> Option<Cell> {
-    // Every in-bounds cell is within this Chebyshev radius. Each ring is
-    // visited in row-major order: top row, left/right sides, bottom row.
-    let max_radius = width.max(height);
-    for r in 0..=max_radius {
-        let min_x = from.x as i64 - r as i64;
-        let max_x = from.x as i64 + r as i64;
-        let min_y = from.y as i64 - r as i64;
-        let max_y = from.y as i64 + r as i64;
-
-        for x in min_x..=max_x {
-            if let Some(c) = ring_try(x, min_y, width, height, blocked) {
-                return Some(c);
-            }
-        }
-        for y in (min_y + 1)..max_y {
-            if let Some(c) = ring_try(min_x, y, width, height, blocked) {
-                return Some(c);
-            }
-            if max_x != min_x
-                && let Some(c) = ring_try(max_x, y, width, height, blocked)
-            {
-                return Some(c);
-            }
-        }
-        if max_y != min_y {
-            for x in min_x..=max_x {
-                if let Some(c) = ring_try(x, max_y, width, height, blocked) {
-                    return Some(c);
-                }
-            }
-        }
-    }
-    None
-}
-
 /// The cell a node occupies.
 pub(crate) fn node_cell(pos: [f32; 2]) -> Cell {
     Cell {
@@ -590,30 +521,6 @@ mod tests {
             "approach cell {a:?} must lie outside the footprint"
         );
         assert!(!nav.center_blocked()[(a.x + a.y * W) as usize]);
-    }
-
-    #[test]
-    fn the_nearest_open_cell_uses_a_deterministic_row_major_tie_break() {
-        let mut blocked = vec![true; 7 * 7];
-        let first = Cell { x: 2, y: 2 };
-        let tied_later = Cell { x: 4, y: 2 };
-        blocked[(first.x + first.y * 7) as usize] = false;
-        blocked[(tied_later.x + tied_later.y * 7) as usize] = false;
-
-        assert_eq!(
-            nearest_unblocked_cell(&blocked, 7, 7, Cell { x: 3, y: 3 }),
-            Some(first)
-        );
-    }
-
-    #[test]
-    fn the_nearest_open_cell_searches_the_whole_grid() {
-        let mut blocked = vec![true; 7 * 7];
-        blocked[6 + 6 * 7] = false;
-        assert_eq!(
-            nearest_unblocked_cell(&blocked, 7, 7, Cell { x: 0, y: 0 }),
-            Some(Cell { x: 6, y: 6 })
-        );
     }
 
     #[test]
