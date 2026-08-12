@@ -32,4 +32,4 @@
 1300:panup:right               # release it
 
 1400:key:f1                    # overlay on for the final frames
-1450:key:esc
+1450:quit

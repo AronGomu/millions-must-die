@@ -560,7 +560,7 @@ fn the_overlay_is_off_by_default() {
 fn a_quit_on_frame_one_renders_nothing() {
     let Some(cli) = or_skip(
         "a_quit_on_frame_one_renders_nothing",
-        rts(&["--inject-input", "1:key:esc"]),
+        rts(&["--inject-input", "1:quit"]),
     ) else {
         return;
     };
@@ -1029,7 +1029,7 @@ fn the_window_is_released_before_it_drops() {
     let Some(cli) = or_skip(
         "the_window_is_released_before_it_drops",
         invoke(
-            &["rts", "--frames", "600", "--inject-input", "4:key:esc"],
+            &["rts", "--frames", "600", "--inject-input", "4:quit"],
             false,
         ),
     ) else {
@@ -1143,17 +1143,22 @@ fn hud_rally_arms_and_waits_for_the_next_world_click() {
     let gear = fmt_xy(gear_click_screen());
     let target = fmt_xy(clear_build_site_screen());
 
-    // Select the HQ, arm rally, click the gear (HUD — must not consume the
-    // pending rally), then click a world cell — rally must land there.
-    let via_gear = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:lclick:{target}");
-    // Same, without the intervening HUD click.
+    // Select the HQ, arm rally, detour through the gear/pause menu (`T13`:
+    // the gear now actually opens it, pausing the sim for the frame it is
+    // open — Escape closes it again before the world click lands), then
+    // click a world cell — rally must still land there. The detour skips
+    // exactly one tick (the paused frame the menu was open), so `via_gear`
+    // gets one extra frame budget to reach the same tick count as `direct`.
+    let via_gear =
+        format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:key:esc;6:lclick:{target}");
+    // Same, without the intervening HUD/menu detour.
     let direct = format!("1:move:{hq};2:lclick:{hq};3:key:r;5:lclick:{target}");
-    // Arm rally, but only click the gear — no world click ever arrives.
-    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear}");
+    // Arm rally, detour through the menu, but no world click ever arrives.
+    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:key:esc");
 
     let Some(via_gear) = or_skip(
         "hud_rally_arms_and_waits_for_the_next_world_click",
-        rts(&["--frames", "10", "--inject-input", &via_gear]),
+        rts(&["--frames", "11", "--inject-input", &via_gear]),
     ) else {
         return;
     };
@@ -1165,7 +1170,7 @@ fn hud_rally_arms_and_waits_for_the_next_world_click() {
     };
     let Some(armed_only) = or_skip(
         "hud_rally_arms_and_waits_for_the_next_world_click",
-        rts(&["--frames", "10", "--inject-input", &armed_only]),
+        rts(&["--frames", "11", "--inject-input", &armed_only]),
     ) else {
         return;
     };
@@ -1174,9 +1179,14 @@ fn hud_rally_arms_and_waits_for_the_next_world_click() {
     armed_only.assert_success();
 
     assert_eq!(
+        via_gear.exit_field("tick"),
+        direct.exit_field("tick"),
+        "{via_gear}\n{direct}\nequal tick counts, or the hash compare below proves nothing"
+    );
+    assert_eq!(
         via_gear.final_hash(),
         direct.final_hash(),
-        "{via_gear}\n{direct}\na HUD click while rally is armed must be a pure no-op"
+        "{via_gear}\n{direct}\na gear/menu detour while rally is armed must not lose it"
     );
     assert_ne!(
         via_gear.final_hash(),
@@ -1237,5 +1247,159 @@ fn hud_background_click_never_reaches_the_world() {
         clicked.final_hash(),
         baseline.final_hash(),
         "{clicked}\n{baseline}\na click/right-click on a HUD background gap must never order the world"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 7. Paused menu / settings FSM (T13)
+// ---------------------------------------------------------------------------
+
+/// Inside the pause menu's own `Settings` button.
+fn pause_menu_settings_screen() -> [f32; 2] {
+    [960.0, 540.0]
+}
+
+/// Inside the settings panel's `Back` control.
+fn settings_back_screen() -> [f32; 2] {
+    [632.0, 928.0]
+}
+
+#[test]
+fn menu_escape_opens_the_pause_menu_without_quitting() {
+    let Some(cli) = or_skip(
+        "menu_escape_opens_the_pause_menu_without_quitting",
+        rts(&["--frames", "5", "--inject-input", "2:key:esc"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("quit"),
+        "false",
+        "{cli}\nEscape must never quit — T13 repurposes it into the paused menu"
+    );
+    assert_eq!(
+        cli.exit_field("paused"),
+        "true",
+        "{cli}\nopening the menu pauses the sim"
+    );
+    assert_eq!(
+        cli.exit_field("frames"),
+        "5",
+        "{cli}\na paused run still renders every budgeted frame"
+    );
+}
+
+#[test]
+fn menu_escape_nesting_backs_out_to_gameplay() {
+    // Escape opens the menu, a second Escape closes it again.
+    let Some(cli) = or_skip(
+        "menu_escape_nesting_backs_out_to_gameplay",
+        rts(&["--frames", "5", "--inject-input", "2:key:esc;3:key:esc"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("quit"), "false", "{cli}");
+    assert_eq!(
+        cli.exit_field("paused"),
+        "false",
+        "{cli}\na closed menu with no manual pause must resume the sim"
+    );
+}
+
+#[test]
+fn menu_manual_pause_survives_the_menu() {
+    // Space pauses manually; opening and closing the menu must not resume
+    // the sim — the manual pause reason is independent of the menu one.
+    let Some(cli) = or_skip(
+        "menu_manual_pause_survives_the_menu",
+        rts(&[
+            "--frames",
+            "6",
+            "--inject-input",
+            "2:key:space;3:key:esc;4:key:esc",
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("paused"),
+        "true",
+        "{cli}\nthe manual pause must survive an opened-then-closed menu"
+    );
+}
+
+#[test]
+fn menu_gear_click_opens_the_menu_exactly_like_escape() {
+    let gear = fmt_xy(gear_click_screen());
+    let script = format!("2:lclick:{gear}");
+    let Some(cli) = or_skip(
+        "menu_gear_click_opens_the_menu_exactly_like_escape",
+        rts(&["--frames", "5", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("quit"), "false", "{cli}");
+    assert_eq!(
+        cli.exit_field("paused"),
+        "true",
+        "{cli}\nthe gear opens the paused menu"
+    );
+}
+
+#[test]
+fn menu_settings_button_navigates_and_back_returns() {
+    // Open the menu, click Settings, click Back, then Escape closes the
+    // (now top-level) menu — quit must never fire and the sim must resume.
+    let settings_btn = fmt_xy(pause_menu_settings_screen());
+    let back_btn = fmt_xy(settings_back_screen());
+    let script = format!("2:key:esc;3:lclick:{settings_btn};4:lclick:{back_btn};5:key:esc");
+    let Some(cli) = or_skip(
+        "menu_settings_button_navigates_and_back_returns",
+        rts(&["--frames", "6", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("quit"), "false", "{cli}");
+    assert_eq!(
+        cli.exit_field("paused"),
+        "false",
+        "{cli}\nSettings -> Back -> Escape must fully close the menu"
+    );
+}
+
+#[test]
+fn menu_modal_consumes_clicks_outside_its_own_controls() {
+    // While the menu is open, a click far outside the pause menu's own
+    // rect (e.g. dead centre of the HUD's command panel) must not select,
+    // place, or otherwise touch the world — it is consumed by the modal.
+    let hq = fmt_xy(hq_click_screen());
+    let outside = fmt_xy([50.0, 50.0]);
+    let with_menu = format!("1:move:{hq};2:lclick:{hq};3:key:esc;4:lclick:{outside}");
+    let no_menu_click = format!("1:move:{hq};2:lclick:{hq};3:key:esc");
+
+    let Some(with_menu) = or_skip(
+        "menu_modal_consumes_clicks_outside_its_own_controls",
+        rts(&["--frames", "5", "--inject-input", &with_menu]),
+    ) else {
+        return;
+    };
+    let Some(no_menu_click) = or_skip(
+        "menu_modal_consumes_clicks_outside_its_own_controls",
+        rts(&["--frames", "5", "--inject-input", &no_menu_click]),
+    ) else {
+        return;
+    };
+    with_menu.assert_success();
+    no_menu_click.assert_success();
+    assert_eq!(
+        with_menu.exit_field("selected"),
+        no_menu_click.exit_field("selected"),
+        "{with_menu}\n{no_menu_click}\na click outside the modal's own rect must not reach \
+         selection"
     );
 }

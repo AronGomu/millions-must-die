@@ -14,9 +14,15 @@
 //! | `sclick`  | `X,Y`           | additive (shift) left click |
 //! | `rclick`  | `X,Y`           | right click |
 //! | `drag`    | `X0,Y0,X1,Y1`   | left drag |
+//! | `quit`    | (none)          | end the run now — script/CLI only, no keyboard binding |
+//!
+//! `quit` is deliberately not a key: `T13` repurposes Escape into the
+//! paused-menu FSM (`Gameplay` → `PauseMenu` → `Settings`, never a quit), so
+//! a script that must guarantee its own early end names `quit` explicitly
+//! instead of relying on a key whose meaning now depends on menu state.
 //!
 //! Example:
-//! `10:move:960,540;12:lclick:960,540;60:key:w;90:lclick:1000,600;200:key:esc`
+//! `10:move:960,540;12:lclick:960,540;60:key:w;90:lclick:1000,600;200:quit`
 //!
 //! [`RtsScript::parse_file_text`] reads the same grammar from a file, where a
 //! newline also separates entries and `#` starts a comment — the form the
@@ -62,12 +68,7 @@ impl RtsScript {
                     "--inject-input entry {entry:?} is not FRAME:KIND[:ARGS] (e.g. 4:key:space)"
                 )
             })?;
-            let args = parts.next().ok_or_else(|| {
-                format!(
-                    "--inject-input entry {entry:?} is missing :ARGS (e.g. 4:key:space, \
-                     4:lclick:960,540)"
-                )
-            })?;
+            let raw_args = parts.next();
 
             let frame: u64 = frame_str.parse().map_err(|_| {
                 format!("--inject-input entry {entry:?}: frame {frame_str:?} is not a number")
@@ -78,6 +79,29 @@ impl RtsScript {
                      event is frame 1"
                 ));
             }
+
+            if kind_str.trim() == "quit" {
+                if let Some(extra) = raw_args {
+                    return Err(format!(
+                        "--inject-input entry {entry:?}: `quit` takes no arguments, found \
+                         {extra:?}"
+                    ));
+                }
+                entries.push(Entry {
+                    frame,
+                    name: "quit".to_string(),
+                    cmd: RtsCommand::Quit,
+                    fired: false,
+                });
+                continue;
+            }
+
+            let args = raw_args.ok_or_else(|| {
+                format!(
+                    "--inject-input entry {entry:?} is missing :ARGS (e.g. 4:key:space, \
+                     4:lclick:960,540)"
+                )
+            })?;
 
             let (name, cmd) = match kind_str.trim() {
                 "key" => {
@@ -138,8 +162,8 @@ impl RtsScript {
                 }
                 other => {
                     return Err(format!(
-                        "--inject-input entry {entry:?}: unknown kind {other:?} (valid: key, \
-                         pan, panup, move, lclick, sclick, rclick, drag)"
+                        "--inject-input entry {entry:?}: unknown kind {other:?} (valid: quit, \
+                         key, pan, panup, move, lclick, sclick, rclick, drag)"
                     ));
                 }
             };
@@ -334,11 +358,27 @@ mod tests {
     /// sweep: the later entry never fires.
     #[test]
     fn quit_stops_the_frames_sweep() {
-        let mut script = RtsScript::parse("3:key:esc;3:key:space").expect("valid script");
+        let mut script = RtsScript::parse("3:quit;3:key:space").expect("valid script");
         let mut out = Vec::new();
         let quit = script.drain_frame(3, &mut out);
-        assert!(quit, "esc did not report a quit");
+        assert!(quit, "quit did not report a quit");
         assert_eq!(out, vec![RtsCommand::Quit]);
         assert_eq!(script.unfired(), vec!["3:space".to_string()]);
+    }
+
+    /// `quit` is a script-only affordance — no key drives `RtsCommand::Quit`
+    /// anymore (`T13` repurposes Escape into the paused-menu FSM).
+    #[test]
+    fn quit_takes_no_arguments() {
+        let err = RtsScript::parse("3:quit:extra").unwrap_err();
+        assert!(err.contains("no arguments"), "{err}");
+    }
+
+    #[test]
+    fn quit_parses_bare() {
+        let script = RtsScript::parse("5:quit").expect("valid script");
+        assert_eq!(script.entries.len(), 1);
+        assert_eq!(script.entries[0].name, "quit");
+        assert_eq!(script.entries[0].cmd, RtsCommand::Quit);
     }
 }

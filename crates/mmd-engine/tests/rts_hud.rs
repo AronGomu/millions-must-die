@@ -886,3 +886,173 @@ fn hit_a_point_off_the_hud_is_the_world() {
     let p = [960.0, 400.0];
     assert_eq!(hud_hit_test(h.world(), p), None);
 }
+
+// ---------------------------------------------------------------------------
+// T13 — pause menu / settings modal: pure layout + hit-test
+// ---------------------------------------------------------------------------
+
+use mmd_engine::rts::{
+    CONFINE_CHECKBOX, EDGE_PAN_TRACK, FOCUS_CHECKBOX, KEYBOARD_PAN_TRACK, MASTER_TRACK,
+    MUSIC_TRACK, ModalHit, ModalPage, ModalSnapshot, PAN_MAX, PAN_MIN, SFX_TRACK, VOICE_TRACK,
+    VOLUME_MAX, VOLUME_MIN, WINDOW_MODE_BUTTONS, modal_hit_test, pack_modal,
+};
+
+fn default_snapshot() -> ModalSnapshot {
+    ModalSnapshot {
+        window_mode_index: 0,
+        keyboard_pan: 48,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+    }
+}
+
+fn corner(rect: [f32; 4]) -> [f32; 2] {
+    [rect[0] + 1.0, rect[1] + 1.0]
+}
+
+/// T13's test plan: the pause menu is a one-button modal — exactly the
+/// `Settings` button is a real hit, everywhere else in the modal's own
+/// footprint (and beyond) is consumed with no other action available.
+#[test]
+fn settings_menu_contains_only_settings_action() {
+    assert_eq!(
+        modal_hit_test(
+            ModalPage::PauseMenu,
+            corner(HudLayout::PAUSE_MENU_SETTINGS_BTN)
+        ),
+        ModalHit::OpenSettings
+    );
+    // The modal's own panel, off the button: consumed, not an action.
+    assert_eq!(
+        modal_hit_test(ModalPage::PauseMenu, corner(HudLayout::PAUSE_MENU)),
+        ModalHit::Consumed
+    );
+    // Far outside the panel entirely: still consumed while the menu owns
+    // every point.
+    assert_eq!(
+        modal_hit_test(ModalPage::PauseMenu, [10.0, 10.0]),
+        ModalHit::Consumed
+    );
+}
+
+#[test]
+fn settings_back_button_hits() {
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, corner(HudLayout::SETTINGS_BACK_BTN)),
+        ModalHit::Back
+    );
+}
+
+#[test]
+fn settings_window_mode_buttons_hit_their_own_index() {
+    for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
+        assert_eq!(
+            modal_hit_test(ModalPage::Settings, corner(*rect)),
+            ModalHit::WindowMode(i as u8)
+        );
+    }
+}
+
+#[test]
+fn settings_toggle_hits() {
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, corner(CONFINE_CHECKBOX)),
+        ModalHit::Confine
+    );
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, corner(FOCUS_CHECKBOX)),
+        ModalHit::Focus
+    );
+}
+
+#[test]
+fn settings_tracks_snap_within_bounds() {
+    for (track, wrap) in [(KEYBOARD_PAN_TRACK, "kb" as &str), (EDGE_PAN_TRACK, "edge")] {
+        let hit = modal_hit_test(
+            ModalPage::Settings,
+            [track[0] + track[2] * 0.5, track[1] + 1.0],
+        );
+        let v = match hit {
+            ModalHit::KeyboardPan(v) | ModalHit::EdgePan(v) => v,
+            other => panic!("{wrap}: expected a pan hit, got {other:?}"),
+        };
+        assert!(
+            (PAN_MIN..=PAN_MAX).contains(&v) && v.is_multiple_of(6),
+            "{wrap}: {v}"
+        );
+    }
+
+    for track in [MASTER_TRACK, MUSIC_TRACK, VOICE_TRACK, SFX_TRACK] {
+        // Leftmost point on the track: must snap to the minimum, never
+        // below it.
+        let hit = modal_hit_test(ModalPage::Settings, [track[0], track[1] + 1.0]);
+        let v = match hit {
+            ModalHit::Master(v) | ModalHit::Music(v) | ModalHit::Voice(v) | ModalHit::Sfx(v) => v,
+            other => panic!("expected a volume hit, got {other:?}"),
+        };
+        assert_eq!(v, VOLUME_MIN);
+
+        // Rightmost point: must snap to the maximum, never past it.
+        let hit = modal_hit_test(
+            ModalPage::Settings,
+            [track[0] + track[2] - 1.0, track[1] + 1.0],
+        );
+        let v = match hit {
+            ModalHit::Master(v) | ModalHit::Music(v) | ModalHit::Voice(v) | ModalHit::Sfx(v) => v,
+            other => panic!("expected a volume hit, got {other:?}"),
+        };
+        assert_eq!(v, VOLUME_MAX);
+    }
+}
+
+#[test]
+fn settings_pack_modal_appends_only_to_props_and_font() {
+    let mut frame = RtsFrame::new();
+    pack_modal(ModalPage::PauseMenu, default_snapshot(), None, &mut frame);
+    assert!(
+        !props(&frame).is_empty(),
+        "the pause menu panel + button must draw at least one prop quad"
+    );
+    assert!(
+        !glyphs(&frame).is_empty(),
+        "the SETTINGS button label must draw at least one glyph"
+    );
+    for slot in [SLOT_RTS_WORKER, SLOT_RTS_SOLDIER, SLOT_RTS_BUILDINGS] {
+        assert!(
+            group(&frame, slot).is_empty(),
+            "the pause menu never touches the portrait sheets"
+        );
+    }
+}
+
+#[test]
+fn settings_pack_modal_settings_page_draws_every_control_and_warning() {
+    let mut frame = RtsFrame::new();
+    let before_props = props(&frame).len();
+    let before_glyphs = glyphs(&frame).len();
+    pack_modal(
+        ModalPage::Settings,
+        default_snapshot(),
+        Some("test reason"),
+        &mut frame,
+    );
+    assert!(props(&frame).len() > before_props);
+    assert!(
+        glyphs(&frame).len() > before_glyphs,
+        "labels, values and the warning line must all draw glyphs"
+    );
+}
+
+#[test]
+fn settings_pack_modal_is_a_pure_append_never_mutating_the_world() {
+    let h = scene();
+    let before = h.state_hash();
+    let mut frame = RtsFrame::new();
+    pack_modal(ModalPage::Settings, default_snapshot(), None, &mut frame);
+    assert_eq!(h.state_hash(), before);
+}

@@ -50,7 +50,7 @@ use mmd_engine::render::{
 };
 use mmd_engine::rts::{
     DragBox, EntityId, EntityKind, OWNER_PLAYER, OrderReceiptBuffer, Placement, RtsFrame, RtsWorld,
-    RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame, pack_hud,
+    RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::{Event, WindowEvent};
@@ -61,6 +61,7 @@ use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
 use crate::rts_settings::{RtsSettings, SettingsStore, escape_warning};
+use crate::rts_ui::{PointerOwner, RtsUiState, SettingsChange};
 use crate::rts_window::{self, FocusAction, RtsWindowState, SdlWindowOps, WindowOps};
 use crate::run::RunError;
 
@@ -91,7 +92,17 @@ pub(crate) struct RtsSession {
     drag: Option<DragBox>,
     /// Currently held keyboard pan directions, summed and clamped per axis.
     keyboard_held: [f32; 2],
-    paused: bool,
+    /// The paused-menu FSM and every pause reason (`T13`) — the single
+    /// source `RtsWorld::tick` is skipped from; there is no separate
+    /// `paused: bool` anymore.
+    pub(crate) ui: RtsUiState,
+    /// The live settings value: what was loaded at startup, updated in
+    /// place by every successful `rts_ui::commit_setting_change`.
+    pub(crate) settings: RtsSettings,
+    /// Set by `rts_ui::handle_modal_click` when a modal click changed a
+    /// value; drained (and committed) by the interactive left-click site
+    /// that owns the window/store `rts_ui::commit_setting_change` needs.
+    pub(crate) pending_setting_change: Option<SettingsChange>,
     overlay_visible: bool,
     quit: bool,
     /// Reused scratch for `RtsWorld::issue_context_order_at`.
@@ -108,7 +119,9 @@ impl Default for RtsSession {
             press: None,
             drag: None,
             keyboard_held: [0.0, 0.0],
-            paused: false,
+            ui: RtsUiState::default(),
+            settings: RtsSettings::default(),
+            pending_setting_change: None,
             overlay_visible: false,
             quit: false,
             receipts: OrderReceiptBuffer::new(),
@@ -158,7 +171,8 @@ fn find_builder(world: &RtsWorld) -> Option<EntityId> {
 fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
     match cmd {
         RtsCommand::Quit => session.quit = true,
-        RtsCommand::TogglePause => session.paused = !session.paused,
+        RtsCommand::Escape => session.ui.handle_escape(),
+        RtsCommand::TogglePause => session.ui.toggle_manual_pause(),
         RtsCommand::ToggleOverlay => session.overlay_visible = !session.overlay_visible,
         RtsCommand::CancelPlacement => world.cancel_placement(),
         RtsCommand::Execute(id) => crate::rts_ui::execute_command(world, session, id),
@@ -181,10 +195,14 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             world.set_edge_pan_dir(edge);
         }
         RtsCommand::LeftClick(p) => {
-            // The HUD owns any click inside its own chrome — it never falls
-            // through to placement/select/rally, per T12's hard constraint.
-            if let crate::rts_ui::PointerOwner::Hud(hit) = crate::rts_ui::owner_for_point(world, p)
-            {
+            // An open modal owns every point first (`T13`) — even outside
+            // its own controls; then the HUD owns any click inside its own
+            // chrome — neither ever falls through to placement/select/rally,
+            // per T12's hard constraint.
+            let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
+            if let PointerOwner::Modal(hit) = owner {
+                crate::rts_ui::handle_modal_click(session, hit);
+            } else if let PointerOwner::Hud(hit) = owner {
                 crate::rts_ui::handle_hud_click(world, session, hit, false);
             } else if let Some(building) = session.pending_rally.take() {
                 // A `SetRally`-armed pending action: this is the next world
@@ -210,10 +228,12 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             }
         }
         RtsCommand::ShiftClick(p) => {
-            // A shift-click never confirms a placement, and the HUD still
-            // owns its own chrome first.
-            if let crate::rts_ui::PointerOwner::Hud(hit) = crate::rts_ui::owner_for_point(world, p)
-            {
+            // A shift-click never confirms a placement, and an open
+            // modal/the HUD still own their own chrome first.
+            let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
+            if matches!(owner, PointerOwner::Modal(_)) {
+                // Consumed: a modal has no shift-click gesture of its own.
+            } else if let PointerOwner::Hud(hit) = owner {
                 crate::rts_ui::handle_hud_click(world, session, hit, true);
             } else {
                 let view = world.iso_view();
@@ -221,22 +241,21 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
             }
         }
         RtsCommand::Drag(a, b) => {
-            // A drag that started on the HUD is consumed, not a box select —
-            // the minimap and cards have no drag gesture of their own.
+            // A drag that started on a modal/the HUD is consumed, not a box
+            // select — none of those have a drag gesture of their own.
             if matches!(
-                crate::rts_ui::owner_for_point(world, a),
-                crate::rts_ui::PointerOwner::World
+                crate::rts_ui::owner_for_point(world, &session.ui, a),
+                PointerOwner::World
             ) {
                 let view = world.iso_view();
                 world.box_select_into_selection(&view, a, b);
             }
         }
         RtsCommand::RightClick(p) => {
-            if matches!(
-                crate::rts_ui::owner_for_point(world, p),
-                crate::rts_ui::PointerOwner::Hud(_)
-            ) {
-                // Consumed: a right click over the HUD is never a world order.
+            let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
+            if matches!(owner, PointerOwner::Modal(_) | PointerOwner::Hud(_)) {
+                // Consumed: a right click over a modal/the HUD is never a
+                // world order.
             } else if matches!(world.placement(), Placement::Pending { .. }) {
                 // A right click while a ghost is pending cancels it instead
                 // of issuing an order.
@@ -293,15 +312,23 @@ fn from_render(e: RenderError) -> RunError {
     }
 }
 
-/// Resolves validated settings once, before interactive window init.
+/// Resolves validated settings once, before interactive window init, along
+/// with the [`SettingsStore`] a later [`crate::rts_ui::commit_setting_change`]
+/// saves through — `None` under the same conditions the load itself falls
+/// back to defaults (offscreen, or an unresolvable pref path).
 ///
 /// An offscreen/deterministic run (`SDL_VIDEODRIVER=offscreen`) always uses
 /// [`RtsSettings::default`] and never resolves [`SettingsStore::pref_path`]
 /// (which creates the real per-user pref directory as a side effect of being
-/// called) — the hard isolation constraint this ticket exists to prove.
-fn load_settings(opts: &RtsOptions, offscreen_driver: bool) -> RtsSettings {
+/// called) — the hard isolation constraint this ticket exists to prove. A
+/// settings-menu edit can therefore change values in memory during an
+/// offscreen run, but never persists one: there is no store to save through.
+fn load_settings(
+    opts: &RtsOptions,
+    offscreen_driver: bool,
+) -> (RtsSettings, Option<SettingsStore>) {
     if offscreen_driver {
-        return RtsSettings::default();
+        return (RtsSettings::default(), None);
     }
 
     let store = match opts.settings_store.clone() {
@@ -315,14 +342,14 @@ fn load_settings(opts: &RtsOptions, offscreen_driver: bool) -> RtsSettings {
             if let Some(warning) = loaded.warning {
                 println!("rts: settings warning={}", escape_warning(&warning));
             }
-            loaded.value
+            (loaded.value, Some(store))
         }
         Err(e) => {
             println!(
                 "rts: settings warning={}",
                 escape_warning(&format!("pref path unavailable: {e}"))
             );
-            RtsSettings::default()
+            (RtsSettings::default(), None)
         }
     }
 }
@@ -337,7 +364,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     let offscreen_driver = std::env::var_os("SDL_VIDEODRIVER")
         .map(|v| v == "offscreen")
         .unwrap_or(false);
-    let settings = load_settings(&opts, offscreen_driver);
+    let (settings, settings_store) = load_settings(&opts, offscreen_driver);
 
     let root = workspace_root_or_cwd();
     let scenario_path = opts
@@ -391,7 +418,10 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     );
     println!("{}", settings.debug_line());
 
-    let mut session = RtsSession::default();
+    let mut session = RtsSession {
+        settings: settings.clone(),
+        ..RtsSession::default()
+    };
     let mut scratch = Scratch {
         frame_buf: RtsFrame::new(),
         cmd_buf: Vec::with_capacity(8),
@@ -541,8 +571,8 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         if let Err(e) = rts_window::handle_focus(
                             &mut ops,
                             true,
-                            settings.display.confine_pointer,
-                            settings.gameplay.pause_on_focus_loss,
+                            session.settings.display.confine_pointer,
+                            session.settings.gameplay.pause_on_focus_loss,
                             || {},
                         ) {
                             eprintln!("rts: focus-gain grab restore failed ({e})");
@@ -554,8 +584,8 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         match rts_window::handle_focus(
                             &mut ops,
                             false,
-                            settings.display.confine_pointer,
-                            settings.gameplay.pause_on_focus_loss,
+                            session.settings.display.confine_pointer,
+                            session.settings.gameplay.pause_on_focus_loss,
                             || {
                                 session.keyboard_held = [0.0, 0.0];
                                 session.press = None;
@@ -564,7 +594,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                                 world.set_edge_pan_dir([0.0, 0.0]);
                             },
                         ) {
-                            Ok(FocusAction::PauseRequested) => session.paused = true,
+                            Ok(FocusAction::PauseRequested) => session.ui.focus_lost(),
                             Ok(FocusAction::None) => {}
                             Err(e) => eprintln!("rts: focus-loss grab release failed ({e})"),
                         }
@@ -648,6 +678,28 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         };
                         session.press = None;
                         apply(&mut world, &mut session, cmd);
+                        if let Some(change) = session.pending_setting_change.take() {
+                            let outcome = {
+                                let mut ops = SdlWindowOps(&mut window);
+                                crate::rts_ui::commit_setting_change(
+                                    &mut world,
+                                    Some(&mut ops),
+                                    settings_store.as_ref(),
+                                    &mut session.settings,
+                                    change,
+                                )
+                            };
+                            match outcome {
+                                Ok(()) => {
+                                    session.ui.warning = None;
+                                    win_state.mode = session.settings.display.mode;
+                                }
+                                Err(reason) => {
+                                    session.ui.warning =
+                                        Some(format!("SETTINGS NOT SAVED: {reason}"));
+                                }
+                            }
+                        }
                     } else {
                         // Release in a bar: no click/drag/order, per contract.
                         session.press = None;
@@ -765,12 +817,12 @@ where
         return Ok(None);
     }
 
-    if !session.paused {
+    if !session.ui.sim_paused() {
         world.tick();
     }
 
     pack_frame(world, session.cursor, session.drag, frame_buf);
-    pack_hud(world, frame_buf);
+    crate::rts_ui::pack_hud(world, session, frame_buf);
 
     draw(frame_buf.scene())?;
 
@@ -782,7 +834,7 @@ where
     state.last_hash = hash;
     // Counted per frame rather than latched: a run that pauses and then
     // unpauses must go back to owing one tick per frame.
-    if !session.paused {
+    if !session.ui.sim_paused() {
         state.expected_ticks += 1;
     }
 
@@ -862,7 +914,7 @@ fn finish(
         state.frames,
         hex::encode(state.last_hash),
         state.quit,
-        session.paused,
+        session.ui.sim_paused(),
         res.crystal,
         res.gas,
         supply.used(),

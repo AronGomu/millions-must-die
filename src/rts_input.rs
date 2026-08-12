@@ -12,7 +12,12 @@ use sdl3::keyboard::Keycode;
 /// that has nothing to do with them.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RtsCommand {
+    /// Script/CLI-only early termination (`quit` script token). No key binds
+    /// this — `T13` repurposes Escape into the paused-menu FSM below.
     Quit,
+    /// Gameplay: opens the paused one-button menu. Menu/Settings: navigates
+    /// back one level. Never quits (`T13`).
+    Escape,
     TogglePause,
     ToggleOverlay,
     CancelPlacement,
@@ -41,7 +46,7 @@ pub enum RtsCommand {
 /// One table so the three views of a binding cannot drift — the same
 /// discipline `src/input.rs` uses for the horde viewer.
 const KEY_BINDINGS: &[(Keycode, &str, RtsCommand)] = &[
-    (Keycode::Escape, "esc", RtsCommand::Quit),
+    (Keycode::Escape, "esc", RtsCommand::Escape),
     (Keycode::Space, "space", RtsCommand::TogglePause),
     (Keycode::F1, "f1", RtsCommand::ToggleOverlay),
     (Keycode::X, "x", RtsCommand::CancelPlacement),
@@ -130,7 +135,7 @@ pub fn pan_key_names() -> String {
 /// `the_window_banner_lists_every_binding` can assert against the same
 /// table-driven text the app prints, instead of a copy that could drift.
 pub fn window_banner() -> String {
-    "Esc quit, Space pause, F1 overlay, X cancel, Q/W/E build, A/S produce, R rally, arrows pan"
+    "Esc menu, Space pause, F1 overlay, X cancel, Q/W/E build, A/S produce, R rally, arrows pan"
         .to_string()
 }
 

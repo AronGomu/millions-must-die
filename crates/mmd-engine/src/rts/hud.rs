@@ -40,7 +40,54 @@ impl HudLayout {
     pub const COMMAND_PANEL: [f32; 4] = [1328.0, 856.0, 576.0, 208.0];
     /// The 3x3 command grid, inset to the right of [`Self::COMMAND_PANEL`].
     pub const COMMAND_GRID: [f32; 4] = [1696.0, 856.0, 208.0, 208.0];
+
+    /// The paused one-button gear/Escape menu (`T13`).
+    pub const PAUSE_MENU: [f32; 4] = [720.0, 408.0, 480.0, 264.0];
+    /// The pause menu's only actionable control.
+    pub const PAUSE_MENU_SETTINGS_BTN: [f32; 4] = [800.0, 508.0, 320.0, 64.0];
+    /// The nested settings panel (`T13`).
+    pub const SETTINGS_PANEL: [f32; 4] = [520.0, 100.0, 880.0, 880.0];
+    /// Settings panel's Back control.
+    pub const SETTINGS_BACK_BTN: [f32; 4] = [552.0, 900.0, 160.0, 56.0];
 }
+
+/// Settings rows share one left margin/width inside [`HudLayout::SETTINGS_PANEL`]
+/// (`520 + 48` .. `520 + 880 - 48`), so every row lines up under the panel's
+/// own left/right padding.
+const ROW_X: f32 = 568.0;
+const ROW_W: f32 = 784.0;
+
+/// The three window-mode buttons, row y=180 — equal width, one gap each side
+/// matching [`ROW_X`]'s margin.
+pub const WINDOW_MODE_BUTTONS: [[f32; 4]; 3] = [
+    [ROW_X, 180.0, 240.0, 56.0],
+    [ROW_X + 272.0, 180.0, 240.0, 56.0],
+    [ROW_X + 544.0, 180.0, 240.0, 56.0],
+];
+/// Labels for [`WINDOW_MODE_BUTTONS`], in the same order the app's
+/// `WindowMode` variants are declared.
+pub const WINDOW_MODE_LABELS: [&str; 3] = ["BORDERLESS", "EXCLUSIVE", "WINDOWED"];
+
+pub const KEYBOARD_PAN_TRACK: [f32; 4] = [ROW_X, 276.0, ROW_W, 24.0];
+pub const EDGE_PAN_TRACK: [f32; 4] = [ROW_X, 372.0, ROW_W, 24.0];
+pub const CONFINE_CHECKBOX: [f32; 4] = [ROW_X, 468.0, 32.0, 32.0];
+pub const FOCUS_CHECKBOX: [f32; 4] = [ROW_X, 516.0, 32.0, 32.0];
+pub const MASTER_TRACK: [f32; 4] = [ROW_X, 584.0, ROW_W, 24.0];
+pub const MUSIC_TRACK: [f32; 4] = [ROW_X, 656.0, ROW_W, 24.0];
+pub const VOICE_TRACK: [f32; 4] = [ROW_X, 728.0, ROW_W, 24.0];
+pub const SFX_TRACK: [f32; 4] = [ROW_X, 800.0, ROW_W, 24.0];
+
+/// Keyboard/edge pan bounds — must match `crate::rts_settings`'s
+/// `PAN_MIN`/`PAN_MAX`/`PAN_STEP` (schema-1 contract, duplicated here so this
+/// engine crate never depends on the app crate's settings type; kept in sync
+/// by `settings_pan_and_volume_bounds_match_app_contract`, `T13`).
+pub const PAN_MIN: u32 = 6;
+pub const PAN_MAX: u32 = 96;
+pub const PAN_STEP: u32 = 6;
+/// Volume bounds — same duplication contract as [`PAN_MIN`].
+pub const VOLUME_MIN: u32 = 0;
+pub const VOLUME_MAX: u32 = 100;
+pub const VOLUME_STEP: u32 = 5;
 
 /// Flat aliases of [`HudLayout`]'s rects, for call sites that only need one.
 pub const TOP_BAR_RECT: [f32; 4] = HudLayout::TOP_BAR;
@@ -668,6 +715,366 @@ fn push_command_card(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
             HudLayout::COMMAND_GRID[1] + row as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
         ];
         push_icon(props, pos, COMMAND_ICON_PX, command_icon(cmd));
+    }
+}
+
+/// Which nested modal page [`pack_modal`]/[`modal_hit_test`] render/hit-test
+/// against — `T13`'s app-crate `UiPage` maps its `PauseMenu`/`Settings`
+/// variants onto this; `Gameplay` has no modal at all, so it is not a variant
+/// here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModalPage {
+    PauseMenu,
+    Settings,
+}
+
+/// What a pointer point inside an open modal landed on. [`Self::Consumed`]
+/// covers every other point in modal space (panel gaps, headers) — while a
+/// modal is open it owns *every* pointer point, never just its own controls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ModalHit {
+    /// The pause menu's one button.
+    OpenSettings,
+    /// The settings panel's Back control.
+    Back,
+    /// One of [`WINDOW_MODE_BUTTONS`], `0..3`.
+    WindowMode(u8),
+    /// Keyboard pan track, already snapped to a legal step.
+    KeyboardPan(u32),
+    /// Edge pan track, already snapped to a legal step.
+    EdgePan(u32),
+    /// Confine-pointer checkbox.
+    Confine,
+    /// Pause-on-focus-loss checkbox.
+    Focus,
+    Master(u32),
+    Music(u32),
+    Voice(u32),
+    Sfx(u32),
+    /// Anywhere else inside the modal — consumed, no action.
+    Consumed,
+}
+
+/// The raw settings values [`pack_modal`] renders, in the numeric domain the
+/// caller (`crate::rts_ui`, app crate) owns — kept as plain fields rather
+/// than the app's `RtsSettings` type so this engine crate never depends on
+/// it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModalSnapshot {
+    pub window_mode_index: u8,
+    pub keyboard_pan: u32,
+    pub edge_pan: u32,
+    pub confine_pointer: bool,
+    pub pause_on_focus_loss: bool,
+    pub master: u32,
+    pub music: u32,
+    pub voice: u32,
+    pub sfx: u32,
+}
+
+fn point_in_modal_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
+    point[0] >= rect[0]
+        && point[0] < rect[0] + rect[2]
+        && point[1] >= rect[1]
+        && point[1] < rect[1] + rect[3]
+}
+
+/// Nearest legal step for a click at `local_x` inside a `[x, y, w, h]` track,
+/// clamped to `min..=max`.
+fn snap_track(local_x: f32, track: [f32; 4], min: u32, max: u32, step: u32) -> u32 {
+    let frac = ((local_x - track[0]) / track[2]).clamp(0.0, 1.0);
+    let span = (max - min) as f32;
+    let raw = min as f32 + frac * span;
+    let steps = ((raw - min as f32) / step as f32).round();
+    (min + steps as u32 * step).min(max)
+}
+
+/// Classify a logical (1920x1080) point against an open modal's own chrome.
+/// Never returns `None` — an open modal owns every pointer point.
+pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
+    match page {
+        ModalPage::PauseMenu => {
+            if point_in_modal_rect(point, HudLayout::PAUSE_MENU_SETTINGS_BTN) {
+                ModalHit::OpenSettings
+            } else {
+                ModalHit::Consumed
+            }
+        }
+        ModalPage::Settings => {
+            if point_in_modal_rect(point, HudLayout::SETTINGS_BACK_BTN) {
+                return ModalHit::Back;
+            }
+            for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
+                if point_in_modal_rect(point, *rect) {
+                    return ModalHit::WindowMode(i as u8);
+                }
+            }
+            if point_in_modal_rect(point, KEYBOARD_PAN_TRACK) {
+                return ModalHit::KeyboardPan(snap_track(
+                    point[0],
+                    KEYBOARD_PAN_TRACK,
+                    PAN_MIN,
+                    PAN_MAX,
+                    PAN_STEP,
+                ));
+            }
+            if point_in_modal_rect(point, EDGE_PAN_TRACK) {
+                return ModalHit::EdgePan(snap_track(
+                    point[0],
+                    EDGE_PAN_TRACK,
+                    PAN_MIN,
+                    PAN_MAX,
+                    PAN_STEP,
+                ));
+            }
+            if point_in_modal_rect(point, CONFINE_CHECKBOX) {
+                return ModalHit::Confine;
+            }
+            if point_in_modal_rect(point, FOCUS_CHECKBOX) {
+                return ModalHit::Focus;
+            }
+            if point_in_modal_rect(point, MASTER_TRACK) {
+                return ModalHit::Master(snap_track(
+                    point[0],
+                    MASTER_TRACK,
+                    VOLUME_MIN,
+                    VOLUME_MAX,
+                    VOLUME_STEP,
+                ));
+            }
+            if point_in_modal_rect(point, MUSIC_TRACK) {
+                return ModalHit::Music(snap_track(
+                    point[0],
+                    MUSIC_TRACK,
+                    VOLUME_MIN,
+                    VOLUME_MAX,
+                    VOLUME_STEP,
+                ));
+            }
+            if point_in_modal_rect(point, VOICE_TRACK) {
+                return ModalHit::Voice(snap_track(
+                    point[0],
+                    VOICE_TRACK,
+                    VOLUME_MIN,
+                    VOLUME_MAX,
+                    VOLUME_STEP,
+                ));
+            }
+            if point_in_modal_rect(point, SFX_TRACK) {
+                return ModalHit::Sfx(snap_track(
+                    point[0],
+                    SFX_TRACK,
+                    VOLUME_MIN,
+                    VOLUME_MAX,
+                    VOLUME_STEP,
+                ));
+            }
+            ModalHit::Consumed
+        }
+    }
+}
+
+fn push_modal_button(
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    rect: [f32; 4],
+    label: &str,
+    selected: bool,
+) {
+    let tint = if selected {
+        [0.30, 0.55, 0.30, 1.0]
+    } else {
+        PANEL_TINT
+    };
+    push_panel(props, rect, tint);
+    let text_y = rect[1] + (rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
+    push_text(
+        font,
+        label,
+        [rect[0] + 12.0, text_y],
+        PANEL_TEXT_SCALE,
+        TEXT_TINT,
+    );
+}
+
+fn push_modal_track(
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    rect: [f32; 4],
+    label: &str,
+    value: u32,
+    min: u32,
+    max: u32,
+) {
+    push_text(
+        font,
+        label,
+        [rect[0], rect[1] - PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        TEXT_TINT,
+    );
+    push_panel(props, rect, [0.35, 0.35, 0.40, 1.0]);
+    let frac = ((value.saturating_sub(min)) as f32 / (max - min) as f32).clamp(0.0, 1.0);
+    let fill = [rect[0], rect[1], rect[2] * frac, rect[3]];
+    push_panel(props, fill, [0.95, 0.85, 0.30, 1.0]);
+    let mut buf = [0u8; NUM_BUF];
+    let s = fmt_u32(&mut buf, value);
+    push_text(
+        font,
+        s,
+        [rect[0] + rect[2] + 16.0, rect[1]],
+        PANEL_TEXT_SCALE,
+        TEXT_TINT,
+    );
+}
+
+fn push_modal_checkbox(
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    rect: [f32; 4],
+    label: &str,
+    checked: bool,
+) {
+    let tint = if checked {
+        [0.30, 0.70, 0.30, 1.0]
+    } else {
+        [0.35, 0.35, 0.40, 1.0]
+    };
+    push_panel(props, rect, tint);
+    let text_y = rect[1] + (rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
+    push_text(
+        font,
+        label,
+        [rect[0] + rect[2] + 16.0, text_y],
+        PANEL_TEXT_SCALE,
+        TEXT_TINT,
+    );
+}
+
+/// Append one open modal (pause menu or settings panel) to `frame`, last in
+/// the textured UI groups — drawn over the world and the normal HUD, which
+/// stay packed underneath. `warning`, when set, is the
+/// `SETTINGS NOT SAVED: <reason>` line a failed transactional commit leaves
+/// up.
+pub fn pack_modal(
+    page: ModalPage,
+    snapshot: ModalSnapshot,
+    warning: Option<&str>,
+    frame: &mut RtsFrame,
+) {
+    let [_, _, _, props, font] = frame.ui.as_mut_slice() else {
+        unreachable!("RtsFrame::new always reserves exactly 5 UI groups")
+    };
+    match page {
+        ModalPage::PauseMenu => {
+            push_panel(&mut props.instances, HudLayout::PAUSE_MENU, PANEL_TINT);
+            push_modal_button(
+                &mut props.instances,
+                &mut font.instances,
+                HudLayout::PAUSE_MENU_SETTINGS_BTN,
+                "SETTINGS",
+                false,
+            );
+        }
+        ModalPage::Settings => {
+            push_panel(&mut props.instances, HudLayout::SETTINGS_PANEL, PANEL_TINT);
+            for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
+                push_modal_button(
+                    &mut props.instances,
+                    &mut font.instances,
+                    *rect,
+                    WINDOW_MODE_LABELS[i],
+                    i as u8 == snapshot.window_mode_index,
+                );
+            }
+            push_modal_track(
+                &mut props.instances,
+                &mut font.instances,
+                KEYBOARD_PAN_TRACK,
+                "KEYBOARD PAN",
+                snapshot.keyboard_pan,
+                PAN_MIN,
+                PAN_MAX,
+            );
+            push_modal_track(
+                &mut props.instances,
+                &mut font.instances,
+                EDGE_PAN_TRACK,
+                "EDGE PAN",
+                snapshot.edge_pan,
+                PAN_MIN,
+                PAN_MAX,
+            );
+            push_modal_checkbox(
+                &mut props.instances,
+                &mut font.instances,
+                CONFINE_CHECKBOX,
+                "CONFINE POINTER",
+                snapshot.confine_pointer,
+            );
+            push_modal_checkbox(
+                &mut props.instances,
+                &mut font.instances,
+                FOCUS_CHECKBOX,
+                "PAUSE ON FOCUS LOSS",
+                snapshot.pause_on_focus_loss,
+            );
+            push_modal_track(
+                &mut props.instances,
+                &mut font.instances,
+                MASTER_TRACK,
+                "MASTER",
+                snapshot.master,
+                VOLUME_MIN,
+                VOLUME_MAX,
+            );
+            push_modal_track(
+                &mut props.instances,
+                &mut font.instances,
+                MUSIC_TRACK,
+                "MUSIC",
+                snapshot.music,
+                VOLUME_MIN,
+                VOLUME_MAX,
+            );
+            push_modal_track(
+                &mut props.instances,
+                &mut font.instances,
+                VOICE_TRACK,
+                "VOICE",
+                snapshot.voice,
+                VOLUME_MIN,
+                VOLUME_MAX,
+            );
+            push_modal_track(
+                &mut props.instances,
+                &mut font.instances,
+                SFX_TRACK,
+                "SFX",
+                snapshot.sfx,
+                VOLUME_MIN,
+                VOLUME_MAX,
+            );
+            push_modal_button(
+                &mut props.instances,
+                &mut font.instances,
+                HudLayout::SETTINGS_BACK_BTN,
+                "BACK",
+                false,
+            );
+            if let Some(msg) = warning {
+                push_text(
+                    &mut font.instances,
+                    msg,
+                    [
+                        HudLayout::SETTINGS_PANEL[0] + 16.0,
+                        HudLayout::SETTINGS_PANEL[1] + HudLayout::SETTINGS_PANEL[3] - 40.0,
+                    ],
+                    PANEL_TEXT_SCALE,
+                    TEXT_TINT_BLOCKED,
+                );
+            }
+        }
     }
 }
 
