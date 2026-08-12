@@ -27,6 +27,13 @@ ADR 003 is **supplemented** by ADR 013 (2026-08-10): the horde simulation is
 unchanged and player units still never path per-unit — they descend a pooled
 flow field keyed by destination cell.
 
+Proposed phase-1.1 records 016–020 (2026-08-10) harden the RTS-only control
+slice. ADR 017 gives RTS units hard bodies while ADR 009 remains authoritative
+for overlap-capable horde `sim/`. ADR 018 proposes replacing ADR 014's fixed
+24-cell/s camera + raw-grid clamp; ADR 014's texture/depth/UI-layer decisions
+stand. Proposed means planned, not shipped; T18 promotes status only after
+matching evidence lands.
+
 Accepted phase-0 decisions:
 
 1. [Technical prototype scope + acceptance](001_ADR_technical_prototype_scope_and_acceptance.md)
@@ -47,5 +54,13 @@ Accepted phase-1 decisions:
 13. [Phase-1 scope + the RTS entity model](013_ADR_phase1_scope_and_rts_entity_model.md)
 14. [Movable camera, texture table + the UI layer](014_ADR_movable_camera_texture_table_and_ui_layer.md)
 15. [Economy, construction + production determinism](015_ADR_economy_construction_and_production_determinism.md)
+
+Proposed phase-1.1 decisions:
+
+16. [Phase-1.1 scope + input geometry](016_ADR_phase1_1_scope_and_input_geometry.md)
+17. [RTS hard collision, radius-aware navigation + formations](017_ADR_rts_hard_collision_navigation_and_formations.md)
+18. [Settings, window modes, logical canvas + camera frontier](018_ADR_settings_window_canvas_and_camera.md)
+19. [HUD, minimap, menu + input routing](019_ADR_hud_minimap_and_input_routing.md)
+20. [Audio events, buses, runtime + generated assets](020_ADR_audio_events_buses_and_generated_assets.md)
 
 New decision → new ADR. Changed decision → superseding ADR; do not rewrite history silently.

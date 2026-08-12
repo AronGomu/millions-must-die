@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock RTS system semantics</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 2 · System semantics</span>
+    <h1>Lock RTS system semantics</h1>
+    <p class="lede">Round 1 fixed product direction. These downstream choices resolve hard-collision edge cases, display transforms, HUD limits, map bounds, and audio lifecycle. Then implementation tickets can contain zero design guesses.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><span class="node"><b>Feedback</b></span><span class="arrow">→</span><span class="node">Product behavior ✓</span><span class="arrow">→</span><span class="node active">Collision</span><span class="node active">Display</span><span class="node active">HUD/map</span><span class="node active">Audio</span><span class="arrow">→</span><span class="node">Plan</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>Hard-collision blockers</b>Three existing paths can create overlap before movement even runs.</figcaption>
+      <svg viewBox="0 0 430 240" role="img" aria-labelledby="collision-title collision-desc">
+        <title id="collision-title">Hard collision edge-case flow</title><desc id="collision-desc">Adjacent scenario spawns, production completions, and shared group destinations all feed overlapping units into a hard collision invariant.</desc>
+        <defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node active" x="14" y="20" width="120" height="46" rx="9"/><text class="svg-label" x="74" y="41" text-anchor="middle">Scene spawn</text><text class="svg-note" x="74" y="56" text-anchor="middle">1-cell spacing</text>
+        <rect class="svg-node active" x="14" y="96" width="120" height="46" rx="9"/><text class="svg-label" x="74" y="117" text-anchor="middle">Production</text><text class="svg-note" x="74" y="132" text-anchor="middle">same approach cell</text>
+        <rect class="svg-node active" x="14" y="172" width="120" height="46" rx="9"/><text class="svg-label" x="74" y="193" text-anchor="middle">Group move</text><text class="svg-note" x="74" y="208" text-anchor="middle">one destination</text>
+        <rect class="svg-node" x="180" y="76" width="104" height="86" rx="10"/><text class="svg-label" x="232" y="108" text-anchor="middle">Radius 3</text><text class="svg-note" x="232" y="126" text-anchor="middle">6-cell contact</text><text class="svg-note" x="232" y="142" text-anchor="middle">no merge</text>
+        <rect class="svg-node" x="330" y="76" width="88" height="86" rx="10"/><text class="svg-label" x="374" y="108" text-anchor="middle">Policy</text><text class="svg-note" x="374" y="126" text-anchor="middle">needed</text><text class="svg-note" x="374" y="142" text-anchor="middle">before plan</text>
+        <path class="svg-line" marker-end="url(#arrowhead)" d="M134 43L174 91M134 119H174M134 195L174 147M284 119H324"/>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Display transform</b>Renderer is fixed 1920×1080; fullscreen/resizing requires one matching visual + pointer transform.</figcaption>
+      <svg viewBox="0 0 430 240" role="img" aria-labelledby="display-title display-desc">
+        <title id="display-title">Logical canvas to window and input transform</title><desc id="display-desc">A fixed logical canvas scales into a physical window viewport, while mouse coordinates travel through the inverse transform before UI or world routing.</desc>
+        <defs><marker id="arrowhead2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node" x="15" y="40" width="116" height="70" rx="10"/><text class="svg-label" x="73" y="68" text-anchor="middle">Logical canvas</text><text class="svg-note" x="73" y="86" text-anchor="middle">1920×1080</text>
+        <rect class="svg-node active" x="170" y="40" width="98" height="70" rx="10"/><text class="svg-label" x="219" y="68" text-anchor="middle">Viewport</text><text class="svg-note" x="219" y="86" text-anchor="middle">policy</text>
+        <rect class="svg-node" x="307" y="40" width="108" height="70" rx="10"/><text class="svg-label" x="361" y="68" text-anchor="middle">Window</text><text class="svg-note" x="361" y="86" text-anchor="middle">mode + size</text>
+        <rect class="svg-node" x="307" y="166" width="108" height="48" rx="10"/><text class="svg-label" x="361" y="195" text-anchor="middle">Mouse x,y</text>
+        <rect class="svg-node active" x="170" y="155" width="98" height="70" rx="10"/><text class="svg-label" x="219" y="183" text-anchor="middle">Inverse</text><text class="svg-note" x="219" y="201" text-anchor="middle">same viewport</text>
+        <rect class="svg-node" x="15" y="166" width="116" height="48" rx="10"/><text class="svg-label" x="73" y="195" text-anchor="middle">HUD/world</text>
+        <path class="svg-line" marker-end="url(#arrowhead2)" d="M131 75H164M268 75H301M307 190H274M170 190H137"/>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="Should the 3-cell body also stay clear of terrain, buildings, and map edges?">
+      <legend>1. Should the 3-cell body also stay clear of terrain, buildings, and map edges?</legend>
+      <p class="why">Current nav validates center cells only; full-body clearance can make narrow routes impassable.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Yes: body clears units, static obstacles, buildings, and map edges"><span><b>Full physical body clearance</b><span class="rank">Recommended</span><span class="detail">One honest collision shape; paths through sub-6-cell gaps become blocked.</span></span></label>
+        <label class="choice"><input type="checkbox" value="No: hard collision applies between units only"><span><b>Unit-unit collision only</b><span class="rank">Second</span><span class="detail">Exact feedback wording; unit circles may overlap walls/map edges.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Clear units and buildings, but terrain and map edges remain center-based"><span><b>Units + buildings only</b><span class="rank">Third</span><span class="detail">Mixed model; avoids inflating terrain mask.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Which static objects count; corridor expectations…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should load and production handle occupied spawn space?">
+      <legend>2. How should load and production handle occupied spawn space?</legend>
+      <p class="why">Tracked scene starts six workers one cell apart; repeated production can reuse one exact cell.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Deterministically search outward for nearest free valid position; production waits if none exists"><span><b>Nearest free position; wait when full</b><span class="rank">Recommended</span><span class="detail">Scene loads; produced units never overlap; queue retains paid unit.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Reject scenarios with overlapping initial units; production waits for exact spawn cell"><span><b>Reject bad scene; exact spawn waits</b><span class="rank">Second</span><span class="detail">Strict authoring; current tracked scene must be rewritten.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Spawn then push units apart in collision pass"><span><b>Spawn then resolve</b><span class="rank">Third</span><span class="detail">Temporary invariant breach; bounded solver may fail in crowds.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Search radius/order, queue behavior, scenario validation…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should group movement finish without merging at one destination?">
+      <legend>3. How should group movement finish without merging at one destination?</legend>
+      <p class="why">Current shared 1.5-cell arrival disk cannot hold two radius-3 units.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Assign deterministic formation slots around clicked destination; units queue through chokes with rotating deterministic priority"><span><b>Formation slots + fair deterministic queue</b><span class="rank">Recommended</span><span class="detail">Orders complete spread out; narrow paths queue without overlap or permanent slot bias.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Units stop at first non-overlapping position near destination; fixed entity-slot priority"><span><b>First free stop + fixed priority</b><span class="rank">Second</span><span class="detail">Simpler; low slots can starve later units.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Units keep shared destination and retain order until exact arrival becomes possible"><span><b>Shared destination + indefinite queue</b><span class="rank">Third</span><span class="detail">No formation design; some orders may never complete.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Formation shape, choke policy, arrival radius…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should fixed 1920x1080 visuals fit other window shapes?">
+      <legend>4. How should fixed 1920×1080 visuals fit other window shapes?</legend>
+      <p class="why">Current renderer stretches; mouse coordinates no longer match visuals outside exact 1920×1080.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Aspect-fit 16:9 with letterbox or pillarbox; inverse-map mouse; ignore bar clicks; edge-pan at content edge"><span><b>Aspect-fit + bars + matched input</b><span class="rank">Recommended</span><span class="detail">No distortion or HUD crop; edge pan remains reachable.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Stretch to fill window and inverse-scale mouse on each axis"><span><b>Stretch to fill</b><span class="rank">Second</span><span class="detail">No bars; sprites/HUD distort on non-16:9 displays.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Dynamically resize render target and reflow HUD"><span><b>Dynamic render + responsive HUD</b><span class="rank">Third</span><span class="detail">Uses full display; much larger renderer/layout scope.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Bar behavior, ultrawide, HiDPI, pixel scaling…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What sizes should exclusive fullscreen and windowed mode use?">
+      <legend>5. What sizes should exclusive fullscreen and windowed mode use?</legend>
+      <p class="why">Borderless desktop default is settled; other two mode transitions need deterministic dimensions.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Exclusive selects closest 1920x1080 mode; windowed starts 1280x720 and is resizable"><span><b>Exclusive 1920×1080; windowed 1280×720 resizable</b><span class="rank">Recommended</span><span class="detail">Common 16:9 defaults; aspect-fit handles later resize.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Exclusive uses current desktop mode; windowed starts 1920x1080 and is resizable"><span><b>Native exclusive; 1920×1080 window</b><span class="rank">Second</span><span class="detail">Maximum pixels; large window may not fit desktop.</span></span></label>
+        <label class="choice"><input type="checkbox" value="All modes use fixed 1920x1080 and windowed is not resizable"><span><b>Fixed 1920×1080 everywhere</b><span class="rank">Third</span><span class="detail">Smallest transform matrix; weak windowed UX.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Resolution, refresh policy, resizable/min size…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What else should happen when game window loses focus?">
+      <legend>6. What else should happen when game window loses focus?</legend>
+      <p class="why">Pointer release is settled; held pan keys and active drags otherwise remain latched.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Pause gameplay, clear held input and drag, release pointer; resume only by user action"><span><b>Pause + clear input; manual resume</b><span class="rank">Recommended</span><span class="detail">Safest single-player behavior; no unseen sim progress.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Clear held input and drag, release pointer; gameplay keeps running"><span><b>Clear input; keep running</b><span class="rank">Second</span><span class="detail">No stuck control; sim advances while unfocused.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Only release pointer"><span><b>Pointer only</b><span class="rank">Third</span><span class="detail">Minimum change; stuck pan/drag remains possible.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Audio focus behavior, auto-resume, menu state…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What defaults and range should camera speed sliders use?">
+      <legend>7. What defaults and range should camera speed sliders use?</legend>
+      <p class="why">Current shared speed is 24 cells/s; workers become 30 cells/s.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Keyboard and edge default 48 cells per second; range 6-96; step 6"><span><b>48 default; 6–96 range; step 6</b><span class="rank">Recommended</span><span class="detail">Camera outruns fastest unit; broad but bounded tuning.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keyboard and edge default 24 cells per second; range 6-96; step 6"><span><b>Keep 24 default; 6–96 range</b><span class="rank">Second</span><span class="detail">Preserves current feel; worker can outrun camera.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keyboard default 48 and edge default 24; each range 6-96; step 6"><span><b>Keyboard 48; edge 24</b><span class="rank">Third</span><span class="detail">Edge pan stays controlled; defaults differ.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Defaults, min/max, step, acceleration…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should center selection panel handle single and multi-selection?">
+      <legend>8. How should center selection panel handle single and multi-selection?</legend>
+      <p class="why">Selection can hold 2,048 entities; current HUD only describes lowest-slot primary.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Single shows portrait and full details; multi shows up to 24 sorted icons plus overflow count; click isolates; Shift-click toggles"><span><b>Single details; 24-icon interactive multi-grid</b><span class="rank">Recommended</span><span class="detail">StarCraft-like, bounded, useful; unlimited world selection remains.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Single shows details; multi shows counts grouped by unit kind with no icon clicks"><span><b>Single details; grouped counts</b><span class="rank">Second</span><span class="detail">Compact and simple; cannot pick unit from group via HUD.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Always show primary details and total selected count"><span><b>Primary details only</b><span class="rank">Third</span><span class="detail">Current model with new layout; not StarCraft-like multi-selection.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Icon cap/pages, ordering, building/node selection, click semantics…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What fixed shape should the command grid use?">
+      <legend>9. What fixed shape should the command grid use?</legend>
+      <p class="why">Worker has 3 build actions; producers have 1 action each; empty slots remain disabled.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="3 columns by 3 rows; stable slots; click and existing hotkeys share commands"><span><b>3×3 command card</b><span class="rank">Recommended</span><span class="detail">Classic RTS shape; enough room for current/future actions.</span></span></label>
+        <label class="choice"><input type="checkbox" value="4 columns by 3 rows; stable slots; click and hotkeys share commands"><span><b>4×3 command card</b><span class="rank">Second</span><span class="detail">More capacity; smaller buttons in same panel.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Auto-size only visible commands"><span><b>Dynamic grid</b><span class="rank">Third</span><span class="detail">Uses space efficiently; command positions shift by selection.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Slot mapping, icon labels, right-click behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should minimap map and viewport be projected?">
+      <legend>10. How should minimap map and viewport be projected?</legend>
+      <p class="why">Playable map is square cell-space; world display is isometric diamond.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Top-down Cartesian square silhouette with axis-aligned cell-space camera rectangle"><span><b>Top-down square + camera rect</b><span class="rank">Recommended</span><span class="detail">Click mapping is exact and familiar; viewport rect is conservative.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Isometric diamond silhouette with projected camera polygon"><span><b>Isometric diamond + viewport polygon</b><span class="rank">Second</span><span class="detail">Matches world orientation; more complex hit math and border drawing.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Top-down square silhouette without viewport shape detail"><span><b>Top-down square + center marker</b><span class="rank">Third</span><span class="detail">Simplest; weaker view-area feedback than requested.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Orientation, click rounding, edge behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What engine cap should validate RTS playable-map dimensions?">
+      <legend>11. What engine cap should validate RTS playable-map dimensions?</legend>
+      <p class="why">Current family is locked to 320×320 = 102,400 cells; larger pooled flow fields multiply memory by eight slots.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="320 by 320 cells for phase 1.1"><span><b>320×320 cells</b><span class="rank">Recommended</span><span class="detail">Names current proven maximum; future increase gets measured decision.</span></span></label>
+        <label class="choice"><input type="checkbox" value="512 by 512 cells"><span><b>512×512 cells</b><span class="rank">Second</span><span class="detail">Allows larger maps now; more field memory without current fixture.</span></span></label>
+        <label class="choice"><input type="checkbox" value="One million cells with width and height each capped at 1024"><span><b>≤1,000,000 cells; each axis ≤1024</b><span class="rank">Third</span><span class="detail">Flexible rectangles; substantial unproven allocation size.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Width, height, total-cell cap…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Exactly which unit interactions should emit voice beeps?">
+      <legend>12. Exactly which unit interactions should emit voice beeps?</legend>
+      <p class="why">Per-unit cap is settled; accepted-vs-attempted events and re-selection still need meaning.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Beep newly selected player units; beep units that accept move, gather, or build orders; cap first eight sorted units and drop rest"><span><b>New selections + accepted orders; first 8</b><span class="rank">Recommended</span><span class="detail">No beep for no-op/rejected input; deterministic overflow.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Beep every selected unit on every selection action and every order attempt; cap first eight"><span><b>Every action/attempt; first 8</b><span class="rank">Second</span><span class="detail">Strong feedback; rejected actions still sound successful.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Beep newly selected units and accepted move orders only; cap first eight"><span><b>Selection + move only</b><span class="rank">Third</span><span class="detail">Literal minimum; gather/build orders lack acknowledgement.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Shift toggle, drag, buildings/nodes, repeated select, overflow…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What should use the new SFX volume bus in v1?">
+      <legend>13. What should use the new SFX volume bus in v1?</legend>
+      <p class="why">Unit beeps belong to voice bus; SFX slider needs honest audible content or explicit reservation.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Menu, settings, command-grid, and minimap click beep"><span><b>UI click beep</b><span class="rank">Recommended</span><span class="detail">One generated SFX proves bus end to end.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Placement confirm and rejected command beeps"><span><b>Gameplay action SFX</b><span class="rank">Second</span><span class="detail">More game feedback; requires success/failure cue distinction.</span></span></label>
+        <label class="choice"><input type="checkbox" value="No SFX yet; persist slider for future content"><span><b>Reserved bus only</b><span class="rank">Third</span><span class="detail">Meets config shape; slider has no audible v1 effect.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Exact UI/game events; cue differences…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What defaults and range should volume controls use?">
+      <legend>14. What defaults and range should volume controls use?</legend>
+      <p class="why">Master multiplies music, voice, and SFX; safe defaults prevent clipping from eight beeps.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="0-100 percent step 5; master 80, music 35, voice 70, SFX 60"><span><b>Master 80 · music 35 · voice 70 · SFX 60</b><span class="rank">Recommended</span><span class="detail">Music stays under cues; all buses audible with headroom.</span></span></label>
+        <label class="choice"><input type="checkbox" value="0-100 percent step 5; master 100, music 50, voice 75, SFX 75"><span><b>Master 100 · music 50 · voice 75 · SFX 75</b><span class="rank">Second</span><span class="detail">Louder baseline; less headroom for polyphony.</span></span></label>
+        <label class="choice"><input type="checkbox" value="0-100 percent step 1; all defaults 100"><span><b>All 100; step 1</b><span class="rank">Third</span><span class="detail">Maximum precision and loudness; poor default mix.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Master/music/voice/SFX defaults, step, mute behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="When should placeholder music play or pause?">
+      <legend>15. When should placeholder music play or pause?</legend>
+      <p class="why">Autoplay, looping, menus, focus, and audio failure affect player experience and test policy.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Autoplay and gapless-loop after game starts; continue through pause/menu; mute while unfocused; audio failure is nonfatal"><span><b>Loop through menus; mute unfocused; fail soft</b><span class="rank">Recommended</span><span class="detail">Stable ambience; desktop focus is quiet; no device never blocks game.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Autoplay and loop; pause in menus and on focus loss; audio failure is nonfatal"><span><b>Pause with gameplay/focus</b><span class="rank">Second</span><span class="detail">Audio mirrors sim pause; restarts often during settings work.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Autoplay and loop continuously, including while unfocused; audio failure aborts startup"><span><b>Always play; require audio</b><span class="rank">Third</span><span class="detail">Strong soundtrack guarantee; hostile to headless/no-device hosts.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Loop gap, menu/focus behavior, device failure…"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 2 · System semantics — Lock RTS system semantics\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>

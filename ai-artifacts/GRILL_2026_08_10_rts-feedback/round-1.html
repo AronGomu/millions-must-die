@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Set RTS feedback behavior</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 1 · Product behavior</span>
+    <h1>Set RTS feedback behavior</h1>
+    <p class="lede">Current code facts are resolved. Choose desired semantics for interaction, collision, settings, HUD, map, audio. Recommended choices preserve frozen horde contracts while fixing player-facing RTS behavior.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><span class="node"><b>Feedback</b></span><span class="arrow">→</span><span class="node active">Scope</span><span class="node active">Input</span><span class="node active">Bodies</span><span class="node active">Settings</span><span class="node active">HUD/map</span><span class="node active">Audio</span><span class="arrow">→</span><span class="node">Solver + schema + tickets</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>Mismatch map</b>Feedback touches six active branches; hard collision reverses one accepted rule.</figcaption>
+      <svg viewBox="0 0 430 250" role="img" aria-labelledby="tree-title tree-desc">
+        <title id="tree-title">RTS feedback design frontier</title><desc id="tree-desc">Feedback branches into scope, input, collision, settings, HUD and audio, then converges into implementation design.</desc>
+        <path class="svg-line" d="M82 125H112M112 125V25H145M112 125V65H145M112 125V105H145M112 125V145H145M112 125V185H145M112 125V225H145M255 25H290V125M255 65H290M255 105H290M255 145H290M255 185H290M255 225H290V125H330"/>
+        <circle class="svg-node" cx="52" cy="125" r="30"/><text class="svg-label" x="52" y="129" text-anchor="middle">Goal</text>
+        <rect class="svg-node active" x="145" y="8" width="110" height="34" rx="9"/><text class="svg-label" x="200" y="29" text-anchor="middle">Scope</text>
+        <rect class="svg-node active" x="145" y="48" width="110" height="34" rx="9"/><text class="svg-label" x="200" y="69" text-anchor="middle">Input</text>
+        <rect class="svg-node active" x="145" y="88" width="110" height="34" rx="9"/><text class="svg-label" x="200" y="109" text-anchor="middle">Bodies</text>
+        <rect class="svg-node active" x="145" y="128" width="110" height="34" rx="9"/><text class="svg-label" x="200" y="149" text-anchor="middle">Settings</text>
+        <rect class="svg-node active" x="145" y="168" width="110" height="34" rx="9"/><text class="svg-label" x="200" y="189" text-anchor="middle">HUD + map</text>
+        <rect class="svg-node active" x="145" y="208" width="110" height="34" rx="9"/><text class="svg-label" x="200" y="229" text-anchor="middle">Audio</text>
+        <rect class="svg-node" x="330" y="93" width="90" height="64" rx="10"/><text class="svg-label" x="375" y="119" text-anchor="middle">Plan</text><text class="svg-note" x="375" y="136" text-anchor="middle">blocked</text>
+        <circle class="svg-accent" cx="263" cy="105" r="4"/><text class="svg-note" x="268" y="98">ADR reversal</text>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Current input path</b>Live and scripted input share one path. Picking geometry—not gather state—is primary click bug.</figcaption>
+      <svg viewBox="0 0 430 250" role="img" aria-labelledby="flow-title flow-desc">
+        <title id="flow-title">Current RTS input and output flow</title><desc id="flow-desc">SDL and scripts create commands, commands pass through apply and picking into world systems, then renderer, window and future audio output.</desc>
+        <defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node" x="12" y="30" width="80" height="44" rx="9"/><text class="svg-label" x="52" y="56" text-anchor="middle">SDL</text>
+        <rect class="svg-node" x="12" y="105" width="80" height="44" rx="9"/><text class="svg-label" x="52" y="131" text-anchor="middle">Script</text>
+        <rect class="svg-node active" x="125" y="68" width="82" height="50" rx="9"/><text class="svg-label" x="166" y="90" text-anchor="middle">apply</text><text class="svg-note" x="166" y="105" text-anchor="middle">shared</text>
+        <rect class="svg-node active" x="240" y="28" width="82" height="50" rx="9"/><text class="svg-label" x="281" y="50" text-anchor="middle">pick_at</text><text class="svg-note" x="281" y="65" text-anchor="middle">mismatch</text>
+        <rect class="svg-node" x="240" y="108" width="82" height="50" rx="9"/><text class="svg-label" x="281" y="130" text-anchor="middle">RtsWorld</text><text class="svg-note" x="281" y="145" text-anchor="middle">tick</text>
+        <rect class="svg-node" x="350" y="28" width="70" height="50" rx="9"/><text class="svg-label" x="385" y="50" text-anchor="middle">HUD</text><text class="svg-note" x="385" y="65" text-anchor="middle">UI</text>
+        <rect class="svg-node" x="350" y="108" width="70" height="50" rx="9"/><text class="svg-label" x="385" y="130" text-anchor="middle">Render</text><text class="svg-note" x="385" y="145" text-anchor="middle">world</text>
+        <rect class="svg-node" x="240" y="190" width="82" height="44" rx="9"/><text class="svg-label" x="281" y="216" text-anchor="middle">Audio</text>
+        <path class="svg-line" marker-end="url(#arrowhead)" d="M92 52L119 79M92 127L119 106M207 85L234 62M281 78V102M322 133H344M322 49H344M281 158V184"/>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="How should this feedback be framed in project history?">
+      <legend>1. How should this feedback be framed in project history?</legend>
+      <p class="why">Phase 1 is already closed; framing controls plan name, status docs, ADR supersession, and branch scope.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Phase 1.1 interaction, UI, and audio hardening"><span><b>Phase 1.1 interaction, UI, and audio hardening</b><span class="rank">Recommended</span><span class="detail">Keeps phase-1 proof honest; adds one post-close vertical slice.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Reopen phase 1"><span><b>Reopen phase 1</b><span class="rank">Second</span><span class="detail">Treats feedback as missing phase-1 acceptance; rewrites current status.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Split bugfix and feature plans"><span><b>Split bugfix and feature plans</b><span class="rank">Third</span><span class="detail">Smaller plans; delays one integrated player-facing acceptance path.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Phase name, release boundary, branch name…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What should each selected entity do on a resource right-click?">
+      <legend>2. What should each selected entity do on a resource right-click?</legend>
+      <p class="why">Only workers can gather; mixed selections need explicit genre behavior.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Workers gather; non-workers move to resource approach cell"><span><b>Workers gather; non-workers move to resource approach cell</b><span class="rank">Recommended</span><span class="detail">Capability-aware context order; every selected unit reacts.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Workers gather; non-workers hold"><span><b>Workers gather; non-workers hold</b><span class="rank">Second</span><span class="detail">Avoids unwanted movement; mixed group visibly splits.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Only all-worker selections may gather"><span><b>Only all-worker selections may gather</b><span class="rank">Third</span><span class="detail">Simple rule; one soldier blocks whole group order.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Single soldier, mixed group, depleted resource behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="When a resource quad overlaps another entity, what wins a right-click?">
+      <legend>3. When a resource quad overlaps another entity, what wins a right-click?</legend>
+      <p class="why">Current picker prioritizes own units; that can intercept visible resource clicks.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Resource wins for right-click context orders"><span><b>Resource wins for right-click context orders</b><span class="rank">Recommended</span><span class="detail">Any point in full visible 48×48 resource square reliably gathers.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Frontmost rendered entity wins"><span><b>Frontmost rendered entity wins</b><span class="rank">Second</span><span class="detail">Matches visual depth; overlapping worker may block resource.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Nearest ground anchor wins"><span><b>Nearest ground anchor wins</b><span class="rank">Third</span><span class="detail">Deterministic world rule; least aligned with visible square.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Different left-click priority, depleted-node rules…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What shape should player unit selection use?">
+      <legend>4. What shape should player unit selection use?</legend>
+      <p class="why">Current selection equals collision radius; feedback requires separate player-pick geometry plus collision-circle coverage.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Per-unit sprite body rectangle union collision circle"><span><b>Per-unit sprite body rectangle ∪ collision circle</b><span class="rank">Recommended</span><span class="detail">Stable, testable, clicks full rendered body; transparent corners also count.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Per-unit tuned ellipse union collision circle"><span><b>Per-unit tuned ellipse ∪ collision circle</b><span class="rank">Second</span><span class="detail">Closer visual fit; may miss protruding sprite pixels.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Opaque sprite pixels union collision circle"><span><b>Opaque sprite pixels ∪ collision circle</b><span class="rank">Third</span><span class="detail">Exact visual body; asset-coupled mask logic adds complexity.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Worker/soldier differences, transparent pixels, selection ring shape…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which populations need hard non-overlap collision?">
+      <legend>5. Which populations need hard non-overlap collision?</legend>
+      <p class="why">Hard non-overlap conflicts accepted horde soft-separation rule; 5,000 agents cannot all remain sprite-separated in dense scenes.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="RTS player units only"><span><b>RTS player units only</b><span class="rank">Recommended</span><span class="detail">Fixes controlled units; preserves frozen horde hashes and density model.</span></span></label>
+        <label class="choice"><input type="checkbox" value="All RTS-world units, including future enemies"><span><b>All RTS-world units, including future enemies</b><span class="rank">Second</span><span class="detail">Future-proof RTS rule; current scene contains player units only.</span></span></label>
+        <label class="choice"><input type="checkbox" value="RTS units and horde agents"><span><b>RTS units and horde agents</b><span class="rank">Third</span><span class="detail">Global promise; breaks frozen phase-0 model and dense-scene feasibility.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Buildings/resources remain static obstacles; future enemy scope…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How far should RTS unit collision radius shrink from current 6 cells?">
+      <legend>6. How far should RTS unit collision radius shrink from current 6 cells?</legend>
+      <p class="why">Radius drives hard-contact spacing; selection geometry will no longer depend on it.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Half: 3 cells for worker and soldier"><span><b>Half: 3 cells for worker and soldier</b><span class="rank">Recommended</span><span class="detail">Clear reduction; 6-cell contact distance still leaves readable formations.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Per-kind: worker 3 cells, soldier 4 cells"><span><b>Per-kind: worker 3 cells, soldier 4 cells</b><span class="rank">Second</span><span class="detail">Soldier feels heavier; adds kind-specific tuning now.</span></span></label>
+        <label class="choice"><input type="checkbox" value="One-third: 2 cells for both"><span><b>One-third: 2 cells for both</b><span class="rank">Third</span><span class="detail">Compact groups; overlap prevention becomes less visible.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Exact radii in cells or sprite pixels…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which speeds should be tripled?">
+      <legend>7. Which speeds should be tripled?</legend>
+      <p class="why">RTS units use 10/8 cells per second; horde agents use frozen 8 cells per second.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="RTS worker and soldier only: 30 and 24 cells per second"><span><b>RTS worker + soldier only: 30 / 24 cells/s</b><span class="rank">Recommended</span><span class="detail">Matches feedback context; preserves phase-0 hashes.</span></span></label>
+        <label class="choice"><input type="checkbox" value="All RTS-world movable units"><span><b>All RTS-world movable units</b><span class="rank">Second</span><span class="detail">Same current result; sets rule for future RTS kinds.</span></span></label>
+        <label class="choice"><input type="checkbox" value="RTS units and horde agents"><span><b>RTS units + horde agents</b><span class="rank">Third</span><span class="detail">Changes frozen horde behavior and exit hashes.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Exact values, future-unit policy…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Should settings persist between launches?">
+      <legend>8. Should settings persist between launches?</legend>
+      <p class="why">Repo has no settings model or config path; persistence changes first ticket and failure handling.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Persist per-user settings immediately"><span><b>Persist per-user settings immediately</b><span class="rank">Recommended</span><span class="detail">Window, cursor, camera, audio choices survive restart.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Persist when settings panel closes"><span><b>Persist when settings panel closes</b><span class="rank">Second</span><span class="detail">Fewer writes; crash before close loses edits.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Session-only settings"><span><b>Session-only settings</b><span class="rank">Third</span><span class="detail">Smallest slice; weak settings UX.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Portable config, reset behavior, preferred format…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which camera speeds should settings expose?">
+      <legend>9. Which camera speeds should settings expose?</legend>
+      <p class="why">Keyboard pan and edge pan currently share one 24-cell/s constant; “scrolling speed” is ambiguous.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Separate keyboard-pan and edge-pan speed sliders"><span><b>Separate keyboard-pan + edge-pan sliders</b><span class="rank">Recommended</span><span class="detail">Direct reading: scrolling keys and cursor-edge panning tune independently.</span></span></label>
+        <label class="choice"><input type="checkbox" value="One camera speed slider for both"><span><b>One camera speed slider for both</b><span class="rank">Second</span><span class="detail">Simple mental model; cannot tune edge pan separately.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Edge-pan slider only"><span><b>Edge-pan slider only</b><span class="rank">Third</span><span class="detail">Smallest change; leaves keyboard speed fixed.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Mouse wheel, acceleration, desired min/max/default…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should the settings menu affect play and Escape?">
+      <legend>10. How should the settings menu affect play and Escape?</legend>
+      <p class="why">Current Escape quits immediately; nested menu/settings needs deterministic pause and back behavior.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Gear pauses; Escape closes settings, then menu, then quits from gameplay"><span><b>Gear pauses; Escape backs out, then quits from gameplay</b><span class="rank">Recommended</span><span class="detail">Standard single-player nesting; no simulation runs under menus.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Gear pauses; Escape backs out; gameplay Escape opens menu"><span><b>Gear pauses; gameplay Escape opens menu</b><span class="rank">Second</span><span class="detail">Most RTS-like; quit needs menu button not currently requested.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Menus do not pause; Escape still quits"><span><b>Menus do not pause; Escape still quits</b><span class="rank">Third</span><span class="detail">Minimal input change; risky while adjusting settings.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Pause semantics, close buttons, quit flow…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="When should pointer confinement release?">
+      <legend>11. When should pointer confinement release?</legend>
+      <p class="why">Default confinement is specified; focus loss and settings access still need behavior.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Confine during focused gameplay; release on focus loss only"><span><b>Confine during focused gameplay; release on focus loss only</b><span class="rank">Recommended</span><span class="detail">Settings remain in-window; Alt-Tab never traps cursor.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Confine whenever game window is focused"><span><b>Confine whenever game window is focused</b><span class="rank">Second</span><span class="detail">Strongest containment; menu still traps cursor.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Release while any menu is open or focus is lost"><span><b>Release in menus + on focus loss</b><span class="rank">Third</span><span class="detail">Easy desktop access; edge-pan/confinement state changes often.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Alt-Tab, multi-monitor, windowed-mode exceptions…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What should the right command grid show and execute?">
+      <legend>12. What should the right command grid show and execute?</legend>
+      <p class="why">Current Q/W/E and A/S actions are text-only; click routing and selection context are undefined.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Context grid: worker builds; producer trains; empty slots disabled"><span><b>Context grid: worker builds; producer trains; empty slots disabled</b><span class="rank">Recommended</span><span class="detail">StarCraft-like command card; click invokes same commands as keys.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Worker build grid only"><span><b>Worker build grid only</b><span class="rank">Second</span><span class="detail">Exact minimum request; production stays key-driven.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Always show all build and production actions"><span><b>Always show all actions</b><span class="rank">Third</span><span class="detail">Discoverable; many invalid buttons and weak selection context.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Grid dimensions, primary selection, icons/text, hotkeys…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What should minimap v1 draw besides supporting click-to-camera?">
+      <legend>13. What should minimap v1 draw besides supporting click-to-camera?</legend>
+      <p class="why">Feedback asks low-detail map plus functional camera recenter; entity/fog detail is optional scope.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Map silhouette and camera viewport rectangle only"><span><b>Map silhouette + camera viewport rect only</b><span class="rank">Recommended</span><span class="detail">Small, honest v1; click maps exactly into playable extent.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Add player units, buildings, and resource dots"><span><b>Add player units, buildings + resource dots</b><span class="rank">Second</span><span class="detail">Useful immediately; more pack/update/test work.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Static framed placeholder with click mapping"><span><b>Static frame + click mapping</b><span class="rank">Third</span><span class="detail">Minimum visuals; camera jumps on a map that shows no map.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Colors, dots, fog, click/drag camera behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should maximum map, playable map, and camera area differ?">
+      <legend>14. How should maximum map, playable map, and camera area differ?</legend>
+      <p class="why">Current camera center clamps directly to scenario grid edges, exposing off-map space; no engine-level RTS map cap exists.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Engine cap validates scenarios; scenario extent is playable map; viewport-shrunk extent is camera area"><span><b>Engine cap → scenario map → viewport-shrunk camera area</b><span class="rank">Recommended</span><span class="detail">Three explicit layers; camera never shows beyond playable frontier.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Scenario stores playable extent and explicit camera rectangle"><span><b>Scenario map + explicit camera rectangle</b><span class="rank">Second</span><span class="detail">Designer-controlled frontier; every map must author extra bounds.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Scenario extent is both playable map and camera-center area"><span><b>Scenario map = camera-center area</b><span class="rank">Third</span><span class="detail">Current model; does not satisfy requested distinction.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Desired engine max dimensions, HUD-aware viewport, border padding…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What did 'change the updates' mean in audio settings?">
+      <legend>15. What did “change the updates” mean in audio settings?</legend>
+      <p class="why">Repo contains no matching term; changing sim update rate would break deterministic gameplay.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Sound-effects volume"><span><b>Sound-effects volume</b><span class="rank">Recommended</span><span class="detail">Likely typo; add master, music, voice, and SFX buses.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Audio output device"><span><b>Audio output device</b><span class="rank">Second</span><span class="detail">Device selector; substantially more platform UI.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Display update or FPS cap"><span><b>Display update / FPS cap</b><span class="rank">Third</span><span class="detail">Not audio; deserves separate video setting.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Simulation update rate"><span><b>Simulation update rate</b><span class="rank">Fourth</span><span class="detail">Would alter fixed-tick determinism; strongly discouraged.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Exact intended word or control…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should unit beep cues trigger?">
+      <legend>16. How should unit beep cues trigger?</legend>
+      <p class="why">Per-unit playback for large selections can stack into clipping; accepted command events provide a clean seam.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="One selection beep per successful selection action and one order beep per accepted move or context order"><span><b>One cue per accepted user action</b><span class="rank">Recommended</span><span class="detail">No cacophony; selection and move/context orders stay distinct.</span></span></label>
+        <label class="choice"><input type="checkbox" value="One beep for each selected unit, capped at eight simultaneous cues"><span><b>One cue per unit, capped at 8</b><span class="rank">Second</span><span class="detail">Feels unit-specific; cap prevents worst clipping.</span></span></label>
+        <label class="choice"><input type="checkbox" value="One beep from primary selected unit only"><span><b>Primary unit only</b><span class="rank">Third</span><span class="detail">Simple; group feedback ignores other units.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Separate click/select/move cues, failed-command cue, group rules…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How will the requested Terran One music be supplied legally and technically?">
+      <legend>17. How will requested “Terran One” music be supplied legally and technically?</legend>
+      <p class="why">No file or license exists in repo. Copyrighted soundtrack cannot be committed or distributed without rights and provenance.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="I will provide a legally distributable WAV file plus source, license, attribution, and checksum"><span><b>Provide distributable WAV + provenance</b><span class="rank">Recommended</span><span class="detail">Core pinned SDL loads WAV; no decoder dependency needed.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Implement loader and ship generated placeholder music; I will replace it with licensed music later"><span><b>Ship generated placeholder; replace later</b><span class="rank">Second</span><span class="detail">Plan remains executable now; no copyrighted file enters repo.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Load my local untracked Terran One file by configurable path"><span><b>Load local untracked file</b><span class="rank">Third</span><span class="detail">Personal testing only; release remains without bundled track.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Attach file/path; format; rights holder; license; source URL; attribution; desired master/music/voice/SFX defaults…"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 1 · Product behavior — Set RTS feedback behavior\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>
