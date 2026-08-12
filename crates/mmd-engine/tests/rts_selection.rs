@@ -6,8 +6,9 @@
 
 use mmd_engine::render::{Camera, IsoView};
 use mmd_engine::rts::{
-    BuildingKind, DRAG_MIN_PX, EntityId, EntityKind, OWNER_PLAYER, Pick, ResourceKind, Selection,
-    UnitKind, footprint_contains, footprint_min, is_drag, normalise_rect, pick_at,
+    BuildingKind, DRAG_MIN_PX, EntityId, EntityKind, OWNER_NEUTRAL, OWNER_PLAYER, Pick,
+    RTS_SPRITE_SIZE_PX, ResourceKind, Selection, UnitKind, entity_pick_depth, footprint_contains,
+    footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect, unit_pick_contains,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
@@ -148,8 +149,13 @@ fn is_drag_needs_four_pixels() {
 fn clicking_a_worker_selects_it() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
-    let target = ids[0]; // slot 11, at (162.5, 178.5)
-    let screen = view().project(162.5, 178.5);
+    let target = ids[0];
+    // Isolated well clear of the other five workers' default spawn row: the
+    // 48x48 sprite rect reaches several cells past a unit's own body radius,
+    // so a click meant for one worker in a tightly packed row can otherwise
+    // resolve to whichever overlapping worker renders frontmost.
+    set_pos(&mut h, target, [50.0, 50.0]);
+    let screen = view().project(50.0, 50.0);
 
     let pick = h.world_mut().click_select(&view(), screen);
     assert_eq!(pick, Pick::Unit(target));
@@ -197,13 +203,39 @@ fn clicking_the_hq_selects_it_when_no_unit_is_near() {
 }
 
 #[test]
-fn a_worker_standing_on_the_hq_wins_the_click() {
+fn equal_depth_ties_go_to_the_lower_entity_slot() {
+    // The HQ is entity slot 0 (spawned first); a worker parked at exactly the
+    // HQ's ground point ties its depth exactly. The GPU's `GREATER` depth
+    // test never lets a later-packed, equal-depth instance overwrite an
+    // earlier one, so at an exact tie the earlier-packed (lower-slot) entity
+    // — here, the HQ — is what is actually on top of the pixel.
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
     let target = ids[0];
+    let hq = h.world().start_hq().expect("start hq");
     set_pos(&mut h, target, [166.0, 166.0]);
     let screen = view().project(166.0, 166.0);
-    assert_eq!(pick_at(h.world(), &view(), screen), Pick::Unit(target));
+    assert_eq!(pick_at(h.world(), &view(), screen), Pick::Building(hq));
+}
+
+#[test]
+fn frontmost_rendered_entity_wins() {
+    // Two workers whose pick regions both cover the click point (adjacent
+    // cells, well within the union of sprite rect and body circle) but at
+    // different depths: the one with the strictly greater ground point —
+    // the one rendered frontmost — must win, regardless of entity slot.
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let ids = workers(&h);
+    let (back, front) = (ids[0], ids[1]);
+    set_pos(&mut h, back, [100.0, 100.0]);
+    set_pos(&mut h, front, [100.0, 102.0]);
+
+    let screen = view().project(100.0, 102.0);
+    assert_eq!(
+        pick_at(h.world(), &view(), screen),
+        Pick::Unit(front),
+        "the strictly-greater-depth unit must win even though it is the higher slot"
+    );
 }
 
 #[test]
@@ -226,6 +258,98 @@ fn clicking_a_node_one_cell_off_misses_it() {
 }
 
 #[test]
+fn every_resource_quad_corner_is_pickable() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    // Spawned well clear of every scenario entity: this test is about corner
+    // geometry, not about the tracked scene's node layout, and a corner near
+    // a real neighbouring node would ambiguously hit either.
+    let ground = [50.0, 250.0];
+    let node = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Node(ResourceKind::Crystal),
+            OWNER_NEUTRAL,
+            ground,
+        )
+        .expect("spawn an isolated node");
+    let rect = sprite_screen_rect(&view(), ground);
+    let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+
+    // Four points just inside each corner: all pick the node.
+    for (x, y) in [
+        (x0 + 1.0, y0 + 1.0),
+        (x1 - 1.0, y0 + 1.0),
+        (x0 + 1.0, y1 - 1.0),
+        (x1 - 1.0, y1 - 1.0),
+    ] {
+        assert_eq!(
+            pick_at(h.world(), &view(), [x, y]),
+            Pick::Node(node),
+            "inside corner ({x}, {y}) must hit the node"
+        );
+    }
+
+    // Four points just outside each corner: all miss.
+    for (x, y) in [
+        (x0 - 1.0, y0 - 1.0),
+        (x1 + 1.0, y0 - 1.0),
+        (x0 - 1.0, y1 + 1.0),
+        (x1 + 1.0, y1 + 1.0),
+    ] {
+        assert_eq!(
+            pick_at(h.world(), &view(), [x, y]),
+            Pick::Nothing,
+            "outside corner ({x}, {y}) must miss"
+        );
+    }
+}
+
+#[test]
+fn unit_pick_is_sprite_rect_union_body_circle() {
+    let v = view();
+    let ground = [50.0, 50.0];
+    let radius = 3.0;
+    let rect = sprite_screen_rect(&v, ground);
+
+    // Rect-only: inside the sprite rect (bottom edge, far right), outside the
+    // body circle.
+    let rect_only = [rect[0] + 20.0, rect[3]];
+    assert!(unit_pick_contains(&v, ground, radius, rect_only));
+
+    // Circle-only: outside the rect (below the ground line), inside the
+    // 3-cell body circle.
+    let below_ground = v.project(ground[0] + 1.5, ground[1] + 1.5);
+    assert!(
+        below_ground[1] > rect[3],
+        "must actually fall outside the rect"
+    );
+    assert!(unit_pick_contains(&v, ground, radius, below_ground));
+
+    // Neither: far outside both.
+    let neither = [rect[0] - 500.0, rect[1] - 500.0];
+    assert!(!unit_pick_contains(&v, ground, radius, neither));
+}
+
+#[test]
+fn entity_pick_depth_matches_the_render_ground_y() {
+    let v = view();
+    let nearer = entity_pick_depth(&v, [100.0, 100.0]);
+    let farther = entity_pick_depth(&v, [100.0, 110.0]);
+    assert!(
+        farther > nearer,
+        "a larger cx+cy ground point must sort deeper (frontmost)"
+    );
+}
+
+#[test]
+fn sprite_screen_rect_is_forty_eight_pixels_square() {
+    let rect = sprite_screen_rect(&view(), [100.0, 100.0]);
+    assert_eq!(rect[2] - rect[0], RTS_SPRITE_SIZE_PX[0]);
+    assert_eq!(rect[3] - rect[1], RTS_SPRITE_SIZE_PX[1]);
+}
+
+#[test]
 fn clicking_empty_ground_clears_the_selection() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
@@ -245,8 +369,14 @@ fn shift_click_adds() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
     let (a, b) = (ids[0], ids[1]);
-    let screen_a = view().project(162.5, 178.5);
-    let screen_b = view().project(163.5, 178.5);
+    // Isolated apart: the default spawn row packs six workers one cell
+    // apart, well inside the union of sprite rect and body circle, which
+    // would make each click resolve to whichever overlapping worker is
+    // frontmost rather than the one the click names.
+    set_pos(&mut h, a, [50.0, 50.0]);
+    set_pos(&mut h, b, [80.0, 80.0]);
+    let screen_a = view().project(50.0, 50.0);
+    let screen_b = view().project(80.0, 80.0);
 
     h.world_mut().click_select(&view(), screen_a);
     h.world_mut().shift_click_select(&view(), screen_b);
@@ -261,9 +391,11 @@ fn shift_click_on_a_selected_unit_removes_it() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
     let (a, b) = (ids[0], ids[1]);
+    set_pos(&mut h, a, [50.0, 50.0]);
+    set_pos(&mut h, b, [80.0, 80.0]);
     h.world_mut().selection_mut().replace(&[a, b]);
 
-    let screen_a = view().project(162.5, 178.5);
+    let screen_a = view().project(50.0, 50.0);
     h.world_mut().shift_click_select(&view(), screen_a);
 
     let sel = h.world().selection();

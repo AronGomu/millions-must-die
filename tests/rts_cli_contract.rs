@@ -94,6 +94,18 @@ fn crystal_node_screen() -> [f32; 2] {
     screen_of(140.5, 150.5)
 }
 
+/// A corner of that node's rendered 48x48 sprite quad, not its centre.
+///
+/// `RTS_SPRITE_SIZE_PX` is `[48.0, 48.0]`, anchored bottom-centre
+/// (`mmd_engine::rts::sprite_screen_rect`): x spans the ground point ±24 px,
+/// y spans it `-48..0` px. `(-20, -4)` sits just inside the bottom-left
+/// corner, and on the side away from the scenario's next-nearest crystal
+/// node (`146, 146`) so the corner cannot also land on that neighbour's quad.
+fn crystal_node_corner_screen() -> [f32; 2] {
+    let g = crystal_node_screen();
+    [g[0] - 20.0, g[1] - 4.0]
+}
+
 /// A cell well clear of the HQ footprint (`160..172`), both resource nodes,
 /// and — empirically, see `a_left_click_places_the_ghost` — the scenario's
 /// obstacle mask: `(180, 150)`, a Depot-sized (8-cell) footprint centred
@@ -627,7 +639,7 @@ fn a_right_click_moves_the_selection() {
 #[test]
 fn a_right_click_on_a_node_starts_gathering() {
     let (a, b) = spawn_group_drag();
-    let node = fmt_xy(crystal_node_screen());
+    let node = fmt_xy(crystal_node_corner_screen());
     let script = format!("1:drag:{a},{b};5:rclick:{node}");
     let Some(cli) = or_skip(
         "a_right_click_on_a_node_starts_gathering",

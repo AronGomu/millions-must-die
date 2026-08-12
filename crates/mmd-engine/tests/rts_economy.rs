@@ -4,8 +4,9 @@
 //! `mmd_engine::rts` and `testkit::RtsHarness`.
 
 use mmd_engine::rts::{
-    BuildingKind, EntityId, EntityKind, EntityStore, GATHER_TICKS, GatherPhase, MAX_ENTITIES,
-    OWNER_PLAYER, Order, ResourceKind, UnitKind, WORKER_CARRY_CAPACITY,
+    BuildingKind, ContextOrderReason, EntityId, EntityKind, EntityStore, GATHER_TICKS, GatherPhase,
+    IssuedOrder, MAX_ENTITIES, MAX_SELECTION, OWNER_PLAYER, Order, OrderReceiptBuffer, Pick,
+    ResourceKind, UnitKind, UnitOrderReceipt, WORKER_CARRY_CAPACITY,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -625,4 +626,124 @@ fn a_worker_that_arrives_starts_mining_the_same_tick() {
         }
     }
     panic!("worker never reached the node within 2000 ticks");
+}
+
+// --- T2: shared click-path context orders -----------------------------------
+
+/// A right-click resolved through the shared engine API on a resource
+/// corner (not the node centre) starts a real gather round trip.
+#[test]
+fn click_path_gather_banks_crystal() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    let n_crystal = crystal_node(&h);
+    h.world_mut().selection_mut().insert(w0);
+
+    let node_pos = position_of(&h, n_crystal);
+    let view = h.world().iso_view();
+    let ground = view.project(node_pos[0], node_pos[1]);
+    // A corner of the node's 48x48 sprite rect, not its centre, and on the
+    // side away from the scenario's next-nearest crystal node so the corner
+    // cannot ambiguously also land on that neighbour's rect.
+    let screen = [ground[0] - 20.0, ground[1] - 4.0];
+
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&view, screen, &mut receipts);
+    assert_eq!(result.pick, Pick::Node(n_crystal));
+    assert_eq!(result.accepted, 1);
+    assert_eq!(result.rejected, 0);
+    assert_eq!(
+        receipts.as_slice(),
+        &[UnitOrderReceipt {
+            id: w0,
+            order: IssuedOrder::Gather
+        }]
+    );
+    assert!(matches!(h.world().order_of(w0), Some(Order::Gather { .. })));
+
+    let start = h.world().resources().crystal;
+    h.step_exact(6_000);
+    assert!(
+        h.world().resources().crystal > start,
+        "crystal did not rise above the starting stock"
+    );
+}
+
+/// A mixed selection right-clicking a node: workers gather it, non-workers
+/// (a Soldier) move toward its approach cell instead.
+#[test]
+fn mixed_resource_order_partitions_by_capability() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [100.0, 100.0],
+        )
+        .expect("spawn a soldier");
+    h.world_mut().selection_mut().replace(&[w0, soldier]);
+
+    let n_crystal = crystal_node(&h);
+    let node_pos = position_of(&h, n_crystal);
+    let view = h.world().iso_view();
+    let screen = view.project(node_pos[0], node_pos[1]);
+
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&view, screen, &mut receipts);
+    assert_eq!(result.pick, Pick::Node(n_crystal));
+    assert_eq!(result.accepted, 2);
+    assert_eq!(result.rejected, 0);
+    assert_eq!(result.reason, None);
+
+    assert!(matches!(h.world().order_of(w0), Some(Order::Gather { .. })));
+    assert!(matches!(
+        h.world().order_of(soldier),
+        Some(Order::Move { .. })
+    ));
+}
+
+/// [`OrderReceiptBuffer::new`] reserves [`MAX_SELECTION`]; repeated calls
+/// clear and refill it in place and never grow it.
+#[test]
+fn context_receipts_allocate_nothing_after_new() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let ids = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    h.world_mut().selection_mut().replace(&ids);
+    let view = h.world().iso_view();
+
+    let mut receipts = OrderReceiptBuffer::new();
+    assert_eq!(receipts.capacity(), MAX_SELECTION);
+    for _ in 0..50 {
+        let _ = h
+            .world_mut()
+            .issue_context_order_at(&view, [0.0, 0.0], &mut receipts);
+        assert_eq!(receipts.capacity(), MAX_SELECTION, "buffer must never grow");
+    }
+}
+
+/// An empty selection issues nothing but still reports the pick.
+#[test]
+fn context_order_with_no_selection_is_a_no_op() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let n_crystal = crystal_node(&h);
+    let node_pos = position_of(&h, n_crystal);
+    let view = h.world().iso_view();
+    let screen = view.project(node_pos[0], node_pos[1]);
+
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&view, screen, &mut receipts);
+    assert_eq!(result.pick, Pick::Node(n_crystal));
+    assert_eq!(result.accepted, 0);
+    assert_eq!(result.rejected, 0);
+    assert_eq!(result.reason, Some(ContextOrderReason::EmptySelection));
+    assert!(receipts.as_slice().is_empty());
 }

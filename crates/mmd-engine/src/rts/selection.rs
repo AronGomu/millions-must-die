@@ -18,13 +18,13 @@ use super::world::RtsWorld;
 /// RTS-traditional 12 would be a gameplay rule this prototype has not chosen.
 pub const MAX_SELECTION: usize = MAX_ENTITIES;
 
-/// Pick radius for a unit, in cells, as a multiple of its body radius.
+/// Rendered sprite quad size, in pixels, shared by the picker and the packer.
 ///
-/// `1.0` — the pointer must land inside the circle the separation pass
-/// separates on. Any other value would make "what you clicked" and "what
-/// collides" two different shapes, and the hitbox overlay (`H`) would stop
-/// being an explanation of the click.
-pub const UNIT_PICK_RADIUS_SCALE: f32 = 1.0;
+/// The tracked RTS scenes pin `sprite_size_px: 48` (`scenario::RTS_SPRITE_PX`);
+/// naming it here rather than reading it back off the scenario every call is
+/// what makes [`sprite_screen_rect`] and `pack_frame`'s node/unit quads provably
+/// the same rectangle instead of two derivations that happen to agree today.
+pub const RTS_SPRITE_SIZE_PX: [f32; 2] = [48.0, 48.0];
 
 /// Whether a drag is long enough to be a box rather than a click.
 ///
@@ -184,86 +184,138 @@ pub fn is_drag(a: [f32; 2], b: [f32; 2]) -> bool {
     (b[0] - a[0]).abs() >= DRAG_MIN_PX || (b[1] - a[1]).abs() >= DRAG_MIN_PX
 }
 
-/// Resolve a screen-space click against the world.
+/// The top-left corner of a quad of `size` whose **bottom edge** sits on
+/// screen point `ground` and which is horizontally centred on it.
 ///
-/// Priority, in order, and the first hit wins:
-/// 1. **Own units** — the player-owned unit whose centre is nearest the click's
-///    cell-space point, within `body_radius * UNIT_PICK_RADIUS_SCALE` cells.
-///    Nearest, not first-found, so overlapping bodies pick the one under the
-///    cursor rather than the one with the lowest slot.
-/// 2. **Own buildings** — the building whose footprint rectangle contains the
-///    clicked cell. Footprints cannot overlap (T10 rejects that), so at most one.
-/// 3. **Resource nodes** — the node occupying the clicked cell exactly.
-/// 4. Nothing.
+/// Shared with [`super::pack::pack_frame`], which anchors every world sprite
+/// the same way: a sprite stands on its tile rather than being centred on it.
+/// One function, not two agreeing derivations, is what makes
+/// [`sprite_screen_rect`] provably the rectangle the renderer draws.
+pub(crate) fn stand_on(ground: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+    [ground[0] - size[0] * 0.5, ground[1] - size[1]]
+}
+
+/// The screen-space rectangle `pack_frame` draws a [`RTS_SPRITE_SIZE_PX`] quad
+/// into for an entity whose ground point is `ground` (cell space).
 ///
-/// Units come first because a worker standing on its own base must be
-/// clickable; the building is the larger target and would always win otherwise.
-pub fn pick_at(world: &RtsWorld, view: &IsoView, screen: [f32; 2]) -> Pick {
+/// `(min_x, min_y, max_x, max_y)`.
+pub fn sprite_screen_rect(view: &IsoView, ground: [f32; 2]) -> [f32; 4] {
+    let g = view.project(ground[0], ground[1]);
+    let pos = stand_on(g, RTS_SPRITE_SIZE_PX);
+    [
+        pos[0],
+        pos[1],
+        pos[0] + RTS_SPRITE_SIZE_PX[0],
+        pos[1] + RTS_SPRITE_SIZE_PX[1],
+    ]
+}
+
+/// Whether a unit whose ground point is `ground` (cell space) is hit by a
+/// click at `screen`.
+///
+/// The union of two shapes: the full rendered [`sprite_screen_rect`] (so the
+/// visible sprite is always clickable) **or** the unprojected body circle of
+/// `radius` cells around `ground` (so the hitbox the collision pass separates
+/// on stays clickable even where the sprite quad does not cover it —
+/// diagonally, past the sprite's edges).
+pub fn unit_pick_contains(view: &IsoView, ground: [f32; 2], radius: f32, screen: [f32; 2]) -> bool {
+    let rect = sprite_screen_rect(view, ground);
+    if screen[0] >= rect[0] && screen[0] <= rect[2] && screen[1] >= rect[1] && screen[1] <= rect[3]
+    {
+        return true;
+    }
     let p = view.unproject(screen[0], screen[1]);
     if !p[0].is_finite() || !p[1].is_finite() {
-        return Pick::Nothing;
+        return false;
     }
-    let r = world.scenario().collision_radius_cells() * UNIT_PICK_RADIUS_SCALE;
-    let r2 = r * r;
-    let slot_count = world.entities().slot_count();
+    let dx = p[0] - ground[0];
+    let dy = p[1] - ground[1];
+    dx * dx + dy * dy <= radius * radius
+}
 
-    // 1. nearest own unit inside r
-    let mut best: Option<(f32, EntityId)> = None;
-    for slot in 0..slot_count {
-        if !world.entities().alive(slot) {
-            continue;
-        }
-        if !matches!(world.entities().kind(slot), EntityKind::Unit(_)) {
-            continue;
-        }
-        if world.entities().owner(slot) != OWNER_PLAYER {
-            continue;
-        }
-        let q = world.entities().position(slot);
-        let d2 = (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2);
-        if d2 <= r2 && best.is_none_or(|(bd, _)| d2 < bd) {
-            best = Some((d2, world.entities().id_at(slot).expect("live")));
-        }
-    }
-    if let Some((_, id)) = best {
-        return Pick::Unit(id);
-    }
+/// The depth key [`super::pack::pack_frame`] would give an entity whose
+/// ground point is `ground` (cell space) — the same [`IsoView::depth`] call,
+/// so a pick can only ever agree with what the GPU's `GREATER` depth test put
+/// on top of the pixel.
+pub fn entity_pick_depth(view: &IsoView, ground: [f32; 2]) -> f32 {
+    let s = view.project(ground[0], ground[1]);
+    view.depth(s[1])
+}
 
-    // 2. own building footprint
+/// Resolve a screen-space click against the world.
+///
+/// Every live entity whose rendered/hitbox geometry covers `screen` is a
+/// candidate; the one with the greatest [`entity_pick_depth`] wins — the same
+/// comparison the GPU's `GREATER` depth test makes when two sprites overlap a
+/// pixel. Iteration is ascending by entity slot and only a **strictly**
+/// greater depth replaces the current best, so an exact tie keeps the lower
+/// slot: the earlier-packed instance the depth test would not have let a
+/// later, equal-depth one overwrite.
+///
+/// Hit shapes, by kind:
+/// - **Unit** (player-owned only) — [`unit_pick_contains`]: the full sprite
+///   rect union the unit kind's body circle.
+/// - **Building** (player-owned only) — footprint-based, via
+///   [`footprint_contains`] against the clicked cell.
+/// - **Node** — the full [`sprite_screen_rect`], no ownership filter.
+///
+/// No type-priority branch: a worker standing on its own HQ wins only when its
+/// ground point renders strictly in front of the HQ's.
+pub fn pick_at(world: &RtsWorld, view: &IsoView, screen: [f32; 2]) -> Pick {
     let width = world.scenario().width();
     let height = world.scenario().height();
-    let Some(cell) = view.cell_at(screen[0], screen[1], width, height) else {
-        return Pick::Nothing;
-    };
+    let cell = view.cell_at(screen[0], screen[1], width, height);
+    let slot_count = world.entities().slot_count();
+
+    let mut best: Option<(f32, usize)> = None;
     for slot in 0..slot_count {
         if !world.entities().alive(slot) {
             continue;
         }
-        let EntityKind::Building(b) = world.entities().kind(slot) else {
-            continue;
+        let hit = match world.entities().kind(slot) {
+            EntityKind::Unit(kind) => {
+                world.entities().owner(slot) == OWNER_PLAYER
+                    && unit_pick_contains(
+                        view,
+                        world.entities().position(slot),
+                        kind.body_radius_cells(),
+                        screen,
+                    )
+            }
+            EntityKind::Building(b) => {
+                world.entities().owner(slot) == OWNER_PLAYER
+                    && cell.is_some_and(|c| {
+                        footprint_contains(world.entities().position(slot), b.footprint_cells(), c)
+                    })
+            }
+            EntityKind::Node(_) => {
+                let rect = sprite_screen_rect(view, world.entities().position(slot));
+                screen[0] >= rect[0]
+                    && screen[0] <= rect[2]
+                    && screen[1] >= rect[1]
+                    && screen[1] <= rect[3]
+            }
         };
-        if world.entities().owner(slot) != OWNER_PLAYER {
+        if !hit {
             continue;
         }
-        if footprint_contains(world.entities().position(slot), b.footprint_cells(), cell) {
-            return Pick::Building(world.entities().id_at(slot).expect("live"));
+        let depth = entity_pick_depth(view, world.entities().position(slot));
+        if best.is_none_or(|(bd, _)| depth > bd) {
+            best = Some((depth, slot));
         }
     }
 
-    // 3. node on that exact cell
-    for slot in 0..slot_count {
-        if !world.entities().alive(slot) {
-            continue;
+    match best {
+        Some((_, slot)) => {
+            let id = world.entities().id_at(slot).expect("live");
+            match world.entities().kind(slot) {
+                EntityKind::Unit(_) => Pick::Unit(id),
+                EntityKind::Building(_) => Pick::Building(id),
+                EntityKind::Node(_) => Pick::Node(id),
+            }
         }
-        let EntityKind::Node(_) = world.entities().kind(slot) else {
-            continue;
-        };
-        let q = world.entities().position(slot);
-        if q[0].floor() as u32 == cell.x && q[1].floor() as u32 == cell.y {
-            return Pick::Node(world.entities().id_at(slot).expect("live"));
-        }
+        None => Pick::Nothing,
     }
-    Pick::Nothing
 }
 
 /// Every player-owned **unit** whose ground point lies inside a screen-space

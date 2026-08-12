@@ -44,7 +44,11 @@ pub use production::{
     unit_cost,
 };
 pub use selection::{
-    DRAG_MIN_PX, MAX_SELECTION, Pick, Selection, UNIT_PICK_RADIUS_SCALE, box_select,
-    footprint_contains, footprint_min, is_drag, normalise_rect, pick_at,
+    DRAG_MIN_PX, MAX_SELECTION, Pick, RTS_SPRITE_SIZE_PX, Selection, box_select, entity_pick_depth,
+    footprint_contains, footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect,
+    unit_pick_contains,
 };
-pub use world::{NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT, RtsWorld, RtsWorldError};
+pub use world::{
+    ContextOrderReason, ContextOrderResult, IssuedOrder, NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT,
+    OrderReceiptBuffer, RtsWorld, RtsWorldError, UnitOrderReceipt,
+};

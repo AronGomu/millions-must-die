@@ -41,8 +41,8 @@ use mmd_engine::render::{
     RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
-    DragBox, EntityId, EntityKind, MAX_SELECTION, OWNER_PLAYER, Pick, Placement, RtsFrame,
-    RtsWorld, RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame, pack_hud, pick_at,
+    DragBox, EntityId, EntityKind, OWNER_PLAYER, OrderReceiptBuffer, Placement, RtsFrame, RtsWorld,
+    RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame, pack_hud,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::Event;
@@ -80,8 +80,8 @@ struct RtsSession {
     paused: bool,
     overlay_visible: bool,
     quit: bool,
-    /// Reused scratch for `order_*_group`.
-    group: Vec<EntityId>,
+    /// Reused scratch for `RtsWorld::issue_context_order_at`.
+    receipts: OrderReceiptBuffer,
 }
 
 impl Default for RtsSession {
@@ -94,7 +94,7 @@ impl Default for RtsSession {
             paused: false,
             overlay_visible: false,
             quit: false,
-            group: Vec::with_capacity(MAX_SELECTION),
+            receipts: OrderReceiptBuffer::new(),
         }
     }
 }
@@ -133,36 +133,6 @@ fn find_builder(world: &RtsWorld) -> Option<EntityId> {
         }
     }
     None
-}
-
-/// The right-click context order: gather a node, attend a site, or move —
-/// resolved against whatever `pick_at` finds at `p`. Public API exposes no
-/// "approach cell" for a finished, non-site building, so that case shares the
-/// plain move-to-clicked-cell fallback the empty-ground case uses.
-fn right_click_order(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 2]) {
-    session.group.clear();
-    session.group.extend_from_slice(world.selection().ids());
-    if session.group.is_empty() {
-        return;
-    }
-    let view = world.iso_view();
-    match pick_at(world, &view, p) {
-        Pick::Node(n) => {
-            world.order_gather_group(&session.group, n);
-        }
-        Pick::Building(b) if world.is_site(b) => {
-            for &id in &session.group {
-                world.order_build(id, b);
-            }
-        }
-        _ => {
-            let width = world.scenario().width();
-            let height = world.scenario().height();
-            if let Some(cell) = view.cell_at(p[0], p[1], width, height) {
-                world.order_move_group(&session.group, cell);
-            }
-        }
-    }
 }
 
 /// Apply one [`RtsCommand`] to `world`/`session`. Shared by the live SDL path
@@ -239,7 +209,8 @@ fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsCommand) {
                 // of issuing an order.
                 world.cancel_placement();
             } else {
-                right_click_order(world, session, p);
+                let view = world.iso_view();
+                let _ = world.issue_context_order_at(&view, p, &mut session.receipts);
             }
         }
     }

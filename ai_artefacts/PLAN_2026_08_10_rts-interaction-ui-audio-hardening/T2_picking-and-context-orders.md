@@ -77,14 +77,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add red picker tests in `crates/mmd-engine/tests/rts_selection.rs`.
-- [ ] 2. Add red shared-click gather/mixed-group tests in `crates/mmd-engine/tests/rts_economy.rs`.
-- [ ] 3. Extract shared sprite rect/depth helpers; make `pack.rs` consume same 48×48 constant.
-- [ ] 4. Replace picker type priority with depth + slot comparator.
-- [ ] 5. Add receipt/result types + preallocated buffer in engine RTS module.
-- [ ] 6. Implement `RtsWorld::issue_context_order_at`; preserve cancel-placement semantics in app.
-- [ ] 7. Replace `src/rts_run.rs::right_click_order` with shared API call.
-- [ ] 8. Extend CLI regression to click away from node center.
+- [x] 1. Add red picker tests in `crates/mmd-engine/tests/rts_selection.rs`. Validated: `cargo test -p mmd-engine --locked --test rts_selection` — added `every_resource_quad_corner_is_pickable`, `unit_pick_is_sprite_rect_union_body_circle`, `frontmost_rendered_entity_wins`, `equal_depth_ties_go_to_the_lower_entity_slot`, `entity_pick_depth_matches_the_render_ground_y`, `sprite_screen_rect_is_forty_eight_pixels_square`; initially red against the old priority-list `pick_at`, green after step 3/4.
+- [x] 2. Add red shared-click gather/mixed-group tests in `crates/mmd-engine/tests/rts_economy.rs`. Validated: `cargo test -p mmd-engine --locked --test rts_economy` — added `click_path_gather_banks_crystal`, `mixed_resource_order_partitions_by_capability`, `context_receipts_allocate_nothing_after_new`, `context_order_with_no_selection_is_a_no_op`; initially red (types did not exist), green after step 5/6.
+- [x] 3. Extract shared sprite rect/depth helpers; make `pack.rs` consume same 48×48 constant. Evidence: `RTS_SPRITE_SIZE_PX`/`sprite_screen_rect`/`entity_pick_depth`/`stand_on` added to `selection.rs`; `pack.rs` now imports `RTS_SPRITE_SIZE_PX`/`stand_on` instead of deriving `sprite_size` from `scenario().sprite_size_px()` and instead of a private `stand_on` copy.
+- [x] 4. Replace picker type priority with depth + slot comparator. Evidence: `pick_at` in `selection.rs` now gathers every hit and picks strictly-greatest `entity_pick_depth`, tie kept by ascending-slot iteration order; `UNIT_PICK_RADIUS_SCALE` deleted.
+- [x] 5. Add receipt/result types + preallocated buffer in engine RTS module. Evidence: `IssuedOrder`, `UnitOrderReceipt`, `ContextOrderReason`, `ContextOrderResult`, `OrderReceiptBuffer` added to `world.rs`, exported from `rts/mod.rs`; `context_receipts_allocate_nothing_after_new` proves capacity pinned at `MAX_SELECTION` across 50 calls.
+- [x] 6. Implement `RtsWorld::issue_context_order_at`; preserve cancel-placement semantics in app. Evidence: method added to `world.rs`; `src/rts_run.rs`'s `RtsCommand::RightClick` arm still checks `Placement::Pending` and calls `world.cancel_placement()` first, unchanged.
+- [x] 7. Replace `src/rts_run.rs::right_click_order` with shared API call. Evidence: `right_click_order` fn and `RtsSession::group` scratch deleted; `RtsCommand::RightClick` now calls `world.issue_context_order_at(&view, p, &mut session.receipts)` directly; `cargo check --workspace --all-targets --all-features --locked` passes.
+- [x] 8. Extend CLI regression to click away from node center. Evidence: `tests/rts_cli_contract.rs::a_right_click_on_a_node_starts_gathering` now clicks `crystal_node_corner_screen()` (a corner of the node's 48×48 quad, `screen_of(140.5,150.5) + (-20,-4)`), not the centre; `cargo test --locked --test rts_cli_contract right_click` passes.
 
 ## Outputs
 
@@ -95,10 +95,10 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test rts_selection`
-- [ ] `cargo test -p mmd-engine --locked --test rts_economy click_path`
-- [ ] `cargo test -p millions_must_die --locked --test rts_cli_contract right_click`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: selected worker right-clicks four resource-square corners → Gather starts
-- [ ] app functional: `cargo run -- rts --frames 160 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
-- [ ] commit msg draft: `fix(rts): make visible pick geometry drive context orders`
+- [x] `cargo test -p mmd-engine --locked --test rts_selection` — 36 passed; 0 failed.
+- [x] `cargo test -p mmd-engine --locked --test rts_economy click_path` — `click_path_gather_banks_crystal ... ok` (1 passed).
+- [x] `cargo test -p millions_must_die --locked --test rts_cli_contract right_click` — 3 passed (`a_right_click_on_a_node_starts_gathering`, `a_right_click_moves_the_selection`, `a_right_click_cancels_the_ghost_without_ordering`).
+- [x] `cargo check --workspace --all-targets --all-features --locked` — clean, no warnings/errors.
+- [x] manual check: selected worker right-clicks four resource-square corners → Gather starts. Evidence: `every_resource_quad_corner_is_pickable` proves all four inside corners resolve `Pick::Node`; `a_right_click_on_a_node_starts_gathering` proves a corner right-click on a selected group actually starts Gather (crystal banks above the starting 300).
+- [x] app functional: `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — the ticket's literal `--frames 160` exits early with `rts failed: --inject-input entries never fired` (the tracked script's last scripted event is at tick 1450; this is true on this branch before this ticket's changes too — not something T2 introduced). Ran the frame count `AGENT.md`'s merge-gate line and this same script use elsewhere in the repo (`1600`); exits `quit=true` clean with `hash=73e65fca25299a97d07e5acd85b08d47e4a38fb71f993dd44026be7b8b6e87af`. Logged under Assumptions below.
+- [x] commit msg draft: `fix(rts): make visible pick geometry drive context orders` — used verbatim as the commit subject.

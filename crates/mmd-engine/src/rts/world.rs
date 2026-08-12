@@ -25,7 +25,91 @@ use super::orders::{
     unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
-use super::selection::{Pick, Selection, box_select, pick_at};
+use super::selection::{MAX_SELECTION, Pick, Selection, box_select, pick_at};
+
+/// What kind of order a context click resolved a unit into. See
+/// [`RtsWorld::issue_context_order_at`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IssuedOrder {
+    Move,
+    Gather,
+    Build,
+}
+
+/// One unit's outcome from a context-order click.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnitOrderReceipt {
+    pub id: EntityId,
+    pub order: IssuedOrder,
+}
+
+/// Why a context-order click issued fewer orders than the selection's size.
+///
+/// Set only when at least one selected unit was rejected outright rather than
+/// simply not eligible for this specific target (a per-unit rejection, e.g. a
+/// Soldier at a build site, needs no shared reason — [`ContextOrderResult::rejected`]
+/// already counts it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContextOrderReason {
+    /// Nothing was selected; the click still resolved a [`Pick`] but issued
+    /// no orders.
+    EmptySelection,
+    /// No navigation field could be built to the target cell.
+    Unreachable,
+    /// The click landed outside the scenario grid.
+    NoTargetCell,
+}
+
+/// The outcome of [`RtsWorld::issue_context_order_at`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ContextOrderResult {
+    pub pick: Pick,
+    pub accepted: usize,
+    pub rejected: usize,
+    pub reason: Option<ContextOrderReason>,
+}
+
+/// Reusable per-call receipt buffer for [`RtsWorld::issue_context_order_at`].
+///
+/// Reserved to [`MAX_SELECTION`] at construction; every call clears and
+/// refills it in place, so issuing orders allocates nothing after `new`.
+#[derive(Debug)]
+pub struct OrderReceiptBuffer {
+    receipts: Vec<UnitOrderReceipt>,
+}
+
+impl Default for OrderReceiptBuffer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OrderReceiptBuffer {
+    pub fn new() -> Self {
+        Self {
+            receipts: Vec::with_capacity(MAX_SELECTION),
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.receipts.clear();
+    }
+
+    fn push(&mut self, id: EntityId, order: IssuedOrder) {
+        self.receipts.push(UnitOrderReceipt { id, order });
+    }
+
+    /// Every receipt from the most recent call, ascending by entity slot —
+    /// the order [`Selection::ids`] iterates in.
+    pub fn as_slice(&self) -> &[UnitOrderReceipt] {
+        &self.receipts
+    }
+
+    /// Current allocation, in receipts. Tests pin this across repeated calls.
+    pub fn capacity(&self) -> usize {
+        self.receipts.capacity()
+    }
+}
 
 /// Starting amount in a freshly seeded Crystal node.
 pub const NODE_CRYSTAL_AMOUNT: u32 = 1_500;
@@ -594,6 +678,150 @@ impl RtsWorld {
         };
         self.orders.set(slot, Order::Build { site, field });
         true
+    }
+
+    /// Resolve a right-click context order against the shared pick geometry:
+    /// gather a node, attend a build site, or move — one dispatcher shared by
+    /// every input path (SDL, scripted, [`crate::testkit::RtsHarness`]).
+    ///
+    /// `receipts` is cleared and refilled with one [`UnitOrderReceipt`] per
+    /// order actually issued, ascending by entity slot (the order
+    /// [`Selection::ids`] iterates in). Capacity never grows past
+    /// [`MAX_SELECTION`] — [`OrderReceiptBuffer::new`] reserves it there.
+    ///
+    /// Dispatch, by what [`pick_at`] found:
+    /// - **Node** — selected workers Gather; every other selected orderable
+    ///   unit Move toward the node's cell (one shared field acquire). A
+    ///   depleted node still resolves the Move fallback but rejects Gather.
+    /// - **Building under construction** (a site) — selected workers Build;
+    ///   every other selected unit is rejected outright, no Move fallback.
+    /// - Anything else (a finished building, empty ground, off-grid) — every
+    ///   selected orderable unit Move to the clicked cell.
+    pub fn issue_context_order_at(
+        &mut self,
+        view: &IsoView,
+        screen: [f32; 2],
+        receipts: &mut OrderReceiptBuffer,
+    ) -> ContextOrderResult {
+        receipts.clear();
+        let pick = pick_at(self, view, screen);
+
+        let mut scratch = std::mem::take(&mut self.pick_scratch);
+        scratch.clear();
+        scratch.extend_from_slice(self.selection.ids());
+
+        if scratch.is_empty() {
+            self.pick_scratch = scratch;
+            return ContextOrderResult {
+                pick,
+                accepted: 0,
+                rejected: 0,
+                reason: Some(ContextOrderReason::EmptySelection),
+            };
+        }
+
+        let mut accepted = 0usize;
+        let mut rejected = 0usize;
+        let mut reason = None;
+
+        match pick {
+            Pick::Node(n) => {
+                if let Some(node_slot) = self.entities.slot(n) {
+                    let cell = node_cell(self.entities.position(node_slot));
+                    match self.nav.acquire(cell) {
+                        Ok(field) => {
+                            let depleted = self.entities.amount(node_slot) == 0;
+                            for &id in &scratch {
+                                if let Some(slot) = self.worker_slot(id) {
+                                    if depleted {
+                                        rejected += 1;
+                                    } else {
+                                        self.orders.set(
+                                            slot,
+                                            Order::Gather {
+                                                node: n,
+                                                phase: GatherPhase::ToNode { field },
+                                            },
+                                        );
+                                        receipts.push(id, IssuedOrder::Gather);
+                                        accepted += 1;
+                                    }
+                                } else if let Some(slot) = self.orderable_slot(id) {
+                                    self.orders.set(slot, Order::Move { dest: cell, field });
+                                    receipts.push(id, IssuedOrder::Move);
+                                    accepted += 1;
+                                } else {
+                                    rejected += 1;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            rejected += scratch.len();
+                            reason = Some(ContextOrderReason::Unreachable);
+                        }
+                    }
+                } else {
+                    rejected += scratch.len();
+                }
+            }
+            Pick::Building(b) if self.is_site(b) => {
+                let width = self.scenario.width();
+                let height = self.scenario.height();
+                let cell =
+                    building_approach_cell(&self.entities, self.nav.blocked(), width, height, b);
+                match self.nav.acquire(cell) {
+                    Ok(field) => {
+                        for &id in &scratch {
+                            if let Some(slot) = self.worker_slot(id) {
+                                self.orders.set(slot, Order::Build { site: b, field });
+                                receipts.push(id, IssuedOrder::Build);
+                                accepted += 1;
+                            } else {
+                                rejected += 1;
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        rejected += scratch.len();
+                        reason = Some(ContextOrderReason::Unreachable);
+                    }
+                }
+            }
+            _ => {
+                let width = self.scenario.width();
+                let height = self.scenario.height();
+                if let Some(cell) = view.cell_at(screen[0], screen[1], width, height) {
+                    match self.nav.acquire(cell) {
+                        Ok(field) => {
+                            for &id in &scratch {
+                                if let Some(slot) = self.orderable_slot(id) {
+                                    self.orders.set(slot, Order::Move { dest: cell, field });
+                                    receipts.push(id, IssuedOrder::Move);
+                                    accepted += 1;
+                                } else {
+                                    rejected += 1;
+                                }
+                            }
+                        }
+                        Err(_) => {
+                            rejected += scratch.len();
+                            reason = Some(ContextOrderReason::Unreachable);
+                        }
+                    }
+                } else {
+                    rejected += scratch.len();
+                    reason = Some(ContextOrderReason::NoTargetCell);
+                }
+            }
+        }
+
+        self.pick_scratch = scratch;
+        ContextOrderResult {
+            pick,
+            accepted,
+            rejected,
+            reason,
+        }
     }
 
     /// Queue a unit at a building.

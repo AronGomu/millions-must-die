@@ -20,7 +20,7 @@ use crate::scenario::Cell;
 
 use super::build::{Placement, placement_valid};
 use super::entity::{BuildingKind, EntityKind, MAX_ENTITIES, ResourceKind, UnitKind};
-use super::selection::normalise_rect;
+use super::selection::{RTS_SPRITE_SIZE_PX, normalise_rect, stand_on};
 use super::world::RtsWorld;
 
 /// Columns of every RTS sheet — the grid [`frame_uv_rect`] addresses.
@@ -247,8 +247,7 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
 
     let iso = world.iso_view();
     let store = world.entities();
-    let sprite_px = world.scenario().sprite_size_px() as f32;
-    let sprite_size = [sprite_px, sprite_px];
+    let sprite_size = RTS_SPRITE_SIZE_PX;
 
     // 1. World, depth-tested.
     //
@@ -424,14 +423,4 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
                 .push(SpriteInstance::new(pos, size, uv, DRAG_BOX_TINT));
         }
     }
-}
-
-/// The top-left corner of a quad of `size` whose **bottom edge** sits on
-/// `ground` and which is horizontally centred on it.
-///
-/// The same anchor [`crate::runtime::pack_instance_groups`] uses: a sprite
-/// stands on its tile rather than being centred on it, which is what makes a
-/// scene read as depth rather than as a scatter.
-fn stand_on(ground: [f32; 2], size: [f32; 2]) -> [f32; 2] {
-    [ground[0] - size[0] * 0.5, ground[1] - size[1]]
 }
