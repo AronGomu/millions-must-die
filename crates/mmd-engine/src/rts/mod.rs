@@ -1,6 +1,7 @@
 //! Phase-1 real-time-strategy world: entities, economy, orders, buildings.
 
 mod build;
+mod collision;
 mod economy;
 mod entity;
 mod hud;
@@ -17,6 +18,7 @@ pub use build::{
     Placement, PlacementError, build_ticks, building_cost, footprint_cells, placement_valid,
     supply_grant,
 };
+pub use collision::{moving_circle_hits_point, units_overlap};
 pub use economy::{
     GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply, WORKER_CARRY_CAPACITY,
     WORKER_SUPPLY_COST, node_amount, supply_cost,
@@ -52,5 +54,5 @@ pub use selection::{
 pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
     ContextOrderReason, ContextOrderResult, IssuedOrder, NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT,
-    OrderReceiptBuffer, RtsWorld, RtsWorldError, UnitOrderReceipt,
+    OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError, UnitOrderReceipt,
 };

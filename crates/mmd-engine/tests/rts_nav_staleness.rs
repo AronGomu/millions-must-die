@@ -51,8 +51,15 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 }
 
 /// Place a Depot at [`DEPOT_MIN`], attended by a worker standing beside it.
+///
+/// The builder stands squarely off the footprint's east edge, not off its
+/// south-east corner: since T4 a unit is a 3-cell body, and the corner spot
+/// this used to use is a pocket — legal to stand in by 0.04 cells, with the
+/// finished Depot's clearance on two sides — so a body parked there can be
+/// neither walked around nor shoved aside, and it wallled in whatever the case
+/// was actually about.
 fn place_depot(h: &mut RtsHarness) -> EntityId {
-    let builder = spawn_worker(h, [190.5, 186.5]);
+    let builder = spawn_worker(h, [191.0, 180.0]);
     assert!(
         h.world_mut().begin_placement(BuildingKind::Depot),
         "the scene's starting crystal must cover a Depot"
@@ -108,6 +115,15 @@ fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
     // Far enough that even at the tripled worker speed the walker is still
     // in flight when the Depot's build timer lands the stamp, not already
     // idle at its destination.
+    // The scene's own starting workers stand right on this route, around
+    // (166, 178). Since T4 they are 3-cell bodies: they would decide where
+    // this walker gets to long before its cached field did, and the
+    // destination sits inside their cluster, where no second body can stand at
+    // all. Clear them — this case is about a *field* going stale, not about a
+    // crowd.
+    for w in h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)) {
+        assert!(h.world_mut().entities_mut().despawn(w));
+    }
     let walker = spawn_worker(&mut h, [310.5, 180.5]);
     let dest = Cell { x: 170, y: 180 };
     assert!(h.world_mut().order_move(walker, dest));

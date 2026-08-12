@@ -189,7 +189,29 @@ impl EntityStore {
     ///
     /// Returns `None` when the store is full: a caller that cannot spawn must
     /// see it, not silently drop a unit it charged the player for.
+    ///
+    /// Sealed at the crate boundary in a shipping build (see
+    /// [`Self::spawn_impl`]): since hard unit collision, *where* a unit is put
+    /// is a world invariant, so outside code goes through
+    /// [`super::world::RtsWorld`].
+    #[cfg(feature = "testkit")]
     pub fn spawn(&mut self, kind: EntityKind, owner: u8, pos: [f32; 2]) -> Option<EntityId> {
+        self.spawn_impl(kind, owner, pos)
+    }
+
+    /// See the `testkit` twin above.
+    #[cfg(not(feature = "testkit"))]
+    pub(crate) fn spawn(&mut self, kind: EntityKind, owner: u8, pos: [f32; 2]) -> Option<EntityId> {
+        self.spawn_impl(kind, owner, pos)
+    }
+
+    /// The one implementation behind the two visibility-split wrappers above.
+    ///
+    /// Rust has no `cfg` on a visibility, and the two things that must be
+    /// true at once — integration tests are an external crate and need this,
+    /// a shipping build must not expose raw placement — leave a wrapper pair
+    /// as the only way to say it.
+    fn spawn_impl(&mut self, kind: EntityKind, owner: u8, pos: [f32; 2]) -> Option<EntityId> {
         let idx = if let Some(i) = self.free.pop() {
             i as usize
         } else if self.alive.len() < MAX_ENTITIES {
@@ -323,7 +345,21 @@ impl EntityStore {
         self.amount[slot]
     }
 
+    /// Place a live entity. Sealed the same way [`Self::spawn`] is: raw
+    /// placement can merge two bodies, so a shipping build reaches it only
+    /// through [`super::world::RtsWorld`]'s own systems.
+    #[cfg(feature = "testkit")]
     pub fn set_position(&mut self, slot: usize, pos: [f32; 2]) {
+        self.set_position_impl(slot, pos);
+    }
+
+    /// See the `testkit` twin above.
+    #[cfg(not(feature = "testkit"))]
+    pub(crate) fn set_position(&mut self, slot: usize, pos: [f32; 2]) {
+        self.set_position_impl(slot, pos);
+    }
+
+    fn set_position_impl(&mut self, slot: usize, pos: [f32; 2]) {
         self.assert_live(slot);
         self.x[slot] = pos[0];
         self.y[slot] = pos[1];

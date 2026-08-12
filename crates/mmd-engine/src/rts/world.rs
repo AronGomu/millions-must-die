@@ -10,6 +10,7 @@ use crate::sim::{TICK_DT, dir_from_vector};
 use super::build::{
     Placement, PlacementError, build_ticks, building_cost, placement_valid, supply_grant,
 };
+use super::collision::{moving_circle_hits_point, units_overlap};
 use super::economy::{
     GATHER_TICKS, Resources, Supply, WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
     supply_cost,
@@ -133,6 +134,24 @@ pub enum RtsWorldError {
     NoFreeUnitPosition,
 }
 
+/// A failure inside one [`RtsWorld::tick`] that the tick cannot signal by
+/// returning — it is stashed on the world and read back with
+/// [`RtsWorld::last_tick_error`].
+///
+/// `Copy` and payload-free on purpose: a tick error is world state that a
+/// replay must reproduce exactly, not a place to carry a formatted string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum TickError {
+    /// A tick started with two unit bodies merged (only
+    /// [`RtsWorld::force_position_for_test`] and a store mutation can
+    /// produce that) and the grid had no legal free centre to repair one of
+    /// them into. The movement system is skipped for that tick rather than
+    /// compounding an illegal state, and the overlap is reported here rather
+    /// than silently kept.
+    #[error("a merged unit body could not be repaired: no legal free position exists")]
+    UnrepairableOverlap,
+}
+
 /// The phase-1 RTS game state.
 #[derive(Debug)]
 pub struct RtsWorld {
@@ -148,6 +167,23 @@ pub struct RtsWorld {
     /// Live-slot buffer the per-tick sweeps reuse. Reserved to
     /// [`MAX_ENTITIES`] so a tick never grows it.
     live_scratch: Vec<usize>,
+    /// Live **unit** slots, ascending, refilled every tick by the movement
+    /// system. Reserved to [`MAX_ENTITIES`] so a tick never grows it.
+    unit_scratch: Vec<usize>,
+    /// Parallel to [`Self::unit_scratch`]: the collision body position of
+    /// each unit *right now* — already committed for a unit the movement
+    /// system has processed this tick, still last tick's for one it has not.
+    /// Reserved to [`MAX_ENTITIES`] so a tick never grows it.
+    candidate_pos: Vec<[f32; 2]>,
+    /// Parallel to [`Self::unit_scratch`]: has this body already been pushed
+    /// aside by a mover this tick? One push per body per tick is what keeps a
+    /// crowd from shoving one unit several cells in a single tick. Reserved to
+    /// [`MAX_ENTITIES`] so a tick never grows it.
+    pushed: Vec<bool>,
+    /// What went wrong in the most recent tick, if anything. Cleared at the
+    /// start of every movement pass, so it always describes the last tick and
+    /// never an older one.
+    last_tick_error: Option<TickError>,
     selection: Selection,
     /// Scratch buffer for a box select's result, before it replaces
     /// [`Self::selection`]. Reserved to [`MAX_ENTITIES`] so no selection
@@ -171,15 +207,96 @@ pub struct RtsWorld {
     pan_dir: [f32; 2],
 }
 
+/// How many bodies one mover may displace, in total, in a single step —
+/// counting the bodies it touches directly and every body those in turn have
+/// to be shoved out of the way of.
+///
+/// A bound, not a tuning knob. A body of one radius can be touched by at most
+/// six others of the same radius at once (the hexagonal packing bound), so
+/// eight leaves room for one direct ring plus the tail of a chain out of it
+/// while keeping the cost of a rejected step flat. Past it, a "step" would be
+/// a mover ploughing through a crowd: the candidate is rejected whole.
+const MAX_PUSHED_BODIES: usize = 8;
+
+/// How far a push may propagate: the mover displaces a body (depth 1), that
+/// body may displace one it would land on (depth 2), and so on to this depth.
+///
+/// Three is what the seeded scene actually needs — its starting workers stand
+/// in a row exactly one body diameter apart, so freeing the first requires
+/// moving the second and third — and stopping there is what keeps a shove from
+/// rippling across a whole base. A chain that would need to go deeper is
+/// rejected whole; the mover waits instead.
+const MAX_PUSH_DEPTH: u8 = 3;
+
+/// The headings one mover tries in a tick, as `(cos, sin)` rotations of its
+/// own field descent vector: straight ahead first, then 45 degrees to each
+/// side, then 90 degrees to each side. First legal one wins, and a unit with
+/// no legal heading stands still.
+///
+/// The fallback exists because a pooled flow field is body-blind: it routes
+/// around walls, never around units, so a mover whose descent points at a body
+/// that cannot legally be shoved — one pinned against a building's clearance,
+/// say — would otherwise be frozen for good with open ground beside it. The
+/// order is fixed and the set is closed, so which heading a unit takes is a
+/// pure function of the world state; the clockwise-before-anticlockwise
+/// convention is arbitrary but must not change, since it is hashed state.
+const MOVE_DEFLECTIONS: [(f32, f32); 5] = [
+    (1.0, 0.0),
+    (COS_45, -COS_45),
+    (COS_45, COS_45),
+    (0.0, -1.0),
+    (0.0, 1.0),
+];
+
+/// `cos 45 == sin 45`, the only rotation magnitude [`MOVE_DEFLECTIONS`] needs.
+const COS_45: f32 = std::f32::consts::FRAC_1_SQRT_2;
+
+/// One body displaced by a push chain: which body, where it lands, and how
+/// deep in the chain it sits.
+#[derive(Clone, Copy, Debug)]
+struct Displacement {
+    body: usize,
+    to: [f32; 2],
+    depth: u8,
+}
+
+impl Displacement {
+    const NONE: Self = Self {
+        body: usize::MAX,
+        to: [0.0, 0.0],
+        depth: 0,
+    };
+}
+
+/// What one unit's swept candidate runs into, among the other unit bodies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BodySweep {
+    /// Nothing: the candidate can be committed as it stands.
+    Clear,
+    /// `count` bodies, named by the first `count` entries of `hit` (indices
+    /// into the movement system's buffers, ascending). Each is a push-aside
+    /// candidate.
+    Bodies {
+        hit: [usize; MAX_PUSHED_BODIES],
+        count: usize,
+    },
+    /// More bodies at once than [`MAX_PUSHED_BODIES`]. Never pushed.
+    TooMany,
+}
+
 /// The nearest legal cell centre to `preferred`: a cell whose centre is
 /// clear per `static_nav.center_blocked()` and does not overlap any
 /// already-`placed` body (two bodies overlap when their centres are closer
 /// than one body diameter — touching is legal). Ties (equal squared distance
 /// to `preferred`) go to the lower flat cell index, so relocation never
 /// depends on scan order. `None` only when the grid has no such cell.
+///
+/// `ignore` names one index in `placed` that is not an obstacle to itself —
+/// the unit being relocated, when this runs as the tick's overlap repair.
 fn nearest_legal_free_center(
     static_nav: &StaticNav,
     placed: &[[f32; 2]],
+    ignore: Option<usize>,
     preferred: [f32; 2],
 ) -> Option<[f32; 2]> {
     let width = static_nav.width();
@@ -195,7 +312,11 @@ fn nearest_legal_free_center(
                 continue;
             }
             let p = [x as f32 + 0.5, y as f32 + 0.5];
-            if placed.iter().any(|&q| dist2(p, q) < diam2) {
+            if placed
+                .iter()
+                .enumerate()
+                .any(|(j, &q)| Some(j) != ignore && dist2(p, q) < diam2)
+            {
                 continue;
             }
             let d = dist2(p, preferred);
@@ -274,7 +395,7 @@ impl RtsWorld {
         let mut placed: Vec<[f32; 2]> = Vec::with_capacity(scenario.spawn_cells().len());
         for c in scenario.spawn_cells() {
             let preferred = [c.x as f32 + 0.5, c.y as f32 + 0.5];
-            let pos = nearest_legal_free_center(&static_nav, &placed, preferred)
+            let pos = nearest_legal_free_center(&static_nav, &placed, None, preferred)
                 .ok_or(RtsWorldError::NoFreeUnitPosition)?;
             entities
                 .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)
@@ -323,6 +444,10 @@ impl RtsWorld {
             nav,
             orders: OrderTable::new(),
             live_scratch: Vec::with_capacity(MAX_ENTITIES),
+            unit_scratch: Vec::with_capacity(MAX_ENTITIES),
+            candidate_pos: Vec::with_capacity(MAX_ENTITIES),
+            pushed: Vec::with_capacity(MAX_ENTITIES),
+            last_tick_error: None,
             selection: Selection::new(),
             pick_scratch: Vec::with_capacity(MAX_ENTITIES),
             placement: Placement::None,
@@ -342,8 +467,36 @@ impl RtsWorld {
         &self.entities
     }
 
+    /// Direct entity-store mutation. A test hook: hard unit collision makes a
+    /// raw position or spawn a world invariant, so shipping code routes
+    /// through [`RtsWorld`]'s own systems instead.
+    #[cfg(feature = "testkit")]
     pub fn entities_mut(&mut self) -> &mut EntityStore {
         &mut self.entities
+    }
+
+    /// Test-only: place a live entity anywhere, **including on top of another
+    /// body**.
+    ///
+    /// The one supported way to construct a penetrating world state. Nothing
+    /// in the game can produce one; the next tick's repair pass
+    /// ([`Self::last_tick_error`]) is what must clear it, and this hook is how
+    /// that pass is exercised. `false` for a stale id.
+    #[cfg(feature = "testkit")]
+    pub fn force_position_for_test(&mut self, id: EntityId, pos: [f32; 2]) -> bool {
+        let Some(slot) = self.entities.slot(id) else {
+            return false;
+        };
+        self.entities.set_position(slot, pos);
+        true
+    }
+
+    /// What went wrong in the most recent [`Self::tick`], if anything.
+    ///
+    /// Only ever `Some` after a tick that began with merged unit bodies the
+    /// grid had no free legal centre to repair — see [`TickError`].
+    pub fn last_tick_error(&self) -> Option<TickError> {
+        self.last_tick_error
     }
 
     /// Direct resource-stock mutation. A test hook: phase 1 has no order
@@ -1388,164 +1541,571 @@ impl RtsWorld {
     }
 
     /// System 6: walk every unit under a `Move` order, or a `Gather` order
-    /// mid-transit (`ToNode` or `Returning`), one step down its field.
+    /// mid-transit (`ToNode` or `Returning`), one step down its field —
+    /// **without ever merging two unit bodies**.
+    ///
+    /// Three phases, in this order:
+    ///
+    /// 1. collect every live unit's slot and body position
+    ///    ([`Self::collect_unit_bodies`]);
+    /// 2. repair any penetration the world was handed
+    ///    ([`Self::repair_body_overlaps`]) — nothing in the game can produce
+    ///    one, only [`Self::force_position_for_test`] and a raw store
+    ///    mutation can;
+    /// 3. propose and commit one candidate step per unit, sequentially, in an
+    ///    order rotated by the tick index.
+    ///
+    /// **Why sequential, and why that is a proof.** Phase 3 accepts a
+    /// candidate only when its whole swept segment clears every *other*
+    /// unit's current body — final position for a unit already processed this
+    /// tick, last tick's position for one not yet processed. So by induction
+    /// on the traversal: the set of committed bodies starts non-overlapping
+    /// (phase 2 guarantees it), and each accepted candidate is non-overlapping
+    /// against every member of that set at the moment it joins it, including
+    /// the ones that will move later — because they have not moved yet and
+    /// their own candidates will in turn be tested against this one. A
+    /// rejected candidate simply does not move, which cannot create an
+    /// overlap either.
+    ///
+    /// The one mutation that touches a body other than the mover's is
+    /// [`Self::try_push_chain`], and it preserves the same induction: it
+    /// commits nothing unless the displaced body's own new position is clear
+    /// of the mover's candidate and of every other body (swept, so it cannot
+    /// tunnel), which is exactly the property the step above assumes of the
+    /// set it joins. Therefore no completed tick leaves two bodies merged.
+    ///
+    /// The traversal start rotates by `tick_index % unit_count` so that
+    /// contention is not settled by slot number forever: a unit queued behind
+    /// another gets the first proposal on its share of ticks instead of being
+    /// starved by a lower-slot neighbour. The rotation is derived from the
+    /// tick counter, which the state hash already covers, so it adds no cursor
+    /// state a replay would have to carry.
     ///
     /// The step obeys the same admissibility rule the horde walk obeys
     /// ([`super::orders::step_admissible`]), so a unit can never be placed in a
     /// walkable-but-unreachable pocket it could not then leave.
     ///
     /// Every order re-checks that the field it cached is still the field it
-    /// asked for, and re-acquires when it is not — see step 2 below.
+    /// asked for, and re-acquires when it is not — see step 2 in
+    /// [`Self::step_one_unit`].
     fn movement(&mut self) {
+        self.collect_unit_bodies();
+        self.repair_body_overlaps();
+        if self.last_tick_error.is_some() {
+            // The world was handed a penetration nothing could repair. Moving
+            // anyone now would build on an illegal state; hold last tick's
+            // positions and let the caller see `last_tick_error`.
+            return;
+        }
+        let n = self.unit_scratch.len();
+        if n == 0 {
+            return;
+        }
+        let start = (self.tick_index % n as u64) as usize;
+        for k in 0..n {
+            self.step_one_unit((start + k) % n);
+        }
+    }
+
+    /// Phase 1: every live unit slot, ascending, with its current body
+    /// position, into the two buffers reserved at load.
+    ///
+    /// Scanned straight off the store rather than off `live_scratch`, because
+    /// a unit produced earlier *this* tick is appended to `live_scratch` at
+    /// whatever free slot it reused — which need not be ascending, and the
+    /// traversal rotation must be over a stable, ascending order.
+    fn collect_unit_bodies(&mut self) {
+        self.unit_scratch.clear();
+        self.candidate_pos.clear();
+        self.pushed.clear();
+        for slot in 0..self.entities.slot_count() {
+            if !self.entities.alive(slot) {
+                continue;
+            }
+            if !matches!(self.entities.kind(slot), EntityKind::Unit(_)) {
+                continue;
+            }
+            self.unit_scratch.push(slot);
+            self.candidate_pos.push(self.entities.position(slot));
+            self.pushed.push(false);
+        }
+    }
+
+    /// Phase 2: move any unit that starts the tick merged into another body to
+    /// the nearest legal free cell centre, in the same rotated order phase 3
+    /// walks.
+    ///
+    /// Only an explicitly invalid state reaches this: every in-game path that
+    /// places a unit (seeding, movement, the push off a finished building)
+    /// already respects bodies, so in a normal run this is a bounded scan that
+    /// finds nothing. When one *is* found, the first penetrating unit in the
+    /// rotated order is the one relocated — its partner is then no longer
+    /// penetrating and is left alone, so a pair costs one relocation, not two.
+    ///
+    /// A unit with nowhere legal to go stashes [`TickError::UnrepairableOverlap`]
+    /// rather than letting the tick complete with a merged pair unreported.
+    fn repair_body_overlaps(&mut self) {
+        self.last_tick_error = None;
+        let n = self.unit_scratch.len();
+        if n < 2 {
+            return;
+        }
+        let start = (self.tick_index % n as u64) as usize;
+        for k in 0..n {
+            let i = (start + k) % n;
+            if !self.body_penetrates_any(i) {
+                continue;
+            }
+            let preferred = self.candidate_pos[i];
+            match nearest_legal_free_center(
+                &self.static_nav,
+                &self.candidate_pos,
+                Some(i),
+                preferred,
+            ) {
+                Some(p) => {
+                    self.entities.set_position(self.unit_scratch[i], p);
+                    self.candidate_pos[i] = p;
+                }
+                None => self.last_tick_error = Some(TickError::UnrepairableOverlap),
+            }
+        }
+    }
+
+    /// Whether unit `i`'s current body penetrates any other unit's.
+    fn body_penetrates_any(&self, i: usize) -> bool {
+        let r = self.body_radius(i);
+        self.candidate_pos.iter().enumerate().any(|(j, &q)| {
+            j != i && units_overlap(self.candidate_pos[i], r, q, self.body_radius(j))
+        })
+    }
+
+    /// What the swept segment `from -> to` of unit `i`'s body runs into.
+    ///
+    /// Unit `i` is skipped against itself; every other unit counts, whatever
+    /// its owner, kind or order — an idle, mining or site-attending unit is a
+    /// body exactly like a walking one.
+    fn body_sweep_hit(&self, i: usize, from: [f32; 2], to: [f32; 2]) -> BodySweep {
+        let r = self.body_radius(i);
+        let mut hit = [0usize; MAX_PUSHED_BODIES];
+        let mut count = 0usize;
+        for (j, &q) in self.candidate_pos.iter().enumerate() {
+            if j == i || !moving_circle_hits_point(from, to, r, q, self.body_radius(j)) {
+                continue;
+            }
+            if count == MAX_PUSHED_BODIES {
+                return BodySweep::TooMany;
+            }
+            hit[count] = j;
+            count += 1;
+        }
+        if count == 0 {
+            BodySweep::Clear
+        } else {
+            BodySweep::Bodies { hit, count }
+        }
+    }
+
+    /// Where `body` lands when a pusher of `pusher_radius` centred at
+    /// `pusher_at` shoves it out of its own space: along the contact normal,
+    /// far enough to clear contact by one `step`.
+    ///
+    /// `None` when there is no usable normal — concentric bodies have none,
+    /// and a body the pusher's *sweep* clipped in passing (already clear of
+    /// the pusher's end position) has none worth trusting either.
+    ///
+    /// The extra `step` is what keeps the displaced body clear of contact by a
+    /// whole step rather than balanced exactly on it, so the legality checks
+    /// resolve without an epsilon anywhere in the collision rule itself.
+    fn push_target(
+        &self,
+        pusher_at: [f32; 2],
+        pusher_radius: f32,
+        body: usize,
+        step: f32,
+    ) -> Option<[f32; 2]> {
+        let q = self.candidate_pos[body];
+        let dx = q[0] - pusher_at[0];
+        let dy = q[1] - pusher_at[1];
+        let d2 = dx * dx + dy * dy;
+        if d2 <= 0.0 {
+            return None;
+        }
+        let d = d2.sqrt();
+        let depth = (pusher_radius + self.body_radius(body)) - d;
+        if depth <= 0.0 {
+            return None;
+        }
+        let push = depth + step;
+        Some([q[0] + dx / d * push, q[1] + dy / d * push])
+    }
+
+    /// Whether a displaced body may legally travel `from -> to`: inside the
+    /// map and clear of static geometry along the whole swept segment, and
+    /// admissible by the same rule a walk obeys — a shove must not park a body
+    /// in a pocket it could never walk out of.
+    fn displacement_is_legal_statically(&self, from: [f32; 2], to: [f32; 2], radius: f32) -> bool {
+        if !self.static_nav.sweep_clear(from, to, radius) {
+            return false;
+        }
         let width = self.scenario.width();
         let height = self.scenario.height();
-        for i in 0..self.live_scratch.len() {
-            let slot = self.live_scratch[i];
-            let EntityKind::Unit(kind) = self.entities.kind(slot) else {
-                continue;
-            };
-            let order = self.orders.get(slot);
-            let (dest, field) = match order {
-                Order::Move { dest, field } => (dest, field),
-                Order::Gather {
-                    node,
-                    phase: GatherPhase::ToNode { field },
-                } => {
-                    if self.entities.slot(node).is_none() {
-                        continue;
-                    }
-                    let (cell, _) =
-                        entity_approach_cell(&self.static_nav, &self.entities, node, kind);
-                    (cell, field)
-                }
-                Order::Gather {
-                    phase: GatherPhase::Returning { drop_off, field },
-                    ..
-                } => {
-                    if self.entities.slot(drop_off).is_none() {
-                        continue;
-                    }
-                    let (cell, _) =
-                        entity_approach_cell(&self.static_nav, &self.entities, drop_off, kind);
-                    (cell, field)
-                }
-                Order::Build { site, field } => {
-                    let Some(site_slot) = self.entities.slot(site) else {
-                        continue;
-                    };
-                    let EntityKind::Building(b) = self.entities.kind(site_slot) else {
-                        continue;
-                    };
-                    let (approach_cell, cell_dist) =
-                        entity_approach_cell(&self.static_nav, &self.entities, site, kind);
-                    // A worker that has reached the site stops and attends it;
-                    // it does not clear the order, since the construction
-                    // system — not the mover — decides when a `Build` order ends.
-                    if rect_distance(
-                        self.entities.position(slot),
-                        self.entities.position(site_slot),
-                        b.footprint_cells(),
-                    ) <= adaptive_reach(kind, cell_dist)
-                    {
-                        continue;
-                    }
-                    (approach_cell, field)
-                }
-                // Idle, and Mining (a mining worker stands still).
-                _ => continue,
-            };
-            let is_move_order = matches!(order, Order::Move { .. });
-
-            let p = self.entities.position(slot);
-            // 1. Arrival, against the destination cell centre: a group is sent
-            //    to one cell and only one of them can stand on it.
-            //
-            //    Only `Order::Move` stops here. A gathering or building worker's
-            //    real completion condition is a *reach* test against a
-            //    footprint rectangle (the gather system's drop-off check, or the
-            //    `Order::Build` guard above), not proximity to the approach
-            //    cell's own centre — and since T10 an approach cell sits just
-            //    outside that footprint, `ARRIVAL_RADIUS_CELLS` alone can no
-            //    longer be trusted to fall inside the reach threshold. Freezing
-            //    such an order here, before its own reach test is satisfied,
-            //    would strand the unit short of the building it was sent to.
-            let dx = p[0] - (dest.x as f32 + 0.5);
-            let dy = p[1] - (dest.y as f32 + 0.5);
-            if is_move_order && dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
-                self.orders.clear(slot);
-                continue;
-            }
-
-            // 2. Re-path if the cached field is no longer the field this order
-            //    asked for.
-            //
-            //    A slot is rebuilt for someone else's destination on an LRU
-            //    miss, and a building finishing drops every key, so the handle
-            //    an order cached may now name a field to somewhere else — or
-            //    the same place across a wall that did not exist when it was
-            //    built. Riding one is how a unit walks into a building that
-            //    went up ten seconds ago, and how an order that is not
-            //    `Order::Move` (which at least stops) hangs forever.
-            let field = if self.nav.is_current(field, dest) {
-                field
-            } else {
-                match self.nav.acquire(dest) {
-                    Ok(fresh) => {
-                        self.orders.set(slot, order.with_field(fresh));
-                        fresh
-                    }
-                    // No field can be built to `dest` any more — it is off the
-                    // grid or has been built over. Stop, rather than keep an
-                    // order alive that nothing can finish.
-                    Err(_) => {
-                        self.orders.clear(slot);
-                        continue;
-                    }
-                }
-            };
-
-            // 3. Sample the field at the unit's own cell.
-            let cx = p[0].floor() as i32;
-            let cy = p[1].floor() as i32;
-            if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
-                continue;
-            }
-            let (vx, vy) = self.nav.field(field.slot).vector_at(cx as u32, cy as u32);
-            if vx == 0.0 && vy == 0.0 {
-                // A zero vector means one of two things: this cell is the
-                // field's own sink (cost 0 — the unit already stands on `dest`
-                // itself, which an approach cell close to its adaptive reach
-                // can leave the unit sitting on exactly), or `dest` is
-                // genuinely unreachable from here (cost never resolved).
-                // `FieldPool::reachable` is the one source of truth for which:
-                // only the second case is a dead order. The first is not a
-                // failure to stop on — the reach tests above (the gather
-                // system's, and the `Order::Build` guard above) own completion
-                // and will see it next tick from wherever this cell leaves the
-                // unit.
-                if !self.nav.reachable(
-                    field.slot as usize,
-                    Cell {
-                        x: cx as u32,
-                        y: cy as u32,
-                    },
-                ) {
-                    self.orders.clear(slot);
-                }
-                continue;
-            }
-
-            // 4. Step, with the horde's admissibility rule.
-            let step = unit_speed(kind) * TICK_DT;
-            let nx = p[0] + vx * step;
-            let ny = p[1] + vy * step;
-            if step_admissible(cx, cy, nx, ny, width, height, self.nav.blocked()) {
-                self.entities.set_position(slot, [nx, ny]);
-            }
-            self.entities.set_dir(slot, dir_from_vector(vx, vy));
-            let f = (self.entities.frame(slot) + 1) % 4;
-            self.entities.set_frame(slot, f);
+        let cx = from[0].floor() as i32;
+        let cy = from[1].floor() as i32;
+        if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
+            return false;
         }
+        step_admissible(cx, cy, to[0], to[1], width, height, self.nav.blocked())
+    }
+
+    /// Try to shove the bodies mover `i`'s candidate touches out of its way,
+    /// each along its own contact normal, propagating to the bodies *they*
+    /// would land on.
+    ///
+    /// This is the one deliberate deviation from "a rejected candidate simply
+    /// stands still": without it, a unit whose field descent points at a
+    /// stationary neighbour is frozen for good — flow fields are body-blind,
+    /// so nothing would ever re-route it — and the tracked scene's workers,
+    /// seeded in a row exactly one body diameter apart, could never leave
+    /// their own cluster to gather or build. Genre-standard behaviour, and an
+    /// amendment to `docs/ADR/017`, which records why it is not the bounded
+    /// relaxation that ADR rejects.
+    ///
+    /// The rules that keep it from becoming soft collision:
+    /// - **Bounded, and iterative.** At most [`MAX_PUSHED_BODIES`] bodies move
+    ///   in total, no further than [`MAX_PUSH_DEPTH`] links from the mover,
+    ///   and each body moves at most once per tick ([`Self::pushed`]). A
+    ///   worklist, never recursion, so the cost of a step has a hard ceiling.
+    /// - **Whole-or-nothing, over the entire chain.** Every displaced body
+    ///   must end fully legal: inside the map, clear of static geometry along
+    ///   its own swept segment, admissible, non-overlapping with the mover's
+    ///   candidate, with every body that is *not* displaced (swept, so a shove
+    ///   cannot tunnel one body through a third), and with every other
+    ///   displaced body's final position. One illegal link rejects the mover's
+    ///   candidate whole and nothing moves at all.
+    /// - **State is untouched.** Only positions move; order, cargo, facing and
+    ///   animation stay exactly as they were.
+    ///
+    /// A displacement is under one cell long, so two bodies displaced by the
+    /// same step cannot have swapped sides on the way to the final positions
+    /// that are checked against each other — passing through would take a
+    /// relative displacement of a whole body diameter.
+    fn try_push_chain(
+        &mut self,
+        i: usize,
+        hit: [usize; MAX_PUSHED_BODIES],
+        count: usize,
+        candidate: [f32; 2],
+        step: f32,
+    ) -> bool {
+        let ri = self.body_radius(i);
+        let mut moved = [Displacement::NONE; MAX_PUSHED_BODIES];
+        let mut n_moved = 0usize;
+
+        // Depth 1: the bodies the mover's own swept candidate touches.
+        for &j in &hit[..count] {
+            if self.pushed[j] || n_moved == MAX_PUSHED_BODIES {
+                return false;
+            }
+            let Some(to) = self.push_target(candidate, ri, j, step) else {
+                return false;
+            };
+            moved[n_moved] = Displacement {
+                body: j,
+                to,
+                depth: 1,
+            };
+            n_moved += 1;
+        }
+
+        // Depths 2..=MAX_PUSH_DEPTH: whatever each displacement runs into.
+        let mut head = 0usize;
+        while head < n_moved {
+            let d = moved[head];
+            head += 1;
+            let from = self.candidate_pos[d.body];
+            let r = self.body_radius(d.body);
+            if !self.displacement_is_legal_statically(from, d.to, r) {
+                return false;
+            }
+            // The mover is never displaced by its own push.
+            if units_overlap(candidate, ri, d.to, r) {
+                return false;
+            }
+            for k in 0..self.candidate_pos.len() {
+                if k == i
+                    || k == d.body
+                    || moved[..n_moved].iter().any(|m| m.body == k)
+                    || !moving_circle_hits_point(
+                        from,
+                        d.to,
+                        r,
+                        self.candidate_pos[k],
+                        self.body_radius(k),
+                    )
+                {
+                    continue;
+                }
+                if d.depth >= MAX_PUSH_DEPTH || self.pushed[k] || n_moved == MAX_PUSHED_BODIES {
+                    return false;
+                }
+                let Some(to) = self.push_target(d.to, r, k, step) else {
+                    return false;
+                };
+                moved[n_moved] = Displacement {
+                    body: k,
+                    to,
+                    depth: d.depth + 1,
+                };
+                n_moved += 1;
+            }
+        }
+
+        // Every displaced body against every other displaced body, at their
+        // final positions.
+        for a in 0..n_moved {
+            for b in (a + 1)..n_moved {
+                if units_overlap(
+                    moved[a].to,
+                    self.body_radius(moved[a].body),
+                    moved[b].to,
+                    self.body_radius(moved[b].body),
+                ) {
+                    return false;
+                }
+            }
+        }
+
+        for m in &moved[..n_moved] {
+            self.entities.set_position(self.unit_scratch[m.body], m.to);
+            self.candidate_pos[m.body] = m.to;
+            self.pushed[m.body] = true;
+        }
+        true
+    }
+
+    /// Body radius of the unit at index `i` of [`Self::unit_scratch`].
+    fn body_radius(&self, i: usize) -> f32 {
+        match self.entities.kind(self.unit_scratch[i]) {
+            EntityKind::Unit(k) => k.body_radius_cells(),
+            // `unit_scratch` holds unit slots only.
+            _ => unreachable!("unit_scratch holds units"),
+        }
+    }
+
+    /// Try one candidate step for unit `i`: every gate, then commit.
+    ///
+    /// `true` when the candidate (and any push chain it needed) was committed,
+    /// `false` when it was rejected — in which case **nothing** has been
+    /// mutated, which is what makes trying several candidates in a row safe.
+    #[allow(clippy::too_many_arguments)]
+    fn try_commit_step(
+        &mut self,
+        i: usize,
+        slot: usize,
+        from: [f32; 2],
+        candidate: [f32; 2],
+        radius: f32,
+        cx: i32,
+        cy: i32,
+        step: f32,
+    ) -> bool {
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+        if !step_admissible(
+            cx,
+            cy,
+            candidate[0],
+            candidate[1],
+            width,
+            height,
+            self.nav.blocked(),
+        ) || !self.static_nav.sweep_clear(from, candidate, radius)
+        {
+            return false;
+        }
+        let clear = match self.body_sweep_hit(i, from, candidate) {
+            BodySweep::Clear => true,
+            BodySweep::Bodies { hit, count } => self.try_push_chain(i, hit, count, candidate, step),
+            // A whole crowd at once is not a step. The mover waits.
+            BodySweep::TooMany => false,
+        };
+        if clear {
+            self.entities.set_position(slot, candidate);
+            self.candidate_pos[i] = candidate;
+        }
+        clear
+    }
+
+    /// Phase 3, for one unit: propose this tick's step and commit it only if
+    /// the whole swept body clears the static world, and every other body is
+    /// either clear of it or can legally be shoved aside.
+    fn step_one_unit(&mut self, i: usize) {
+        let width = self.scenario.width();
+        let height = self.scenario.height();
+        let slot = self.unit_scratch[i];
+        let EntityKind::Unit(kind) = self.entities.kind(slot) else {
+            return;
+        };
+        let order = self.orders.get(slot);
+        let (dest, field) = match order {
+            Order::Move { dest, field } => (dest, field),
+            Order::Gather {
+                node,
+                phase: GatherPhase::ToNode { field },
+            } => {
+                if self.entities.slot(node).is_none() {
+                    return;
+                }
+                let (cell, _) = entity_approach_cell(&self.static_nav, &self.entities, node, kind);
+                (cell, field)
+            }
+            Order::Gather {
+                phase: GatherPhase::Returning { drop_off, field },
+                ..
+            } => {
+                if self.entities.slot(drop_off).is_none() {
+                    return;
+                }
+                let (cell, _) =
+                    entity_approach_cell(&self.static_nav, &self.entities, drop_off, kind);
+                (cell, field)
+            }
+            Order::Build { site, field } => {
+                let Some(site_slot) = self.entities.slot(site) else {
+                    return;
+                };
+                let EntityKind::Building(b) = self.entities.kind(site_slot) else {
+                    return;
+                };
+                let (approach_cell, cell_dist) =
+                    entity_approach_cell(&self.static_nav, &self.entities, site, kind);
+                // A worker that has reached the site stops and attends it;
+                // it does not clear the order, since the construction
+                // system — not the mover — decides when a `Build` order ends.
+                if rect_distance(
+                    self.entities.position(slot),
+                    self.entities.position(site_slot),
+                    b.footprint_cells(),
+                ) <= adaptive_reach(kind, cell_dist)
+                {
+                    return;
+                }
+                (approach_cell, field)
+            }
+            // Idle, and Mining (a mining worker stands still).
+            _ => return,
+        };
+        let is_move_order = matches!(order, Order::Move { .. });
+
+        let p = self.entities.position(slot);
+        // 1. Arrival, against the destination cell centre: a group is sent
+        //    to one cell and only one of them can stand on it.
+        //
+        //    Only `Order::Move` stops here. A gathering or building worker's
+        //    real completion condition is a *reach* test against a
+        //    footprint rectangle (the gather system's drop-off check, or the
+        //    `Order::Build` guard above), not proximity to the approach
+        //    cell's own centre — and since T10 an approach cell sits just
+        //    outside that footprint, `ARRIVAL_RADIUS_CELLS` alone can no
+        //    longer be trusted to fall inside the reach threshold. Freezing
+        //    such an order here, before its own reach test is satisfied,
+        //    would strand the unit short of the building it was sent to.
+        let dx = p[0] - (dest.x as f32 + 0.5);
+        let dy = p[1] - (dest.y as f32 + 0.5);
+        if is_move_order && dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
+            self.orders.clear(slot);
+            return;
+        }
+
+        // 2. Re-path if the cached field is no longer the field this order
+        //    asked for.
+        //
+        //    A slot is rebuilt for someone else's destination on an LRU
+        //    miss, and a building finishing drops every key, so the handle
+        //    an order cached may now name a field to somewhere else — or
+        //    the same place across a wall that did not exist when it was
+        //    built. Riding one is how a unit walks into a building that
+        //    went up ten seconds ago, and how an order that is not
+        //    `Order::Move` (which at least stops) hangs forever.
+        let field = if self.nav.is_current(field, dest) {
+            field
+        } else {
+            match self.nav.acquire(dest) {
+                Ok(fresh) => {
+                    self.orders.set(slot, order.with_field(fresh));
+                    fresh
+                }
+                // No field can be built to `dest` any more — it is off the
+                // grid or has been built over. Stop, rather than keep an
+                // order alive that nothing can finish.
+                Err(_) => {
+                    self.orders.clear(slot);
+                    return;
+                }
+            }
+        };
+
+        // 3. Sample the field at the unit's own cell.
+        let cx = p[0].floor() as i32;
+        let cy = p[1].floor() as i32;
+        if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
+            return;
+        }
+        let (vx, vy) = self.nav.field(field.slot).vector_at(cx as u32, cy as u32);
+        if vx == 0.0 && vy == 0.0 {
+            // A zero vector means one of two things: this cell is the
+            // field's own sink (cost 0 — the unit already stands on `dest`
+            // itself, which an approach cell close to its adaptive reach
+            // can leave the unit sitting on exactly), or `dest` is
+            // genuinely unreachable from here (cost never resolved).
+            // `FieldPool::reachable` is the one source of truth for which:
+            // only the second case is a dead order. The first is not a
+            // failure to stop on — the reach tests above (the gather
+            // system's, and the `Order::Build` guard above) own completion
+            // and will see it next tick from wherever this cell leaves the
+            // unit.
+            if !self.nav.reachable(
+                field.slot as usize,
+                Cell {
+                    x: cx as u32,
+                    y: cy as u32,
+                },
+            ) {
+                self.orders.clear(slot);
+            }
+            return;
+        }
+
+        // 4. Propose the step, with the horde's admissibility rule...
+        let step = unit_speed(kind) * TICK_DT;
+        let body = kind.body_radius_cells();
+        // 5. ...and commit it whole, or not at all. A candidate must clear the
+        //    admissibility rule (no corner cut into an unreachable pocket),
+        //    then the static world along its whole swept segment, then every
+        //    other unit body along that same segment. Sweeps, not endpoints:
+        //    at 30 cells/s a body covers half a cell per tick, and an endpoint
+        //    test would let a future faster unit step straight over a body.
+        //    There is no partial step: a candidate is taken whole or not at
+        //    all, and a unit with no legal candidate stands still and
+        //    re-proposes next tick.
+        //
+        //    Two things stop that from meaning "frozen for good", because a
+        //    pooled field is body-blind and will never re-route around a unit:
+        //    the mover may shove bodies out of the way
+        //    ([`Self::try_push_chain`]), and, only when that fails, it may try
+        //    the deflected headings in [`MOVE_DEFLECTIONS`].
+        for (c, sn) in MOVE_DEFLECTIONS {
+            let dx = vx * c - vy * sn;
+            let dy = vx * sn + vy * c;
+            let candidate = [p[0] + dx * step, p[1] + dy * step];
+            if self.try_commit_step(i, slot, p, candidate, body, cx, cy, step) {
+                break;
+            }
+        }
+        self.entities.set_dir(slot, dir_from_vector(vx, vy));
+        let f = (self.entities.frame(slot) + 1) % 4;
+        self.entities.set_frame(slot, f);
     }
 
     /// Exact same-host state digest.

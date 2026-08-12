@@ -889,3 +889,69 @@ fn cold_field_acquire_allocates_nothing() {
         "the destination must have been legal, or this measured nothing"
     );
 }
+
+/// T4: hard unit collision keeps the movement sweep allocation-free.
+///
+/// Every worker on the scene is sent to one destination cell, so the whole
+/// group contends for the same space for the entire measured window: bodies
+/// are collected, candidates are swept against every other body, and rejected
+/// candidates are re-proposed tick after tick. All of that runs out of the
+/// `unit_scratch` / `candidate_pos` buffers `RtsWorld` reserves at load.
+///
+/// The pool is warmed *outside* the scope for the same reason
+/// `movement_allocates_nothing` warms it: a flow-field miss rebuilds into
+/// reused scratch and is the single bounded exception.
+#[test]
+fn hard_collision_tick_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    let dest = Cell { x: 170, y: 190 };
+    assert_eq!(h.world_mut().order_move_group(&workers, dest), 6);
+    // Warm-up outside the scope: the acquire above is the miss that builds the
+    // field and settles the scratch heap.
+    h.step_exact(2);
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(600);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "the contended hard-collision movement sweep allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and the run really did contend: every worker was sent to one cell,
+    // and bodies that size cannot all stand on it.
+    let positions: Vec<[f32; 2]> = workers
+        .iter()
+        .map(|&id| {
+            let slot = h.world().entities().slot(id).expect("live worker");
+            h.world().entities().position(slot)
+        })
+        .collect();
+    let mut close = 0;
+    for (i, a) in positions.iter().enumerate() {
+        for b in &positions[i + 1..] {
+            let dx = a[0] - b[0];
+            let dy = a[1] - b[1];
+            let d2 = dx * dx + dy * dy;
+            assert!(
+                d2 >= 36.0 - 1e-2,
+                "two measured bodies merged: {a:?} and {b:?}"
+            );
+            if d2 < 100.0 {
+                close += 1;
+            }
+        }
+    }
+    assert!(
+        close > 0,
+        "the measured ticks never brought two bodies into contention"
+    );
+}

@@ -104,3 +104,32 @@ Raw store mutation becomes crate-private/testkit-only.
 ## Validation contract
 
 Planned tests prove exact contact, head-on/crossing no penetration, all owners/idle bodies, static sweep, edge/corridor rules, one field/group, distinct deterministic slots, fair choke progress, blocked production/completion wait, reproducible hashes, zero per-frame alloc, no `sim/` diff.
+
+## Amendment (T4 implementation)
+
+Implemented literally — candidate accepted whole or the mover stands still —
+this froze the game: a pooled flow field is body-blind, so a unit whose descent
+points at a stationary body is stuck for good, and the tracked scene seeds
+three workers in a row exactly one body diameter apart. 26 tests, including the
+merge-gate acceptance run, showed it. Three bounded mechanisms were added on
+top of the rotated sequential proposal/commit above:
+
+1. **Push-aside.** A mover displaces the bodies its candidate touches, along
+   their contact normals.
+2. **Bounded push chain.** A displaced body may in turn displace what it would
+   land on, to `MAX_PUSH_DEPTH = 3` links and `MAX_PUSHED_BODIES = 8` bodies,
+   iteratively — never recursively. Each body moves at most once per tick.
+3. **Deflection fallback.** Only after a push chain is rejected, the mover
+   tries its descent rotated `-45°, +45°, -90°, +90°` (fixed order, first legal
+   wins). Needed because a body pinned against a building's static clearance
+   cannot legally be shoved in any direction.
+
+This narrows, but does not reverse, the "iterative push" entry under
+**Rejected** above: what is rejected there is *relaxation* — pushing bodies
+apart in bounded passes and hoping the result is separated. Nothing here
+relaxes. A push is committed only when every displaced body's final position is
+already proven legal against the static world, the mover's candidate, every
+non-displaced body and every other displaced body; one illegal link rejects the
+mover's whole step and nothing moves. The invariant, its induction and the
+no-epsilon rule are unchanged: no completed tick leaves two RTS unit bodies
+merged.

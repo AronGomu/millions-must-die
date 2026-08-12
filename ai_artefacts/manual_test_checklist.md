@@ -26,5 +26,17 @@
 - [ ] Right-click a resource node with a worker selected and watch the whole round trip: confirm the worker visibly stops walking *before* reaching the node's own tile (it mines from just outside the node, never standing on top of it) and the same holds on the return leg at the HQ.
 - [ ] Order a worker to walk close past a cluster of terrain obstacles and confirm it visibly keeps a small clearance gap from each obstacle's edge, rather than grazing or clipping through the corner of one.
 - [ ] Place a Depot or Barracks next to existing terrain and confirm the ghost still only rejects placement for genuinely overlapping/blocked footprints — a legal, terrain-clear spot right up against an obstacle should still be placeable (placement validity is intentionally *not* widened by the new body-clearance rule).
-- [ ] Queue and produce a Worker and a Soldier from the HQ/Barracks and confirm each newly spawned unit appears standing just outside the producing building's footprint, not overlapping it or another unit.
+- [ ] Queue and produce a Worker and a Soldier from the HQ/Barracks and confirm each newly spawned unit appears standing just outside the producing building's footprint, not overlapping it (since T4, a unit that would appear on top of another is moved clear on the next tick rather than left merged).
 - [ ] Run the full tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) in a window and confirm it still completes the whole select → gather (crystal and gas) → build Depot → produce Worker → build Barracks → produce Soldier → pan-camera flow visibly, ending in a clean quit.
+
+## T4 hard-unit-collision
+
+- [ ] Launch `cargo run -- rts`, select all six starting workers and send them to one distant point: confirm they arrive as a loose cluster with visible gaps and that **no two unit sprites ever overlap or pass through each other** at any point of the walk.
+- [ ] Send two workers at each other head-on across open ground: confirm they meet and stop a body's width apart instead of merging, and neither one is left jittering on the spot.
+- [ ] Send one worker straight through a standing (idle) worker: confirm the standing worker is visibly *shoved aside* along the line between them and the mover continues, rather than the mover walking through it or freezing in front of it.
+- [ ] Line three idle workers up in a row and walk a fourth into the back of the line: confirm the whole row shuffles forward together, and that nobody is pushed into a building, a resource node or terrain.
+- [ ] Park a worker tight against a building's edge, then send another worker past it on that side: confirm the passing worker steers around it instead of stopping dead (it may take a slightly curved path).
+- [ ] Send five workers to gather from one crystal node: confirm they take turns at the node — some mine while the rest wait clear of them — and that crystal keeps being delivered rather than the group deadlocking.
+- [ ] Produce several units in a row from the HQ with workers standing right outside it: confirm each new unit appears clear of the others and the crowd sorts itself out instead of stacking on one spot.
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole gather → build Depot → produce Worker → build Barracks → produce Soldier flow still completes visibly, with no unit ever drawn on top of another.
+- [ ] Watch a busy base for a minute or two and confirm no unit is ever left permanently stuck against another unit with its order still active.
