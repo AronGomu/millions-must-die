@@ -57,6 +57,28 @@ pub trait WindowOps {
     fn set_mouse_grab(&mut self, grabbed: bool) -> Result<(), String>;
 }
 
+/// The GPU-claim half of a **live** window-mode change.
+///
+/// [`transition_window_mode`] states its own precondition: a caller that has
+/// the window GPU-claimed releases the claim, transitions, then reclaims. A
+/// mode change tears down the window's presentation surface, so a swapchain
+/// built for the old one is lost and the next present fails — which, on the
+/// interactive path, is a `present_error` and exit 1 in the middle of a
+/// session. The transition also changes the window's size, so the aspect-fit
+/// [`DisplayViewport`] computed for the old shape is stale until recomputed.
+///
+/// This trait is the seam both halves go through, so the whole sequence is
+/// unit-testable against a fake instead of needing a real display.
+pub trait ClaimedWindow: WindowOps {
+    /// Release this window from the GPU device, tearing down its swapchain.
+    /// Infallible, exactly like `GpuContext::release_window`.
+    fn release_claim(&mut self);
+    /// Re-claim it, rebuilding the swapchain for the window's new shape.
+    fn reclaim(&mut self) -> Result<(), String>;
+    /// The aspect-fit viewport for the window's **current** size.
+    fn viewport(&self) -> Result<DisplayViewport, String>;
+}
+
 /// Live per-frame window shape/lifecycle state [`crate::rts_run::run`]
 /// tracks across the event loop.
 ///

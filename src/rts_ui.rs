@@ -21,7 +21,8 @@ use mmd_engine::rts::{
 use crate::rts_feedback::{AudioEvent, AudioSink, UiCue, effective_gains};
 use crate::rts_run::RtsSession;
 use crate::rts_settings::{RtsSettings, SettingsStore, WindowMode};
-use crate::rts_window::{self, ModeChangeOutcome, WindowOps};
+use crate::rts_window::{self, ClaimedWindow, ModeChangeOutcome, WindowOps};
+use mmd_engine::render::DisplayViewport;
 
 /// Which side of the input boundary a pointer gesture belongs to.
 ///
@@ -443,6 +444,64 @@ pub fn commit_setting_change<W: WindowOps>(
     Ok(())
 }
 
+/// What a live commit produced beyond the transaction's own answer.
+#[derive(Debug)]
+pub struct LiveCommit {
+    /// The transactional commit's result — exactly what
+    /// [`commit_setting_change`] returned.
+    pub result: Result<(), String>,
+    /// The viewport recomputed after a window-mode transition changed the
+    /// window's shape. `None` when the change was not a mode change and the
+    /// caller's viewport is therefore still current.
+    pub viewport: Option<DisplayViewport>,
+}
+
+/// [`commit_setting_change`] for a window the caller has **GPU-claimed**.
+///
+/// A window-mode change goes through [`rts_window::transition_window_mode`],
+/// whose contract requires the claim to be released first and retaken after;
+/// calling it on a still-claimed window can lose the swapchain, which then
+/// surfaces as a `present_error` and exit 1 mid-session. The transition also
+/// resizes the window, so the aspect-fit viewport is stale until recomputed
+/// — and a stale one silently mismaps every subsequent click.
+///
+/// Release and reclaim bracket the commit *including its own rollback path*:
+/// a refused mode change rolls back inside `transition_window_mode`, which is
+/// another mode sequence and needs the claim released just as much. The
+/// reclaim therefore runs whatever the commit answered, and only a failed
+/// reclaim (or a viewport that cannot be read back) is an `Err` here — that
+/// leaves the run with no presentable window and is fatal, not a
+/// "SETTINGS NOT SAVED" warning.
+pub fn commit_setting_change_live<W: ClaimedWindow>(
+    world: &mut RtsWorld,
+    window: &mut W,
+    store: Option<&SettingsStore>,
+    settings: &mut RtsSettings,
+    audio: &mut dyn AudioSink,
+    change: SettingsChange,
+) -> Result<LiveCommit, String> {
+    let mode_change = matches!(change, SettingsChange::WindowMode(_));
+    if !mode_change {
+        return Ok(LiveCommit {
+            result: commit_setting_change(world, Some(window), store, settings, audio, change),
+            viewport: None,
+        });
+    }
+
+    window.release_claim();
+    let result = commit_setting_change(world, Some(window), store, settings, audio, change);
+    window
+        .reclaim()
+        .map_err(|e| format!("window reclaim after a mode change failed: {e}"))?;
+    let viewport = window
+        .viewport()
+        .map_err(|e| format!("viewport refresh after a mode change failed: {e}"))?;
+    Ok(LiveCommit {
+        result,
+        viewport: Some(viewport),
+    })
+}
+
 /// The runtime half of [`commit_setting_change`]'s transaction: window mode
 /// / pointer confinement only, applied `from -> to`. `None` for every other
 /// [`SettingsChange`] variant (camera speeds and audio have no window-level
@@ -617,6 +676,25 @@ mod tests {
         log: Vec<String>,
         grabbed: bool,
         fail: Option<&'static str>,
+        /// Logical size the fake reports back after a mode change, so a test
+        /// can tell a refreshed viewport from the one the caller already had.
+        size: Option<[u32; 2]>,
+    }
+
+    impl ClaimedWindow for FakeWindow {
+        fn release_claim(&mut self) {
+            self.log.push("release_claim".to_string());
+        }
+        fn reclaim(&mut self) -> Result<(), String> {
+            self.record("reclaim")
+        }
+        fn viewport(&self) -> Result<DisplayViewport, String> {
+            if self.fail == Some("viewport") {
+                return Err("viewport failed (injected)".to_string());
+            }
+            let size = self.size.unwrap_or([1920, 1080]);
+            DisplayViewport::new(size, size).ok_or_else(|| "degenerate size".to_string())
+        }
     }
 
     impl WindowOps for FakeWindow {
@@ -664,6 +742,159 @@ mod tests {
             self.grabbed = grabbed;
             Ok(())
         }
+    }
+
+    /// A live mode change must bracket the whole transition in
+    /// release/reclaim, and hand back a viewport recomputed *after* it.
+    ///
+    /// Before this, `commit_setting_change` ran `transition_window_mode` on a
+    /// still-GPU-claimed window — against that function's own documented
+    /// contract — so a settings-menu mode switch could lose the swapchain and
+    /// take the session down with a `present_error` and exit 1. The viewport
+    /// was not refreshed either, so every later click mapped through the old
+    /// window shape.
+    #[test]
+    fn a_live_mode_change_brackets_the_transition_in_release_and_reclaim() {
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow {
+            size: Some([1280, 720]),
+            ..Default::default()
+        };
+
+        let live = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::WindowMode(WindowMode::Windowed1280x720),
+        )
+        .expect("the reclaim succeeded");
+
+        assert!(live.result.is_ok(), "{:?}", live.result);
+        assert_eq!(
+            window.log.first().map(String::as_str),
+            Some("release_claim"),
+            "the claim must be dropped before the first mode call: {:?}",
+            window.log
+        );
+        assert_eq!(
+            window.log.last().map(String::as_str),
+            Some("reclaim"),
+            "the claim must be retaken after the last mode call: {:?}",
+            window.log
+        );
+        assert!(
+            window.log.len() > 2,
+            "the mode sequence itself must run between them: {:?}",
+            window.log
+        );
+        let vp = live.viewport.expect("a mode change refreshes the viewport");
+        assert_eq!(
+            vp,
+            DisplayViewport::new([1280, 720], [1280, 720]).unwrap(),
+            "the viewport must be recomputed from the window's new shape"
+        );
+    }
+
+    /// Only a mode change needs the claim dance. A pointer-confinement or
+    /// volume edit must not tear down the swapchain for nothing, and leaves
+    /// the caller's viewport alone.
+    #[test]
+    fn a_non_mode_change_never_touches_the_gpu_claim() {
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow::default();
+
+        let live = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::Confine(false),
+        )
+        .expect("no claim work to fail");
+
+        assert!(live.result.is_ok(), "{:?}", live.result);
+        assert!(live.viewport.is_none(), "no mode change, no new viewport");
+        assert!(
+            !window
+                .log
+                .iter()
+                .any(|s| s == "release_claim" || s == "reclaim"),
+            "a non-mode change must not release the claim: {:?}",
+            window.log
+        );
+    }
+
+    /// A refused mode change rolls back *inside* `transition_window_mode` —
+    /// another mode sequence, on the same released claim. The reclaim has to
+    /// happen whatever the transaction answered, or a rejected settings edit
+    /// leaves the run with no swapchain at all.
+    #[test]
+    fn a_refused_mode_change_still_reclaims() {
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow {
+            fail: Some("set_size"),
+            ..Default::default()
+        };
+
+        let live = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::WindowMode(WindowMode::Windowed1280x720),
+        )
+        .expect("the reclaim itself succeeded");
+
+        assert!(
+            live.result.is_err(),
+            "the injected failure must refuse the commit"
+        );
+        assert_eq!(
+            settings.display.mode,
+            RtsSettings::default().display.mode,
+            "a refused mode change must not publish"
+        );
+        assert_eq!(
+            window.log.last().map(String::as_str),
+            Some("reclaim"),
+            "the claim must be retaken even on a refused change: {:?}",
+            window.log
+        );
+    }
+
+    /// A reclaim that fails leaves the run with no presentable window. That is
+    /// fatal for the session, not a "SETTINGS NOT SAVED" warning, so it comes
+    /// back as the outer `Err`.
+    #[test]
+    fn a_failed_reclaim_is_fatal_not_a_warning() {
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow {
+            fail: Some("reclaim"),
+            ..Default::default()
+        };
+
+        let err = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::WindowMode(WindowMode::Windowed1280x720),
+        )
+        .expect_err("a failed reclaim must not come back as a soft warning");
+        assert!(err.contains("reclaim"), "{err}");
     }
 
     impl FakeWindow {

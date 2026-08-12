@@ -65,7 +65,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use mmd_engine::render::{
-    RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
+    DisplayViewport, RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
     DragBox, EntityId, EntityKind, MAX_SELECTION, OWNER_PLAYER, OrderReceiptBuffer, Placement,
@@ -86,7 +86,9 @@ use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
 use crate::rts_settings::{RtsSettings, SettingsStore, escape_warning};
 use crate::rts_ui::{PointerOwner, RtsUiState, SettingsChange};
-use crate::rts_window::{self, FocusAction, RtsWindowState, SdlWindowOps, WindowOps};
+use crate::rts_window::{
+    self, ClaimedWindow, FocusAction, ModeCandidate, RtsWindowState, SdlWindowOps, WindowOps,
+};
 use crate::run::RunError;
 
 /// Frames rendered when neither `--frames` nor `MMD_RTS_FRAMES` is given and
@@ -751,8 +753,10 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         // resize/pixel-size/display-change events, not recomputed every
         // batch: every mouse event still maps through whatever shape the
         // window has *now*, without a redundant `size()`/`size_in_pixels()`
-        // syscall pair on batches that changed nothing.
-        let viewport = win_state.viewport;
+        // syscall pair on batches that changed nothing. Mutable because a
+        // window-mode change committed *inside* this batch resizes the window
+        // and hands back a fresh viewport the rest of the batch must use.
+        let mut viewport = win_state.viewport;
 
         // Collected rather than iterated live: `pump.keyboard_state()` below
         // needs an immutable borrow of `pump`, which cannot coexist with the
@@ -880,18 +884,37 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         session.press = None;
                         apply(&mut world, &mut session, cmd);
                         if let Some(change) = session.pending_setting_change.take() {
-                            let outcome = {
-                                let mut ops = SdlWindowOps(&mut window);
-                                crate::rts_ui::commit_setting_change(
+                            // Through the claim-aware seam: a window-mode
+                            // change must run with the GPU claim released and
+                            // retaken, and invalidates the viewport.
+                            let live = {
+                                let mut ops = SdlClaimedWindow {
+                                    window: &mut window,
+                                    renderer: &renderer,
+                                };
+                                crate::rts_ui::commit_setting_change_live(
                                     &mut world,
-                                    Some(&mut ops),
+                                    &mut ops,
                                     settings_store.as_ref(),
                                     &mut session.settings,
                                     session.audio.as_mut(),
                                     change,
                                 )
                             };
-                            match outcome {
+                            let live = match live {
+                                Ok(live) => live,
+                                // No presentable window left: fatal, not a
+                                // "SETTINGS NOT SAVED" warning.
+                                Err(e) => {
+                                    release_window(&renderer, window);
+                                    return Err(RunError::Failed(e));
+                                }
+                            };
+                            if let Some(v) = live.viewport {
+                                win_state.viewport = v;
+                                viewport = v;
+                            }
+                            match live.result {
                                 Ok(()) => {
                                     session.ui.warning = None;
                                     win_state.mode = session.settings.display.mode;
@@ -1116,6 +1139,67 @@ fn commit_scripted_setting_change(world: &mut RtsWorld, session: &mut RtsSession
 }
 
 /// Release the window from the device, then drop it — in that order.
+/// The live window plus the GPU device holding its claim — the real
+/// [`ClaimedWindow`] a settings-menu window-mode change commits through.
+///
+/// Every [`WindowOps`] call delegates to [`SdlWindowOps`], so the mode
+/// sequences themselves stay exactly as they are; this type only adds the
+/// release/reclaim/viewport half `rts_ui::commit_setting_change_live` needs.
+struct SdlClaimedWindow<'a> {
+    window: &'a mut sdl3::video::Window,
+    renderer: &'a SpriteRenderer,
+}
+
+impl WindowOps for SdlClaimedWindow<'_> {
+    fn leave_fullscreen(&mut self) -> Result<(), String> {
+        SdlWindowOps(self.window).leave_fullscreen()
+    }
+    fn enter_fullscreen(&mut self) -> Result<(), String> {
+        SdlWindowOps(self.window).enter_fullscreen()
+    }
+    fn clear_exclusive_mode(&mut self) -> Result<(), String> {
+        SdlWindowOps(self.window).clear_exclusive_mode()
+    }
+    fn available_modes(&mut self) -> Result<Vec<ModeCandidate>, String> {
+        SdlWindowOps(self.window).available_modes()
+    }
+    fn set_exclusive_mode(&mut self, mode: ModeCandidate) -> Result<(), String> {
+        SdlWindowOps(self.window).set_exclusive_mode(mode)
+    }
+    fn set_bordered(&mut self, bordered: bool) -> Result<(), String> {
+        SdlWindowOps(self.window).set_bordered(bordered)
+    }
+    fn set_size(&mut self, w: u32, h: u32) -> Result<(), String> {
+        SdlWindowOps(self.window).set_size(w, h)
+    }
+    fn center(&mut self) -> Result<(), String> {
+        SdlWindowOps(self.window).center()
+    }
+    fn sync(&mut self) -> Result<(), String> {
+        SdlWindowOps(self.window).sync()
+    }
+    fn set_mouse_grab(&mut self, grabbed: bool) -> Result<(), String> {
+        SdlWindowOps(self.window).set_mouse_grab(grabbed)
+    }
+}
+
+impl ClaimedWindow for SdlClaimedWindow<'_> {
+    fn release_claim(&mut self) {
+        self.renderer.ctx.release_window(self.window);
+    }
+
+    fn reclaim(&mut self) -> Result<(), String> {
+        self.renderer
+            .ctx
+            .claim_window(self.window)
+            .map_err(|e| e.to_string())
+    }
+
+    fn viewport(&self) -> Result<DisplayViewport, String> {
+        rts_window::refresh_viewport(self.window).map_err(|e| e.to_string())
+    }
+}
+
 fn release_window(renderer: &SpriteRenderer, window: sdl3::video::Window) {
     renderer.ctx.release_window(&window);
     drop(window);
