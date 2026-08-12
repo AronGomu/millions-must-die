@@ -19,10 +19,13 @@ use super::entity::{
     BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
     RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
 };
+use super::formation::{
+    FORMATION_ARRIVAL_CELLS, FormationError, FormationGoal, FormationScratch,
+    nearest_body_clear_cell,
+};
 use super::orders::{
-    ARRIVAL_RADIUS_CELLS, GatherPhase, Order, OrderTable, adaptive_reach, dist2,
-    entity_approach_cell, nearest_unblocked_cell, node_cell, rect_distance, step_admissible,
-    unit_speed,
+    GatherPhase, Order, OrderTable, adaptive_reach, dist2, entity_approach_cell,
+    nearest_unblocked_cell, node_cell, rect_distance, step_admissible, unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
 use super::selection::{MAX_SELECTION, Pick, Selection, box_select, footprint_min, pick_at};
@@ -35,6 +38,20 @@ pub enum IssuedOrder {
     Move,
     Gather,
     Build,
+}
+
+/// What one group command is pointed at — the only thing that differs between
+/// a ground move, a gather and a build, once [`RtsWorld::order_group`] has the
+/// group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GroupTarget {
+    /// A cell of open ground, which snaps to the nearest legal body position.
+    Ground(Cell),
+    /// A resource node: workers mine it, anything else forms up around it.
+    Node(EntityId),
+    /// A building under construction: workers attend it, anything else is
+    /// rejected outright.
+    Site(EntityId),
 }
 
 /// One unit's outcome from a context-order click.
@@ -59,6 +76,10 @@ pub enum ContextOrderReason {
     Unreachable,
     /// The click landed outside the scenario grid.
     NoTargetCell,
+    /// The grid holds fewer legal formation slots around the target than the
+    /// selection has members, so the whole order was refused — see
+    /// [`super::FormationError::NoFormationSpace`].
+    NoFormationSpace,
 }
 
 /// The outcome of [`RtsWorld::issue_context_order_at`].
@@ -164,6 +185,9 @@ pub struct RtsWorld {
     static_nav: StaticNav,
     nav: FieldPool,
     orders: OrderTable,
+    /// Working storage for one formation plan, reserved at load: a group order
+    /// arrives on a click and must not allocate.
+    formation: FormationScratch,
     /// Live-slot buffer the per-tick sweeps reuse. Reserved to
     /// [`MAX_ENTITIES`] so a tick never grows it.
     live_scratch: Vec<usize>,
@@ -423,6 +447,8 @@ impl RtsWorld {
             static_nav.center_blocked(),
         )?;
 
+        let cells = scenario.width() as usize * scenario.height() as usize;
+
         // Opens on the base: the HQ's footprint centre is what a player wants
         // to see on frame 1, not the map's geometric middle.
         let camera = Camera::new(
@@ -443,6 +469,7 @@ impl RtsWorld {
             static_nav,
             nav,
             orders: OrderTable::new(),
+            formation: FormationScratch::new(cells),
             live_scratch: Vec::with_capacity(MAX_ENTITIES),
             unit_scratch: Vec::with_capacity(MAX_ENTITIES),
             candidate_pos: Vec::with_capacity(MAX_ENTITIES),
@@ -619,36 +646,173 @@ impl RtsWorld {
 
     /// Order one unit to walk to `dest`.
     ///
-    /// Returns `false` when `id` is stale, is not a unit, is not owned by
-    /// [`OWNER_PLAYER`], or `dest` is out of bounds or blocked — a right-click on
-    /// a rock must be a no-op, not an order nobody can finish.
+    /// A group of one: the unit is given the anchor cell itself as its slot.
+    /// `false` when `id` is stale, is not a player-owned unit, or `dest` is
+    /// off the grid.
     pub fn order_move(&mut self, id: EntityId, dest: Cell) -> bool {
-        let Some(slot) = self.orderable_slot(id) else {
-            return false;
-        };
-        let Ok(field) = self.nav.acquire(dest) else {
-            return false;
-        };
-        self.orders.set(slot, Order::Move { dest, field });
-        true
+        self.order_move_group(&[id], dest).is_ok()
     }
 
-    /// Order several units to one destination, acquiring the field **once**.
+    /// Order several units into a formation around `dest`, acquiring the
+    /// anchor field **once**.
     ///
     /// This is the API the input layer uses. Issuing N single orders would
-    /// acquire N times, and on a full pool that is N rebuilds of the same field.
-    pub fn order_move_group(&mut self, ids: &[EntityId], dest: Cell) -> usize {
-        let Ok(field) = self.nav.acquire(dest) else {
-            return 0;
-        };
-        let mut ordered = 0;
-        for &id in ids {
-            if let Some(slot) = self.orderable_slot(id) {
-                self.orders.set(slot, Order::Move { dest, field });
-                ordered += 1;
+    /// acquire N times, and on a full pool that is N rebuilds of the same
+    /// field — and, since T4, would send N bodies at one cell only one of them
+    /// can stand on.
+    ///
+    /// Whole or nothing: `Ok(n)` means every one of the `n` orderable units in
+    /// `ids` now holds a distinct slot around one shared anchor, and any error
+    /// means nothing was written at all.
+    pub fn order_move_group(
+        &mut self,
+        ids: &[EntityId],
+        dest: Cell,
+    ) -> Result<usize, FormationError> {
+        self.order_group(ids, GroupTarget::Ground(dest), None)
+    }
+
+    /// Plan and commit one group order, whole or not at all.
+    ///
+    /// The one path every group command takes — ground move, gather, build,
+    /// and every context click that resolves into one of them:
+    ///
+    /// 1. canonicalize the group: every live, player-owned unit in `ids` that
+    ///    is eligible for `target`, ascending by entity slot, so the caller's
+    ///    argument order cannot reach the plan;
+    /// 2. resolve the target to one anchor cell;
+    /// 3. acquire that anchor's field — **once**, for the whole group;
+    /// 4. plan one distinct slot per member ([`FormationScratch::plan`]);
+    /// 5. write every member's order, sharing the one field handle, and push
+    ///    one receipt each in the same ascending order.
+    ///
+    /// `receipts`, when given, is cleared first: a refused order leaves an
+    /// empty buffer rather than the previous click's answers.
+    fn order_group(
+        &mut self,
+        ids: &[EntityId],
+        target: GroupTarget,
+        mut receipts: Option<&mut OrderReceiptBuffer>,
+    ) -> Result<usize, FormationError> {
+        if let Some(r) = receipts.as_deref_mut() {
+            r.clear();
+        }
+        let anchor = self.group_anchor(target)?;
+
+        self.formation.begin();
+        for slot in 0..self.entities.slot_count() {
+            let Some(id) = self.entities.id_at(slot) else {
+                continue;
+            };
+            if !ids.contains(&id) || self.orderable_slot(id).is_none() {
+                continue;
+            }
+            if !self.eligible_for(slot, target) {
+                continue;
+            }
+            self.formation.push_unit(id);
+        }
+        if self.formation.len() == 0 {
+            return Err(FormationError::NoUnits);
+        }
+
+        let field = self
+            .nav
+            .acquire(anchor)
+            .map_err(|_| FormationError::Unreachable)?;
+        self.formation.plan(
+            &self.static_nav,
+            &self.entities,
+            &self.nav,
+            field.slot,
+            anchor,
+        )?;
+
+        for i in 0..self.formation.len() {
+            let id = self.formation.unit(i);
+            let goal = FormationGoal {
+                anchor,
+                slot: self.formation.slot(i),
+            };
+            let slot = self.entities.slot(id).expect("a planned unit is live");
+            let is_worker = matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker));
+            let (order, issued) = match target {
+                GroupTarget::Ground(_) => (Order::Move { goal, field }, IssuedOrder::Move),
+                GroupTarget::Node(node) if is_worker => (
+                    Order::Gather {
+                        node,
+                        phase: GatherPhase::ToNode { goal, field },
+                    },
+                    IssuedOrder::Gather,
+                ),
+                // A non-worker cannot mine, but it can still be sent to the
+                // node: it takes a formation slot around the same anchor.
+                GroupTarget::Node(_) => (Order::Move { goal, field }, IssuedOrder::Move),
+                GroupTarget::Site(site) => (Order::Build { site, goal, field }, IssuedOrder::Build),
+            };
+            self.orders.set(slot, order);
+            if let Some(r) = receipts.as_deref_mut() {
+                r.push(id, issued);
             }
         }
-        ordered
+        Ok(self.formation.len())
+    }
+
+    /// The one cell a group command forms up around.
+    ///
+    /// A ground click snaps to the nearest cell a body may legally stand on; a
+    /// node or a site resolves to its deterministic approach cell, the same one
+    /// [`entity_approach_cell`] has always produced.
+    fn group_anchor(&self, target: GroupTarget) -> Result<Cell, FormationError> {
+        match target {
+            GroupTarget::Ground(cell) => {
+                if cell.x >= self.scenario.width() || cell.y >= self.scenario.height() {
+                    return Err(FormationError::Unreachable);
+                }
+                nearest_body_clear_cell(&self.static_nav, cell).ok_or(FormationError::Unreachable)
+            }
+            GroupTarget::Node(node) => {
+                let Some(node_slot) = self.entities.slot(node) else {
+                    return Err(FormationError::NoTarget);
+                };
+                if !matches!(self.entities.kind(node_slot), EntityKind::Node(_)) {
+                    return Err(FormationError::NoTarget);
+                }
+                Ok(
+                    entity_approach_cell(&self.static_nav, &self.entities, node, UnitKind::Worker)
+                        .0,
+                )
+            }
+            GroupTarget::Site(site) => {
+                if !self.is_site(site) {
+                    return Err(FormationError::NoTarget);
+                }
+                Ok(
+                    entity_approach_cell(&self.static_nav, &self.entities, site, UnitKind::Worker)
+                        .0,
+                )
+            }
+        }
+    }
+
+    /// Whether the unit at `slot` can take this target's order at all. A unit
+    /// that cannot is left out of the plan entirely — it keeps whatever it was
+    /// already doing, and the caller counts it as rejected.
+    fn eligible_for(&self, slot: usize, target: GroupTarget) -> bool {
+        let is_worker = matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker));
+        match target {
+            GroupTarget::Ground(_) => true,
+            // A depleted node is nothing to mine: a worker is rejected, and
+            // anything else still walks over.
+            GroupTarget::Node(node) => {
+                !is_worker
+                    || self
+                        .entities
+                        .slot(node)
+                        .is_some_and(|s| self.entities.amount(s) > 0)
+            }
+            GroupTarget::Site(_) => is_worker,
+        }
     }
 
     /// The current order of a live entity.
@@ -684,43 +848,24 @@ impl RtsWorld {
     ///
     /// `false` when: `id` is stale, is not a `UnitKind::Worker`, is not
     /// `OWNER_PLAYER`; `node` is stale or is not an `EntityKind::Node`; the
-    /// node is already empty; or no field can be built to the node's cell.
+    /// node is already empty; or no legal approach slot is left around it.
     /// A Soldier cannot gather — refusing is what makes the HUD's "no valid
     /// order" state real rather than cosmetic.
     pub fn order_gather(&mut self, id: EntityId, node: EntityId) -> bool {
-        self.order_gather_group(&[id], node) == 1
+        self.worker_slot(id).is_some() && self.order_gather_group(&[id], node) == Ok(1)
     }
 
-    /// Order several workers onto one node, acquiring the field once.
-    pub fn order_gather_group(&mut self, ids: &[EntityId], node: EntityId) -> usize {
-        let Some(node_slot) = self.entities.slot(node) else {
-            return 0;
-        };
-        if !matches!(self.entities.kind(node_slot), EntityKind::Node(_)) {
-            return 0;
-        }
-        if self.entities.amount(node_slot) == 0 {
-            return 0;
-        }
-        let (cell, _) =
-            entity_approach_cell(&self.static_nav, &self.entities, node, UnitKind::Worker);
-        let Ok(field) = self.nav.acquire(cell) else {
-            return 0;
-        };
-        let mut ordered = 0;
-        for &id in ids {
-            if let Some(slot) = self.worker_slot(id) {
-                self.orders.set(
-                    slot,
-                    Order::Gather {
-                        node,
-                        phase: GatherPhase::ToNode { field },
-                    },
-                );
-                ordered += 1;
-            }
-        }
-        ordered
+    /// Order a group onto one node, acquiring the anchor field once.
+    ///
+    /// Workers get a distinct legal approach slot each and mine; anything else
+    /// in the group forms up around the same anchor instead — it cannot mine,
+    /// but "go there" is still what the player asked for.
+    pub fn order_gather_group(
+        &mut self,
+        ids: &[EntityId],
+        node: EntityId,
+    ) -> Result<usize, FormationError> {
+        self.order_group(ids, GroupTarget::Node(node), None)
     }
 
     /// The nearest live drop-off building owned by the player, by distance
@@ -875,25 +1020,22 @@ impl RtsWorld {
 
     /// Order an existing worker to attend an existing site.
     pub fn order_build(&mut self, id: EntityId, site: EntityId) -> bool {
-        let Some(slot) = self.worker_slot(id) else {
-            return false;
-        };
-        let Some(site_slot) = self.entities.slot(site) else {
-            return false;
-        };
-        if !matches!(self.entities.kind(site_slot), EntityKind::Building(_)) {
-            return false;
-        }
-        if self.entities.progress_target(site_slot) == 0 {
-            return false;
-        }
-        let (cell, _) =
-            entity_approach_cell(&self.static_nav, &self.entities, site, UnitKind::Worker);
-        let Ok(field) = self.nav.acquire(cell) else {
-            return false;
-        };
-        self.orders.set(slot, Order::Build { site, field });
-        true
+        self.order_group(&[id], GroupTarget::Site(site), None) == Ok(1)
+    }
+
+    /// Order a group onto one site, acquiring the anchor field once.
+    ///
+    /// Every eligible worker gets a distinct legal approach slot around the
+    /// site and one receipt, ascending by entity slot; every other unit in
+    /// `ids` is rejected outright (a Soldier cannot build) and the caller sees
+    /// it as the difference between `ids.len()` and the returned count.
+    pub fn order_build_group(
+        &mut self,
+        ids: &[EntityId],
+        site: EntityId,
+        receipts: &mut OrderReceiptBuffer,
+    ) -> Result<usize, FormationError> {
+        self.order_group(ids, GroupTarget::Site(site), Some(receipts))
     }
 
     /// Resolve a right-click context order against the shared pick geometry:
@@ -905,14 +1047,19 @@ impl RtsWorld {
     /// [`Selection::ids`] iterates in). Capacity never grows past
     /// [`MAX_SELECTION`] — [`OrderReceiptBuffer::new`] reserves it there.
     ///
+    /// Every branch resolves to one [`GroupTarget`] and one call to
+    /// [`Self::order_group`], so a click is planned as a formation — one
+    /// shared anchor field, one distinct slot per unit — exactly like the
+    /// group APIs it shares that path with.
+    ///
     /// Dispatch, by what [`pick_at`] found:
     /// - **Node** — selected workers Gather; every other selected orderable
-    ///   unit Move toward the node's cell (one shared field acquire). A
-    ///   depleted node still resolves the Move fallback but rejects Gather.
+    ///   unit takes a formation slot around the same node anchor. A depleted
+    ///   node still places the non-workers but rejects Gather.
     /// - **Building under construction** (a site) — selected workers Build;
     ///   every other selected unit is rejected outright, no Move fallback.
     /// - Anything else (a finished building, empty ground, off-grid) — every
-    ///   selected orderable unit Move to the clicked cell.
+    ///   selected orderable unit forms up around the clicked cell.
     pub fn issue_context_order_at(
         &mut self,
         view: &IsoView,
@@ -936,105 +1083,47 @@ impl RtsWorld {
             };
         }
 
-        let mut accepted = 0usize;
-        let mut rejected = 0usize;
-        let mut reason = None;
+        let selected = scratch.len();
+        let target = match pick {
+            Pick::Node(n) => Some(GroupTarget::Node(n)),
+            Pick::Building(b) if self.is_site(b) => Some(GroupTarget::Site(b)),
+            _ => view
+                .cell_at(
+                    screen[0],
+                    screen[1],
+                    self.scenario.width(),
+                    self.scenario.height(),
+                )
+                .map(GroupTarget::Ground),
+        };
 
-        match pick {
-            Pick::Node(n) => {
-                if let Some(node_slot) = self.entities.slot(n) {
-                    let (cell, _) =
-                        entity_approach_cell(&self.static_nav, &self.entities, n, UnitKind::Worker);
-                    match self.nav.acquire(cell) {
-                        Ok(field) => {
-                            let depleted = self.entities.amount(node_slot) == 0;
-                            for &id in &scratch {
-                                if let Some(slot) = self.worker_slot(id) {
-                                    if depleted {
-                                        rejected += 1;
-                                    } else {
-                                        self.orders.set(
-                                            slot,
-                                            Order::Gather {
-                                                node: n,
-                                                phase: GatherPhase::ToNode { field },
-                                            },
-                                        );
-                                        receipts.push(id, IssuedOrder::Gather);
-                                        accepted += 1;
-                                    }
-                                } else if let Some(slot) = self.orderable_slot(id) {
-                                    self.orders.set(slot, Order::Move { dest: cell, field });
-                                    receipts.push(id, IssuedOrder::Move);
-                                    accepted += 1;
-                                } else {
-                                    rejected += 1;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            rejected += scratch.len();
-                            reason = Some(ContextOrderReason::Unreachable);
-                        }
-                    }
-                } else {
-                    rejected += scratch.len();
-                }
-            }
-            Pick::Building(b) if self.is_site(b) => {
-                let (cell, _) =
-                    entity_approach_cell(&self.static_nav, &self.entities, b, UnitKind::Worker);
-                match self.nav.acquire(cell) {
-                    Ok(field) => {
-                        for &id in &scratch {
-                            if let Some(slot) = self.worker_slot(id) {
-                                self.orders.set(slot, Order::Build { site: b, field });
-                                receipts.push(id, IssuedOrder::Build);
-                                accepted += 1;
-                            } else {
-                                rejected += 1;
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        rejected += scratch.len();
-                        reason = Some(ContextOrderReason::Unreachable);
-                    }
-                }
-            }
-            _ => {
-                let width = self.scenario.width();
-                let height = self.scenario.height();
-                if let Some(cell) = view.cell_at(screen[0], screen[1], width, height) {
-                    match self.nav.acquire(cell) {
-                        Ok(field) => {
-                            for &id in &scratch {
-                                if let Some(slot) = self.orderable_slot(id) {
-                                    self.orders.set(slot, Order::Move { dest: cell, field });
-                                    receipts.push(id, IssuedOrder::Move);
-                                    accepted += 1;
-                                } else {
-                                    rejected += 1;
-                                }
-                            }
-                        }
-                        Err(_) => {
-                            rejected += scratch.len();
-                            reason = Some(ContextOrderReason::Unreachable);
-                        }
-                    }
-                } else {
-                    rejected += scratch.len();
-                    reason = Some(ContextOrderReason::NoTargetCell);
-                }
-            }
-        }
+        let Some(target) = target else {
+            self.pick_scratch = scratch;
+            return ContextOrderResult {
+                pick,
+                accepted: 0,
+                rejected: selected,
+                reason: Some(ContextOrderReason::NoTargetCell),
+            };
+        };
 
+        let outcome = self.order_group(&scratch, target, Some(receipts));
         self.pick_scratch = scratch;
+
+        let (accepted, reason) = match outcome {
+            Ok(n) => (n, None),
+            // A per-unit rejection needs no shared reason: `rejected` already
+            // counts it, exactly as a mixed selection at a build site does.
+            Err(FormationError::NoUnits | FormationError::NoTarget) => (0, None),
+            Err(FormationError::Unreachable) => (0, Some(ContextOrderReason::Unreachable)),
+            Err(FormationError::NoFormationSpace) => {
+                (0, Some(ContextOrderReason::NoFormationSpace))
+            }
+        };
         ContextOrderResult {
             pick,
             accepted,
-            rejected,
+            rejected: selected - accepted,
             reason,
         }
     }
@@ -1205,7 +1294,7 @@ impl RtsWorld {
         self.build_attend.fill(false);
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
-            let Order::Build { site, .. } = self.orders.get(slot) else {
+            let Order::Build { site, goal, .. } = self.orders.get(slot) else {
                 continue;
             };
             if !matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker)) {
@@ -1223,14 +1312,13 @@ impl RtsWorld {
                 self.orders.clear(slot);
                 continue;
             }
-            let (_, cell_dist) =
-                entity_approach_cell(&self.static_nav, &self.entities, site, UnitKind::Worker);
-            if rect_distance(
+            if self.approach_done(
                 self.entities.position(slot),
-                self.entities.position(site_slot),
+                goal,
+                site_slot,
                 b.footprint_cells(),
-            ) <= adaptive_reach(UnitKind::Worker, cell_dist)
-            {
+                UnitKind::Worker,
+            ) {
                 self.build_attend[site_slot] = true;
             }
         }
@@ -1292,6 +1380,34 @@ impl RtsWorld {
         if !self.finished.is_empty() {
             self.push_units_off_blocked_cells();
         }
+    }
+
+    /// Whether a unit standing at `p` has finished its approach to the entity
+    /// at `target_slot`.
+    ///
+    /// Two ways, one rule — "it got where it was sent":
+    ///
+    /// - it is within the target's reach, measured (as T3's
+    ///   [`adaptive_reach`] requires) from the *anchor* the group shares. The
+    ///   anchor is the nearest legal approach cell, so this stays a tight,
+    ///   bounded distance whatever the formation does;
+    /// - or it is standing on its own assigned slot. A slot on the outer
+    ///   rings of a large formation can sit farther out than the anchor's own
+    ///   reach, and a unit that has arrived where it was routed must be able
+    ///   to finish its order rather than grind against the neighbour standing
+    ///   between it and the anchor.
+    fn approach_done(
+        &self,
+        p: [f32; 2],
+        goal: FormationGoal,
+        target_slot: usize,
+        edge: u32,
+        kind: UnitKind,
+    ) -> bool {
+        let target_pos = self.entities.position(target_slot);
+        let anchor_dist = rect_distance(goal.anchor_center(), target_pos, edge);
+        rect_distance(p, target_pos, edge) <= adaptive_reach(kind, anchor_dist)
+            || dist2(p, goal.slot_center()) <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS
     }
 
     /// Move every unit standing in a blocked cell to the nearest open one.
@@ -1407,24 +1523,15 @@ impl RtsWorld {
                 self.orders.clear(slot);
                 continue;
             };
-            let node_pos = self.entities.position(node_slot);
             let p = self.entities.position(slot);
 
             match phase {
-                GatherPhase::ToNode { .. } => {
+                GatherPhase::ToNode { goal, .. } => {
                     if self.entities.amount(node_slot) == 0 {
                         self.orders.clear(slot);
                         continue;
                     }
-                    let (_, node_cell_dist) = entity_approach_cell(
-                        &self.static_nav,
-                        &self.entities,
-                        node,
-                        UnitKind::Worker,
-                    );
-                    if rect_distance(p, node_pos, 1)
-                        <= adaptive_reach(UnitKind::Worker, node_cell_dist)
-                    {
+                    if self.approach_done(p, goal, node_slot, 1, UnitKind::Worker) {
                         self.orders.set(
                             slot,
                             Order::Gather {
@@ -1518,21 +1625,16 @@ impl RtsWorld {
                             self.orders.clear(slot);
                             continue;
                         }
-                        let (cell, _) = entity_approach_cell(
-                            &self.static_nav,
-                            &self.entities,
-                            node,
-                            UnitKind::Worker,
-                        );
-                        match self.nav.acquire(cell) {
-                            Ok(field) => self.orders.set(
-                                slot,
-                                Order::Gather {
-                                    node,
-                                    phase: GatherPhase::ToNode { field },
-                                },
-                            ),
-                            Err(_) => self.orders.clear(slot),
+                        // Re-plan this one worker's approach slot rather than
+                        // reusing the one it left: another worker may have
+                        // taken it while this one was hauling, and a slot two
+                        // bodies cannot share is not an approach.
+                        let id = self.entities.id_at(slot).expect("live worker");
+                        if self
+                            .order_group(&[id], GroupTarget::Node(node), None)
+                            .is_err()
+                        {
+                            self.orders.clear(slot);
                         }
                     }
                 }
@@ -1948,17 +2050,16 @@ impl RtsWorld {
             return;
         };
         let order = self.orders.get(slot);
-        let (dest, field) = match order {
-            Order::Move { dest, field } => (dest, field),
+        let (goal, field) = match order {
+            Order::Move { goal, field } => (goal, field),
             Order::Gather {
                 node,
-                phase: GatherPhase::ToNode { field },
+                phase: GatherPhase::ToNode { goal, field },
             } => {
                 if self.entities.slot(node).is_none() {
                     return;
                 }
-                let (cell, _) = entity_approach_cell(&self.static_nav, &self.entities, node, kind);
-                (cell, field)
+                (goal, field)
             }
             Order::Gather {
                 phase: GatherPhase::Returning { drop_off, field },
@@ -1967,58 +2068,110 @@ impl RtsWorld {
                 if self.entities.slot(drop_off).is_none() {
                     return;
                 }
+                // A hauler has no formation: the whole shift converges on one
+                // drop-off, and the reach test against the building's
+                // footprint — not a slot — is what ends the trip.
                 let (cell, _) =
                     entity_approach_cell(&self.static_nav, &self.entities, drop_off, kind);
-                (cell, field)
+                (FormationGoal::at(cell), field)
             }
-            Order::Build { site, field } => {
+            Order::Build { site, goal, field } => {
                 let Some(site_slot) = self.entities.slot(site) else {
                     return;
                 };
                 let EntityKind::Building(b) = self.entities.kind(site_slot) else {
                     return;
                 };
-                let (approach_cell, cell_dist) =
-                    entity_approach_cell(&self.static_nav, &self.entities, site, kind);
                 // A worker that has reached the site stops and attends it;
                 // it does not clear the order, since the construction
                 // system — not the mover — decides when a `Build` order ends.
-                if rect_distance(
+                if self.approach_done(
                     self.entities.position(slot),
-                    self.entities.position(site_slot),
+                    goal,
+                    site_slot,
                     b.footprint_cells(),
-                ) <= adaptive_reach(kind, cell_dist)
-                {
+                    kind,
+                ) {
                     return;
                 }
-                (approach_cell, field)
+                (goal, field)
             }
             // Idle, and Mining (a mining worker stands still).
             _ => return,
         };
         let is_move_order = matches!(order, Order::Move { .. });
+        let dest = goal.anchor;
 
         let p = self.entities.position(slot);
-        // 1. Arrival, against the destination cell centre: a group is sent
-        //    to one cell and only one of them can stand on it.
+        // 1. Arrival, against this unit's **own slot** centre, and only with
+        //    its body clear of every other.
         //
         //    Only `Order::Move` stops here. A gathering or building worker's
-        //    real completion condition is a *reach* test against a
-        //    footprint rectangle (the gather system's drop-off check, or the
-        //    `Order::Build` guard above), not proximity to the approach
-        //    cell's own centre — and since T10 an approach cell sits just
-        //    outside that footprint, `ARRIVAL_RADIUS_CELLS` alone can no
-        //    longer be trusted to fall inside the reach threshold. Freezing
-        //    such an order here, before its own reach test is satisfied,
-        //    would strand the unit short of the building it was sent to.
-        let dx = p[0] - (dest.x as f32 + 0.5);
-        let dy = p[1] - (dest.y as f32 + 0.5);
-        if is_move_order && dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS {
+        //    real completion condition is a reach test against a footprint
+        //    rectangle ([`Self::approach_done`]), not proximity to a cell
+        //    centre. Freezing such an order here, before its own reach test
+        //    is satisfied, would strand the unit short of the building it
+        //    was sent to.
+        if is_move_order
+            && dist2(p, goal.slot_center()) <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS
+            && !self.body_penetrates_any(i)
+        {
             self.orders.clear(slot);
             return;
         }
 
-        // 2. Re-path if the cached field is no longer the field this order
+        // 2. Terminal steering: inside the capture ring a unit stops
+        //    descending the shared field and walks straight at its own slot.
+        //
+        //    This is local formation placement, not pathfinding: one straight
+        //    segment, gated by exactly the rules a field step is gated by, and
+        //    it never touches the pool. Outside the ring, or when the direct
+        //    segment is refused, the shared field below is what moves the
+        //    unit — which is also how a unit shoved out of its lane finds its
+        //    way back in.
+        let cell_x = p[0].floor() as i32;
+        let cell_y = p[1].floor() as i32;
+        if cell_x < 0 || cell_y < 0 || cell_x >= width as i32 || cell_y >= height as i32 {
+            return;
+        }
+        let step = unit_speed(kind) * TICK_DT;
+        let body = kind.body_radius_cells();
+        if dist2(p, goal.anchor_center()) <= goal.capture_radius2() {
+            let blocked =
+                self.static_nav.center_blocked()[(goal.slot.x + goal.slot.y * width) as usize];
+            if blocked {
+                // The slot was built over after the plan was made. A move
+                // order aimed at a cell no body may stand on can never
+                // finish, so it stops here rather than hovering forever; a
+                // gather or build order has its own reach test and falls
+                // through to the shared field.
+                if is_move_order {
+                    self.orders.clear(slot);
+                    return;
+                }
+            } else {
+                let target = goal.slot_center();
+                let dx = target[0] - p[0];
+                let dy = target[1] - p[1];
+                let len = (dx * dx + dy * dy).sqrt();
+                if len > 0.0 {
+                    // Clamped, never overshot: the last step of a walk lands
+                    // on the slot centre exactly, which is what makes the
+                    // arrival test above reachable at a whole step per tick.
+                    let candidate = if len <= step {
+                        target
+                    } else {
+                        [p[0] + dx / len * step, p[1] + dy / len * step]
+                    };
+                    if self.try_commit_step(i, slot, p, candidate, body, cell_x, cell_y, step) {
+                        self.advance_animation(slot, dx, dy);
+                        return;
+                    }
+                }
+            }
+        }
+
+        // 3. Re-path if the cached field is no longer the field this order
         //    asked for.
         //
         //    A slot is rebuilt for someone else's destination on an LRU
@@ -2046,12 +2199,8 @@ impl RtsWorld {
             }
         };
 
-        // 3. Sample the field at the unit's own cell.
-        let cx = p[0].floor() as i32;
-        let cy = p[1].floor() as i32;
-        if cx < 0 || cy < 0 || cx >= width as i32 || cy >= height as i32 {
-            return;
-        }
+        // 4. Sample the field at the unit's own cell.
+        let (cx, cy) = (cell_x, cell_y);
         let (vx, vy) = self.nav.field(field.slot).vector_at(cx as u32, cy as u32);
         if vx == 0.0 && vy == 0.0 {
             // A zero vector means one of two things: this cell is the
@@ -2077,10 +2226,9 @@ impl RtsWorld {
             return;
         }
 
-        // 4. Propose the step, with the horde's admissibility rule...
-        let step = unit_speed(kind) * TICK_DT;
-        let body = kind.body_radius_cells();
-        // 5. ...and commit it whole, or not at all. A candidate must clear the
+        // 5. Propose the step, with the horde's admissibility rule...
+        //
+        // 6. ...and commit it whole, or not at all. A candidate must clear the
         //    admissibility rule (no corner cut into an unreachable pocket),
         //    then the static world along its whole swept segment, then every
         //    other unit body along that same segment. Sweeps, not endpoints:
@@ -2103,6 +2251,11 @@ impl RtsWorld {
                 break;
             }
         }
+        self.advance_animation(slot, vx, vy);
+    }
+
+    /// Face a unit along `(vx, vy)` and advance its walk cycle by one frame.
+    fn advance_animation(&mut self, slot: usize, vx: f32, vy: f32) {
         self.entities.set_dir(slot, dir_from_vector(vx, vy));
         let f = (self.entities.frame(slot) + 1) % 4;
         self.entities.set_frame(slot, f);

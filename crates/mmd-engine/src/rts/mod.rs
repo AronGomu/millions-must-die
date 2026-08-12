@@ -4,6 +4,7 @@ mod build;
 mod collision;
 mod economy;
 mod entity;
+mod formation;
 mod hud;
 mod orders;
 mod pack;
@@ -27,14 +28,18 @@ pub use entity::{
     BuildingKind, CARRY_NONE, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL,
     OWNER_PLAYER, RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
 };
+pub use formation::{
+    FORMATION_ARRIVAL_CELLS, FORMATION_CAPTURE_MARGIN_CELLS, FORMATION_SPACING_CELLS,
+    FormationError, FormationGoal, FormationScratch,
+};
 pub use hud::{
     BOTTOM_PANEL_RECT, BUILD_MENU, BUILD_MENU_RECT, ICON_PX, NUM_BUF, PANEL_LINE_PX,
     PANEL_TEXT_SCALE, PANEL_TINT, PRODUCTION_RECT, SELECTION_RECT, TEXT_TINT, TEXT_TINT_BLOCKED,
     TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, fmt_ratio, fmt_u32, kind_label, pack_hud,
 };
 pub use orders::{
-    ARRIVAL_RADIUS_CELLS, GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable,
-    SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
+    GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
+    WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
 };
 pub use pack::{
     DRAG_BOX_THICKNESS_PX, DRAG_BOX_TINT, DragBox, GHOST_TINT, Prop, RtsFrame,

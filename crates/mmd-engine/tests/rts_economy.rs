@@ -187,7 +187,7 @@ fn order_gather_group_acquires_once() {
     let n_crystal = crystal_node(&h);
     let before = h.world().nav().rebuild_count();
     let ordered = h.world_mut().order_gather_group(&workers, n_crystal);
-    assert_eq!(ordered, 6);
+    assert_eq!(ordered, Ok(6));
     assert_eq!(
         h.world().nav().rebuild_count(),
         before + 1,
@@ -579,7 +579,7 @@ fn six_workers_on_one_node_all_deliver() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     let n_crystal = crystal_node(&h);
-    assert_eq!(h.world_mut().order_gather_group(&workers, n_crystal), 6);
+    assert_eq!(h.world_mut().order_gather_group(&workers, n_crystal), Ok(6));
 
     h.step_exact(4_000);
     assert!(
@@ -788,4 +788,129 @@ fn context_order_with_no_selection_is_a_no_op() {
     assert_eq!(result.rejected, 0);
     assert_eq!(result.reason, Some(ContextOrderReason::EmptySelection));
     assert!(receipts.as_slice().is_empty());
+}
+
+// --- T5: group approaches around a resource ---------------------------------
+
+/// Six workers sent to one node get six *distinct* legal approach slots around
+/// one shared anchor — not six copies of the node's own approach cell, which
+/// only one 3-cell body could ever stand on.
+#[test]
+fn gatherers_get_distinct_legal_approaches() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    let n_crystal = crystal_node(&h);
+
+    let acquires = h.world().nav().acquire_count();
+    assert_eq!(h.world_mut().order_gather_group(&workers, n_crystal), Ok(6));
+    assert_eq!(
+        h.world().nav().acquire_count(),
+        acquires + 1,
+        "a group gather order must acquire exactly one anchor field"
+    );
+
+    let width = h.world().scenario().width();
+    let mut slots = Vec::new();
+    let mut anchors = Vec::new();
+    for id in &workers {
+        match h.world().order_of(*id) {
+            Some(Order::Gather {
+                node,
+                phase: GatherPhase::ToNode { goal, .. },
+            }) if node == n_crystal => {
+                assert!(
+                    !h.world().static_nav().center_blocked()
+                        [(goal.slot.x + goal.slot.y * width) as usize],
+                    "approach slot {:?} is not a legal body position",
+                    goal.slot
+                );
+                slots.push((goal.slot.x, goal.slot.y));
+                anchors.push((goal.anchor.x, goal.anchor.y));
+            }
+            other => panic!("{id:?} is not gathering the node: {other:?}"),
+        }
+    }
+    let unique: std::collections::HashSet<(u32, u32)> = slots.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        slots.len(),
+        "two gatherers were sent to one cell: {slots:?}"
+    );
+    assert_eq!(
+        anchors
+            .iter()
+            .copied()
+            .collect::<std::collections::HashSet<_>>()
+            .len(),
+        1,
+        "one node must mean one shared anchor"
+    );
+}
+
+/// A mixed group right-clicking a node: the workers mine it and the Soldier
+/// takes a formation slot around the same anchor. Every receipt says so.
+#[test]
+fn nonworkers_move_around_resource() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [100.0, 100.0],
+        )
+        .expect("spawn a soldier");
+    h.world_mut().selection_mut().replace(&[w0, soldier]);
+
+    let n_crystal = crystal_node(&h);
+    let node_pos = position_of(&h, n_crystal);
+    let view = h.world().iso_view();
+    let screen = view.project(node_pos[0], node_pos[1]);
+
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&view, screen, &mut receipts);
+    assert_eq!(result.pick, Pick::Node(n_crystal));
+    assert_eq!(result.accepted, 2);
+    assert_eq!(result.rejected, 0);
+
+    // Ascending by entity slot: the spawn worker before the soldier spawned
+    // after it.
+    assert_eq!(
+        receipts.as_slice(),
+        &[
+            UnitOrderReceipt {
+                id: w0,
+                order: IssuedOrder::Gather
+            },
+            UnitOrderReceipt {
+                id: soldier,
+                order: IssuedOrder::Move
+            },
+        ]
+    );
+
+    let worker_goal = match h.world().order_of(w0) {
+        Some(Order::Gather {
+            phase: GatherPhase::ToNode { goal, .. },
+            ..
+        }) => goal,
+        other => panic!("the worker is not gathering: {other:?}"),
+    };
+    let soldier_goal = match h.world().order_of(soldier) {
+        Some(Order::Move { goal, .. }) => goal,
+        other => panic!("the soldier is not moving: {other:?}"),
+    };
+    assert_eq!(
+        worker_goal.anchor, soldier_goal.anchor,
+        "both must form up around the same resource anchor"
+    );
+    assert_ne!(
+        worker_goal.slot, soldier_goal.slot,
+        "two bodies cannot share one slot"
+    );
 }

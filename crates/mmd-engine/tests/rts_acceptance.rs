@@ -177,7 +177,7 @@ fn drive() -> Run {
 
     // --- 2. send them all to the nearest crystal node ---------------------
     let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
-    h.world_mut().order_gather_group(&group, node);
+    assert!(h.world_mut().order_gather_group(&group, node).is_ok());
     let gather_orders = group
         .iter()
         .filter(|&&id| matches!(h.world().order_of(id), Some(Order::Gather { .. })))
@@ -190,7 +190,10 @@ fn drive() -> Run {
     // the 100 gas the scene starts with.
     let gas_node = h.ids_of_kind(EntityKind::Node(ResourceKind::Gas))[1];
     let gas_worker = *group.last().expect("the box selected nobody");
-    let gas_gather_orders = h.world_mut().order_gather_group(&[gas_worker], gas_node);
+    let gas_gather_orders = h
+        .world_mut()
+        .order_gather_group(&[gas_worker], gas_node)
+        .unwrap_or(0);
 
     // --- 3. gather ---------------------------------------------------------
     h.step_exact(TICKS_GATHER);

@@ -187,14 +187,19 @@ fn a_sweep_catches_what_the_endpoints_miss() {
 // Movement
 // ---------------------------------------------------------------------------
 
+/// Both units are sent to the *same* midpoint cell, not at each other's own
+/// cell: since T5 an order onto a cell another body already stands on resolves
+/// to a formation slot beside it, so aiming each unit at the other's feet no
+/// longer produces a head-on walk at all. One shared destination does.
 #[test]
 fn head_on_units_never_penetrate() {
     let mut h = harness(scattered_spawns(2));
     let w = workers(&h);
     assert!(h.world_mut().force_position_for_test(w[0], [10.5, 20.5]));
     assert!(h.world_mut().force_position_for_test(w[1], [30.5, 20.5]));
-    assert!(h.world_mut().order_move(w[0], Cell { x: 30, y: 20 }));
-    assert!(h.world_mut().order_move(w[1], Cell { x: 10, y: 20 }));
+    let midpoint = Cell { x: 20, y: 20 };
+    assert!(h.world_mut().order_move(w[0], midpoint));
+    assert!(h.world_mut().order_move(w[1], midpoint));
 
     for tick in 0..600 {
         h.step_exact(1);
@@ -532,7 +537,10 @@ fn priority_rotates_deterministically() {
         h.step_exact(idle_ticks);
         assert!(h.world_mut().force_position_for_test(w[0], [10.5, 20.5]));
         assert!(h.world_mut().force_position_for_test(w[1], [16.8, 20.5]));
-        assert_eq!(h.world_mut().order_move_group(&w, Cell { x: 40, y: 20 }), 2);
+        assert_eq!(
+            h.world_mut().order_move_group(&w, Cell { x: 40, y: 20 }),
+            Ok(2)
+        );
         h.step_exact(1);
         (pos(&h, w[0]), pos(&h, w[1]))
     }
@@ -602,7 +610,10 @@ fn canonical_hash() -> String {
     let mut h = harness(scattered_spawns(4));
     let w = workers(&h);
     assert_eq!(w.len(), 4);
-    assert_eq!(h.world_mut().order_move_group(&w, Cell { x: 20, y: 20 }), 4);
+    assert_eq!(
+        h.world_mut().order_move_group(&w, Cell { x: 20, y: 20 }),
+        Ok(4)
+    );
     h.step_exact(400);
     h.state_hash_hex()
 }

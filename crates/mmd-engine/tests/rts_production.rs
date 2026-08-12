@@ -4,8 +4,8 @@
 //! `mmd_engine::rts` and `testkit::RtsHarness`.
 
 use mmd_engine::rts::{
-    ARRIVAL_RADIUS_CELLS, BuildingKind, EntityId, EntityKind, MAX_ENTITIES, OWNER_NEUTRAL, Order,
-    PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ResourceKind, SOLDIER_COST,
+    BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_NEUTRAL,
+    Order, PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ResourceKind, SOLDIER_COST,
     SOLDIER_PRODUCE_TICKS, UnitKind, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce, produce_ticks,
     unit_cost,
 };
@@ -437,7 +437,7 @@ fn a_produced_unit_walks_to_the_rally() {
     let dx = pos[0] - 200.5;
     let dy = pos[1] - 200.5;
     assert!(
-        (dx * dx + dy * dy).sqrt() <= ARRIVAL_RADIUS_CELLS,
+        (dx * dx + dy * dy).sqrt() <= FORMATION_ARRIVAL_CELLS,
         "unit ended at {pos:?}, expected near (200.5, 200.5)"
     );
 }

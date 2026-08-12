@@ -6,6 +6,7 @@ use crate::nav::field_pool::FieldRef;
 use crate::scenario::Cell;
 
 use super::entity::{EntityId, EntityStore, MAX_ENTITIES, UnitKind};
+use super::formation::FormationGoal;
 use super::static_nav::StaticNav;
 
 /// Walk speed in cells per second, per unit kind.
@@ -25,15 +26,6 @@ pub fn unit_speed(kind: UnitKind) -> f32 {
         UnitKind::Soldier => SOLDIER_SPEED_CELLS_PER_SEC,
     }
 }
-
-/// How close a unit's centre must get to its destination cell's centre to be
-/// finished, in cells.
-///
-/// Larger than the horde's `ARRIVAL_RADIUS` (0.5) because a *group* is sent to
-/// one cell and only one of them can stand on it; the rest stop adjacent and the
-/// order still completes. Arrival is checked against the destination cell, not
-/// against a per-unit goal, so the whole group clears its order together.
-pub const ARRIVAL_RADIUS_CELLS: f32 = 1.5;
 
 /// Slack added to a unit's own body radius to get its interaction reach: a
 /// unit standing at a legal approach cell (whose centre already sits at least
@@ -64,8 +56,11 @@ pub(crate) fn adaptive_reach(kind: UnitKind, chosen_cell_dist: f32) -> f32 {
 /// Where a gathering worker is in its round trip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GatherPhase {
-    /// Walking to the node.
-    ToNode { field: FieldRef },
+    /// Walking to this worker's own approach slot around the node.
+    ToNode {
+        goal: FormationGoal,
+        field: FieldRef,
+    },
     /// Standing at the node, filling up. `ticks_left` counts down to zero.
     Mining { ticks_left: u32 },
     /// Walking back to `drop_off` with a full load.
@@ -89,9 +84,10 @@ impl GatherPhase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Order {
     Idle,
-    /// Walk to `dest` down the field `field` names.
+    /// Walk to this unit's own slot in the group's formation, descending the
+    /// group's shared field until the slot is in reach.
     Move {
-        dest: Cell,
+        goal: FormationGoal,
         field: FieldRef,
     },
     /// Mine `node` and haul to the nearest drop-off, forever.
@@ -99,9 +95,11 @@ pub enum Order {
         node: EntityId,
         phase: GatherPhase,
     },
-    /// Walk to `site` and attend it until it finishes.
+    /// Walk to this worker's own approach slot around `site` and attend it
+    /// until it finishes.
     Build {
         site: EntityId,
+        goal: FormationGoal,
         field: FieldRef,
     },
 }
@@ -125,14 +123,14 @@ impl Order {
     /// order's own payload at each of the four places that carry one.
     pub fn with_field(self, field: FieldRef) -> Self {
         match self {
-            Self::Move { dest, .. } => Self::Move { dest, field },
-            Self::Build { site, .. } => Self::Build { site, field },
+            Self::Move { goal, .. } => Self::Move { goal, field },
+            Self::Build { site, goal, .. } => Self::Build { site, goal, field },
             Self::Gather {
                 node,
-                phase: GatherPhase::ToNode { .. },
+                phase: GatherPhase::ToNode { goal, .. },
             } => Self::Gather {
                 node,
-                phase: GatherPhase::ToNode { field },
+                phase: GatherPhase::ToNode { goal, field },
             },
             Self::Gather {
                 node,
@@ -187,14 +185,12 @@ impl OrderTable {
             h.update([order.tag()]);
             match order {
                 Order::Idle => {
-                    h.update(0u32.to_le_bytes());
-                    h.update(0u32.to_le_bytes());
+                    hash_goal(h, FormationGoal::at(Cell { x: 0, y: 0 }));
                     h.update([0u8]);
                     h.update(0u64.to_le_bytes());
                 }
-                Order::Move { dest, field } => {
-                    h.update(dest.x.to_le_bytes());
-                    h.update(dest.y.to_le_bytes());
+                Order::Move { goal, field } => {
+                    hash_goal(h, goal);
                     hash_field(h, field);
                 }
                 Order::Gather { node, phase } => {
@@ -202,25 +198,29 @@ impl OrderTable {
                     h.update(node.generation.to_le_bytes());
                     h.update([phase.tag()]);
                     match phase {
-                        GatherPhase::ToNode { field } => {
+                        GatherPhase::ToNode { goal, field } => {
+                            hash_goal(h, goal);
                             hash_field(h, field);
                             h.update(0u32.to_le_bytes());
                         }
                         GatherPhase::Mining { ticks_left } => {
+                            hash_goal(h, FormationGoal::at(Cell { x: 0, y: 0 }));
                             h.update([0u8]);
                             h.update(0u64.to_le_bytes());
                             h.update(ticks_left.to_le_bytes());
                         }
                         GatherPhase::Returning { drop_off, field } => {
+                            hash_goal(h, FormationGoal::at(Cell { x: 0, y: 0 }));
                             hash_field(h, field);
                             h.update(drop_off.index.to_le_bytes());
                             h.update(drop_off.generation.to_le_bytes());
                         }
                     }
                 }
-                Order::Build { site, field } => {
+                Order::Build { site, goal, field } => {
                     h.update(site.index.to_le_bytes());
                     h.update(site.generation.to_le_bytes());
+                    hash_goal(h, goal);
                     hash_field(h, field);
                 }
             }
@@ -236,6 +236,18 @@ impl OrderTable {
 fn hash_field(h: &mut Sha256, field: FieldRef) {
     h.update([field.slot]);
     h.update(field.epoch.to_le_bytes());
+}
+
+/// A formation goal's contribution to the state hash: anchor then slot.
+///
+/// Both halves are state. Two units of one group share an anchor and differ
+/// only in their slot, so hashing the anchor alone would make a plan that
+/// swapped two members' slots indistinguishable from the one that did not.
+fn hash_goal(h: &mut Sha256, goal: FormationGoal) {
+    h.update(goal.anchor.x.to_le_bytes());
+    h.update(goal.anchor.y.to_le_bytes());
+    h.update(goal.slot.x.to_le_bytes());
+    h.update(goal.slot.y.to_le_bytes());
 }
 
 /// Squared cell-space distance.

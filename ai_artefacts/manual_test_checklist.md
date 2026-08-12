@@ -31,8 +31,8 @@
 
 ## T4 hard-unit-collision
 
-- [ ] Launch `cargo run -- rts`, select all six starting workers and send them to one distant point: confirm they arrive as a loose cluster with visible gaps and that **no two unit sprites ever overlap or pass through each other** at any point of the walk.
-- [ ] Send two workers at each other head-on across open ground: confirm they meet and stop a body's width apart instead of merging, and neither one is left jittering on the spot.
+- [ ] Launch `cargo run -- rts`, select all six starting workers and send them to one distant point: confirm they arrive spread across their own formation slots (since T5) with visible gaps and that **no two unit sprites ever overlap or pass through each other** at any point of the walk.
+- [ ] Send two workers at one shared point midway between them (since T5, right-clicking a worker's *own* cell snaps the order to a free slot beside it, so aiming them at each other no longer produces a head-on walk): confirm they meet and stop a body's width apart instead of merging, and neither one is left jittering on the spot.
 - [ ] Send one worker straight through a standing (idle) worker: confirm the standing worker is visibly *shoved aside* along the line between them and the mover continues, rather than the mover walking through it or freezing in front of it.
 - [ ] Line three idle workers up in a row and walk a fourth into the back of the line: confirm the whole row shuffles forward together, and that nobody is pushed into a building, a resource node or terrain.
 - [ ] Park a worker tight against a building's edge, then send another worker past it on that side: confirm the passing worker steers around it instead of stopping dead (it may take a slightly curved path).
@@ -40,3 +40,16 @@
 - [ ] Produce several units in a row from the HQ with workers standing right outside it: confirm each new unit appears clear of the others and the crowd sorts itself out instead of stacking on one spot.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole gather → build Depot → produce Worker → build Barracks → produce Soldier flow still completes visibly, with no unit ever drawn on top of another.
 - [ ] Watch a busy base for a minute or two and confirm no unit is ever left permanently stuck against another unit with its order still active.
+
+## T5 formations-and-fair-chokes
+
+- [ ] Launch `cargo run -- rts`, box-select the six starting workers and right-click a distant patch of open ground: confirm they spread into a grid of evenly spaced final positions (about one body-width apart) instead of piling onto the clicked point, and that every one of them ends up standing still with no order left running.
+- [ ] Repeat the same order twice in a row from different starting scatterings: confirm the group always lands on the same shaped block around the clicked point (deterministic slots), with only who-stands-where differing.
+- [ ] Right-click a spot right up against a wall or inside a building's footprint: confirm the group still accepts the order and forms up on the nearest legal ground beside it, rather than the click being silently ignored.
+- [ ] Box-select the six workers and right-click a crystal node: confirm each worker walks to its *own* spot around the node, they all mine and deliver, and none of them stands on the node's tile or on another worker.
+- [ ] Select a mixed group (workers plus a soldier) and right-click a resource node: confirm the workers gather while the soldier takes its own spot around the same node instead of shoving into the mining ring.
+- [ ] Select several workers and right-click a building under construction: confirm each one walks to a distinct spot around the site and attends it (the build bar moves faster with more of them), and that a soldier in the same selection is given no order at all.
+- [ ] Send a group into a narrow gap (a one-body-wide choke between terrain): confirm they file through one at a time, each one taking its turn, and that nobody is left permanently waiting while another repeatedly cuts in front.
+- [ ] Send a large group (a dozen or more, produced from the HQ) to one point: confirm the formation grows outward in rings and every member still finishes its walk rather than the outer ones grinding against the inner ones.
+- [ ] Order a group into a fully enclosed pocket that only one unit could stand in: confirm nothing moves at all (the whole order is refused) rather than one unit walking off alone.
+- [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole select → gather → build → produce flow still completes visibly, with the gathering workers visibly spread around their node.

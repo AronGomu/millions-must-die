@@ -606,7 +606,7 @@ fn movement_allocates_nothing() {
     let dest = Cell { x: 200, y: 200 };
     // Warm-up outside the scope: this acquire is the miss that builds the
     // field and settles the scratch heap.
-    assert_eq!(h.world_mut().order_move_group(&workers, dest), 6);
+    assert_eq!(h.world_mut().order_move_group(&workers, dest), Ok(6));
     h.step_exact(2);
     assert!(
         workers
@@ -652,9 +652,12 @@ fn the_gather_loop_allocates_nothing() {
     assert_eq!(
         h.world_mut()
             .order_gather_group(first_three, crystal_nodes[0]),
-        3
+        Ok(3)
     );
-    assert_eq!(h.world_mut().order_gather_group(rest, crystal_nodes[1]), 3);
+    assert_eq!(
+        h.world_mut().order_gather_group(rest, crystal_nodes[1]),
+        Ok(3)
+    );
 
     // Warm-up outside the scope: run one full round trip per worker so every
     // field this test will ever need (to each node, then to the HQ) has
@@ -910,7 +913,7 @@ fn hard_collision_tick_allocates_nothing() {
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     assert_eq!(workers.len(), 6);
     let dest = Cell { x: 170, y: 190 };
-    assert_eq!(h.world_mut().order_move_group(&workers, dest), 6);
+    assert_eq!(h.world_mut().order_move_group(&workers, dest), Ok(6));
     // Warm-up outside the scope: the acquire above is the miss that builds the
     // field and settles the scratch heap.
     h.step_exact(2);
@@ -954,4 +957,46 @@ fn hard_collision_tick_allocates_nothing() {
         close > 0,
         "the measured ticks never brought two bodies into contention"
     );
+}
+
+/// T5: planning a formation is a click-path operation under the same
+/// zero-allocation contract as the per-frame path.
+///
+/// Everything the plan touches — the canonical member list, the reserved-cell
+/// mask, the slot set — lives in the `FormationScratch` `RtsWorld` reserves at
+/// load. The pool is warmed *outside* the scope for the usual reason: a
+/// flow-field miss rebuilds into reused scratch, the single bounded exception.
+#[test]
+fn formation_planning_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    let a = Cell { x: 200, y: 200 };
+    let b = Cell { x: 150, y: 150 };
+    // Warm-up outside the scope: both anchors' fields are built here.
+    assert_eq!(h.world_mut().order_move_group(&workers, a), Ok(6));
+    assert_eq!(h.world_mut().order_move_group(&workers, b), Ok(6));
+
+    let guard = MeasureGuard::enter();
+    for i in 0..50 {
+        let dest = if i % 2 == 0 { a } else { b };
+        let ordered = h.world_mut().order_move_group(&workers, dest);
+        std::hint::black_box(&ordered);
+    }
+    assert_eq!(guard.allocations(), 0, "formation planning allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and the plan really did place the group: six distinct slots.
+    let slots: std::collections::HashSet<(u32, u32)> = workers
+        .iter()
+        .map(|id| match h.world().order_of(*id) {
+            Some(Order::Move { goal, .. }) => (goal.slot.x, goal.slot.y),
+            other => panic!("{id:?} is not moving: {other:?}"),
+        })
+        .collect();
+    assert_eq!(slots.len(), 6, "the measured calls planned nothing");
 }

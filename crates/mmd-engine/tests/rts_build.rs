@@ -5,11 +5,14 @@
 //! Pure logic, no GPU, no clock: every case here is a headless CPU check of
 //! `mmd_engine::rts` and `testkit::RtsHarness`.
 
+use std::collections::HashSet;
+
 use mmd_engine::rts::{
     BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, BuildingKind, DEPOT_BUILD_TICKS,
     DEPOT_COST, DEPOT_SUPPLY_GRANT, EntityId, EntityKind, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
-    OWNER_PLAYER, Order, Placement, PlacementError, ResourceKind, Resources, Supply, UnitKind,
-    build_ticks, building_cost, placement_valid, supply_grant,
+    IssuedOrder, OWNER_PLAYER, Order, OrderReceiptBuffer, Placement, PlacementError, ResourceKind,
+    Resources, Supply, UnitKind, UnitOrderReceipt, build_ticks, building_cost, placement_valid,
+    supply_grant,
 };
 use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP};
 use mmd_engine::testkit::RtsHarness;
@@ -672,4 +675,124 @@ fn state_hash_sees_construction_progress() {
     let before = h.state_hash();
     h.step_exact(1);
     assert_ne!(h.state_hash(), before);
+}
+
+// --- T5: group build orders ---------------------------------------------------
+
+/// Every eligible worker sent to one site gets its own legal approach slot —
+/// distinct cells, one shared anchor field, receipts ascending by entity slot —
+/// and a Soldier in the same group is rejected outright.
+#[test]
+fn builders_get_distinct_site_approaches() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(CLEAR_CORNER, workers[0])
+        .expect("confirm");
+
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [140.0, 200.0],
+        )
+        .expect("spawn a soldier");
+    let mut group = workers.clone();
+    group.push(soldier);
+
+    let acquires = h.world().nav().acquire_count();
+    let mut receipts = OrderReceiptBuffer::new();
+    assert_eq!(
+        h.world_mut().order_build_group(&group, site, &mut receipts),
+        Ok(workers.len()),
+        "every worker must be ordered and the Soldier rejected"
+    );
+    assert_eq!(
+        h.world().nav().acquire_count(),
+        acquires + 1,
+        "a group build order must acquire exactly one anchor field"
+    );
+
+    // Receipts: one Build per worker, ascending by entity slot, no Soldier.
+    assert_eq!(
+        receipts.as_slice(),
+        workers
+            .iter()
+            .map(|&id| UnitOrderReceipt {
+                id,
+                order: IssuedOrder::Build
+            })
+            .collect::<Vec<_>>()
+            .as_slice()
+    );
+    assert_eq!(
+        h.world().order_of(soldier),
+        Some(Order::Idle),
+        "a Soldier cannot build and must keep its own order"
+    );
+
+    // Distinct legal slots around one shared anchor.
+    let mut slots = Vec::new();
+    let mut anchors = Vec::new();
+    for id in &workers {
+        match h.world().order_of(*id) {
+            Some(Order::Build { site: s, goal, .. }) if s == site => {
+                assert!(
+                    !h.world().static_nav().center_blocked()
+                        [(goal.slot.x + goal.slot.y * 320) as usize],
+                    "slot {:?} is not a legal body position",
+                    goal.slot
+                );
+                slots.push((goal.slot.x, goal.slot.y));
+                anchors.push((goal.anchor.x, goal.anchor.y));
+            }
+            other => panic!("{id:?} is not building the site: {other:?}"),
+        }
+    }
+    let unique: HashSet<(u32, u32)> = slots.iter().copied().collect();
+    assert_eq!(
+        unique.len(),
+        slots.len(),
+        "two builders share a slot: {slots:?}"
+    );
+    assert_eq!(
+        anchors.iter().copied().collect::<HashSet<_>>().len(),
+        1,
+        "one site must mean one shared anchor"
+    );
+}
+
+/// The group build order really builds: six workers walk to their own slots
+/// and the site finishes.
+#[test]
+fn a_group_of_builders_finishes_the_site() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(CLEAR_CORNER, workers[0])
+        .expect("confirm");
+    let mut receipts = OrderReceiptBuffer::new();
+    assert_eq!(
+        h.world_mut()
+            .order_build_group(&workers, site, &mut receipts),
+        Ok(6)
+    );
+
+    for _ in 0..2_000 {
+        h.step_exact(1);
+        if !h.world().is_site(site) {
+            break;
+        }
+    }
+    assert!(
+        !h.world().is_site(site),
+        "the group never finished the site"
+    );
 }

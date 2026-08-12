@@ -75,14 +75,14 @@
 
 ## Impl steps
 
-- [ ] 1. Add `rts_formation.rs` red tests + allocation case.
-- [ ] 2. Add `FormationGoal`/scratch/constants; reserve buffers at world load.
-- [ ] 3. Extend `Order::Move` + gather/build phases; update hash.
-- [ ] 4. Implement atomic shared-anchor formation planner exactly as scored above.
-- [ ] 5. Add terminal steering branch before shared-field fallback.
-- [ ] 6. Rework gather group into worker approaches + non-worker formation moves.
-- [ ] 7. Add `order_build_group`; route context site orders through it.
-- [ ] 8. Assert receipt order + one field acquisition; run economy/build/nav-staleness suites.
+- [x] 1. Add `rts_formation.rs` red tests + allocation case. — criterion: `crates/mmd-engine/tests/rts_formation.rs` exists and every Test-plan row above has a case; `cargo test -p mmd-engine --test rts_formation` fails (red) before step 4 lands.
+- [x] 2. Add `FormationGoal`/scratch/constants; reserve buffers at world load. — criterion: `crates/mmd-engine/src/rts/formation.rs` defines `FORMATION_SPACING_CELLS`, `FORMATION_CAPTURE_MARGIN_CELLS`, `FormationGoal`, `FormationScratch`; `RtsWorld::from_scenario` reserves the scratch buffers (`formation_planning_allocates_nothing` proves it).
+- [x] 3. Extend `Order::Move` + gather/build phases; update hash. — criterion: `Order::Move`/`GatherPhase::ToNode`/`Order::Build` each carry a `FormationGoal`; `OrderTable::hash_into` digests anchor, slot and field epoch; a slot-only change moves the state hash (`state_hash_sees_the_formation_slot`).
+- [x] 4. Implement atomic shared-anchor formation planner exactly as scored above. — criterion: `cargo test -p mmd-engine --locked --test rts_formation` green, including `group_input_order_does_not_change_slots`, `formation_slots_are_six_cells_apart`, `formation_order_is_atomic_when_space_missing`, `group_move_acquires_one_anchor_field`.
+- [x] 5. Add terminal steering branch before shared-field fallback. — criterion: `terminal_steering_uses_no_new_field` and `a_group_spreads_into_distinct_final_positions` green; no `FieldPool::acquire` inside the terminal branch.
+- [x] 6. Rework gather group into worker approaches + non-worker formation moves. — criterion: `cargo test -p mmd-engine --locked --test rts_economy approach` green (`gatherers_get_distinct_legal_approaches`), `nonworkers_move_around_resource` green.
+- [x] 7. Add `order_build_group`; route context site orders through it. — criterion: `cargo test -p mmd-engine --locked --test rts_build approach` green (`builders_get_distinct_site_approaches`); `RtsWorld::issue_context_order_at`'s site branch calls `order_build_group`.
+- [x] 8. Assert receipt order + one field acquisition; run economy/build/nav-staleness suites. — criterion: receipts ascending by entity slot asserted in a test; `nav().acquire_count()` rises by exactly 1 per group command; `cargo test -p mmd-engine --locked --test rts_economy --test rts_build --test rts_nav_staleness` green.
 
 ## Outputs
 
@@ -94,10 +94,11 @@
 
 ## Validation
 
-- [ ] `cargo test -p mmd-engine --locked --test rts_formation`
-- [ ] `cargo test -p mmd-engine --locked --test rts_economy approach`
-- [ ] `cargo test -p mmd-engine --locked --test rts_build approach`
-- [ ] `cargo test -p mmd-engine --locked --test frame_allocations formation_planning_allocates_nothing`
-- [ ] `cargo check --workspace --all-targets --all-features --locked`
-- [ ] manual check: box-select six workers; right-click ground/node/site → visible spread, no merge
-- [ ] commit msg draft: `feat(rts): give group orders deterministic collision-safe slots`
+- [x] `cargo test -p mmd-engine --locked --test rts_formation` — criterion: exits 0, every listed case runs.
+- [x] `cargo test -p mmd-engine --locked --test rts_economy approach` — criterion: exits 0 with at least one matching case executed (not a vacuous filter).
+- [x] `cargo test -p mmd-engine --locked --test rts_build approach` — criterion: exits 0 with at least one matching case executed (not a vacuous filter).
+- [x] `cargo test -p mmd-engine --locked --test frame_allocations formation_planning_allocates_nothing` — criterion: exits 0; the guard observes exactly 0 allocations.
+- [x] `cargo check --workspace --all-targets --all-features --locked` — criterion: exits 0, no warnings.
+- [x] full merge-gate suite `cargo test --workspace --locked`, `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets --all-features -- -D warnings` — criterion: all exit 0 (determinism cases `the_economy_is_reproducible` / `the_acceptance_run_is_deterministic` included).
+- [x] manual check: box-select six workers; right-click ground/node/site → visible spread, no merge — criterion: appended as unchecked steps to `ai_artefacts/manual_test_checklist.md` under `## T5 formations-and-fair-chokes`.
+- [ ] commit msg draft: `feat(rts): give group orders deterministic collision-safe slots` — criterion: committed with that subject.

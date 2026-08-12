@@ -6,8 +6,8 @@
 use std::collections::HashSet;
 
 use mmd_engine::rts::{
-    ARRIVAL_RADIUS_CELLS, BuildingKind, EntityKind, EntityStore, MAX_ENTITIES, OWNER_PLAYER, Order,
-    ResourceKind, Resources, RtsWorldError, Supply, UnitKind, unit_speed,
+    BuildingKind, EntityKind, EntityStore, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_PLAYER,
+    Order, ResourceKind, Resources, RtsWorldError, Supply, UnitKind, unit_speed,
 };
 use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
@@ -609,7 +609,7 @@ fn order_move_sets_a_move_order() {
     assert!(h.world_mut().order_move(worker, dest));
     assert!(matches!(
         h.world().order_of(worker),
-        Some(Order::Move { dest: d, .. }) if d == dest
+        Some(Order::Move { goal, .. }) if goal.anchor == dest && goal.slot == dest
     ));
 }
 
@@ -638,8 +638,11 @@ fn order_move_rejects_a_neutral_node() {
     assert_eq!(h.world().order_of(node), Some(Order::Idle));
 }
 
+/// A click on a rock is an order to stand *by* the rock, not a refusal: since
+/// T5 the anchor snaps to the nearest cell a body may legally occupy. Only a
+/// destination off the grid entirely has nothing to snap to.
 #[test]
-fn order_move_rejects_a_blocked_destination() {
+fn order_move_snaps_a_blocked_destination_to_a_legal_anchor() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let worker = first_worker(&h);
     // Cell (0, 0) is the tracked scene's first obstacle.
@@ -649,11 +652,24 @@ fn order_move_rejects_a_blocked_destination() {
             .scenario()
             .is_obstacle_index(rock.x + rock.y * 320)
     );
+
+    assert!(h.world_mut().order_move(worker, rock));
+    let goal = match h.world().order_of(worker) {
+        Some(Order::Move { goal, .. }) => goal,
+        other => panic!("the worker is not moving: {other:?}"),
+    };
+    assert_ne!(goal.anchor, rock, "the anchor must not be the rock itself");
+    assert!(
+        !h.world().static_nav().center_blocked()[(goal.anchor.x + goal.anchor.y * 320) as usize],
+        "the snapped anchor {:?} is not a legal body position",
+        goal.anchor
+    );
+
+    // Off the grid has no legal cell to snap to, and is still refused.
     let live_dest = Cell { x: 200, y: 200 };
     assert!(h.world_mut().order_move(worker, live_dest));
     let before = h.world().order_of(worker);
-
-    assert!(!h.world_mut().order_move(worker, rock));
+    assert!(!h.world_mut().order_move(worker, Cell { x: 320, y: 0 }));
     assert_eq!(
         h.world().order_of(worker),
         before,
@@ -671,7 +687,7 @@ fn order_move_group_acquires_once() {
     let ordered = h
         .world_mut()
         .order_move_group(&workers, Cell { x: 200, y: 200 });
-    assert_eq!(ordered, 6);
+    assert_eq!(ordered, Ok(6));
     assert_eq!(
         h.world().nav().rebuild_count(),
         before + 1,
@@ -690,8 +706,11 @@ fn order_move_group_acquires_once() {
 fn a_group_sharing_a_destination_shares_a_field() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
-    h.world_mut()
-        .order_move_group(&workers, Cell { x: 200, y: 200 });
+    assert!(
+        h.world_mut()
+            .order_move_group(&workers, Cell { x: 200, y: 200 })
+            .is_ok()
+    );
     let slots: HashSet<u8> = workers
         .iter()
         .map(|id| match h.world().order_of(*id) {
@@ -719,8 +738,8 @@ fn a_unit_reaches_its_destination() {
     let dx = p[0] - 200.5;
     let dy = p[1] - 200.5;
     assert!(
-        dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS,
-        "worker stopped at {p:?}, not within {ARRIVAL_RADIUS_CELLS} of (200.5, 200.5)"
+        dx * dx + dy * dy <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS,
+        "worker stopped at {p:?}, not within {FORMATION_ARRIVAL_CELLS} of (200.5, 200.5)"
     );
     assert_eq!(h.world().order_of(worker), Some(Order::Idle));
 }
@@ -760,7 +779,7 @@ fn a_unit_walks_around_an_obstacle() {
     let dx = p[0] - 30.5;
     let dy = p[1] - 20.5;
     assert!(
-        dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS,
+        dx * dx + dy * dy <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS,
         "worker cleared its order at {p:?}, away from the destination"
     );
     assert!(
@@ -817,22 +836,42 @@ fn an_unreachable_destination_clears_the_order() {
     assert_eq!(position_of(&h, worker), before, "the worker moved anyway");
 }
 
+/// Arrival is measured from the unit's own formation slot's *centre*, at
+/// `FORMATION_ARRIVAL_CELLS`: a unit parked a fifth of a cell east of the
+/// centre has arrived, one parked a third of a cell east has not.
 #[test]
-fn arrival_is_measured_from_the_cell_centre() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    let worker = first_worker(&h);
-    let dest = Cell { x: 200, y: 200 };
-    assert!(h.world_mut().order_move(worker, dest));
+fn arrival_is_measured_from_the_slot_centre() {
+    let park = |offset: f32| {
+        let mut h = RtsHarness::scene().build().expect("rts scene harness");
+        let worker = first_worker(&h);
+        let dest = Cell { x: 200, y: 200 };
+        assert!(h.world_mut().order_move(worker, dest));
+        let goal = match h.world().order_of(worker) {
+            Some(Order::Move { goal, .. }) => goal,
+            other => panic!("the worker is not moving: {other:?}"),
+        };
+        assert_eq!(goal.slot, dest, "a lone unit forms up on the anchor itself");
 
-    // Exactly 1.4 cells east of the destination cell's *centre*: inside the
-    // 1.5 arrival radius, but 1.9 from the cell's min corner.
-    let placed = [dest.x as f32 + 0.5 + 1.4, dest.y as f32 + 0.5];
-    let slot = h.world().entities().slot(worker).expect("worker slot");
-    h.world_mut().entities_mut().set_position(slot, placed);
+        let placed = [goal.slot.x as f32 + 0.5 + offset, goal.slot.y as f32 + 0.5];
+        let slot = h.world().entities().slot(worker).expect("worker slot");
+        h.world_mut().entities_mut().set_position(slot, placed);
+        h.step_exact(1);
+        (h.world().order_of(worker), position_of(&h, worker), placed)
+    };
 
-    h.step_exact(1);
-    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
-    assert_eq!(position_of(&h, worker), placed, "an arrival must not step");
+    let (order, p, placed) = park(FORMATION_ARRIVAL_CELLS - 0.05);
+    assert_eq!(
+        order,
+        Some(Order::Idle),
+        "inside the arrival radius is arrival"
+    );
+    assert_eq!(p, placed, "an arrival must not step");
+
+    let (order, _, _) = park(FORMATION_ARRIVAL_CELLS + 0.05);
+    assert!(
+        matches!(order, Some(Order::Move { .. })),
+        "outside the arrival radius the order must still be live, got {order:?}"
+    );
 }
 
 #[test]
@@ -847,7 +886,10 @@ fn worker_outruns_soldier() {
         .expect("spawn a soldier");
 
     let dest = Cell { x: 200, y: 200 };
-    assert_eq!(h.world_mut().order_move_group(&[worker, soldier], dest), 2);
+    assert_eq!(
+        h.world_mut().order_move_group(&[worker, soldier], dest),
+        Ok(2)
+    );
     h.step_exact(60);
 
     let dist = |p: [f32; 2]| {
@@ -892,7 +934,7 @@ fn movement_is_reproducible() {
     let mut b = RtsHarness::scene().build().expect("b");
     for h in [&mut a, &mut b] {
         let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
-        assert_eq!(h.world_mut().order_move_group(&workers, dest), 6);
+        assert_eq!(h.world_mut().order_move_group(&workers, dest), Ok(6));
         h.step_exact(600);
     }
     assert_eq!(a.state_hash(), b.state_hash());

@@ -8,7 +8,7 @@
 
 use mmd_engine::nav::field_pool::NAV_FIELD_SLOTS;
 use mmd_engine::rts::{
-    ARRIVAL_RADIUS_CELLS, BuildingKind, EntityId, EntityKind, OWNER_PLAYER, Order, ResourceKind,
+    BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, OWNER_PLAYER, Order, ResourceKind,
     UnitKind,
 };
 use mmd_engine::scenario::Cell;
@@ -102,7 +102,7 @@ fn evict_every_field(h: &mut RtsHarness) {
 fn arrived(p: [f32; 2], dest: Cell) -> bool {
     let dx = p[0] - (dest.x as f32 + 0.5);
     let dy = p[1] - (dest.y as f32 + 0.5);
-    dx * dx + dy * dy <= ARRIVAL_RADIUS_CELLS * ARRIVAL_RADIUS_CELLS
+    dx * dx + dy * dy <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS
 }
 
 // --- a building finishing under a live order ---------------------------------
@@ -148,7 +148,7 @@ fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
     let p = position_of(&h, walker);
     assert!(
         arrived(p, dest),
-        "the walker stopped at {p:?}, not within {ARRIVAL_RADIUS_CELLS} of \
+        "the walker stopped at {p:?}, not within {FORMATION_ARRIVAL_CELLS} of \
          {dest:?}: the Depot finished at tick {finished_at} and the order kept \
          riding the field cached before the stamp"
     );
@@ -236,7 +236,7 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
     let p = position_of(&h, caught);
     assert!(
         arrived(p, dest),
-        "the caught worker stopped at {p:?}, not within {ARRIVAL_RADIUS_CELLS} \
+        "the caught worker stopped at {p:?}, not within {FORMATION_ARRIVAL_CELLS} \
          of {dest:?}"
     );
     assert_eq!(
