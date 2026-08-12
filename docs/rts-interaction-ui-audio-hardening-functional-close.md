@@ -212,18 +212,44 @@ checklist item in `ai_artefacts/manual_test_checklist.md`:
 
 ## Known gaps — all non-blocking
 
-### 1. A nav channel the centre mask and the sweep disagree about
+### 1. One parked body plugs a single-file corridor, permanently
 
-`StaticNav::center_blocked` marks a 1–2 cell diagonal channel of the tracked
-scene (y ≈ 172..174, x ≈ 190..199) as legal centres, but no step through it
-survives `StaticNav::sweep_clear` plus `sim::step_admissible`: the field claims
-the channel is reachable and a 3-cell body wedges in it. It is **pre-existing**
-— the per-cell circle test and the continuous sweep were never required to
-agree — and it is pinned rather than fixed, as an `#[ignore]`d reproducer,
-`a_body_wedges_in_the_narrow_eastern_channel` in
-`crates/mmd-engine/tests/rts_nav_staleness.rs`. Reconciling the two is a
-navigation change with its own ticket, not a documentation change. Nothing on
-the tracked acceptance path routes through that channel.
+An earlier revision of this document reported this as a **pre-existing** defect
+in which `StaticNav::center_blocked` and `StaticNav::sweep_clear` disagreed
+about a diagonal channel. That was wrong on both counts and is corrected here.
+The mask and the sweep agree — over every free cell of the accused region
+(x 188..201, y 170..177) every centre-to-centre step between free neighbours is
+swept clear — and the same walk completes when no other body is in the way.
+
+What actually happens: a finished Depot at `(180, 176)` and the crystal node at
+`(196, 178)` inflate toward each other until the only legal body centres
+between them are the columns `x = 191` and `x = 192`. Two 3-cell-radius bodies
+do not fit side by side there, so the corridor is single-file, and one idle
+body parked in it blocks every other body for good: the mover's candidate
+passes `orders::step_admissible` and `StaticNav::sweep_clear` and is refused
+only by the body sweep; `RtsWorld::try_push_chain` fails because the parked
+body's contact-normal push target is a `StaticNav::center_blocked` cell; and
+the mover's south-east deflection lands on a cell whose field vector points
+back south-west, so it ping-pongs in a two-cell cycle holding a live order.
+
+It is a **regression of this phase**, not pre-existing — hard 3-cell bodies are
+new in phase 1.1, and a point-sized phase-1 unit walked straight past — and it
+is owned by the collision/push rule (`docs/ADR/017`), not by the navigation
+mask. It is pinned by a positive, un-ignored test,
+`a_parked_body_plugs_the_single_file_depot_corridor` in
+`crates/mmd-engine/tests/rts_nav_staleness.rs`, whose second half walks the
+identical route with the corridor clear and asserts arrival. Nothing on the
+tracked acceptance path routes through that corridor.
+
+**Named follow-up:** *push-through along the mover's heading when the
+contact-normal target is statically illegal.* Prototyped during the review-fix
+pass and confirmed to resolve both reproducers; deferred because it moves unit
+positions across the tracked 1,600-frame acceptance run and so requires
+re-baselining that script and its contracted exit line, which is a ticket of
+its own. A secondary smell to fold into the same ticket: the deflection
+ping-pong burns ticks with no net progress and nothing counts it — the run's
+existing exit-line body-overlap counter does not see it, and no new mechanism
+was added here to make it observable.
 
 ### 2. Collision is O(U²) by choice
 

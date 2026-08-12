@@ -51,6 +51,7 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 }
 
 /// Place a Depot at [`DEPOT_MIN`], attended by a worker standing beside it.
+/// Returns the site and the builder attending it.
 ///
 /// The builder stands squarely off the footprint's east edge, not off its
 /// south-east corner: since T4 a unit is a 3-cell body, and the corner spot
@@ -58,15 +59,23 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 /// finished Depot's clearance on two sides — so a body parked there can be
 /// neither walked around nor shoved aside, and it wallled in whatever the case
 /// was actually about.
-fn place_depot(h: &mut RtsHarness) -> EntityId {
+///
+/// The east-edge spot it uses instead is legal, but it is *inside* the
+/// single-file corridor the finished Depot leaves (see
+/// [`a_parked_body_plugs_the_single_file_depot_corridor`]), so a case that
+/// walks another body south past the Depot has to get this scaffolding body
+/// out of the way first.
+fn place_depot(h: &mut RtsHarness) -> (EntityId, EntityId) {
     let builder = spawn_worker(h, [191.0, 180.0]);
     assert!(
         h.world_mut().begin_placement(BuildingKind::Depot),
         "the scene's starting crystal must cover a Depot"
     );
-    h.world_mut()
+    let site = h
+        .world_mut()
         .confirm_placement(DEPOT_MIN, builder)
-        .expect("Depot placement refused")
+        .expect("Depot placement refused");
+    (site, builder)
 }
 
 /// Fill every pool slot with fields nobody else is using, so any field an
@@ -129,7 +138,7 @@ fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
     assert!(h.world_mut().order_move(walker, dest));
 
     // The Depot lands squarely across the route the walker is already on.
-    let depot = place_depot(&mut h);
+    let (depot, _) = place_depot(&mut h);
     // Every field this run needs is now built; nothing but the stamp can
     // force another rebuild.
     let rebuilds_before_stamp = h.world().nav().rebuild_count();
@@ -192,7 +201,7 @@ fn an_evicted_field_does_not_hang_a_gather() {
 #[test]
 fn an_evicted_field_does_not_hang_a_build() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    let depot = place_depot(&mut h);
+    let (depot, _) = place_depot(&mut h);
     evict_every_field(&mut h);
 
     h.step_exact(4_000);
@@ -211,22 +220,17 @@ fn an_evicted_field_does_not_hang_a_build() {
 /// centre outside the finished footprint, still able to take and finish an
 /// order.
 ///
-/// The walk target is (150, 150), not the (200, 200) this case used before T6.
-/// T6's evacuation puts the caught body at the nearest legal free centre to
-/// where it stood, `[183.5, 172.5]`, and the eastbound route out of there
-/// crosses a **pre-existing** nav defect: `center_blocked` marks the 1–2 cell
-/// diagonal channel around `y = 172..174, x = 190..199` as legal body centres,
-/// the pooled field routes through it, and no candidate step survives
-/// `StaticNav::sweep_clear` plus `step_admissible`, so a body grinds to a halt
-/// at ~`[192.91, 173.91]`. That is not a T6 regression: against pre-T6 code a
-/// body spawned at `[183.5, 172.5]` wedges at the same point, and so does a
-/// fresh body from `[176.5, 166.5]` that was never near the Depot — see
-/// [`a_body_wedges_in_the_narrow_eastern_channel`]. Owner: T3/T4 navigation.
+/// The walk target is the original (200, 200). Getting there means walking
+/// south past the finished Depot, down the single-file corridor
+/// [`a_parked_body_plugs_the_single_file_depot_corridor`] pins — so the
+/// scaffolding builder, which stands in that corridor, is despawned once the
+/// body-placement assertions it participates in have run. It is scaffolding,
+/// not this case's subject.
 #[test]
 fn a_unit_caught_in_a_finished_footprint_escapes() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let caught = spawn_worker(&mut h, DEPOT_CENTER);
-    let depot = place_depot(&mut h);
+    let (depot, builder) = place_depot(&mut h);
 
     for _ in 0..1_000 {
         h.step_exact(1);
@@ -259,7 +263,11 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
         );
     }
 
-    let dest = Cell { x: 150, y: 150 };
+    // Every body assertion above has run, including against the builder.
+    // Clear it out of the single-file corridor the route south uses.
+    assert!(h.world_mut().entities_mut().despawn(builder));
+
+    let dest = Cell { x: 200, y: 200 };
     assert!(
         h.world_mut().order_move(caught, dest),
         "order_move refused a unit that was inside the footprint"
@@ -278,29 +286,50 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
     );
 }
 
-/// Known gap, pinned rather than asserted: a body sent east across the narrow
-/// diagonal channel at `y = 172..174, x = 190..199` stops dead partway and
-/// never finishes its order.
+/// A finished Depot at [`DEPOT_MIN`] leaves a **single-file** corridor on its
+/// east side, and one idle body parked in it blocks every other body for good.
 ///
-/// `center_blocked` calls those cells legal body centres and the pooled field
-/// routes through them, but every candidate step is refused by
-/// `StaticNav::sweep_clear` / `step_admissible`, so the walk has a live order,
-/// a non-zero descent vector and nowhere to put its feet. Pre-dates T6: this
-/// reproduces with no building finished on top of anybody and a body that was
-/// never near the Depot. Ignored because it asserts the *defect*, and running
-/// it green would mean the defect is still there; it is here so the repro is
-/// not lost. Owner: T3/T4 navigation.
+/// The geometry: the Depot occupies `[180, 188) x [176, 184)` and the crystal
+/// node at `(196, 178)` inflates its own clearance westward, so between them
+/// the only legal body centres are the two columns `x = 191` and `x = 192`.
+/// Two 3-cell-radius bodies six cells apart do not fit side by side in two
+/// columns, so the corridor passes one body at a time.
+///
+/// What then makes the block permanent is the push rule, not the navigation
+/// mask: `StaticNav::center_blocked` and `StaticNav::sweep_clear` agree here
+/// (every centre-to-centre step in this region is swept clear, and the same
+/// walk arrives when the corridor is empty — the second half of this case).
+/// The mover's candidate is refused only by `body_sweep_hit`, and
+/// `try_push_chain` cannot rescue it: the parked body's contact-normal push
+/// target lands on a `center_blocked` cell inside the Depot's clearance, so
+/// the whole chain is rejected. The mover then takes its south-east
+/// deflection, and the field vector at the deflected cell points back
+/// south-west, so it ping-pongs between two cells forever with a live order.
+///
+/// A regression of **this branch** — hard 3-cell bodies are new here, and
+/// before them a point-sized unit walked straight past — owned by the
+/// collision/push rule (T5/T6), not by the T3/T4 navigation mask. The fix,
+/// deferred because it re-bases the tracked acceptance run: retry the push
+/// chain along the mover's own heading when the contact-normal target is
+/// statically illegal. See `docs/ADR/017`.
 #[test]
-#[ignore = "pins a known pre-existing T3/T4 nav defect; not a T6 contract"]
-fn a_body_wedges_in_the_narrow_eastern_channel() {
+fn a_parked_body_plugs_the_single_file_depot_corridor() {
+    // (a) Corridor plugged by the builder that raised the Depot.
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    let depot = place_depot(&mut h);
+    let (depot, builder) = place_depot(&mut h);
     for _ in 0..1_000 {
         h.step_exact(1);
         if !h.world().is_site(depot) {
             break;
         }
     }
+    assert!(!h.world().is_site(depot), "the Depot never finished");
+    assert_eq!(
+        position_of(&h, builder),
+        [191.0, 180.0],
+        "the builder must still be parked in the corridor"
+    );
+
     let w = spawn_worker(&mut h, [176.5, 166.5]);
     let dest = Cell { x: 200, y: 200 };
     assert!(h.world_mut().order_move(w, dest));
@@ -309,12 +338,43 @@ fn a_body_wedges_in_the_narrow_eastern_channel() {
     let p = position_of(&h, w);
     assert!(
         !arrived(p, dest),
-        "the eastern channel is traversable again — delete this test and \
-         retarget `a_unit_caught_in_a_finished_footprint_escapes`"
+        "the corridor passed a second body around the parked one at {p:?} \
+         — the push rule changed; update this case and `docs/ADR/017`"
     );
     assert!(
         matches!(h.world().order_of(w), Some(Order::Move { .. })),
-        "the wedged body should still be holding a live order at {p:?}"
+        "the blocked body should still be holding a live order at {p:?}"
+    );
+    assert!(
+        h.world()
+            .static_nav()
+            .position_clear(p, RTS_UNIT_BODY_RADIUS_CELLS),
+        "the blocked body at {p:?} is not even clear of static geometry — \
+         this case is about a body in the way, not about the nav mask"
+    );
+
+    // (b) The identical walk, with the corridor clear, arrives. This is what
+    // makes (a) a statement about bodies and not about the mask.
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let (depot, builder) = place_depot(&mut h);
+    for _ in 0..1_000 {
+        h.step_exact(1);
+        if !h.world().is_site(depot) {
+            break;
+        }
+    }
+    assert!(!h.world().is_site(depot), "the Depot never finished");
+    assert!(h.world_mut().entities_mut().despawn(builder));
+
+    let w = spawn_worker(&mut h, [176.5, 166.5]);
+    assert!(h.world_mut().order_move(w, dest));
+    h.step_exact(3_000);
+
+    let p = position_of(&h, w);
+    assert!(
+        arrived(p, dest),
+        "with the corridor clear the same walk must reach {dest:?}, but the \
+         body stopped at {p:?}"
     );
 }
 
@@ -324,7 +384,7 @@ fn a_body_wedges_in_the_narrow_eastern_channel() {
 fn a_unit_caught_in_a_finished_footprint_can_still_gather() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let caught = spawn_worker(&mut h, DEPOT_CENTER);
-    let depot = place_depot(&mut h);
+    let (depot, _) = place_depot(&mut h);
     for _ in 0..1_000 {
         h.step_exact(1);
         if !h.world().is_site(depot) {

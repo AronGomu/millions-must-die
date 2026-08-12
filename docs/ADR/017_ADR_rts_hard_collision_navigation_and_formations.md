@@ -166,14 +166,43 @@ code and all narrower than what they replace.
    the type that holds the payment (`production_waits_when_no_spawn_is_free`,
    `waiting_production_resumes_once`).
 
-### Known defect, pinned not fixed
+### Known defect, pinned not fixed: a parked body plugs a single-file corridor
 
-`StaticNav::center_blocked` marks a 1–2 cell diagonal channel of the tracked
-scene (y ≈ 172..174, x ≈ 190..199) as legal centres, but no step through it
-survives `sweep_clear` + `step_admissible`: the field claims the channel is
-reachable and a 3-cell body wedges in it. The two tests disagree by
-construction — the centre mask is a per-cell circle test, the sweep is
-continuous — and reconciling them is a navigation change, not a docs one. It
-is pinned as an `#[ignore]`d reproducer,
-`rts_nav_staleness::a_body_wedges_in_the_narrow_eastern_channel`, and carried
-forward in the phase-1.1 close's known gaps.
+An earlier revision of this ADR blamed a "nav channel the centre mask and the
+sweep disagree about". That was wrong, and is corrected here. `center_blocked`
+and `sweep_clear` **agree**: over every free cell of the region that was
+accused (x 188..201, y 170..177 on the tracked scene), every centre-to-centre
+step between two free neighbours is swept clear, and a body walks the same
+route to completion when no other body is standing in it.
+
+The real defect is in **this ADR's own push rule**. A finished Depot at
+`(180, 176)` and the crystal node at `(196, 178)` inflate toward each other
+until the only legal body centres between them are the two columns `x = 191`
+and `x = 192`. Two 3-cell-radius bodies cannot stand six cells apart in two
+columns, so that corridor is single-file — which is fine — and one idle body
+parked in it blocks every other body **for good**, which is not:
+
+- the mover's candidate passes `step_admissible` and `sweep_clear`, and is
+  refused only by `body_sweep_hit`;
+- `try_push_chain` cannot rescue it, because the parked body's contact-normal
+  push target lands on a `center_blocked` cell inside the Depot's clearance,
+  and the chain is all-or-nothing;
+- the mover then takes its south-east `MOVE_DEFLECTIONS` entry, and the field
+  vector at the deflected cell points back south-west, so it ping-pongs
+  between two cells forever holding a live order.
+
+This is a regression of phase 1.1 — hard 3-cell bodies are new here, and a
+point-sized phase-1 unit walked straight past — owned by the collision/push
+rule, **not** by the navigation mask. It is pinned by a positive, un-ignored
+test, `rts_nav_staleness::a_parked_body_plugs_the_single_file_depot_corridor`,
+whose second half walks the identical route with the corridor clear and
+asserts arrival.
+
+The deferred fix, prototyped and known to resolve both reproducers: when the
+contact-normal push target is statically illegal, retry the whole chain
+pushing along the *mover's own heading* (exact circle-exit solve, same
+all-or-nothing legality gate). It is deferred because it perturbs unit
+positions across the tracked 1,600-frame acceptance run and therefore re-bases
+that script and its contracted exit line — a ticket of its own, not a
+review-fix. Nothing on the tracked acceptance path routes through that
+corridor.

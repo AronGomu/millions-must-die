@@ -11,6 +11,7 @@ use mmd_engine::rts::{
     BuildingKind, EntityKind, EntityStore, OWNER_NEUTRAL, OWNER_PLAYER,
     RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, StaticNav, UnitKind,
 };
+use mmd_engine::rts::{FORMATION_ARRIVAL_CELLS, Order};
 use mmd_engine::scenario::{Cell, RtsSpec, Scenario, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
 
@@ -22,7 +23,20 @@ const RADIUS: f32 = RTS_UNIT_BODY_RADIUS_CELLS;
 /// node-reachability validation (point-agent geometry, unrelated to body
 /// radius) always passes regardless of what a case is testing.
 fn small_scenario(width: u32, height: u32, obstacle_cells: Vec<u32>) -> Scenario {
-    let spec = ScenarioSpec {
+    Scenario::from_spec(small_spec(width, height, obstacle_cells))
+        .expect("small scenario must validate")
+}
+
+/// A live world over [`small_scenario`]'s 50 x 40 corridor grid — HQ, starting
+/// workers and all, so a case can walk a real body instead of reading a mask.
+fn spec_harness(obstacle_cells: Vec<u32>) -> RtsHarness {
+    RtsHarness::spec(small_spec(50, 40, obstacle_cells))
+        .build()
+        .expect("corridor harness")
+}
+
+fn small_spec(width: u32, height: u32, obstacle_cells: Vec<u32>) -> ScenarioSpec {
+    ScenarioSpec {
         version: "rts_prototype_v1".to_string(),
         width,
         height,
@@ -62,8 +76,7 @@ fn small_scenario(width: u32, height: u32, obstacle_cells: Vec<u32>) -> Scenario
                 y: height - 3,
             }],
         }),
-    };
-    Scenario::from_spec(spec).expect("small scenario must validate")
+    }
 }
 
 fn flat_index(x: u32, y: u32, width: u32) -> u32 {
@@ -164,15 +177,18 @@ fn body_clears_static_rectangles() {
 /// A full-height wall at `x == wall_x`, with a `gap` cells wide opening
 /// centred on `y == 20`, on a 50 x 40 grid.
 fn walled_corridor(wall_x: u32, gap: u32) -> (Scenario, EntityStore) {
-    let gap_lo = 20u32.saturating_sub(gap / 2);
-    let gap_hi = gap_lo + gap;
-    let obstacles: Vec<u32> = (0..40u32)
-        .filter(|y| !(gap_lo..gap_hi).contains(y))
-        .map(|y| flat_index(wall_x, y, 50))
-        .collect();
-    let scenario = small_scenario(50, 40, obstacles);
+    let scenario = small_scenario(50, 40, walled_corridor_obstacles(wall_x, gap));
     let store = EntityStore::new();
     (scenario, store)
+}
+
+fn walled_corridor_obstacles(wall_x: u32, gap: u32) -> Vec<u32> {
+    let gap_lo = 20u32.saturating_sub(gap / 2);
+    let gap_hi = gap_lo + gap;
+    (0..40u32)
+        .filter(|y| !(gap_lo..gap_hi).contains(y))
+        .map(|y| flat_index(wall_x, y, 50))
+        .collect()
 }
 
 #[test]
@@ -208,6 +224,66 @@ fn wide_corridor_is_reachable() {
     assert!(
         pool.reachable(field.slot as usize, near_side),
         "a 7-cell gap must pass a 6-cell-diameter body"
+    );
+}
+
+/// `pool.reachable` on the inflated mask is a claim about the *mask*, not
+/// about a body. This walks a real 3-cell body through the same 7-cell gap in
+/// a live world and asserts it arrives — the invariant the mask exists to
+/// stand for: field-reachable implies a swept body can traverse. Without it,
+/// the mask and `StaticNav::sweep_clear` could disagree in the gap and only
+/// the mask half would be tested.
+///
+/// The 5-cell gap is walked too, as the negative control — the same order on
+/// the same grid must leave the body on its own side of the wall — which is
+/// what makes the positive half non-vacuous.
+#[test]
+fn a_body_walks_through_the_wide_corridor_and_not_the_narrow_one() {
+    // Clear of the HQ footprint ([31, 43) x [21, 33)) and its inflation, and
+    // one full radius inside the map edges.
+    let far_side = Cell { x: 46, y: 10 };
+    let near_start = [5.5f32, 20.5];
+
+    let mut wide = spec_harness(walled_corridor_obstacles(25, 7));
+    let walker = wide
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, near_start)
+        .expect("spawn walker");
+    assert!(
+        wide.world_mut().order_move(walker, far_side),
+        "a 7-cell gap must accept a move order across the wall"
+    );
+    wide.step_exact(3_000);
+    let slot = wide.world().entities().slot(walker).expect("live walker");
+    let p = wide.world().entities().position(slot);
+    let dx = p[0] - (far_side.x as f32 + 0.5);
+    let dy = p[1] - (far_side.y as f32 + 0.5);
+    assert!(
+        dx * dx + dy * dy <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS,
+        "a 6-cell-diameter body must walk a 7-cell gap; it stopped at {p:?}, \
+         not within {FORMATION_ARRIVAL_CELLS} of {far_side:?}"
+    );
+    assert_eq!(
+        wide.world().order_of(walker),
+        Some(Order::Idle),
+        "the move order never completed"
+    );
+
+    let mut narrow = spec_harness(walled_corridor_obstacles(25, 5));
+    let walker = narrow
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, near_start)
+        .expect("spawn walker");
+    narrow.world_mut().order_move(walker, far_side);
+    narrow.step_exact(3_000);
+    let slot = narrow.world().entities().slot(walker).expect("live walker");
+    let p = narrow.world().entities().position(slot);
+    assert!(
+        p[0] < 25.0,
+        "a 5-cell gap cannot pass a 6-cell-diameter body, but the walker \
+         reached {p:?}, east of the wall at x = 25"
     );
 }
 
