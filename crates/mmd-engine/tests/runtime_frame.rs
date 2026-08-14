@@ -258,3 +258,128 @@ fn toggling_hitboxes_changes_only_the_rings() {
     assert_eq!(groups_back, groups_on);
     assert_eq!(hash_back, hash_on);
 }
+
+/// The unhashed frame is the hashed frame minus the digest — not a second,
+/// looser frame body.
+///
+/// Two runtimes on the same scene, stepped side by side: everything a caller
+/// can observe about the frame must match, and the two simulations must still
+/// be in the same state afterwards. The digests are read off the *simulation*
+/// rather than through `Runtime::state_hash`, which is counted — an observation
+/// must not spend the budget this test asserts.
+#[test]
+fn the_unhashed_frame_reports_the_same_frame() {
+    let mut hashed = Runtime::load(gate_scenario(), Some(256)).expect("load");
+    let mut unhashed = Runtime::load(gate_scenario(), Some(256)).expect("load");
+
+    for frame in 1..=3u64 {
+        let (h_tick, h_agents, h_paused, h_overlay, h_groups, h_rings, h_digest) = {
+            let out = hashed.tick_and_render();
+            (
+                out.tick_index,
+                out.agent_count,
+                out.paused,
+                out.overlay_visible,
+                out.groups
+                    .iter()
+                    .map(|g| g.instances.clone())
+                    .collect::<Vec<Vec<SpriteInstance>>>(),
+                out.rings.to_vec(),
+                out.state_hash,
+            )
+        };
+        let (u_tick, u_agents, u_paused, u_overlay, u_groups, u_rings) = {
+            let out = unhashed.tick_and_render_unhashed();
+            (
+                out.tick_index,
+                out.agent_count,
+                out.paused,
+                out.overlay_visible,
+                out.groups
+                    .iter()
+                    .map(|g| g.instances.clone())
+                    .collect::<Vec<Vec<SpriteInstance>>>(),
+                out.rings.to_vec(),
+            )
+        };
+
+        assert_eq!(h_tick, frame, "the hashed frame must tick once per frame");
+        assert_eq!(
+            (u_tick, u_agents, u_paused, u_overlay),
+            (h_tick, h_agents, h_paused, h_overlay),
+            "frame {frame}: the unhashed frame reports a different frame"
+        );
+        assert_eq!(u_groups, h_groups, "frame {frame}: atlas groups differ");
+        assert_eq!(u_rings, h_rings, "frame {frame}: hitbox rings differ");
+        assert_eq!(
+            unhashed.sim().state_hash(),
+            hashed.sim().state_hash(),
+            "frame {frame}: the two simulations diverged"
+        );
+        assert_eq!(
+            h_digest,
+            hashed.sim().state_hash(),
+            "frame {frame}: the hashed frame reported a digest of some other state"
+        );
+    }
+
+    assert_eq!(
+        unhashed.state_hash_calls(),
+        0,
+        "the unhashed path digested anyway"
+    );
+    assert_eq!(
+        hashed.state_hash_calls(),
+        3,
+        "the hashed path must digest exactly once per frame"
+    );
+}
+
+/// Budget of the hashed path: one digest per frame, one per explicit call, and
+/// none for reading the bytes off the simulation.
+#[test]
+fn a_hashed_frame_digests_exactly_once() {
+    let mut rt = Runtime::load(gate_scenario(), Some(64)).expect("load");
+    for _ in 0..5 {
+        let _ = rt.tick_and_render();
+    }
+    assert_eq!(rt.state_hash_calls(), 5, "one digest per hashed frame");
+
+    let explicit = rt.state_hash();
+    assert_eq!(rt.state_hash_calls(), 6, "an explicit digest is counted");
+
+    // The uncounted channel every budget test observes through.
+    assert_eq!(rt.sim().state_hash(), explicit);
+    assert_eq!(rt.sim().state_hash(), explicit);
+    assert_eq!(
+        rt.state_hash_calls(),
+        6,
+        "reading the digest off the simulation must not spend the budget"
+    );
+}
+
+/// The unhashed path still simulates — it just never digests.
+#[test]
+fn unhashed_frames_never_digest() {
+    let opening = Runtime::load(gate_scenario(), Some(64))
+        .expect("load")
+        .sim()
+        .state_hash();
+
+    let mut rt = Runtime::load(gate_scenario(), Some(64)).expect("load");
+    for _ in 0..5 {
+        let _ = rt.tick_and_render_unhashed();
+    }
+
+    assert_eq!(rt.tick_index(), 5, "the unhashed frame must still tick");
+    assert_ne!(
+        rt.sim().state_hash(),
+        opening,
+        "five unhashed frames left the state where it started"
+    );
+    assert_eq!(
+        rt.state_hash_calls(),
+        0,
+        "the unhashed path must take no digest at all"
+    );
+}

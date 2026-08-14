@@ -1,6 +1,7 @@
 //! Interactive frame composition: scenario → field → sim → instances.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use thiserror::Error;
@@ -150,6 +151,24 @@ pub struct FrameOutput<'a> {
     pub state_hash: [u8; 32],
 }
 
+/// Result of one runtime frame, without the state digest.
+///
+/// [`FrameOutput`] minus `state_hash`. `Simulation::state_hash` walks every
+/// agent, so a frame whose caller has no consumer for the digest must not pay
+/// for one — the interactive app digests at its two endpoints only, and the
+/// frozen benchmark never does.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderOutput<'a> {
+    pub tick_index: u64,
+    pub agent_count: usize,
+    pub paused: bool,
+    pub overlay_visible: bool,
+    pub groups: &'a [DrawGroup; ATLAS_COUNT],
+    /// Hitbox rings for this frame — same contract as [`FrameOutput::rings`].
+    pub rings: &'a [SpriteInstance],
+    pub stats: FrameStats,
+}
+
 /// Runtime load failures.
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -188,6 +207,10 @@ pub struct Runtime {
     groups: [DrawGroup; ATLAS_COUNT],
     /// Reused ring buffer, same contract as `groups`.
     ring_instances: Vec<SpriteInstance>,
+    /// Full-state digests taken through this runtime (see
+    /// [`Self::state_hash_calls`]). Not feature-gated: the app crate links this
+    /// library without `testkit`, and its own tests pin this budget.
+    state_hash_calls: AtomicU64,
 }
 
 impl Runtime {
@@ -266,6 +289,7 @@ impl Runtime {
             last_stats: FrameStats::default(),
             groups,
             ring_instances,
+            state_hash_calls: AtomicU64::new(0),
         })
     }
 
@@ -359,8 +383,23 @@ impl Runtime {
         self.last_stats
     }
 
+    /// Digest the full simulation state. Counted by [`Self::state_hash_calls`].
+    ///
+    /// O(agent count). Read the bytes off the simulation
+    /// (`runtime.sim().state_hash()`) when the read must not move that budget.
     pub fn state_hash(&self) -> [u8; 32] {
+        self.state_hash_calls.fetch_add(1, Ordering::Relaxed);
         self.sim.state_hash()
+    }
+
+    /// How many full-state digests were taken through this runtime.
+    ///
+    /// The digest is the one per-frame cost with no intermediate consumer, so
+    /// the count is a budget a test can pin: one per [`Self::tick_and_render`],
+    /// none per [`Self::tick_and_render_unhashed`], plus every explicit
+    /// [`Self::state_hash`].
+    pub fn state_hash_calls(&self) -> u64 {
+        self.state_hash_calls.load(Ordering::Relaxed)
     }
 
     /// Borrow last packed draw groups (updated by [`Self::tick_and_render`]).
@@ -430,8 +469,10 @@ impl Runtime {
         }
     }
 
-    /// One frame: optional sim tick + rebuild draw groups into reused buffers.
-    pub fn tick_and_render(&mut self) -> FrameOutput<'_> {
+    /// Tick (unless paused) and repack into the reused buffers, returning the
+    /// frame's timings. The one body both frame entries share, so a hashed and
+    /// an unhashed frame can never drift apart on what they simulate or pack.
+    fn tick_and_pack(&mut self) -> FrameStats {
         let t0 = Instant::now();
 
         let sim_ms = if self.paused {
@@ -453,6 +494,14 @@ impl Runtime {
             total_ms,
         };
         self.last_stats = stats;
+        stats
+    }
+
+    /// One frame: optional sim tick + rebuild draw groups into reused buffers,
+    /// with the state digest. Costs one [`Self::state_hash`].
+    pub fn tick_and_render(&mut self) -> FrameOutput<'_> {
+        let stats = self.tick_and_pack();
+        let state_hash = self.state_hash();
 
         FrameOutput {
             tick_index: self.sim.tick_index(),
@@ -462,7 +511,23 @@ impl Runtime {
             groups: &self.groups,
             rings: &self.ring_instances,
             stats,
-            state_hash: self.sim.state_hash(),
+            state_hash,
+        }
+    }
+
+    /// [`Self::tick_and_render`] without the digest — same tick, same pack,
+    /// same [`FrameStats`], zero [`Self::state_hash`] calls.
+    pub fn tick_and_render_unhashed(&mut self) -> RenderOutput<'_> {
+        let stats = self.tick_and_pack();
+
+        RenderOutput {
+            tick_index: self.sim.tick_index(),
+            agent_count: self.sim.agent_count(),
+            paused: self.paused,
+            overlay_visible: self.overlay_visible,
+            groups: &self.groups,
+            rings: &self.ring_instances,
+            stats,
         }
     }
 }
