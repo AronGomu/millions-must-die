@@ -15,10 +15,13 @@ use std::process::Command;
 
 use mmd_engine::rts::{
     EntityId, EntityKind, OWNER_PLAYER, Order, RTS_UNIT_BODY_DIAMETER_CELLS,
-    RTS_UNIT_BODY_RADIUS_CELLS, UnitKind, moving_circle_hits_point, units_overlap,
+    RTS_UNIT_BODY_RADIUS_CELLS, TickError, UnitKind, moving_circle_hits_point, units_overlap,
 };
 use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
+
+mod common;
+use common::{ONE_FREE_CENTRE, one_free_centre_spec};
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -582,6 +585,11 @@ fn forced_overlap_is_repaired() {
         None,
         "an open map always has a legal free centre to repair into"
     );
+    assert_eq!(
+        h.world().overlap_repair_runs(),
+        1,
+        "the forced overlap must have armed exactly one repair pass"
+    );
     assert_no_overlap(&h, "after one repaired tick");
     // The repaired unit must land on a legal centre, not merely a free one.
     let blocked = h.world().static_nav().center_blocked();
@@ -591,6 +599,65 @@ fn forced_overlap_is_repaired() {
         assert!(
             !blocked[idx],
             "repaired unit at {p:?} stands on a blocked cell"
+        );
+    }
+}
+
+/// An overlap the grid cannot repair is reported on **every** tick, not just
+/// the first: the pass stays armed until it ends clean, so a world holding an
+/// unrepairable penetration never quietly resumes moving.
+///
+/// The scene's grid holds exactly one legal body centre, which the seeded
+/// worker already stands on, so a second body forced onto the same point has
+/// nowhere at all to go.
+#[test]
+fn an_unrepairable_overlap_is_reported_on_every_tick() {
+    let mut h = RtsHarness::spec(one_free_centre_spec())
+        .build()
+        .expect("one-free-centre scene");
+    let seeded = workers(&h);
+    assert_eq!(seeded.len(), 1, "the pocket scene seeds one worker");
+    assert_eq!(
+        pos(&h, seeded[0]),
+        ONE_FREE_CENTRE,
+        "the seeded worker must stand on the grid's only legal body centre"
+    );
+
+    let twin = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Worker),
+            OWNER_PLAYER,
+            ONE_FREE_CENTRE,
+        )
+        .expect("spawn a second worker on the same point");
+    assert!(
+        units_overlap(pos(&h, seeded[0]), RADIUS, pos(&h, twin), RADIUS),
+        "the forced state must actually be illegal, or this proves nothing"
+    );
+
+    for tick in 1..=2u64 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().last_tick_error(),
+            Some(TickError::UnrepairableOverlap),
+            "tick {tick} must report the overlap it could not repair"
+        );
+        assert_eq!(
+            h.world().overlap_repair_runs(),
+            tick,
+            "the pass must stay armed and retry on tick {tick}"
+        );
+        assert_eq!(
+            pos(&h, seeded[0]),
+            ONE_FREE_CENTRE,
+            "an unrepairable tick moves nobody"
+        );
+        assert_eq!(
+            pos(&h, twin),
+            ONE_FREE_CENTRE,
+            "an unrepairable tick moves nobody"
         );
     }
 }
