@@ -381,6 +381,10 @@ enum BodySweep {
 /// `preferred`) go to the lower flat cell index, so the choice never depends
 /// on scan order. `None` only when the grid has no such cell.
 ///
+/// When `preferred` is exactly a legal free unexcluded body centre, that
+/// centre is the unique optimum (squared distance 0) and is returned without
+/// scanning the map.
+///
 /// The one planner behind every body placement this world performs: seeding a
 /// scenario's starting workers, repairing a penetration the world was handed,
 /// placing a finished production unit, and evacuating the bodies a finishing
@@ -421,11 +425,60 @@ fn nearest_free_body_center(
     let height = static_nav.height();
     let cb = static_nav.center_blocked();
     let diam2 = RTS_UNIT_BODY_DIAMETER_CELLS * RTS_UNIT_BODY_DIAMETER_CELLS;
+
+    // --- FAST PATH (the exact preferred cell is the unique optimum) ---
+    // Every predicate is required. Short-circuit order is fixed, and after the
+    // bounds check the predicates are the exhaustive loop's own, in the loop's
+    // own order:
+    //  1. finite preferred coords
+    //  2. exact cell-centre equality (`== floor + 0.5`) on both axes
+    //  3. non-negative floor
+    //  4. in-bounds cell (no clamp) — must precede any `cb` index
+    //  5. `!cb[idx]`                          == loop arm 1
+    //  6. `component_at(cell).is_some()`      == loop arm 2; a legal preferred
+    //     cell is its own anchor, so `== Some(anchor)` here would compare a
+    //     value with itself
+    //  7. exclusion clear                     == loop arm 3
+    //  8. body clear vs `placed`/`ignore`     == loop arm 4
+    // Hit → return the reconstructed centre. Miss → fall through unchanged.
+    if preferred[0].is_finite() && preferred[1].is_finite() {
+        let fx = preferred[0].floor();
+        let fy = preferred[1].floor();
+        if preferred[0] == fx + 0.5 && preferred[1] == fy + 0.5 && fx >= 0.0 && fy >= 0.0 {
+            let x = fx as u32;
+            let y = fy as u32;
+            if x < width && y < height {
+                let idx = (x + y * width) as usize;
+                let cell = Cell { x, y };
+                if !cb[idx] && static_nav.component_at(cell).is_some() {
+                    let p = [x as f32 + 0.5, y as f32 + 0.5];
+                    let excluded = exclude.is_some_and(|(min, edge)| {
+                        !circle_clear_of_cell_rect(p, RTS_UNIT_BODY_RADIUS_CELLS, min, edge)
+                    });
+                    if !excluded {
+                        let blocked_by_body = placed
+                            .iter()
+                            .enumerate()
+                            .any(|(j, &q)| Some(j) != ignore && dist2(p, q) < diam2);
+                        if !blocked_by_body {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let anchor = anchor_component(static_nav, preferred)?;
 
     let mut best: Option<(f32, u32)> = None;
     for y in 0..height {
         for x in 0..width {
+            #[cfg(test)]
+            {
+                NEAREST_FREE_BODY_CENTER_CELL_VISITS
+                    .set(NEAREST_FREE_BODY_CENTER_CELL_VISITS.get().saturating_add(1));
+            }
             let idx = (x + y * width) as usize;
             if cb[idx] {
                 continue;
@@ -454,6 +507,22 @@ fn nearest_free_body_center(
         }
     }
     best.map(|(_, idx)| [(idx % width) as f32 + 0.5, (idx / width) as f32 + 0.5])
+}
+
+#[cfg(test)]
+thread_local! {
+    static NEAREST_FREE_BODY_CENTER_CELL_VISITS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn reset_nearest_free_body_center_cell_visits() {
+    NEAREST_FREE_BODY_CENTER_CELL_VISITS.set(0);
+}
+
+#[cfg(test)]
+fn nearest_free_body_center_cell_visits() -> u64 {
+    NEAREST_FREE_BODY_CENTER_CELL_VISITS.get()
 }
 
 /// The connected region [`nearest_free_body_center`] confines its search to:
@@ -2753,6 +2822,137 @@ mod tests {
             nearest_free_body_center(&nav, &[[5.5, 5.5]], None, None, inside_the_room),
             None,
             "and with that region full, there is no answer at all"
+        );
+    }
+
+    #[test]
+    fn exact_preferred_centre_returns_without_full_scan() {
+        let nav = sealed_room_and_open_field();
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, None, [5.5, 5.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(got, Some([5.5, 5.5]));
+        assert_eq!(
+            visits, 0,
+            "a legal free preferred centre is the unique optimum and must skip the \
+             exhaustive scan"
+        );
+    }
+
+    #[test]
+    fn exact_preferred_centre_ignores_self_body_on_fast_path() {
+        let nav = sealed_room_and_open_field();
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[[5.5, 5.5]], Some(0), None, [5.5, 5.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(got, Some([5.5, 5.5]));
+        assert_eq!(
+            visits, 0,
+            "the ignored index is not an obstacle to itself on the fast path either"
+        );
+    }
+
+    #[test]
+    fn occupied_preferred_falls_back_with_full_scan() {
+        let nav = sealed_room_and_open_field();
+        let preferred = [28.5f32, 20.5];
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[preferred], None, None, preferred);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(
+            got,
+            Some([28.5, 14.5]),
+            "an occupied preferred centre falls back to the exhaustive optimum: \
+             three legal centres tie one body diameter away and the lowest flat \
+             index (588) wins"
+        );
+        assert_eq!(visits, (W * H) as u64);
+    }
+
+    #[test]
+    fn blocked_preferred_centre_does_not_fast_path() {
+        let nav = sealed_room_and_open_field();
+        assert!(nav.center_blocked()[idx(2, 2)]);
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, None, [2.5, 2.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(got, Some([5.5, 5.5]));
+        assert_eq!(visits, (W * H) as u64);
+    }
+
+    #[test]
+    fn excluded_preferred_centre_does_not_fast_path() {
+        let nav = sealed_room_and_open_field();
+        assert!(!nav.center_blocked()[idx(28, 20)]);
+        let preferred = [28.5f32, 20.5];
+        let exclude = Some((Cell { x: 28, y: 20 }, 1u32));
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, exclude, preferred);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(
+            got,
+            Some([28.5, 16.5]),
+            "the excluded preferred centre falls back to the nearest centre clear \
+             of the rectangle, ties going to the lowest flat index (668)"
+        );
+        assert_eq!(visits, (W * H) as u64);
+    }
+
+    #[test]
+    fn non_centre_preferred_does_not_fast_path() {
+        let nav = sealed_room_and_open_field();
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, None, [5.25, 5.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(got, Some([5.5, 5.5]));
+        assert_eq!(
+            visits,
+            (W * H) as u64,
+            "a point that is not a cell centre is not the optimum by inspection"
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_preferred_centre_does_not_fast_path() {
+        let nav = sealed_room_and_open_field();
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, None, [45.5, 20.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(
+            got,
+            Some([34.5, 20.5]),
+            "an exact centre off the grid is bounds-rejected before any cell index \
+             and answered by the clamped fallback"
+        );
+        assert_eq!(visits, (W * H) as u64);
+    }
+
+    #[test]
+    fn negative_preferred_centre_does_not_fast_path() {
+        let nav = sealed_room_and_open_field();
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, None, [-3.5, -2.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(
+            got,
+            Some([5.5, 5.5]),
+            "a negative exact centre is rejected before any cast and answered by \
+             the clamped fallback"
+        );
+        assert_eq!(visits, (W * H) as u64);
+    }
+
+    #[test]
+    fn empty_grid_still_returns_none() {
+        let solids = vec![true; (W * H) as usize];
+        let nav = StaticNav::from_raw(W, H, solids, RTS_UNIT_BODY_RADIUS_CELLS);
+        reset_nearest_free_body_center_cell_visits();
+        let got = nearest_free_body_center(&nav, &[], None, None, [5.5, 5.5]);
+        let visits = nearest_free_body_center_cell_visits();
+        assert_eq!(got, None);
+        assert_eq!(
+            visits, 0,
+            "a None anchor returns before the exhaustive loop"
         );
     }
 }
