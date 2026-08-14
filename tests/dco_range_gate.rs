@@ -23,7 +23,10 @@ impl Fixture {
         let dir = TempDir::new().expect("tempdir");
         run_git(dir.path(), &["init", "-b", "main"]);
         run_git(dir.path(), &["config", "user.name", "DCO Tester"]);
-        run_git(dir.path(), &["config", "user.email", "dco-tester@example.com"]);
+        run_git(
+            dir.path(),
+            &["config", "user.email", "dco-tester@example.com"],
+        );
         run_git(dir.path(), &["config", "commit.gpgsign", "false"]);
         Self { dir }
     }
@@ -39,7 +42,14 @@ impl Fixture {
         run_git(self.path(), &["add", "tracked.txt"]);
         let mut child = Command::new("git")
             .current_dir(self.path())
-            .args(["-c", "commit.gpgsign=false", "commit", "--cleanup=verbatim", "-F", "-"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--cleanup=verbatim",
+                "-F",
+                "-",
+            ])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -96,9 +106,7 @@ fn run_git_stdout(cwd: &Path, args: &[&str]) -> String {
 }
 
 fn signed_msg(subject: &str) -> String {
-    format!(
-        "{subject}\n\nSigned-off-by: DCO Tester <dco-tester@example.com>\n"
-    )
+    format!("{subject}\n\nSigned-off-by: DCO Tester <dco-tester@example.com>\n")
 }
 
 fn run_check(fixture: &Path, base: &str, cand: &str) -> Output {
@@ -247,9 +255,7 @@ fn wrong_key_trailer_rejected() {
     let fx = Fixture::new();
     let root = fx.commit(&signed_msg("signed root"));
 
-    let acked = fx.commit(
-        "acked only\n\nAcked-by: DCO Tester <dco-tester@example.com>\n",
-    );
+    let acked = fx.commit("acked only\n\nAcked-by: DCO Tester <dco-tester@example.com>\n");
     let out_a = run_check(fx.path(), &root, &acked);
     assert_eq!(
         out_a.status.code(),
@@ -264,9 +270,7 @@ fn wrong_key_trailer_rejected() {
     // Fresh base for plural spoof child from root via reset
     run_git(fx.path(), &["checkout", "--detach", &root]);
     run_git(fx.path(), &["checkout", "-B", "spoof"]);
-    let plural = fx.commit(
-        "plural spoof\n\nSigned-off-bys: DCO Tester <dco-tester@example.com>\n",
-    );
+    let plural = fx.commit("plural spoof\n\nSigned-off-bys: DCO Tester <dco-tester@example.com>\n");
     let out_b = run_check(fx.path(), &root, &plural);
     assert_eq!(
         out_b.status.code(),
@@ -276,16 +280,17 @@ fn wrong_key_trailer_rejected() {
     );
     let err_b = stderr_str(&out_b);
     assert!(err_b.contains("missing Signed-off-by:"), "stderr={err_b}");
-    assert!(err_b.contains(&plural), "stderr missing plural sha: {err_b}");
+    assert!(
+        err_b.contains(&plural),
+        "stderr missing plural sha: {err_b}"
+    );
 }
 
 #[test]
 fn lowercase_signed_off_by_key_accepted() {
     let fx = Fixture::new();
     let root = fx.commit(&signed_msg("signed root"));
-    let child = fx.commit(
-        "lower key\n\nsigned-off-by: DCO Tester <dco-tester@example.com>\n",
-    );
+    let child = fx.commit("lower key\n\nsigned-off-by: DCO Tester <dco-tester@example.com>\n");
     let out = run_check(fx.path(), &root, &child);
     assert_eq!(out.status.code(), Some(0), "stderr={}", stderr_str(&out));
 }

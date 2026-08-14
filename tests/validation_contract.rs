@@ -84,8 +84,7 @@ const AUDIO_GATE_COMMAND: &str = "cargo run -p xtask -- audio --check";
 /// Offline DCO range gate (audit F11 / issue #10). Tokens TRUSTED_BASE_SHA and
 /// EXACT_CANDIDATE_SHA are literal placeholders in the doc fence; maintainer
 /// substitutes real SHAs at run time. No angle-bracket argv tokens (shell-safe).
-const DCO_GATE_COMMAND: &str =
-    "./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA";
+const DCO_GATE_COMMAND: &str = "./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA";
 
 /// The interactive smokes, exactly as documented. The RTS one carries its
 /// frame budget and its tracked script inline: a smoke silently shortened to
