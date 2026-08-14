@@ -2,7 +2,7 @@
 
 ## Goal
 
-Add tracked offline DCO range checker `./scripts/check-dco <trusted-base-sha> <exact-candidate-sha>`. Wire into authoritative required merge gate + CONTRIBUTING. Prove unsigned range fails (names hashes) and signed range passes. Success = script + contract tests green; gate docs list exact cmd; legacy main history never revalidated/rewritten.
+Add tracked offline DCO range checker `./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA`. Wire into authoritative required merge gate + CONTRIBUTING. Prove unsigned range fails (names hashes) and signed range passes. Success = script + contract tests green; gate docs list exact cmd; legacy main history never revalidated/rewritten.
 
 ## Scope
 
@@ -26,6 +26,15 @@ Add tracked offline DCO range checker `./scripts/check-dco <trusted-base-sha> <e
 - No HTML plan / architecture docs (caller override).
 - Bash script (`#!/usr/bin/env bash`, `set -euo pipefail`) matches `lab/provision/*` style.
 - `tempfile` already root `[dev-dependencies]` → integration tests may use it.
+- **Gate / docs / contract command string is shell-safe** (no unquoted `<…>` metacharacters). Locked exact token:
+  ```text
+  ./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA
+  ```
+  Same string in `docs/05-testing.md`, `README.md`, `AGENT.md`, `CONTRIBUTING.md`, `DCO_GATE_COMMAND`, and tests. Prose says maintainer replaces tokens with real SHAs at run time. Angle brackets remain only inside commit-message trailer examples (`Signed-off-by: Name <email>`), never as sh-fence argv placeholders.
+- **Root tests workspace-green on Windows:** unix-only APIs under `#[cfg(unix)]`; non-unix script spawn via `Command::new("bash").arg(script)` (bash required on PATH for behavioral script tests; fail with clear message if bash missing). Mode-bit fs assert unix-only; index mode `100755` via `git ls-files -s` asserted on all platforms.
+- **`set -e`-safe control flow locked** in T1 CLI contract: rev-parse and merge-base ancestor checks wrapped; never bare failing git for those paths.
+- **CONTRIBUTING insert:** single anchor after DCO license fence closing ` ``` `, before `## Pull requests`.
+- **Wrong-key trailer negative test required** (`Acked-by` / `Signed-off-bys` only → fail).
 
 ## Ticket flowchart
 
@@ -38,10 +47,22 @@ flowchart TD
 
 | ID | Title | Depends | Commit outcome | File |
 | --- | --- | --- | --- | --- |
-| T1 | Offline DCO range script + behavioral tests | — | `./scripts/check-dco` enforces signed range; temp-repo tests green | `PLAN_2026_08_14_audit_issue_10_dco_range_gate/T1_check-dco-script-and-tests.md` |
-| T2 | Wire required merge gate + CONTRIBUTING + doc contract | T1 | Gate docs list DCO cmd; `required_gate_contains_dco_check` locks it | `PLAN_2026_08_14_audit_issue_10_dco_range_gate/T2_gate-docs-and-contract.md` |
+| T1 | Offline DCO range script + behavioral tests | — | `./scripts/check-dco` enforces signed range; temp-repo tests green on unix + non-unix | `PLAN_2026_08_14_audit_issue_10_dco_range_gate/T1_check-dco-script-and-tests.md` |
+| T2 | Wire required merge gate + CONTRIBUTING + doc contract | T1 | Gate docs list shell-safe DCO cmd; `required_gate_contains_dco_check` locks it | `PLAN_2026_08_14_audit_issue_10_dco_range_gate/T2_gate-docs-and-contract.md` |
 
 ## Tickets
 
 - [T1: Offline DCO range script + behavioral tests](PLAN_2026_08_14_audit_issue_10_dco_range_gate/T1_check-dco-script-and-tests.md) — depends: none
 - [T2: Wire required merge gate + CONTRIBUTING + doc contract](PLAN_2026_08_14_audit_issue_10_dco_range_gate/T2_gate-docs-and-contract.md) — depends: T1
+
+## Repair log (plan review F11)
+
+Resolved from `F11-plan-review-{scope,exec,security}.md` before impl:
+
+1. Shell-safe gate tokens (`TRUSTED_BASE_SHA` / `EXACT_CANDIDATE_SHA`) — exec blocker + security should-fix.
+2. Windows workspace-green: `#[cfg(unix)]` mode/shebang; non-unix `bash` spawn — exec blocker.
+3. Locked `set -e`-safe `if !` wrappers for rev-parse / merge-base — exec + security should-fix.
+4. Single CONTRIBUTING anchor (after DCO license fence, before `## Pull requests`) — exec should-fix.
+5. Wrong-key trailer negative test — security should-fix.
+6. Index mode `100755` via `git ls-files -s` (all platforms) + unix fs exec bit — exec note.
+7. Soft choices locked: manual SOB fixtures (never `-s`); `git init -b main`; AGENT DCO bullet required.
