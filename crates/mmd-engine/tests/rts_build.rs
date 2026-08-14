@@ -893,6 +893,49 @@ fn completion_evacuates_every_overlapping_body() {
     assert_every_body_is_legal(&h);
 }
 
+/// Construction places bodies itself — the builder walks in under the movement
+/// system, and completion evacuates whatever the finished footprint would
+/// swallow — so a build run never needs the overlap-repair pass, which the
+/// shipping build does not compile at all.
+///
+/// The sibling above owns the evacuation *behaviour*; it forces its extra
+/// bodies in through the raw store hook, which is exactly what arms the repair
+/// pass, so it cannot make this claim. This one drives the plain path: one
+/// builder, one Depot, no test hook at all.
+#[test]
+fn a_completion_never_runs_overlap_repair() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let builder = first_worker(&h);
+    assert_eq!(
+        h.world().overlap_repair_runs(),
+        0,
+        "seeding must not need the repair pass"
+    );
+
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(CLEAR_CORNER, builder)
+        .expect("confirm");
+
+    for tick in 1..=2_000u64 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick} ended with a merged pair"
+        );
+        assert_eq!(
+            h.world().overlap_repair_runs(),
+            0,
+            "tick {tick} ran the overlap repair pass on the construction path"
+        );
+    }
+
+    assert!(!h.world().is_site(site), "the Depot never finished");
+    assert_every_body_is_legal(&h);
+}
+
 /// A site whose completion would leave a body with nowhere legal to stand does
 /// not finish: it holds at one tick short of complete, stays walkable, grants
 /// no supply, and moves nobody.

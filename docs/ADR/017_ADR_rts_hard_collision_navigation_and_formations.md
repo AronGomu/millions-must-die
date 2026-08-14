@@ -218,3 +218,40 @@ positions across the tracked 1,600-frame acceptance run and therefore re-bases
 that script and its contracted exit line — a ticket of its own, not a
 review-fix. Nothing on the tracked acceptance path routes through that
 corridor.
+
+## Amendment (F10: the overlap repair pass is testkit-only)
+
+The movement system's phase 2 — "repair any penetration the world was handed" —
+ran on **every** tick, scanning every ordered pair of live unit bodies before a
+single unit moved. It was unreachable work by this ADR's own rules: seeding,
+movement, the push chain, production placement and completion evacuation all
+place bodies body-safely, and the decision above already states that raw store
+mutation is crate-private/testkit-only. The only two mutations that can hand
+the world a merged pair are `RtsWorld::force_position_for_test` and
+`RtsWorld::entities_mut`, and neither exists without the `testkit` feature.
+
+The pass is therefore `#[cfg(feature = "testkit")]` and, inside a testkit
+build, runs only on ticks where one of those two hooks armed it
+(`repair_armed`). Arming is sticky until a pass ends clean, so an overlap the
+grid cannot repair still stashes `TickError::UnrepairableOverlap` and is
+re-reported every tick instead of going quiet after one. `last_tick_error` is
+now cleared at the top of `movement` rather than inside the pass, so it still
+describes the last tick and never an older one in a build that has no pass at
+all; in a shipping build it is always `None`.
+
+What this does not change: the hard-body invariant, its induction, the
+no-epsilon rule, the arrival check's own `body_penetrates_any` call (a
+per-mover check inside `step_one_unit`, not a per-tick pair scan), and every
+valid-state hash — a repair-capable run and a repair-disabled run of the same
+contended world hash identically
+(`rts_collision::arming_overlap_repair_on_a_valid_world_changes_no_state`).
+
+The claim is pinned by deterministic work counts, never timings:
+`RtsWorld::overlap_repair_runs()` counts executed passes, and the seed,
+movement, production and construction runs assert it stays `0`
+(`rts_collision::movement_never_runs_overlap_repair`,
+`rts_production::production_never_runs_overlap_repair`,
+`rts_build::a_completion_never_runs_overlap_repair`), while
+`rts_collision::forced_overlap_is_repaired` and
+`rts_collision::an_unrepairable_overlap_is_reported_on_every_tick` keep the
+forced-overlap behaviour green.
