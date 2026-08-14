@@ -2,11 +2,11 @@
 
 ## Goal
 
-Block live left/right actions unless button-down plus button-up both occur inside aspect-fit RTS canvas. Preserve valid click, shift-click, drag, right-order, edge-pan behavior; prove routing without SDL display.
+Block live left/right actions unless button-down plus button-up both occur inside aspect-fit RTS canvas. Route live pointer/focus arms through tested SDL-free seams. Preserve valid click, shift-click, drag, right-order, edge-pan behavior.
 
 ## Scope
 
-- In: live pointer button-down ownership; left/right release routing; focus-loss button-state clear; focused unit regressions; T8 manual checklist update.
+- In: extracted SDL-free live pointer router; left/right button-down ownership; release routing; extracted focus-loss held-input clear; focused unit regressions; T8 manual checklist update.
 - Out: stale resize viewport (F2); focus pause behavior (F3) beyond button-state clear; scripted input semantics; app-wide input refactor; other audit findings.
 
 ## Assumptions
@@ -15,6 +15,7 @@ Block live left/right actions unless button-down plus button-up both occur insid
 - Left/right button state stays independent. Shift remains sampled on left release.
 - Mouse motion still routes clamped logical coords from bars → edge-pan unchanged.
 - Script-built `RtsCommand` values bypass live pointer gesture state → replay contract unchanged.
+- Live SDL arms only translate event fields, then call tested router/clear seams; no duplicate pointer command construction stays in event match.
 - Live compositor proof remains human-only → checklist records gesture regression.
 
 ## Ticket flowchart
