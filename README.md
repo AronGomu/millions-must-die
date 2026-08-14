@@ -51,6 +51,7 @@ Everything that must pass before a merge, and nothing else. Defined by
 [docs/05-testing.md](docs/05-testing.md).
 
 ```sh
+./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings

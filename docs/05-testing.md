@@ -64,6 +64,7 @@ Every command here is deterministic and behavioural. None consumes a
 measurement number, and none may be replaced by one.
 
 ```sh
+./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -77,6 +78,20 @@ cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
+
+`./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA` is the offline DCO
+range gate. Replace the two placeholder tokens with real SHAs at run time:
+`TRUSTED_BASE_SHA` = a commit already on trusted `main` that is an ancestor of
+the candidate (typical: `git merge-base main EXACT_CANDIDATE_SHA`);
+`EXACT_CANDIDATE_SHA` = the **exact** commit under test. The checker walks only
+`TRUSTED_BASE_SHA..EXACT_CANDIDATE_SHA` (base exclusive, candidate inclusive):
+every commit in that range must carry a valid `Signed-off-by: Name <email>`
+trailer (`git interpret-trailers --parse`, value must include `<email@domain>`).
+Missing trailers exit nonzero and print each offending full hash. A candidate
+that is not a descendant of the trusted base exits nonzero. Equal base and
+candidate (empty range) exits zero. Legacy history on `main` is **not**
+revalidated and must not be rewritten to satisfy this gate.
+`required_gate_contains_dco_check` keeps the command on this list.
 
 The last command is the interactive RTS smoke: one tracked script selects the
 starting workers, puts them on a crystal and a gas node by clicking the visible
