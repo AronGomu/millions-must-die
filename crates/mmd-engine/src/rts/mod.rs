@@ -35,17 +35,25 @@ pub use formation::{
 };
 pub use hud::{
     BOTTOM_PANEL_RECT, BUILD_MENU, CAMERA_POLY_PX, CAMERA_POLY_TINT, COMMAND_GRID_RECT,
-    COMMAND_ICON_PX, COMMAND_PANEL_RECT, CONFINE_CHECKBOX, CommandId, CommandSlot, DETAIL_TEXT_X,
-    DETAIL_TEXT_Y, EDGE_PAN_TRACK, FOCUS_CHECKBOX, GEAR_RECT, HudLayout, ICON_PX,
-    KEYBOARD_PAN_TRACK, MASTER_TRACK, MINIMAP_MAP_RECT, MINIMAP_PANEL_RECT, MULTI_ICON_CAP,
+    COMMAND_ICON_PX, COMMAND_PANEL_RECT, CONFINE_CHECKBOX, CONFINE_CONTROL_RECT, CONTROL_FRAME_PX,
+    CONTROL_TINT_DISABLED, CONTROL_TINT_HOVER, CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED,
+    CONTROL_TINT_SELECTED, CommandId, CommandSlot, ControlId, ControlVisualState, DETAIL_TEXT_X,
+    DETAIL_TEXT_Y, EDGE_PAN_TRACK, FOCUS_CHECKBOX, FOCUS_CONTROL_RECT, GRID_CHECKBOX,
+    GRID_CONTROL_RECT, HudLayout, ICON_PX, InteractionSnapshot, KEYBOARD_PAN_TRACK, MASTER_TRACK,
+    MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT, MINIMAP_PANEL_RECT, MULTI_ICON_CAP,
     MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, MULTI_ICON_ROWS,
-    MUSIC_TRACK, ModalHit, ModalPage, ModalSnapshot, NUM_BUF, PAN_MAX, PAN_MIN, PAN_STEP,
-    PANEL_LINE_PX, PANEL_TEXT_SCALE, PANEL_TINT, PORTRAIT_POS, PORTRAIT_PX, SELECTION_PANEL_RECT,
-    SFX_TRACK, TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE,
-    VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, WINDOW_MODE_LABELS,
-    command_slots, fmt_ratio, fmt_u32, kind_label, modal_hit_test, pack_hud, pack_modal,
+    MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_W, ModalHit, ModalPage, ModalSnapshot, NUM_BUF, PAN_MAX,
+    PAN_MIN, PAN_STEP, PANEL_LINE_PX, PANEL_TEXT_SCALE, PANEL_TINT, PORTRAIT_POS, PORTRAIT_PX,
+    SELECTION_PANEL_RECT, SFX_TRACK, TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT,
+    TOP_TEXT_SCALE, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X, VOICE_TRACK, VOLUME_MAX,
+    VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, WINDOW_MODE_LABELS, command_slot_rect,
+    command_slots, control_id_from_modal_hit, control_tint, control_visual_state, fmt_ratio,
+    fmt_u32, kind_label, modal_hit_test, mute_label_rect, pack_hud, pack_hud_interactive,
+    pack_modal, pack_modal_interactive, snap_track, value_field_rect,
 };
-pub use minimap::{HudHit, MinimapProjection, hud_hit_test, minimap_projection};
+pub use minimap::{
+    HudHit, MinimapProjection, control_id_from_hud_hit, hud_hit_test, minimap_projection,
+};
 pub use orders::{
     GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
     WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,

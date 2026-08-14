@@ -14,8 +14,10 @@
 //! paused for the menu.
 
 use mmd_engine::rts::{
-    BuildingKind, CommandId, HudHit, HudLayout, ModalHit, ModalPage, ModalSnapshot, RtsWorld,
-    UnitKind, command_slots, hud_hit_test, minimap_projection, modal_hit_test,
+    BuildingKind, CommandId, ControlId, HudHit, HudLayout, InteractionSnapshot, ModalHit,
+    ModalPage, ModalSnapshot, RtsWorld, UnitKind, command_slots, control_id_from_hud_hit,
+    control_id_from_modal_hit, hud_hit_test, minimap_projection, modal_hit_test,
+    pack_hud_interactive, pack_modal_interactive,
 };
 
 use crate::rts_feedback::{AudioEvent, AudioSink, UiCue, effective_gains};
@@ -153,9 +155,9 @@ impl RtsUiState {
         self.pauses.manual = !self.pauses.manual;
     }
 
-    /// Gameplay gear/Escape: opens the paused one-button menu. A no-op from
-    /// any other page — the gear is unreachable once the HUD stops routing
-    /// clicks to it, and Escape has its own per-page meaning below.
+    /// Gameplay Menu/Escape: opens the paused menu. A no-op from any other
+    /// page — Menu is unreachable once the HUD stops routing clicks to it,
+    /// and Escape has its own per-page meaning below.
     pub fn open_menu(&mut self) {
         if self.page == UiPage::Gameplay {
             self.page = UiPage::PauseMenu;
@@ -190,7 +192,9 @@ impl RtsUiState {
         }
     }
 
-    fn close_menu(&mut self) {
+    /// Close the pause menu back to Gameplay. Clears `menu` + `focus` pause
+    /// reasons and any settings warning; leaves `manual` unchanged (`T1`).
+    pub fn close_menu(&mut self) {
         self.page = UiPage::Gameplay;
         self.pauses.menu = false;
         self.pauses.focus = false;
@@ -262,7 +266,7 @@ pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: Comma
 /// ever issues a world order or falls through to selection/placement logic.
 pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: HudHit, shift: bool) {
     match hit {
-        HudHit::Gear => {
+        HudHit::Menu => {
             session.ui.open_menu();
             session.emit_audio(AudioEvent::Ui(UiCue::Menu));
         }
@@ -317,6 +321,11 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
             session.emit_audio(AudioEvent::Ui(UiCue::Menu));
             None
         }
+        ModalHit::CloseMenu => {
+            session.ui.close_menu();
+            session.emit_audio(AudioEvent::Ui(UiCue::Menu));
+            None
+        }
         ModalHit::Back => {
             session.ui.settings_back();
             session.emit_audio(AudioEvent::Ui(UiCue::Menu));
@@ -364,20 +373,45 @@ fn modal_snapshot(settings: &RtsSettings, pending: Option<SettingsChange>) -> Mo
     }
 }
 
-/// App-crate `pack_hud`: packs the world-facing HUD exactly as
-/// `mmd_engine::rts::pack_hud` always has, then — only while a menu is open —
-/// appends the modal last, over everything else. Lives here (not in the
-/// engine crate) because it reads [`RtsUiState`]/[`RtsSettings`], both app
-/// types.
+/// Build the interaction snapshot the HUD/modal packers tint from.
+pub fn interaction_snapshot(
+    world: &RtsWorld,
+    ui: &RtsUiState,
+    cursor: [f32; 2],
+    pressed: Option<ControlId>,
+) -> InteractionSnapshot {
+    let hovered = match owner_for_point(world, ui, cursor) {
+        PointerOwner::Hud(hit) => control_id_from_hud_hit(world, hit),
+        PointerOwner::Modal(hit) => control_id_from_modal_hit(hit),
+        PointerOwner::World | PointerOwner::None => None,
+    };
+    InteractionSnapshot { hovered, pressed }
+}
+
+/// App-crate `pack_hud`: packs the world-facing HUD with the session's live
+/// interaction snapshot, then — only while a menu is open — appends the modal
+/// last, over everything else.
 pub fn pack_hud(world: &RtsWorld, session: &RtsSession, frame: &mut mmd_engine::rts::RtsFrame) {
-    mmd_engine::rts::pack_hud(world, frame);
+    let interaction = interaction_snapshot(
+        world,
+        &session.ui,
+        session.cursor_logical(),
+        session.pressed_control(),
+    );
+    pack_hud_interactive(world, &interaction, frame);
     let page = match session.ui.page {
         UiPage::Gameplay => return,
         UiPage::PauseMenu => ModalPage::PauseMenu,
         UiPage::Settings => ModalPage::Settings,
     };
     let snapshot = modal_snapshot(&session.settings, session.pending_setting_change);
-    mmd_engine::rts::pack_modal(page, snapshot, session.ui.warning.as_deref(), frame);
+    pack_modal_interactive(
+        page,
+        snapshot,
+        session.ui.warning.as_deref(),
+        &interaction,
+        frame,
+    );
 }
 
 /// The transactional settings commit, `T13`'s hard contract:
@@ -533,7 +567,8 @@ fn apply_runtime<W: WindowOps>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rts_feedback::FakeAudioSink;
+    use crate::rts_feedback::{FakeAudioSink, UiCue};
+    use crate::rts_run::RtsSession;
 
     #[test]
     fn default_pointer_owner_is_none() {
@@ -600,7 +635,7 @@ mod tests {
     }
 
     #[test]
-    fn gear_only_opens_from_gameplay() {
+    fn menu_only_opens_from_gameplay() {
         let mut ui = RtsUiState::default();
         ui.open_settings(); // no-op: not in PauseMenu yet
         assert_eq!(ui.page, UiPage::Gameplay);
@@ -608,6 +643,43 @@ mod tests {
         assert_eq!(ui.page, UiPage::PauseMenu);
         ui.open_menu(); // no-op: already open
         assert_eq!(ui.page, UiPage::PauseMenu);
+    }
+
+    #[test]
+    fn close_menu_preserves_manual_pause() {
+        let mut ui = RtsUiState::default();
+        ui.toggle_manual_pause();
+        ui.open_menu();
+        ui.close_menu();
+        assert_eq!(ui.page, UiPage::Gameplay);
+        assert!(ui.pauses.manual);
+        assert!(!ui.pauses.menu);
+        assert!(!ui.pauses.focus);
+        assert!(ui.sim_paused());
+    }
+
+    #[test]
+    fn close_menu_clears_menu_and_focus_pause() {
+        let mut ui = RtsUiState::default();
+        ui.focus_lost();
+        assert!(ui.pauses.focus);
+        assert!(ui.pauses.menu || ui.page == UiPage::PauseMenu);
+        ui.warning = Some("x".into());
+        ui.close_menu();
+        assert_eq!(ui.page, UiPage::Gameplay);
+        assert!(!ui.pauses.menu);
+        assert!(!ui.pauses.focus);
+        assert!(ui.warning.is_none());
+    }
+
+    #[test]
+    fn close_menu_activation_emits_menu_cue() {
+        let (session, handle) = RtsSession::for_test();
+        let mut session = session;
+        session.ui.open_menu();
+        handle_modal_click(&mut session, ModalHit::CloseMenu);
+        assert_eq!(session.ui.page, UiPage::Gameplay);
+        assert_eq!(handle.sink().ui_cues(), vec![UiCue::Menu]);
     }
 
     // -- Modal ownership ------------------------------------------------

@@ -11,11 +11,12 @@ use mmd_engine::render::{
 };
 use mmd_engine::rts::{
     BuildingKind, COMMAND_GRID_RECT, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y, EntityId, EntityKind,
-    GEAR_RECT, HudHit, HudLayout, MINIMAP_MAP_RECT, MULTI_ICON_COLS, MULTI_ICON_GAP_PX,
-    MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE,
-    PORTRAIT_POS, PORTRAIT_PX, Prop, ResourceKind, RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED,
-    TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slots, fmt_ratio, fmt_u32,
-    hud_hit_test, kind_label, minimap_projection, node_uv, pack_frame, pack_hud, prop_uv,
+    HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT, MULTI_ICON_COLS,
+    MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX,
+    PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, ResourceKind, RtsFrame, TEXT_TINT,
+    TEXT_TINT_BLOCKED, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slots,
+    fmt_ratio, fmt_u32, hud_hit_test, kind_label, minimap_projection, node_uv, pack_frame,
+    pack_hud,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -195,7 +196,7 @@ fn hud_uses_only_the_five_ui_groups() {
     );
 }
 
-// --- the top bar and gear -----------------------------------------------------
+// --- the top bar and menu -----------------------------------------------------
 
 #[test]
 fn the_top_bar_shows_the_stock() {
@@ -258,25 +259,32 @@ fn supply_is_normal_below_the_cap() {
 }
 
 #[test]
-fn the_gear_icon_appears_in_the_top_bar() {
+fn the_menu_control_appears_in_the_top_bar() {
     let h = scene();
     let mut frame = RtsFrame::new();
     pack_hud(h.world(), &mut frame);
     assert!(
-        props(&frame)
-            .iter()
-            .any(|i| i.pos == [GEAR_RECT[0], GEAR_RECT[1]]
-                && i.size == [GEAR_RECT[2], GEAR_RECT[3]]
-                && i.uv_rect == prop_uv(Prop::GearIcon)),
-        "the gear icon must be drawn at its documented rect"
+        props(&frame).iter().any(|i| {
+            i.pos == [MENU_RECT[0], MENU_RECT[1]] && i.size == [MENU_RECT[2], MENU_RECT[3]]
+        }),
+        "the MENU frame must be drawn at its documented rect"
+    );
+    assert_eq!(
+        text_at(&frame, MENU_TEXT_POS, PANEL_TEXT_SCALE, 4),
+        "MENU",
+        "the MENU label must be drawn at its documented position"
     );
     assert!(
         inside_rect(
-            [GEAR_RECT[0], GEAR_RECT[1]],
-            [GEAR_RECT[2], GEAR_RECT[3]],
+            [MENU_RECT[0], MENU_RECT[1]],
+            [MENU_RECT[2], MENU_RECT[3]],
             TOP_BAR_RECT
         ),
-        "the gear sits inside the top bar"
+        "the MENU control sits inside the top bar"
+    );
+    assert!(
+        MENU_RECT[0] + MENU_RECT[2] <= 1920.0,
+        "MENU frame must stay inside the 1920 logical edge"
     );
 }
 
@@ -669,16 +677,16 @@ fn pack_hud_does_not_mutate_the_world() {
 // --- hud_hit_test / minimap: HUD ownership (T12) ------------------------------
 
 #[test]
-fn hit_gear_is_gear() {
+fn hit_menu_is_menu() {
     let h = scene();
-    let p = [HudLayout::GEAR[0] + 8.0, HudLayout::GEAR[1] + 8.0];
-    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Gear));
+    let p = [HudLayout::MENU[0] + 8.0, HudLayout::MENU[1] + 8.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Menu));
 }
 
 #[test]
 fn hit_top_bar_gap_is_background_not_world() {
     let h = scene();
-    // Well clear of the gear, still inside the top bar.
+    // Well clear of MENU, still inside the top bar.
     let p = [800.0, TOP_BAR_RECT[1] + 20.0];
     assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Background));
 }
@@ -892,9 +900,14 @@ fn hit_a_point_off_the_hud_is_the_world() {
 // ---------------------------------------------------------------------------
 
 use mmd_engine::rts::{
-    CONFINE_CHECKBOX, EDGE_PAN_TRACK, FOCUS_CHECKBOX, KEYBOARD_PAN_TRACK, MASTER_TRACK,
-    MUSIC_TRACK, ModalHit, ModalPage, ModalSnapshot, PAN_MAX, PAN_MIN, SFX_TRACK, VOICE_TRACK,
-    VOLUME_MAX, VOLUME_MIN, WINDOW_MODE_BUTTONS, modal_hit_test, pack_modal,
+    CONFINE_CHECKBOX, CONFINE_CONTROL_RECT, CONTROL_FRAME_PX, CONTROL_TINT_DISABLED,
+    CONTROL_TINT_HOVER, CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED, CONTROL_TINT_SELECTED, ControlId,
+    ControlVisualState, EDGE_PAN_TRACK, FOCUS_CHECKBOX, FOCUS_CONTROL_RECT, GRID_CONTROL_RECT,
+    InteractionSnapshot, KEYBOARD_PAN_TRACK, MASTER_TRACK, MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_W,
+    ModalHit, ModalPage, ModalSnapshot, PAN_MAX, PAN_MIN, PAN_STEP, SFX_TRACK, VALUE_FIELD_H,
+    VALUE_FIELD_W, VALUE_FIELD_X, VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, WINDOW_MODE_BUTTONS,
+    command_slot_rect, control_tint, control_visual_state, modal_hit_test, mute_label_rect,
+    pack_modal, snap_track, value_field_rect,
 };
 
 fn default_snapshot() -> ModalSnapshot {
@@ -915,11 +928,9 @@ fn corner(rect: [f32; 4]) -> [f32; 2] {
     [rect[0] + 1.0, rect[1] + 1.0]
 }
 
-/// T13's test plan: the pause menu is a one-button modal — exactly the
-/// `Settings` button is a real hit, everywhere else in the modal's own
-/// footprint (and beyond) is consumed with no other action available.
+/// Pause menu: Settings + Close Menu are real hits; everything else is consumed.
 #[test]
-fn settings_menu_contains_only_settings_action() {
+fn settings_menu_contains_settings_and_close_actions() {
     assert_eq!(
         modal_hit_test(
             ModalPage::PauseMenu,
@@ -927,7 +938,14 @@ fn settings_menu_contains_only_settings_action() {
         ),
         ModalHit::OpenSettings
     );
-    // The modal's own panel, off the button: consumed, not an action.
+    assert_eq!(
+        modal_hit_test(
+            ModalPage::PauseMenu,
+            corner(HudLayout::PAUSE_MENU_CLOSE_BTN)
+        ),
+        ModalHit::CloseMenu
+    );
+    // The modal's own panel, off the buttons: consumed, not an action.
     assert_eq!(
         modal_hit_test(ModalPage::PauseMenu, corner(HudLayout::PAUSE_MENU)),
         ModalHit::Consumed
@@ -1055,4 +1073,250 @@ fn settings_pack_modal_is_a_pure_append_never_mutating_the_world() {
     let mut frame = RtsFrame::new();
     pack_modal(ModalPage::Settings, default_snapshot(), None, &mut frame);
     assert_eq!(h.state_hash(), before);
+}
+
+// ---------------------------------------------------------------------------
+// T1 — interaction FSM frontload: control states, Menu, Close, geometry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn control_visual_states_have_distinct_tints() {
+    let tints = [
+        control_tint(ControlVisualState::Idle),
+        control_tint(ControlVisualState::Hover),
+        control_tint(ControlVisualState::Pressed),
+        control_tint(ControlVisualState::Selected),
+        control_tint(ControlVisualState::Disabled),
+    ];
+    assert_eq!(tints[0], CONTROL_TINT_IDLE);
+    assert_eq!(tints[1], CONTROL_TINT_HOVER);
+    assert_eq!(tints[2], CONTROL_TINT_PRESSED);
+    assert_eq!(tints[3], CONTROL_TINT_SELECTED);
+    assert_eq!(tints[4], CONTROL_TINT_DISABLED);
+    for (i, a) in tints.iter().enumerate() {
+        for (j, b) in tints.iter().enumerate() {
+            if i != j {
+                assert_ne!(a, b, "tints {i} and {j} must be pairwise distinct");
+            }
+        }
+    }
+    assert_eq!(CONTROL_FRAME_PX, 2.0);
+    // Precedence: Disabled beats Pressed beats Hover beats Selected.
+    let snap = InteractionSnapshot {
+        hovered: Some(ControlId::Menu),
+        pressed: Some(ControlId::Menu),
+    };
+    assert_eq!(
+        control_visual_state(ControlId::Menu, &snap, true, true),
+        ControlVisualState::Disabled
+    );
+    assert_eq!(
+        control_visual_state(ControlId::Menu, &snap, true, false),
+        ControlVisualState::Pressed
+    );
+    let hover_only = InteractionSnapshot {
+        hovered: Some(ControlId::Menu),
+        pressed: None,
+    };
+    assert_eq!(
+        control_visual_state(ControlId::Menu, &hover_only, true, false),
+        ControlVisualState::Hover
+    );
+    assert_eq!(
+        control_visual_state(
+            ControlId::Menu,
+            &InteractionSnapshot::default(),
+            true,
+            false
+        ),
+        ControlVisualState::Selected
+    );
+    assert_eq!(
+        control_visual_state(
+            ControlId::Menu,
+            &InteractionSnapshot::default(),
+            false,
+            false
+        ),
+        ControlVisualState::Idle
+    );
+}
+
+#[test]
+fn menu_is_framed_text_control_at_existing_hit_coordinate() {
+    let h = scene();
+    let p = [1888.0, 24.0];
+    assert_eq!(hud_hit_test(h.world(), p), Some(HudHit::Menu));
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    assert!(
+        props(&frame).iter().any(|i| {
+            i.pos == [MENU_RECT[0], MENU_RECT[1]]
+                && i.size == [MENU_RECT[2], MENU_RECT[3]]
+                && i.tint == CONTROL_TINT_IDLE
+        }),
+        "MENU frame must be present at idle tint"
+    );
+    assert_eq!(text_at(&frame, MENU_TEXT_POS, PANEL_TEXT_SCALE, 4), "MENU");
+    assert!(MENU_RECT[0] + MENU_RECT[2] <= 1920.0);
+}
+
+#[test]
+fn all_command_cells_have_frames() {
+    let mut h = scene();
+    // Empty selection: all 9 cells disabled.
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    let disabled_frames = props(&frame)
+        .iter()
+        .filter(|i| i.tint == CONTROL_TINT_DISABLED && i.size == [64.0, 64.0])
+        .count();
+    assert_eq!(disabled_frames, 9, "empty selection → 9 disabled frames");
+
+    // Worker selected: build slots enabled (idle), others disabled.
+    let worker = workers(&h)[0];
+    h.world_mut().select_only(worker);
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    let frames: Vec<_> = props(&frame)
+        .iter()
+        .filter(|i| {
+            i.size == [64.0, 64.0]
+                && (i.tint == CONTROL_TINT_IDLE || i.tint == CONTROL_TINT_DISABLED)
+        })
+        .collect();
+    assert_eq!(frames.len(), 9, "mixed selection still frames all 9 cells");
+    for i in 0..9 {
+        let rect = command_slot_rect(i);
+        assert!(
+            props(&frame)
+                .iter()
+                .any(|p| p.pos == [rect[0], rect[1]] && p.size == [rect[2], rect[3]]),
+            "slot {i} missing frame at {rect:?}"
+        );
+    }
+}
+
+#[test]
+fn checkbox_label_row_is_one_control() {
+    // Square and far end of the label row must hit the same control.
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, corner(CONFINE_CHECKBOX)),
+        ModalHit::Confine
+    );
+    let row_end = [
+        CONFINE_CONTROL_RECT[0] + CONFINE_CONTROL_RECT[2] - 1.0,
+        CONFINE_CONTROL_RECT[1] + 1.0,
+    ];
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, row_end),
+        ModalHit::Confine,
+        "label row end is part of the control"
+    );
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, corner(FOCUS_CHECKBOX)),
+        ModalHit::Focus
+    );
+    let focus_end = [
+        FOCUS_CONTROL_RECT[0] + FOCUS_CONTROL_RECT[2] - 1.0,
+        FOCUS_CONTROL_RECT[1] + 1.0,
+    ];
+    assert_eq!(
+        modal_hit_test(ModalPage::Settings, focus_end),
+        ModalHit::Focus
+    );
+}
+
+#[test]
+fn close_menu_is_below_settings() {
+    let settings = HudLayout::PAUSE_MENU_SETTINGS_BTN;
+    let close = HudLayout::PAUSE_MENU_CLOSE_BTN;
+    assert_eq!(settings, [800.0, 508.0, 320.0, 64.0]);
+    assert_eq!(close, [800.0, 588.0, 320.0, 64.0]);
+    assert!(close[1] >= settings[1] + settings[3]);
+    assert_eq!(
+        modal_hit_test(ModalPage::PauseMenu, corner(close)),
+        ModalHit::CloseMenu
+    );
+    // Close sits inside the unmoved pause menu panel.
+    assert!(inside_rect(
+        [close[0], close[1]],
+        [close[2], close[3]],
+        HudLayout::PAUSE_MENU
+    ));
+}
+
+#[test]
+fn settings_button_still_contains_the_canonical_click() {
+    assert_eq!(
+        modal_hit_test(ModalPage::PauseMenu, [960.0, 540.0]),
+        ModalHit::OpenSettings
+    );
+}
+
+#[test]
+fn keyboard_pan_track_still_reads_seventy_eight_at_1170() {
+    assert_eq!(
+        snap_track(1170.0, KEYBOARD_PAN_TRACK, PAN_MIN, PAN_MAX, PAN_STEP),
+        78
+    );
+}
+
+fn rects_overlap(a: [f32; 4], b: [f32; 4]) -> bool {
+    a[0] < b[0] + b[2] && a[0] + a[2] > b[0] && a[1] < b[1] + b[3] && a[1] + a[3] > b[1]
+}
+
+fn inside_x_span(rect: [f32; 4], viewport: [f32; 4]) -> bool {
+    rect[0] >= viewport[0] && rect[0] + rect[2] <= viewport[0] + viewport[2]
+}
+
+#[test]
+fn settings_geometry_is_disjoint_and_inside_the_viewport() {
+    let vp = HudLayout::SETTINGS_BODY_VIEWPORT;
+    assert_eq!(vp, [456.0, 160.0, 1008.0, 720.0]);
+    assert_eq!(HudLayout::SETTINGS_PANEL, [440.0, 100.0, 1040.0, 880.0]);
+    assert_eq!(HudLayout::SETTINGS_BACK_BTN, [472.0, 900.0, 160.0, 56.0]);
+    assert_eq!(
+        HudLayout::SETTINGS_SCROLLBAR_TRACK,
+        [1432.0, 160.0, 16.0, 720.0]
+    );
+    assert_eq!(GRID_CONTROL_RECT, [568.0, 564.0, 784.0, 32.0]);
+
+    let tracks = [
+        KEYBOARD_PAN_TRACK,
+        EDGE_PAN_TRACK,
+        MASTER_TRACK,
+        MUSIC_TRACK,
+        VOICE_TRACK,
+        SFX_TRACK,
+    ];
+    let fields: Vec<[f32; 4]> = tracks.iter().copied().map(value_field_rect).collect();
+    let mutes: Vec<[f32; 4]> = [MASTER_TRACK, MUSIC_TRACK, VOICE_TRACK, SFX_TRACK]
+        .iter()
+        .copied()
+        .map(mute_label_rect)
+        .collect();
+    let scrollbar = HudLayout::SETTINGS_SCROLLBAR_TRACK;
+
+    for t in tracks {
+        assert!(inside_x_span(t, vp), "track {t:?} outside viewport x");
+        // track ends at 1352; field starts 1368 — no overlap
+        assert_eq!(t[0] + t[2], 1352.0);
+    }
+    for f in &fields {
+        assert_eq!(*f, [VALUE_FIELD_X, f[1], VALUE_FIELD_W, VALUE_FIELD_H]);
+        assert!(inside_x_span(*f, vp), "field {f:?} outside viewport x");
+        assert!(!rects_overlap(*f, scrollbar));
+        for t in tracks {
+            assert!(!rects_overlap(*f, t), "field overlaps track");
+        }
+    }
+    for m in &mutes {
+        assert_eq!(m[2], MUTE_LABEL_W);
+        assert_eq!(m[3], MUTE_LABEL_H);
+        assert!(inside_x_span(*m, vp));
+    }
+    assert!(inside_x_span(scrollbar, vp));
+    // Back sits below the viewport (fixed footer).
+    assert!(HudLayout::SETTINGS_BACK_BTN[1] > vp[1] + vp[3]);
 }

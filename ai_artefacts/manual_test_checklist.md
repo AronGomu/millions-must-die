@@ -213,3 +213,14 @@ command below except what a browser or a human eye must judge.
 - [ ] Run the merge gate's RTS smoke in its real windowed form — `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — and confirm it exits 0 with the exit line ending `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. The agent ran this offscreen only; the windowed run is the one that proves window + pointer + audio.
 - [ ] Run `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` and the `collision_sprite_v1` twin in their real windowed form and confirm both exit cleanly; the agent ran them offscreen.
 - [ ] Confirm `cargo run -p xtask -- audio --check` prints `audio: ok (7 wav + manifest)` on your machine, and that `git status` is clean afterwards.
+
+## T1 interaction-fsm-menu-close
+
+- [ ] Launch `cargo run -- rts`: confirm top-right control shows framed text `MENU` (not a gear icon); click it and confirm the pause menu opens with a Menu SFX.
+- [ ] Hover and press `MENU`, command-grid cells (empty + filled), selection icons, Settings/Close/Back/window-mode/checkbox rows: confirm idle/hover/pressed/selected/disabled frames are pairwise-distinct and readable.
+- [ ] Open pause menu: confirm Settings still at centre `[960,540]` and Close Menu sits directly below; click Close Menu and confirm return to gameplay with one Menu SFX.
+- [ ] Space to pause, open Menu, Close Menu: confirm manual Space pause is still active (sim stays paused) after close.
+- [ ] Open Menu, press on Settings, drag to Close Menu, release: confirm neither Settings nor Close activates.
+- [ ] Open Menu, press on modal chrome, drag onto the world, release: confirm no world select/order.
+- [ ] Escape nesting still works (Gameplay→Menu→Settings→Menu→Gameplay); no F10 binding appears.
+- [ ] Open Settings: confirm panel is wider, audio rows sit lower (96px pitch), checkbox label rows are fully hittable, Back still works; keyboard-pan track at x=1170 still reads 78 after a click there.

@@ -90,6 +90,7 @@ use crate::rts_window::{
     self, ClaimedWindow, FocusAction, ModeCandidate, RtsWindowState, SdlWindowOps, WindowOps,
 };
 use crate::run::RunError;
+use mmd_engine::rts::{control_id_from_hud_hit, control_id_from_modal_hit};
 
 /// Frames rendered when neither `--frames` nor `MMD_RTS_FRAMES` is given and
 /// no window could be opened.
@@ -115,6 +116,10 @@ pub(crate) struct RtsSession {
     cursor: [f32; 2],
     /// Left button pressed at this position, if it is down.
     press: Option<[f32; 2]>,
+    /// Owner classified at pointer-down — retained until release (`T1`).
+    press_owner: PointerOwner,
+    /// Stable control identity at pointer-down, when the owner named one.
+    press_control: Option<mmd_engine::rts::ControlId>,
     drag: Option<DragBox>,
     /// Currently held keyboard pan directions, summed and clamped per axis.
     keyboard_held: [f32; 2],
@@ -173,6 +178,8 @@ impl RtsSession {
         Self {
             cursor: [0.0, 0.0],
             press: None,
+            press_owner: PointerOwner::None,
+            press_control: None,
             drag: None,
             keyboard_held: [0.0, 0.0],
             ui: RtsUiState::default(),
@@ -189,6 +196,24 @@ impl RtsSession {
             selection_before: Vec::with_capacity(MAX_SELECTION),
             selection_after: Vec::with_capacity(MAX_SELECTION),
         }
+    }
+
+    /// Logical cursor position the HUD packer tints hover from.
+    pub(crate) fn cursor_logical(&self) -> [f32; 2] {
+        self.cursor
+    }
+
+    /// Control currently held under the left button, if any.
+    pub(crate) fn pressed_control(&self) -> Option<mmd_engine::rts::ControlId> {
+        self.press_control
+    }
+
+    /// Clear retained pointer-down state (focus loss, content-bar cancel).
+    pub(crate) fn clear_press(&mut self) {
+        self.press = None;
+        self.press_owner = PointerOwner::None;
+        self.press_control = None;
+        self.drag = None;
     }
 
     /// Count and forward one derived event. A sink failure latches into
@@ -295,6 +320,107 @@ fn emit_selection_cues(world: &RtsWorld, session: &mut RtsSession) {
     }
 }
 
+/// Record pointer-down owner + stable control id (`T1`).
+pub(crate) fn pointer_down(world: &RtsWorld, session: &mut RtsSession, p: [f32; 2]) {
+    session.cursor = p;
+    session.press = Some(p);
+    let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
+    session.press_owner = owner;
+    session.press_control = match owner {
+        PointerOwner::Hud(hit) => control_id_from_hud_hit(world, hit),
+        PointerOwner::Modal(hit) => control_id_from_modal_hit(hit),
+        PointerOwner::World | PointerOwner::None => None,
+    };
+}
+
+/// Whether release may activate given retained down identity (`T1`).
+fn activation_matches(world: &RtsWorld, session: &RtsSession, up_owner: PointerOwner) -> bool {
+    match session.press_control {
+        Some(down_id) => match up_owner {
+            PointerOwner::Hud(hit) => control_id_from_hud_hit(world, hit) == Some(down_id),
+            PointerOwner::Modal(hit) => control_id_from_modal_hit(hit) == Some(down_id),
+            PointerOwner::World | PointerOwner::None => false,
+        },
+        // No discrete control on down: only world/minimap-style owners activate
+        // when the release stays on the same owner kind (never modal/HUD leak).
+        None => match (session.press_owner, up_owner) {
+            (PointerOwner::World, PointerOwner::World) => true,
+            (
+                PointerOwner::Hud(mmd_engine::rts::HudHit::Minimap(_)),
+                PointerOwner::Hud(mmd_engine::rts::HudHit::Minimap(_)),
+            ) => true,
+            _ => false,
+        },
+    }
+}
+
+/// Activate one world left-click at `p` (select / place / rally).
+fn activate_world_left(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 2]) {
+    if let Some(building) = session.pending_rally.take() {
+        let view = world.iso_view();
+        let width = world.scenario().width();
+        let height = world.scenario().height();
+        let cell = view.cell_at(p[0], p[1], width, height);
+        let _ = world.set_rally(building, cell);
+    } else if let Placement::Pending { kind } = world.placement() {
+        let view = world.iso_view();
+        let width = world.scenario().width();
+        let height = world.scenario().height();
+        if let Some(cell) = view.cell_at(p[0], p[1], width, height) {
+            let min = ghost_min_corner(cell, kind.footprint_cells());
+            if let Some(builder) = find_builder(world) {
+                let _ = world.confirm_placement(min, builder);
+            }
+        }
+    } else {
+        let view = world.iso_view();
+        world.click_select(&view, p);
+    }
+}
+
+/// Pointer-up activation using retained down owner/control (`T1`).
+pub(crate) fn pointer_up(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 2], shift: bool) {
+    session.cursor = p;
+    selection_snapshot(world, session);
+    let up_owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
+    let down_owner = session.press_owner;
+    let matched = activation_matches(world, session, up_owner);
+    // Clear retained press before handlers (they may open menus / change page).
+    session.press = None;
+    session.press_owner = PointerOwner::None;
+    session.press_control = None;
+    session.drag = None;
+
+    if !matched {
+        // Modal/HUD down never leaks to world after motion; mismatched IDs no-op.
+        emit_selection_cues(world, session);
+        return;
+    }
+
+    match down_owner {
+        PointerOwner::Modal(_) => {
+            if let PointerOwner::Modal(hit) = up_owner {
+                crate::rts_ui::handle_modal_click(session, hit);
+            }
+        }
+        PointerOwner::Hud(_) => {
+            if let PointerOwner::Hud(hit) = up_owner {
+                crate::rts_ui::handle_hud_click(world, session, hit, shift);
+            }
+        }
+        PointerOwner::World => {
+            if shift {
+                let view = world.iso_view();
+                world.shift_click_select(&view, p);
+            } else {
+                activate_world_left(world, session, p);
+            }
+        }
+        PointerOwner::None => {}
+    }
+    emit_selection_cues(world, session);
+}
+
 /// Apply one [`RtsCommand`] to `world`/`session`. Shared by the live SDL path
 /// and the scripted path, so the two cannot drift — including the audio
 /// events derived from each command's own receipts (`T15`).
@@ -324,67 +450,24 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
             let edge = edge_pan_dir(p, [VIEW_WIDTH as f32, VIEW_HEIGHT as f32]);
             world.set_edge_pan_dir(edge);
         }
+        // Scripted lclick synthesizes atomic down/up on the same control (`T1`).
         RtsCommand::LeftClick(p) => {
-            selection_snapshot(world, session);
-            // An open modal owns every point first (`T13`) — even outside
-            // its own controls; then the HUD owns any click inside its own
-            // chrome — neither ever falls through to placement/select/rally,
-            // per T12's hard constraint.
-            let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
-            if let PointerOwner::Modal(hit) = owner {
-                crate::rts_ui::handle_modal_click(session, hit);
-            } else if let PointerOwner::Hud(hit) = owner {
-                crate::rts_ui::handle_hud_click(world, session, hit, false);
-            } else if let Some(building) = session.pending_rally.take() {
-                // A `SetRally`-armed pending action: this is the next world
-                // click, so it sets the cell instead of selecting/placing.
-                let view = world.iso_view();
-                let width = world.scenario().width();
-                let height = world.scenario().height();
-                let cell = view.cell_at(p[0], p[1], width, height);
-                let _ = world.set_rally(building, cell);
-            } else if let Placement::Pending { kind } = world.placement() {
-                let view = world.iso_view();
-                let width = world.scenario().width();
-                let height = world.scenario().height();
-                if let Some(cell) = view.cell_at(p[0], p[1], width, height) {
-                    let min = ghost_min_corner(cell, kind.footprint_cells());
-                    if let Some(builder) = find_builder(world) {
-                        let _ = world.confirm_placement(min, builder);
-                    }
-                }
-            } else {
-                let view = world.iso_view();
-                world.click_select(&view, p);
-            }
-            emit_selection_cues(world, session);
+            pointer_down(world, session, p);
+            pointer_up(world, session, p, false);
         }
         RtsCommand::ShiftClick(p) => {
-            selection_snapshot(world, session);
-            // A shift-click never confirms a placement, and an open
-            // modal/the HUD still own their own chrome first.
-            let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
-            if matches!(owner, PointerOwner::Modal(_)) {
-                // Consumed: a modal has no shift-click gesture of its own.
-            } else if let PointerOwner::Hud(hit) = owner {
-                crate::rts_ui::handle_hud_click(world, session, hit, true);
-            } else {
-                let view = world.iso_view();
-                world.shift_click_select(&view, p);
-            }
-            emit_selection_cues(world, session);
+            pointer_down(world, session, p);
+            pointer_up(world, session, p, true);
         }
         RtsCommand::Drag(a, b) => {
+            // Scripted drag: only a world-origin press becomes a box select.
+            pointer_down(world, session, a);
             selection_snapshot(world, session);
-            // A drag that started on a modal/the HUD is consumed, not a box
-            // select — none of those have a drag gesture of their own.
-            if matches!(
-                crate::rts_ui::owner_for_point(world, &session.ui, a),
-                PointerOwner::World
-            ) {
+            if matches!(session.press_owner, PointerOwner::World) {
                 let view = world.iso_view();
                 world.box_select_into_selection(&view, a, b);
             }
+            session.clear_press();
             emit_selection_cues(world, session);
         }
         RtsCommand::RightClick(p) => {
@@ -833,8 +916,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                             session.settings.gameplay.pause_on_focus_loss,
                             || {
                                 session.keyboard_held = [0.0, 0.0];
-                                session.press = None;
-                                session.drag = None;
+                                session.clear_press();
                                 world.set_keyboard_pan_dir([0.0, 0.0]);
                                 world.set_edge_pan_dir([0.0, 0.0]);
                             },
@@ -897,7 +979,11 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     // A press that starts in a bar leaves `press` unset, so a
                     // release anywhere cannot read it as a drag/click origin
                     // — the bar press did nothing, per contract.
-                    session.press = mapped.inside_content.then_some(mapped.logical);
+                    if mapped.inside_content {
+                        pointer_down(&world, &mut session, mapped.logical);
+                    } else {
+                        session.clear_press();
+                    }
                 }
                 Event::MouseButtonUp {
                     mouse_btn: MouseButton::Left,
@@ -906,23 +992,28 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     ..
                 } => {
                     let mapped = viewport.map_pointer([x, y]);
-                    session.drag = None;
-                    if mapped.inside_content {
+                    if mapped.inside_content && session.press.is_some() {
                         let end = mapped.logical;
                         let shift = {
                             let ks = pump.keyboard_state();
                             ks.is_scancode_pressed(Scancode::LShift)
                                 || ks.is_scancode_pressed(Scancode::RShift)
                         };
-                        let cmd = if shift {
-                            RtsCommand::ShiftClick(end)
-                        } else if session.press.is_some_and(|a| is_drag(a, end)) {
-                            RtsCommand::Drag(session.press.unwrap(), end)
+                        // World-origin drag becomes a box select; otherwise
+                        // matching down/up control activates (`T1`).
+                        if !shift
+                            && matches!(session.press_owner, PointerOwner::World)
+                            && session.press.is_some_and(|a| is_drag(a, end))
+                        {
+                            let start = session.press.unwrap();
+                            selection_snapshot(&world, &mut session);
+                            let view = world.iso_view();
+                            world.box_select_into_selection(&view, start, end);
+                            session.clear_press();
+                            emit_selection_cues(&world, &mut session);
                         } else {
-                            RtsCommand::LeftClick(end)
-                        };
-                        session.press = None;
-                        apply(&mut world, &mut session, cmd);
+                            pointer_up(&mut world, &mut session, end, shift);
+                        }
                         if let Some(change) = session.pending_setting_change.take() {
                             // Through the claim-aware seam: a window-mode
                             // change must run with the GPU claim released and
@@ -967,7 +1058,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         }
                     } else {
                         // Release in a bar: no click/drag/order, per contract.
-                        session.press = None;
+                        session.clear_press();
                     }
                 }
                 Event::MouseButtonUp {

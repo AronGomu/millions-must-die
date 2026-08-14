@@ -1270,8 +1270,8 @@ fn the_window_is_released_before_it_drops() {
 // 6. HUD routing and the minimap (T12)
 // ---------------------------------------------------------------------------
 
-/// A point inside the top-right settings gear — HUD chrome, no world
-/// meaning.
+/// A point inside the top-right MENU control — HUD chrome, no world meaning.
+/// Canonical acceptance coordinate `[1888, 24]` stays inside `HudLayout::MENU`.
 fn gear_click_screen() -> [f32; 2] {
     [1888.0, 24.0]
 }
@@ -1470,9 +1470,9 @@ fn pause_menu_settings_screen() -> [f32; 2] {
     [960.0, 540.0]
 }
 
-/// Inside the settings panel's `Back` control.
+/// Inside the settings panel's `Back` control (`HudLayout::SETTINGS_BACK_BTN`).
 fn settings_back_screen() -> [f32; 2] {
-    [632.0, 928.0]
+    [552.0, 928.0]
 }
 
 #[test]

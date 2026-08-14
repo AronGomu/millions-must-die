@@ -189,8 +189,8 @@ const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
     ),
     (
         [1888.0, 24.0],
-        ScriptPoint::Hud(HudHit::Gear),
-        "settings gear centre",
+        ScriptPoint::Hud(HudHit::Menu),
+        "settings menu centre",
     ),
     (
         [1170.0, 288.0],

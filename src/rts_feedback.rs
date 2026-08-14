@@ -151,7 +151,7 @@ impl VoiceBatch {
 /// Which UI surface a click SFX came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiCue {
-    /// Gear icon, and every pause-menu navigation button.
+    /// Menu control, and every pause-menu navigation button.
     Menu,
     /// A settings control that accepted a new value.
     Settings,
@@ -713,8 +713,8 @@ mod tests {
         let worker = player_units(&world, UnitKind::Worker)[0];
         world.select_only(worker);
 
-        // 1. Gear -> Menu.
-        crate::rts_ui::handle_hud_click(&mut world, &mut session, HudHit::Gear, false);
+        // 1. Menu control -> Menu cue.
+        crate::rts_ui::handle_hud_click(&mut world, &mut session, HudHit::Menu, false);
         // 2. Pause menu's Settings button -> Menu, then a settings edit ->
         //    Settings.
         crate::rts_ui::handle_modal_click(&mut session, ModalHit::OpenSettings);
@@ -782,6 +782,45 @@ mod tests {
         );
 
         assert_eq!(audio.sink().ui_cues(), Vec::<UiCue>::new());
+    }
+
+    #[test]
+    fn activation_requires_matching_down_and_up_control() {
+        let (mut world, mut session, audio) = session_with_world();
+        session.ui.open_menu();
+        let settings = [
+            HudLayout::PAUSE_MENU_SETTINGS_BTN[0] + 10.0,
+            HudLayout::PAUSE_MENU_SETTINGS_BTN[1] + 10.0,
+        ];
+        let close = [
+            HudLayout::PAUSE_MENU_CLOSE_BTN[0] + 10.0,
+            HudLayout::PAUSE_MENU_CLOSE_BTN[1] + 10.0,
+        ];
+        // Down Settings, up Close → no activation / no cue.
+        crate::rts_run::pointer_down(&world, &mut session, settings);
+        crate::rts_run::pointer_up(&mut world, &mut session, close, false);
+        assert_eq!(session.ui.page, crate::rts_ui::UiPage::PauseMenu);
+        assert!(audio.sink().ui_cues().is_empty());
+
+        // Matching down/up on Settings still opens.
+        crate::rts_run::pointer_down(&world, &mut session, settings);
+        crate::rts_run::pointer_up(&mut world, &mut session, settings, false);
+        assert_eq!(session.ui.page, crate::rts_ui::UiPage::Settings);
+        assert_eq!(audio.sink().ui_cues(), vec![UiCue::Menu]);
+    }
+
+    #[test]
+    fn modal_press_never_leaks_to_world() {
+        let (mut world, mut session, _audio) = session_with_world();
+        let before = world.selection().ids().to_vec();
+        session.ui.open_menu();
+        let modal_gap = [10.0, 10.0];
+        let world_pt = [960.0, 400.0];
+        // Down on modal, move to world, up — no select/order.
+        crate::rts_run::pointer_down(&world, &mut session, modal_gap);
+        crate::rts_run::pointer_up(&mut world, &mut session, world_pt, false);
+        assert_eq!(world.selection().ids(), before.as_slice());
+        assert_eq!(session.ui.page, crate::rts_ui::UiPage::PauseMenu);
     }
 
     // -- Music -----------------------------------------------------------
