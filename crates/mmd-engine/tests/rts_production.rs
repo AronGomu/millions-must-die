@@ -991,3 +991,39 @@ fn new_spawn_joins_same_tick_collision() {
         "the queued worker never appeared"
     );
 }
+
+/// Production places a finished unit itself, on the nearest free legal body
+/// centre, so a producing run never needs the overlap-repair pass — which the
+/// shipping build does not compile at all.
+#[test]
+fn production_never_runs_overlap_repair() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    assert_eq!(h.world().body_overlap_count(), 0, "the scene starts clean");
+    assert_eq!(
+        h.world().overlap_repair_runs(),
+        0,
+        "seeding must not need the repair pass"
+    );
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+
+    for tick in 1..=(2 * WORKER_PRODUCE_TICKS as u64 + 240) {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick} ended with a merged pair"
+        );
+        assert_eq!(
+            h.world().overlap_repair_runs(),
+            0,
+            "tick {tick} ran the overlap repair pass on the production path"
+        );
+    }
+    assert_eq!(
+        h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
+        8,
+        "both queued workers must have been produced, or this run proved nothing"
+    );
+}

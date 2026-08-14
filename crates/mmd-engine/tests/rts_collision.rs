@@ -15,10 +15,14 @@ use std::process::Command;
 
 use mmd_engine::rts::{
     EntityId, EntityKind, OWNER_PLAYER, Order, RTS_UNIT_BODY_DIAMETER_CELLS,
-    RTS_UNIT_BODY_RADIUS_CELLS, UnitKind, moving_circle_hits_point, units_overlap,
+    RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, TickError, UnitKind, moving_circle_hits_point,
+    units_overlap,
 };
 use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
+
+mod common;
+use common::{ONE_FREE_CENTRE, one_free_centre_spec};
 
 const W: u32 = 64;
 const H: u32 = 64;
@@ -582,6 +586,11 @@ fn forced_overlap_is_repaired() {
         None,
         "an open map always has a legal free centre to repair into"
     );
+    assert_eq!(
+        h.world().overlap_repair_runs(),
+        1,
+        "the forced overlap must have armed exactly one repair pass"
+    );
     assert_no_overlap(&h, "after one repaired tick");
     // The repaired unit must land on a legal centre, not merely a free one.
     let blocked = h.world().static_nav().center_blocked();
@@ -593,6 +602,174 @@ fn forced_overlap_is_repaired() {
             "repaired unit at {p:?} stands on a blocked cell"
         );
     }
+}
+
+/// An overlap the grid cannot repair is reported on **every** tick, not just
+/// the first: the pass stays armed until it ends clean, so a world holding an
+/// unrepairable penetration never quietly resumes moving.
+///
+/// The scene's grid holds exactly one legal body centre, which the seeded
+/// worker already stands on, so a second body forced onto the same point has
+/// nowhere at all to go.
+#[test]
+fn an_unrepairable_overlap_is_reported_on_every_tick() {
+    let mut h = RtsHarness::spec(one_free_centre_spec())
+        .build()
+        .expect("one-free-centre scene");
+    let seeded = workers(&h);
+    assert_eq!(seeded.len(), 1, "the pocket scene seeds one worker");
+    assert_eq!(
+        pos(&h, seeded[0]),
+        ONE_FREE_CENTRE,
+        "the seeded worker must stand on the grid's only legal body centre"
+    );
+
+    let twin = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Worker),
+            OWNER_PLAYER,
+            ONE_FREE_CENTRE,
+        )
+        .expect("spawn a second worker on the same point");
+    assert!(
+        units_overlap(pos(&h, seeded[0]), RADIUS, pos(&h, twin), RADIUS),
+        "the forced state must actually be illegal, or this proves nothing"
+    );
+
+    for tick in 1..=2u64 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().last_tick_error(),
+            Some(TickError::UnrepairableOverlap),
+            "tick {tick} must report the overlap it could not repair"
+        );
+        assert_eq!(
+            h.world().overlap_repair_runs(),
+            tick,
+            "the pass must stay armed and retry on tick {tick}"
+        );
+        assert_eq!(
+            pos(&h, seeded[0]),
+            ONE_FREE_CENTRE,
+            "an unrepairable tick moves nobody"
+        );
+        assert_eq!(
+            pos(&h, twin),
+            ONE_FREE_CENTRE,
+            "an unrepairable tick moves nobody"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The repair pass is not part of the game
+// ---------------------------------------------------------------------------
+
+/// The tracked scene, seeded and then walked as a gathering group, never arms
+/// the overlap-repair pass — and never merges two bodies either.
+///
+/// This is the invariant the shipping build depends on: it compiles no repair
+/// pass at all, so if seeding or movement could hand the world a penetration,
+/// nothing would clear it. `overlap_repair_runs() == 0` is the proof that the
+/// pass never had anything to do here; `body_overlap_count() == 0` is the
+/// proof that this is because there was no overlap, not because the oracle is
+/// blind.
+#[test]
+fn movement_never_runs_overlap_repair() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let group = workers(&h);
+    assert_eq!(group.len(), 6, "the tracked scene seeds six workers");
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "the seed path handed the world a merged pair"
+    );
+    assert_eq!(
+        h.world().overlap_repair_runs(),
+        0,
+        "seeding must not need the repair pass"
+    );
+
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    assert!(
+        h.world_mut().order_gather_group(&group, node).is_ok(),
+        "the whole group must take the gather order"
+    );
+
+    for tick in 1..=600u64 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick} ended with a merged pair"
+        );
+        assert_eq!(
+            h.world().overlap_repair_runs(),
+            0,
+            "tick {tick} ran the overlap repair pass on a normal movement path"
+        );
+    }
+}
+
+/// A repair-capable run and a repair-disabled run of the same world end in the
+/// same state, hash for hash.
+///
+/// Arming the pass on a valid world is a no-op — that is exactly why the
+/// shipping build may omit it. The armed run re-arms before every tick (an
+/// identity reposition writes the body's own coordinates back, which changes
+/// no state), so the only difference between the two worlds is whether the
+/// pass ran at all: 400 times against 0.
+#[test]
+fn arming_overlap_repair_on_a_valid_world_changes_no_state() {
+    fn contended_run() -> RtsHarness {
+        let mut h = harness(scattered_spawns(4));
+        let w = workers(&h);
+        assert_eq!(w.len(), 4);
+        assert_eq!(
+            h.world_mut().order_move_group(&w, Cell { x: 20, y: 20 }),
+            Ok(4)
+        );
+        h
+    }
+
+    let mut disabled = contended_run();
+    disabled.step_exact(400);
+    assert_eq!(
+        disabled.world().overlap_repair_runs(),
+        0,
+        "a run that touches no test hook must never run the repair pass"
+    );
+
+    let mut armed = contended_run();
+    let first = workers(&armed)[0];
+    for _ in 0..400 {
+        let p = pos(&armed, first);
+        assert!(
+            armed.world_mut().force_position_for_test(first, p),
+            "the arming reposition must accept a live id"
+        );
+        armed.step_exact(1);
+    }
+    assert_eq!(
+        armed.world().overlap_repair_runs(),
+        400,
+        "the armed run must have run the pass on every tick"
+    );
+
+    assert_eq!(
+        disabled.state_hash_hex(),
+        armed.state_hash_hex(),
+        "the repair pass changed a valid world's state; the shipping build \
+         omits it, so it must change nothing"
+    );
+    assert_eq!(
+        disabled.state_hash_hex(),
+        canonical_hash(),
+        "the repair-disabled run must still be the canonical contended run the \
+         cross-process determinism test hashes"
+    );
 }
 
 // ---------------------------------------------------------------------------

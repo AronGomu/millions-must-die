@@ -163,12 +163,14 @@ pub enum RtsWorldError {
 /// replay must reproduce exactly, not a place to carry a formatted string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TickError {
-    /// A tick started with two unit bodies merged (only
-    /// [`RtsWorld::force_position_for_test`] and a store mutation can
-    /// produce that) and the grid had no legal free centre to repair one of
-    /// them into. The movement system is skipped for that tick rather than
-    /// compounding an illegal state, and the overlap is reported here rather
-    /// than silently kept.
+    /// A tick started with two unit bodies merged and the grid had no legal
+    /// free centre to repair one of them into. Only
+    /// [`RtsWorld::force_position_for_test`] and a raw store mutation through
+    /// [`RtsWorld::entities_mut`] can produce that, and both arm a repair pass
+    /// the shipping build does not compile — so a shipping tick never sets
+    /// this. The movement system is skipped for that tick rather than
+    /// compounding an illegal state, the repair stays armed so the next tick
+    /// retries, and the overlap is reported here rather than silently kept.
     #[error("a merged unit body could not be repaired: no legal free position exists")]
     UnrepairableOverlap,
 }
@@ -208,6 +210,24 @@ pub struct RtsWorld {
     /// start of every movement pass, so it always describes the last tick and
     /// never an older one.
     last_tick_error: Option<TickError>,
+    /// Testkit only: has a raw store mutation happened since the last clean
+    /// overlap-repair pass? Nothing in the game can merge two bodies — every
+    /// path that places a unit (seeding, movement, production, the push off a
+    /// finished building) already respects them — so the repair pass exists
+    /// solely for [`Self::force_position_for_test`] and [`Self::entities_mut`]
+    /// and runs only when one of them has armed it. The shipping tick compiles
+    /// no repair pass at all.
+    ///
+    /// Sticky on failure: an overlap the grid cannot repair leaves this set, so
+    /// the pass retries and re-reports [`TickError::UnrepairableOverlap`] every
+    /// tick instead of going quiet after one.
+    #[cfg(feature = "testkit")]
+    repair_armed: bool,
+    /// Testkit only: how many overlap-repair passes have actually run. The
+    /// deterministic work count the repair-disabled invariants assert on —
+    /// never a timing.
+    #[cfg(feature = "testkit")]
+    repair_runs: u64,
     selection: Selection,
     /// Scratch buffer for a box select's result, before it replaces
     /// [`Self::selection`]. Reserved to [`MAX_ENTITIES`] so no selection
@@ -684,6 +704,10 @@ impl RtsWorld {
             candidate_pos: Vec::with_capacity(MAX_ENTITIES),
             pushed: Vec::with_capacity(MAX_ENTITIES),
             last_tick_error: None,
+            #[cfg(feature = "testkit")]
+            repair_armed: false,
+            #[cfg(feature = "testkit")]
+            repair_runs: 0,
             selection: Selection::new(),
             pick_scratch: Vec::with_capacity(MAX_ENTITIES),
             placement: Placement::None,
@@ -750,8 +774,14 @@ impl RtsWorld {
     /// Direct entity-store mutation. A test hook: hard unit collision makes a
     /// raw position or spawn a world invariant, so shipping code routes
     /// through [`RtsWorld`]'s own systems instead.
+    ///
+    /// Taking this borrow **arms the overlap-repair pass** ([`Self::repair_armed`]):
+    /// the writes it hands out cannot be observed from here, so a raw store
+    /// mutation is assumed to be able to merge two bodies. The next tick's
+    /// repair pass is what clears one.
     #[cfg(feature = "testkit")]
     pub fn entities_mut(&mut self) -> &mut EntityStore {
+        self.repair_armed = true;
         &mut self.entities
     }
 
@@ -759,15 +789,17 @@ impl RtsWorld {
     /// body**.
     ///
     /// The one supported way to construct a penetrating world state. Nothing
-    /// in the game can produce one; the next tick's repair pass
-    /// ([`Self::last_tick_error`]) is what must clear it, and this hook is how
-    /// that pass is exercised. `false` for a stale id.
+    /// in the game can produce one, so this hook **arms the overlap-repair
+    /// pass** ([`Self::repair_armed`]) and the next tick's pass is what must
+    /// clear it, reporting [`Self::last_tick_error`] when it cannot. `false`
+    /// for a stale id, and a stale id arms nothing.
     #[cfg(feature = "testkit")]
     pub fn force_position_for_test(&mut self, id: EntityId, pos: [f32; 2]) -> bool {
         let Some(slot) = self.entities.slot(id) else {
             return false;
         };
         self.entities.set_position(slot, pos);
+        self.repair_armed = true;
         true
     }
 
@@ -777,6 +809,17 @@ impl RtsWorld {
     /// grid had no free legal centre to repair — see [`TickError`].
     pub fn last_tick_error(&self) -> Option<TickError> {
         self.last_tick_error
+    }
+
+    /// Testkit only: how many overlap-repair passes this world has run.
+    ///
+    /// The pass is armed by [`Self::force_position_for_test`] and
+    /// [`Self::entities_mut`] and by nothing else, so a run that touches
+    /// neither must report `0` — that is the observation the repair-disabled
+    /// invariants assert on, and it is a work count, never a timing.
+    #[cfg(feature = "testkit")]
+    pub fn overlap_repair_runs(&self) -> u64 {
+        self.repair_runs
     }
 
     /// Direct resource-stock mutation. A test hook: phase 1 has no order
@@ -2064,10 +2107,11 @@ impl RtsWorld {
     ///
     /// 1. collect every live unit's slot and body position
     ///    ([`Self::collect_unit_bodies`]);
-    /// 2. repair any penetration the world was handed
+    /// 2. **testkit builds only, and only when a test hook armed it**: repair
+    ///    any penetration the world was handed
     ///    ([`Self::repair_body_overlaps`]) — nothing in the game can produce
-    ///    one, only [`Self::force_position_for_test`] and a raw store
-    ///    mutation can;
+    ///    one, only [`Self::force_position_for_test`] and a raw store mutation
+    ///    can, so the shipping tick skips straight from phase 1 to phase 3;
     /// 3. propose and commit one candidate step per unit, sequentially, in an
     ///    order rotated by the tick index.
     ///
@@ -2076,11 +2120,12 @@ impl RtsWorld {
     /// unit's current body — final position for a unit already processed this
     /// tick, last tick's position for one not yet processed. So by induction
     /// on the traversal: the set of committed bodies starts non-overlapping
-    /// (phase 2 guarantees it), and each accepted candidate is non-overlapping
-    /// against every member of that set at the moment it joins it, including
-    /// the ones that will move later — because they have not moved yet and
-    /// their own candidates will in turn be tested against this one. A
-    /// rejected candidate simply does not move, which cannot create an
+    /// (no in-game path can hand this system a merged pair, and phase 2
+    /// repairs the ones a test hook forces), and each accepted candidate is
+    /// non-overlapping against every member of that set at the moment it joins
+    /// it, including the ones that will move later — because they have not
+    /// moved yet and their own candidates will in turn be tested against this
+    /// one. A rejected candidate simply does not move, which cannot create an
     /// overlap either.
     ///
     /// The one mutation that touches a body other than the mover's is
@@ -2106,12 +2151,21 @@ impl RtsWorld {
     /// [`Self::step_one_unit`].
     fn movement(&mut self) {
         self.collect_unit_bodies();
-        self.repair_body_overlaps();
-        if self.last_tick_error.is_some() {
-            // The world was handed a penetration nothing could repair. Moving
-            // anyone now would build on an illegal state; hold last tick's
-            // positions and let the caller see `last_tick_error`.
-            return;
+        // Always describes the last tick and never an older one, in every
+        // build — the repair pass below is the only thing that can set it,
+        // and the shipping build has no repair pass.
+        self.last_tick_error = None;
+        #[cfg(feature = "testkit")]
+        if self.repair_armed {
+            self.repair_body_overlaps();
+            if self.last_tick_error.is_some() {
+                // The world was handed a penetration nothing could repair.
+                // Moving anyone now would build on an illegal state; hold last
+                // tick's positions, stay armed so the next tick retries, and
+                // let the caller see `last_tick_error`.
+                return;
+            }
+            self.repair_armed = false;
         }
         let n = self.unit_scratch.len();
         if n == 0 {
@@ -2147,21 +2201,28 @@ impl RtsWorld {
         }
     }
 
-    /// Phase 2: move any unit that starts the tick merged into another body to
-    /// the nearest legal free cell centre, in the same rotated order phase 3
-    /// walks.
+    /// Phase 2, **testkit only**: move any unit that starts the tick merged
+    /// into another body to the nearest legal free cell centre, in the same
+    /// rotated order phase 3 walks.
     ///
-    /// Only an explicitly invalid state reaches this: every in-game path that
-    /// places a unit (seeding, movement, the push off a finished building)
-    /// already respects bodies, so in a normal run this is a bounded scan that
-    /// finds nothing. When one *is* found, the first penetrating unit in the
-    /// rotated order is the one relocated — its partner is then no longer
-    /// penetrating and is left alone, so a pair costs one relocation, not two.
+    /// Only an explicitly invalid state reaches this, and only a test can
+    /// build one: every in-game path that places a unit (seeding, movement,
+    /// production, the push off a finished building) already respects bodies,
+    /// so the shipping tick compiles this pass out entirely rather than
+    /// scanning every pair of live bodies for a penetration that cannot exist.
+    /// [`Self::force_position_for_test`] and [`Self::entities_mut`] arm it;
+    /// nothing else does. When a penetration *is* found, the first penetrating
+    /// unit in the rotated order is the one relocated — its partner is then no
+    /// longer penetrating and is left alone, so a pair costs one relocation,
+    /// not two.
     ///
     /// A unit with nowhere legal to go stashes [`TickError::UnrepairableOverlap`]
     /// rather than letting the tick complete with a merged pair unreported.
+    /// The caller then leaves [`Self::repair_armed`] set, so the pass retries
+    /// on the next tick.
+    #[cfg(feature = "testkit")]
     fn repair_body_overlaps(&mut self) {
-        self.last_tick_error = None;
+        self.repair_runs += 1;
         let n = self.unit_scratch.len();
         if n < 2 {
             return;
