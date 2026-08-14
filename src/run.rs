@@ -33,7 +33,11 @@
 //! rest is prose for a human.
 //!
 //! `hash` is the simulation state hash: on the `frame0` line after the first
-//! frame, on the exit line after the last. The `sim=`/`upload=` fields are for
+//! frame, on the exit line after the last. It is digested at those two moments
+//! and nowhere else — the digest walks every agent, and no frame in between has
+//! a consumer for one. A run that quits before frame 1 prints neither a
+//! `frame0` line nor a first digest, and pays for exactly one.
+//! The `sim=`/`upload=` fields are for
 //! a human — phase-0 acceptance is behavioural and nothing gates on a duration
 //! (`docs/05-testing.md`).
 //!
@@ -246,6 +250,9 @@ impl InputScript {
 // ---------------------------------------------------------------------------
 
 /// Everything the exit line reports, accumulated as the run proceeds.
+///
+/// Carries no state hash: the two lines that print one digest the runtime at
+/// the moment they print it, so there is nothing to keep in step here.
 struct RunState {
     /// Frames actually rendered (frame 1 is the offscreen proof frame).
     frames: u64,
@@ -253,8 +260,6 @@ struct RunState {
     /// Ticks the frames rendered so far should have produced — one per
     /// unpaused frame.
     expected_ticks: u64,
-    first_hash: [u8; 32],
-    last_hash: [u8; 32],
 }
 
 /// Run full prototype: scenario → sim → instances → 4 draws.
@@ -293,13 +298,10 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
         mmd_engine::version()
     );
 
-    let initial_hash = runtime.state_hash();
     let mut state = RunState {
         frames: 0,
         quit: false,
         expected_ticks: 0,
-        first_hash: initial_hash,
-        last_hash: initial_hash,
     };
 
     // Frame 1 is the headless proof: nonempty groups and a real offscreen draw
@@ -322,7 +324,10 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
     println!(
         "run: frame0 tick={} hash={} groups={:?} sim={:.3}ms upload={:.3}ms",
         frame0.tick,
-        hex::encode(state.first_hash),
+        // First of the run's two digests. Taken here rather than inside the
+        // frame body: nothing has touched the simulation since frame 1 packed,
+        // so this is the state frame 1 produced.
+        hex::encode(runtime.state_hash()),
         frame0.group_lens,
         frame0.sim_ms,
         frame0.upload_ms
@@ -536,7 +541,9 @@ where
     }
 
     let frame_start = Instant::now();
-    let out = runtime.tick_and_render();
+    // Unhashed: a rendered frame has no consumer for the state digest, and the
+    // digest walks every agent. The two lines that print one take their own.
+    let out = runtime.tick_and_render_unhashed();
     let overlay_visible = out.overlay_visible;
     let agent_count = out.agent_count;
     let tick_index = out.tick_index;
@@ -548,11 +555,7 @@ where
     }
     draw(out.groups, out.rings)?;
 
-    if frame == 1 {
-        state.first_hash = out.state_hash;
-    }
     state.frames = frame;
-    state.last_hash = out.state_hash;
     // Counted per frame rather than latched: a run that pauses and then
     // unpauses must go back to owing one tick per frame, or the lockstep check
     // in `finish` stays switched off for the rest of the run.
@@ -632,7 +635,11 @@ fn finish(
         "run: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} paused={} overlay={} hitboxes={}",
         runtime.tick_index(),
         state.frames,
-        hex::encode(state.last_hash),
+        // Second of the run's two digests — and the only one on a run that quit
+        // before frame 1. Nothing mutates the simulation after the last
+        // rendered frame (`apply_action` reaches pause/overlay/hitboxes only),
+        // so this is the state the last frame left behind.
+        hex::encode(runtime.state_hash()),
         state.quit,
         runtime.paused(),
         runtime.overlay_visible(),
@@ -710,5 +717,143 @@ fn workspace_root_or_cwd() -> PathBuf {
         root
     } else {
         std::env::current_dir().unwrap_or(root)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate scene at a small population: CPU only, no device needed.
+    fn test_runtime() -> Runtime {
+        let scenario = workspace_root_or_cwd().join("assets/scenarios/technical_prototype_v1.ron");
+        Runtime::load(&scenario, Some(64)).expect("load gate scenario")
+    }
+
+    fn fresh_state() -> RunState {
+        RunState {
+            frames: 0,
+            quit: false,
+            expected_ticks: 0,
+        }
+    }
+
+    /// Stand-in for the offscreen/swapchain draw. The frame body under test is
+    /// the real `step_frame`; only the device is replaced.
+    fn noop_draw(
+        _groups: &[DrawGroup; ATLAS_COUNT],
+        _rings: &[SpriteInstance],
+    ) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    /// A rendered frame must not digest: no line prints a per-frame hash.
+    #[test]
+    fn rendered_frames_never_digest_state() {
+        let mut runtime = test_runtime();
+        let mut script = InputScript::default();
+        let mut state = fresh_state();
+
+        for frame in 1..=5u64 {
+            let report = step_frame(&mut runtime, &mut script, &mut state, "test", noop_draw)
+                .expect("frame body")
+                .expect("a frame was rendered");
+            assert_eq!(report.tick, frame, "a frame must advance the simulation");
+        }
+
+        assert_eq!(state.frames, 5);
+        assert_eq!(state.expected_ticks, 5);
+        assert_eq!(runtime.tick_index(), 5);
+        assert_eq!(
+            runtime.state_hash_calls(),
+            0,
+            "the frame body digested a state nothing prints"
+        );
+    }
+
+    /// The `frame0` line reports the state frame 1 produced.
+    ///
+    /// Checked against a second runtime advanced one tick through `tick_only`,
+    /// so the expectation does not flow through the code under test.
+    #[test]
+    fn the_frame0_hash_is_the_state_frame_one_produced() {
+        let mut driven = test_runtime();
+        let mut script = InputScript::default();
+        let mut state = fresh_state();
+        step_frame(&mut driven, &mut script, &mut state, "test", noop_draw)
+            .expect("frame body")
+            .expect("a frame was rendered");
+
+        let printed = driven.state_hash();
+
+        let mut independent = test_runtime();
+        assert!(independent.tick_only(), "the control run must tick");
+        assert_eq!(
+            printed,
+            independent.sim().state_hash(),
+            "the frame0 line reports a state frame 1 did not produce"
+        );
+        assert_eq!(
+            driven.state_hash_calls(),
+            1,
+            "the frame0 line owes exactly one digest"
+        );
+    }
+
+    /// A whole run digests twice: once for `frame0`, once for the exit line.
+    #[test]
+    fn a_whole_run_digests_at_its_two_endpoints() {
+        let mut runtime = test_runtime();
+        let mut script = InputScript::default();
+        let mut state = fresh_state();
+
+        step_frame(&mut runtime, &mut script, &mut state, "test", noop_draw)
+            .expect("frame body")
+            .expect("a frame was rendered");
+        let frame0_hash = runtime.state_hash();
+        for _ in 0..2 {
+            step_frame(&mut runtime, &mut script, &mut state, "test", noop_draw)
+                .expect("frame body")
+                .expect("a frame was rendered");
+        }
+
+        finish(&mut script, &state, &runtime, "test", "offscreen").expect("clean exit");
+
+        assert_eq!(
+            runtime.state_hash_calls(),
+            2,
+            "a run may digest at its two endpoints and nowhere else"
+        );
+        // Read off the simulation: `Runtime::state_hash` is counted, and this
+        // observation must not spend the budget just asserted.
+        assert_ne!(
+            frame0_hash,
+            runtime.sim().state_hash(),
+            "the exit line must report the final state, not frame 1's"
+        );
+    }
+
+    /// A scripted quit on frame 1 renders nothing, so it pays for one digest —
+    /// the exit line's — and never reaches the `frame0` line.
+    #[test]
+    fn a_quit_before_the_first_frame_digests_once() {
+        let mut runtime = test_runtime();
+        let mut script = InputScript::parse("1:esc").expect("script");
+        let mut state = fresh_state();
+
+        let rendered = step_frame(&mut runtime, &mut script, &mut state, "test", noop_draw)
+            .expect("frame body");
+        assert!(rendered.is_none(), "a quit cancels its own frame");
+        assert!(state.quit);
+        assert_eq!(state.frames, 0);
+        assert_eq!(runtime.tick_index(), 0);
+
+        finish(&mut script, &state, &runtime, "test", "offscreen").expect("clean exit");
+
+        assert_eq!(
+            runtime.state_hash_calls(),
+            1,
+            "a run that rendered nothing owes exactly the exit line's digest"
+        );
     }
 }
