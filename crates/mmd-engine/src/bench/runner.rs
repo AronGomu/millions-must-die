@@ -315,7 +315,11 @@ fn run_phase(
             std::hint::black_box(forced);
         }
 
-        let out = runtime.tick_and_render();
+        // The bench has no consumer for the state digest — it reads timings,
+        // the agent count and the atlas groups, and `submit_frame` uploads the
+        // groups only. Hashing every measured frame would charge the frozen
+        // ladder for work no measured frame uses.
+        let out = runtime.tick_and_render_unhashed();
         let sim_ms = out.stats.sim_ms;
         let upload_ms = out.stats.upload_ms;
         let agent_count = out.agent_count;
@@ -476,4 +480,49 @@ pub fn synthetic_scale_from_trial_p99s(
         .map(|(i, t)| trial_report(i as u32, t, 1.0, 1.0, 1.0))
         .collect();
     build_scale_result(policy, agent_count, rows, &agg, 0.5, 100, 100, 2, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The measured loop never digests the simulation.
+    ///
+    /// Drives the real `run_phase` — the same function warmup and every trial
+    /// go through — rather than a stand-in. The frame count comes from
+    /// `min_frames` with a zero duration, so this pins an exact number of
+    /// frames and never waits on a clock.
+    #[test]
+    fn the_measured_loop_never_digests() {
+        let mut runtime = Runtime::load(default_scenario_path(), Some(64)).expect("load");
+        let mut queue: FenceQueue<BenchFence> = FenceQueue::new(FRAMES_IN_FLIGHT);
+        let mut samples = SampleBuffer::with_capacity(16);
+        let mut poll_scratch = Vec::with_capacity(FRAMES_IN_FLIGHT);
+
+        let frames = run_phase(
+            &mut runtime,
+            None,
+            &mut queue,
+            Duration::ZERO,
+            4,
+            true,
+            true,
+            false,
+            &mut samples,
+            &mut poll_scratch,
+        )
+        .expect("dry phase");
+
+        assert_eq!(frames, 4, "min_frames must fix the frame count exactly");
+        assert_eq!(
+            runtime.tick_index(),
+            4,
+            "a bench frame must still advance the simulation"
+        );
+        assert_eq!(
+            runtime.state_hash_calls(),
+            0,
+            "the benchmark digested state it never reads"
+        );
+    }
 }
