@@ -2,20 +2,22 @@
 
 ## Goal
 
-Keep settings primary failures recoverable only after verified rollback. Any failed window/audio compensation becomes fatal, reaches live session teardown after required GPU reclaim, preserves primary + compensation context.
+Keep settings primary failures recoverable only after verified rollback. Any failed window/audio compensation becomes fatal, reaches live `MouseButtonUp` teardown after required GPU reclaim, preserves txn primary + every compensation + lifecycle context.
 
 ## Scope
 
-- In: `rts_ui` transaction classification/compensation; narrow `rts_window` mode-error + test-fake seams; narrow audio fake fault schedule; live/scripted caller propagation; focused tests; manual checklist note.
+- In: `rts_ui` txn classification/compensation; narrow `rts_window` mode error; deterministic window/audio fault schedules; live `MouseButtonUp` teardown seam; scripted pre-latched fatal composition; focused tests; manual checklist note.
 - Out: other audit findings; settings schema/UI redesign; persistence protocol changes; unrelated window/audio/UI refactor; app impl in this planning commit.
 
 ## Assumptions
 
-- One commit-sized TDD slice suffices: error type, compensation, live propagation form one inseparable transaction contract.
-- Reverse compensation order = audio gains, then window runtime. Both attempts run even if first fails; fatal text retains every failure.
-- `LiveCommit.result` remains soft-only: `Err(String)` means primary failed + rollback verified. Fatal transaction errors use outer `Err(String)` from `commit_setting_change_live`.
-- Mode-change fatality returns only after `reclaim`; fatal path skips `viewport` because session exits.
-- Native double-failure injection unsafe/non-portable; production-seam fakes provide automated proof. Manual checklist covers ordinary recoverable save rollback plus proof boundary.
+- One commit-sized TDD slice suffices: seam prep, typed errors, compensation, caller propagation form one txn contract.
+- Seam-first prep compiles green before behavioral reds; every red uses existing prod APIs + prep seams, never later Green-only types.
+- Reverse compensation order = audio gains, then window runtime. All attempts run; fatal text retains txn primary + every compensation.
+- `LiveCommit.result` remains soft-only: `Err(String)` means primary failed + rollback verified. Fatal txn errors use outer `Err(String)`.
+- Mode fatality returns after one `reclaim`; fatal path skips `viewport`. Combined txn/reclaim errors retain both contexts.
+- Scripted settings fatal composes with pre-latched `audio_fatal`; no `get_or_insert` context loss.
+- Native double-failure injection unsafe/non-portable; production-seam fakes prove logic. Manual checklist states proof boundary.
 
 ## Ticket flowchart
 
