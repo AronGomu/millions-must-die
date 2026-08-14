@@ -103,6 +103,17 @@ fn reserve_exact<T>(
         })
 }
 
+fn copy_error_path(path: &str) -> Result<String, ArchiveError> {
+    let mut copy = String::new();
+    copy.try_reserve_exact(path.len())
+        .map_err(|_| ArchiveError::AllocationFailed {
+            context: "archive error path",
+            requested: path.len(),
+        })?;
+    copy.push_str(path);
+    Ok(copy)
+}
+
 /// One file inside the archive (path relative, `/` separators).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveEntry {
@@ -152,6 +163,12 @@ fn build_archive_with_limits(
 
     let mut decoded_len = 0u64;
     let mut encoded_len = 12u64;
+    if encoded_len > limits.max_encoded_bytes {
+        return Err(ArchiveError::EncodedSizeLimitExceeded {
+            actual: encoded_len,
+            limit: limits.max_encoded_bytes,
+        });
+    }
     for entry in &entries {
         validate_archive_path(&entry.path)?;
         let path_len = u32::try_from(entry.path.len())
@@ -162,7 +179,7 @@ fn build_archive_with_limits(
             return Err(ArchiveError::FileSizeLimitExceeded {
                 actual: data_len,
                 limit: limits.max_file_bytes,
-                path: entry.path.clone(),
+                path: copy_error_path(&entry.path)?,
             });
         }
 
@@ -175,7 +192,7 @@ fn build_archive_with_limits(
             return Err(ArchiveError::DecodedSizeLimitExceeded {
                 actual: decoded_len,
                 limit: limits.max_decoded_bytes,
-                path: entry.path.clone(),
+                path: copy_error_path(&entry.path)?,
             });
         }
 
@@ -824,6 +841,33 @@ mod tests {
 
     #[test]
     fn builder_encoded_limit_accepts_limit_and_rejects_limit_plus_one() {
+        let empty_at_limit = ArchiveLimits {
+            max_encoded_bytes: 12,
+            ..tiny_limits()
+        };
+        assert_eq!(
+            build_archive_with_limits(Vec::new(), empty_at_limit)
+                .unwrap()
+                .bytes
+                .len(),
+            12
+        );
+        let empty_below_limit = ArchiveLimits {
+            max_encoded_bytes: 11,
+            ..tiny_limits()
+        };
+        let err = build_archive_with_limits(Vec::new(), empty_below_limit).unwrap_err();
+        match &err {
+            ArchiveError::EncodedSizeLimitExceeded { actual, limit } => {
+                assert_eq!((*actual, *limit), (12, 11));
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert_eq!(
+            err.to_string(),
+            "archive limit exceeded: max_encoded_bytes actual=12 limit=11"
+        );
+
         let pass = ArchiveLimits {
             max_encoded_bytes: 25,
             ..tiny_limits()
