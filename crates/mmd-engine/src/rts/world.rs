@@ -799,6 +799,11 @@ impl RtsWorld {
         self.edge_pan_speed = edge;
     }
 
+    /// Current keyboard and edge pan speeds, cells/second.
+    pub fn camera_speeds(&self) -> (f32, f32) {
+        (self.keyboard_pan_speed, self.edge_pan_speed)
+    }
+
     /// Centre the camera on a fractional map point (clamped to the
     /// frontier). Minimap-ready: `point` need not be a cell centre.
     pub fn look_at_map_point(&mut self, point: [f32; 2]) {

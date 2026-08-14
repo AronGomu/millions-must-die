@@ -15,9 +15,10 @@
 
 use mmd_engine::rts::{
     BuildingKind, CommandId, ControlId, HudHit, HudLayout, InteractionSnapshot, ModalHit,
-    ModalPage, ModalSnapshot, RtsWorld, UnitKind, command_slots, control_id_from_hud_hit,
-    control_id_from_modal_hit, hud_hit_test, minimap_projection, modal_hit_test,
-    pack_hud_interactive, pack_modal_interactive,
+    ModalPage, ModalSnapshot, NumericSettingId, RtsWorld, UnitKind, command_slots,
+    control_id_from_hud_hit, control_id_from_modal_hit, hud_hit_test, minimap_projection,
+    modal_hit_test, numeric_id_from_slider_control, pack_hud_interactive, pack_modal_interactive,
+    snap_numeric_at_x,
 };
 
 use crate::rts_feedback::{AudioEvent, AudioSink, UiCue, effective_gains};
@@ -91,7 +92,7 @@ pub enum SettingsChange {
 }
 
 impl SettingsChange {
-    fn apply_to(self, settings: &mut RtsSettings) {
+    pub(crate) fn apply_to(self, settings: &mut RtsSettings) {
         match self {
             Self::WindowMode(mode) => settings.display.mode = mode,
             Self::KeyboardPan(v) => settings.camera.keyboard_pan = v,
@@ -104,6 +105,63 @@ impl SettingsChange {
             Self::Sfx(v) => settings.audio.sfx = v,
         }
     }
+}
+
+/// [`SettingsChange`] for one snapped numeric row value.
+pub fn settings_change_for_numeric(id: NumericSettingId, value: u32) -> SettingsChange {
+    match id {
+        NumericSettingId::KeyboardPan => SettingsChange::KeyboardPan(value),
+        NumericSettingId::EdgePan => SettingsChange::EdgePan(value),
+        NumericSettingId::Master => SettingsChange::Master(value),
+        NumericSettingId::Music => SettingsChange::Music(value),
+        NumericSettingId::Voice => SettingsChange::Voice(value),
+        NumericSettingId::Sfx => SettingsChange::Sfx(value),
+    }
+}
+
+/// Live numeric value for one settings row.
+pub fn current_numeric_value(settings: &RtsSettings, id: NumericSettingId) -> u32 {
+    match id {
+        NumericSettingId::KeyboardPan => settings.camera.keyboard_pan,
+        NumericSettingId::EdgePan => settings.camera.edge_pan,
+        NumericSettingId::Master => settings.audio.master,
+        NumericSettingId::Music => settings.audio.music,
+        NumericSettingId::Voice => settings.audio.voice,
+        NumericSettingId::Sfx => settings.audio.sfx,
+    }
+}
+
+/// Stage one slider step when the snapped value differs from the live cfg.
+///
+/// Emits at most one Settings cue per drag (`cue_emitted` latches true on the
+/// first staged step). Returns whether a pending change was written.
+pub fn stage_slider_step(
+    session: &mut RtsSession,
+    id: NumericSettingId,
+    value: u32,
+    cue_emitted: &mut bool,
+) -> bool {
+    if current_numeric_value(&session.settings, id) == value {
+        return false;
+    }
+    if !*cue_emitted {
+        session.emit_audio(AudioEvent::Ui(UiCue::Settings));
+        *cue_emitted = true;
+    }
+    session.pending_setting_change = Some(settings_change_for_numeric(id, value));
+    true
+}
+
+/// Stage a slider step from pointer x against the retained slider control.
+pub fn stage_slider_at_pointer(session: &mut RtsSession, control: ControlId, x: f32) -> bool {
+    let Some(id) = numeric_id_from_slider_control(control) else {
+        return false;
+    };
+    let value = snap_numeric_at_x(id, x);
+    let mut cue = session.slider_cue_emitted;
+    let staged = stage_slider_step(session, id, value, &mut cue);
+    session.slider_cue_emitted = cue;
+    staged
 }
 
 /// `WindowMode` index into `mmd_engine::rts::WINDOW_MODE_BUTTONS`/`_LABELS` —
@@ -534,6 +592,56 @@ pub fn commit_setting_change_live<W: ClaimedWindow>(
         result,
         viewport: Some(viewport),
     })
+}
+
+/// Drain `session.pending_setting_change` through the memory-only transaction
+/// (scripted / offscreen). Shared with the live drain's non-window path.
+pub fn drain_pending_setting_change_memory(world: &mut RtsWorld, session: &mut RtsSession) {
+    let Some(change) = session.pending_setting_change.take() else {
+        return;
+    };
+    // Window type is never used when `window` is `None`.
+    let outcome = commit_setting_change::<crate::rts_window::SdlWindowOps<'_>>(
+        world,
+        None,
+        None,
+        &mut session.settings,
+        session.audio.as_mut(),
+        change,
+    );
+    match outcome {
+        Ok(()) => session.ui.warning = None,
+        Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+    }
+}
+
+/// Drain `session.pending_setting_change` through the live (claim-aware)
+/// transaction. Returns the live commit result; empty pending is a no-op Ok.
+pub fn drain_pending_setting_change_live<W: ClaimedWindow>(
+    world: &mut RtsWorld,
+    window: &mut W,
+    store: Option<&SettingsStore>,
+    session: &mut RtsSession,
+) -> Result<LiveCommit, String> {
+    let Some(change) = session.pending_setting_change.take() else {
+        return Ok(LiveCommit {
+            result: Ok(()),
+            viewport: None,
+        });
+    };
+    let live = commit_setting_change_live(
+        world,
+        window,
+        store,
+        &mut session.settings,
+        session.audio.as_mut(),
+        change,
+    )?;
+    match &live.result {
+        Ok(()) => session.ui.warning = None,
+        Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+    }
+    Ok(live)
 }
 
 /// The runtime half of [`commit_setting_change`]'s transaction: window mode
@@ -1294,5 +1402,190 @@ mod tests {
         assert!(s.validate().is_ok());
         s.audio.master = VOLUME_MIN + VOLUME_STEP;
         assert!(s.validate().is_ok());
+    }
+
+    // -- T3 live sliders -------------------------------------------------
+
+    use crate::rts_feedback::FakeSinkHandle;
+    use crate::rts_input::RtsCommand;
+    use crate::rts_run::{apply, pointer_down, pointer_up};
+    use mmd_engine::rts::{
+        KEYBOARD_PAN_TRACK, MASTER_TRACK, NUMERIC_SETTING_SPECS, PAN_MAX, PAN_MIN,
+        snap_numeric_at_x,
+    };
+
+    fn session_open_settings() -> (RtsWorld, RtsSession, FakeSinkHandle) {
+        let (mut session, handle) = RtsSession::for_test();
+        session.ui.open_menu();
+        session.ui.open_settings();
+        // Mirror startup: world camera speeds match default settings.
+        let mut world = test_world();
+        world.set_camera_speeds(
+            session.settings.camera.keyboard_pan as f32,
+            session.settings.camera.edge_pan as f32,
+        );
+        (world, session, handle)
+    }
+
+    fn track_x_for(track: [f32; 4], value: u32, min: u32, max: u32) -> f32 {
+        let frac = (value - min) as f32 / (max - min) as f32;
+        track[0] + frac * track[2]
+    }
+
+    fn track_point(track: [f32; 4], value: u32, min: u32, max: u32) -> [f32; 2] {
+        [track_x_for(track, value, min, max), track[1] + 1.0]
+    }
+
+    #[test]
+    fn slider_drag_retains_stable_control() {
+        let (mut world, mut session, _) = session_open_settings();
+        let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
+        pointer_down(&world, &mut session, start);
+        assert_eq!(
+            session.pressed_control(),
+            Some(ControlId::KeyboardPanSlider)
+        );
+        // Move far outside the track — ownership stays on the slider.
+        apply(&mut world, &mut session, RtsCommand::Move([10.0, 10.0]));
+        assert_eq!(
+            session.pressed_control(),
+            Some(ControlId::KeyboardPanSlider),
+            "motion outside track must keep the slider owner"
+        );
+        // x clamps to endpoints for the staged value (left end → min).
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, PAN_MIN);
+    }
+
+    #[test]
+    fn slider_drag_commits_only_distinct_steps() {
+        let (mut world, mut session, audio) = session_open_settings();
+        let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
+        // Default keyboard_pan is 48 — down at 48 stages nothing.
+        pointer_down(&world, &mut session, start);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        let gains_before = audio.sink().gain_calls();
+
+        // Ten motions inside the same step band around 60.
+        let x60 = track_x_for(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
+        for dx in 0..10 {
+            let x = x60 + (dx as f32) * 0.3; // stay inside the 60 step
+            apply(
+                &mut world,
+                &mut session,
+                RtsCommand::Move([x, KEYBOARD_PAN_TRACK[1] + 1.0]),
+            );
+            drain_pending_setting_change_memory(&mut world, &mut session);
+        }
+        assert_eq!(session.settings.camera.keyboard_pan, 60);
+        // One save/runtime change → one gain push (even camera still pushes gains).
+        assert_eq!(
+            audio.sink().gain_calls() - gains_before,
+            1,
+            "duplicate motions in one step must not re-commit"
+        );
+        // One Settings cue for the whole drag.
+        assert_eq!(audio.sink().ui_cues(), vec![UiCue::Settings]);
+    }
+
+    #[test]
+    fn slider_drag_updates_camera_and_audio_before_next_frame() {
+        let (mut world, mut session, audio) = session_open_settings();
+        // Camera: 48 → 60.
+        let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
+        pointer_down(&world, &mut session, p60);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, 60);
+        assert_eq!(world.camera_speeds().0, 60.0);
+        pointer_up(&mut world, &mut session, p60, false);
+
+        // Audio: master default 80 → 50 via a fresh drag.
+        let p50 = track_point(MASTER_TRACK, 50, 0, 100);
+        pointer_down(&world, &mut session, p50);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.audio.master, 50);
+        assert_eq!(
+            audio.sink().gains(),
+            effective_gains(&session.settings.audio)
+        );
+        pointer_up(&mut world, &mut session, p50, false);
+    }
+
+    #[test]
+    fn failed_slider_commit_rolls_back_runtime_and_value() {
+        let (mut world, mut session, handle) = session_open_settings();
+        handle.set_fail_set_gains(true);
+        let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
+        let old = session.settings.camera.keyboard_pan;
+        let old_speed = world.camera_speeds();
+        pointer_down(&world, &mut session, p60);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, old);
+        assert_eq!(world.camera_speeds(), old_speed);
+        assert!(session.ui.warning.is_some());
+        // Drag stays active after a failed step.
+        assert_eq!(
+            session.pressed_control(),
+            Some(ControlId::KeyboardPanSlider)
+        );
+        // Later legal motion after the fault clears still commits.
+        handle.set_fail_set_gains(false);
+        session.ui.warning = None;
+        let p72 = track_point(KEYBOARD_PAN_TRACK, 72, PAN_MIN, PAN_MAX);
+        apply(&mut world, &mut session, RtsCommand::Move(p72));
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, 72);
+        assert_eq!(world.camera_speeds().0, 72.0);
+        assert!(session.ui.warning.is_none());
+    }
+
+    #[test]
+    fn slider_drag_never_selects_world() {
+        let (mut world, mut session, _) = session_open_settings();
+        let before = world.selection().ids().to_vec();
+        let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
+        pointer_down(&world, &mut session, start);
+        // Drag out into the world and release.
+        apply(&mut world, &mut session, RtsCommand::Move([960.0, 400.0]));
+        pointer_up(&mut world, &mut session, [960.0, 400.0], false);
+        assert_eq!(world.selection().ids(), before.as_slice());
+        assert_eq!(session.ui.page, UiPage::Settings);
+        assert!(session.pressed_control().is_none());
+    }
+
+    #[test]
+    fn scripted_slider_drag_uses_same_controller() {
+        let (mut world, mut session, audio) = session_open_settings();
+        let a = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
+        let b = track_point(KEYBOARD_PAN_TRACK, 72, PAN_MIN, PAN_MAX);
+        apply(&mut world, &mut session, RtsCommand::Drag(a, b));
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, 72);
+        assert_eq!(world.camera_speeds().0, 72.0);
+        assert_eq!(audio.sink().ui_cues(), vec![UiCue::Settings]);
+        assert!(session.pressed_control().is_none());
+        assert!(session.ui.warning.is_none());
+    }
+
+    #[test]
+    fn numeric_id_mapping_is_exhaustive() {
+        for spec in &NUMERIC_SETTING_SPECS {
+            let change = settings_change_for_numeric(spec.id, spec.min);
+            let mut s = RtsSettings::default();
+            change.apply_to(&mut s);
+            assert_eq!(current_numeric_value(&s, spec.id), spec.min);
+            assert_eq!(
+                snap_numeric_at_x(spec.id, spec.track[0]),
+                spec.min,
+                "{:?} left end",
+                spec.id
+            );
+            assert_eq!(
+                snap_numeric_at_x(spec.id, spec.track[0] + spec.track[2]),
+                spec.max,
+                "{:?} right end",
+                spec.id
+            );
+        }
     }
 }

@@ -120,6 +120,8 @@ pub(crate) struct RtsSession {
     press_owner: PointerOwner,
     /// Stable control identity at pointer-down, when the owner named one.
     press_control: Option<mmd_engine::rts::ControlId>,
+    /// One Settings cue per slider drag (latched on first staged step).
+    pub(crate) slider_cue_emitted: bool,
     drag: Option<DragBox>,
     /// Currently held keyboard pan directions, summed and clamped per axis.
     keyboard_held: [f32; 2],
@@ -180,6 +182,7 @@ impl RtsSession {
             press: None,
             press_owner: PointerOwner::None,
             press_control: None,
+            slider_cue_emitted: false,
             drag: None,
             keyboard_held: [0.0, 0.0],
             ui: RtsUiState::default(),
@@ -213,6 +216,7 @@ impl RtsSession {
         self.press = None;
         self.press_owner = PointerOwner::None;
         self.press_control = None;
+        self.slider_cue_emitted = false;
         self.drag = None;
     }
 
@@ -321,9 +325,11 @@ fn emit_selection_cues(world: &RtsWorld, session: &mut RtsSession) {
 }
 
 /// Record pointer-down owner + stable control id (`T1`).
+/// Slider tracks also stage the first snapped step immediately (`T3`).
 pub(crate) fn pointer_down(world: &RtsWorld, session: &mut RtsSession, p: [f32; 2]) {
     session.cursor = p;
     session.press = Some(p);
+    session.slider_cue_emitted = false;
     let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
     session.press_owner = owner;
     session.press_control = match owner {
@@ -331,6 +337,9 @@ pub(crate) fn pointer_down(world: &RtsWorld, session: &mut RtsSession, p: [f32; 
         PointerOwner::Modal(hit) => control_id_from_modal_hit(hit),
         PointerOwner::World | PointerOwner::None => None,
     };
+    if let Some(control) = session.press_control {
+        crate::rts_ui::stage_slider_at_pointer(session, control, p[0]);
+    }
 }
 
 /// Whether release may activate given retained down identity (`T1`).
@@ -379,17 +388,29 @@ fn activate_world_left(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 
 }
 
 /// Pointer-up activation using retained down owner/control (`T1`).
+/// Slider drags commit on down/motion only — release just clears (`T3`).
 pub(crate) fn pointer_up(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 2], shift: bool) {
     session.cursor = p;
     selection_snapshot(world, session);
     let up_owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
     let down_owner = session.press_owner;
+    let down_control = session.press_control;
+    let slider_drag =
+        down_control.is_some_and(|c| mmd_engine::rts::numeric_id_from_slider_control(c).is_some());
     let matched = activation_matches(world, session, up_owner);
     // Clear retained press before handlers (they may open menus / change page).
     session.press = None;
     session.press_owner = PointerOwner::None;
     session.press_control = None;
+    session.slider_cue_emitted = false;
     session.drag = None;
+
+    if slider_drag {
+        // Live steps already drained on down/motion; never re-activate as click
+        // and never route a slider drag into the world.
+        emit_selection_cues(world, session);
+        return;
+    }
 
     if !matched {
         // Modal/HUD down never leaks to world after motion; mismatched IDs no-op.
@@ -444,8 +465,13 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
             session.cursor = p;
             if let Some(a) = session.press
                 && is_drag(a, p)
+                && matches!(session.press_owner, PointerOwner::World)
             {
                 session.drag = Some(DragBox { a, b: p });
+            }
+            // Retained slider: every motion restages from pointer x (`T3`).
+            if let Some(control) = session.press_control {
+                crate::rts_ui::stage_slider_at_pointer(session, control, p[0]);
             }
             let edge = edge_pan_dir(p, [VIEW_WIDTH as f32, VIEW_HEIGHT as f32]);
             world.set_edge_pan_dir(edge);
@@ -460,15 +486,24 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
             pointer_up(world, session, p, true);
         }
         RtsCommand::Drag(a, b) => {
-            // Scripted drag: only a world-origin press becomes a box select.
+            // Scripted drag: slider start → same down/motion/up controller;
+            // world-origin press becomes a box select; other modal drags consume.
             pointer_down(world, session, a);
-            selection_snapshot(world, session);
-            if matches!(session.press_owner, PointerOwner::World) {
-                let view = world.iso_view();
-                world.box_select_into_selection(&view, a, b);
+            let slider = session
+                .press_control
+                .is_some_and(|c| mmd_engine::rts::numeric_id_from_slider_control(c).is_some());
+            if slider {
+                apply(world, session, RtsCommand::Move(b));
+                pointer_up(world, session, b, false);
+            } else {
+                selection_snapshot(world, session);
+                if matches!(session.press_owner, PointerOwner::World) {
+                    let view = world.iso_view();
+                    world.box_select_into_selection(&view, a, b);
+                }
+                session.clear_press();
+                emit_selection_cues(world, session);
             }
-            session.clear_press();
-            emit_selection_cues(world, session);
         }
         RtsCommand::RightClick(p) => {
             let owner = crate::rts_ui::owner_for_point(world, &session.ui, p);
@@ -968,6 +1003,19 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     // edge-pan the camera.
                     let mapped = viewport.map_pointer([x, y]);
                     apply(&mut world, &mut session, RtsCommand::Move(mapped.logical));
+                    // Live slider steps commit on motion (`T3`).
+                    if let Err(e) = drain_live_setting_change(
+                        &mut world,
+                        &mut window,
+                        &renderer,
+                        settings_store.as_ref(),
+                        &mut session,
+                        &mut win_state,
+                        &mut viewport,
+                    ) {
+                        release_window(&renderer, window);
+                        return Err(e);
+                    }
                 }
                 Event::MouseButtonDown {
                     mouse_btn: MouseButton::Left,
@@ -981,6 +1029,19 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     // — the bar press did nothing, per contract.
                     if mapped.inside_content {
                         pointer_down(&world, &mut session, mapped.logical);
+                        // Slider down commits the first snapped step live.
+                        if let Err(e) = drain_live_setting_change(
+                            &mut world,
+                            &mut window,
+                            &renderer,
+                            settings_store.as_ref(),
+                            &mut session,
+                            &mut win_state,
+                            &mut viewport,
+                        ) {
+                            release_window(&renderer, window);
+                            return Err(e);
+                        }
                     } else {
                         session.clear_press();
                     }
@@ -1014,47 +1075,19 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         } else {
                             pointer_up(&mut world, &mut session, end, shift);
                         }
-                        if let Some(change) = session.pending_setting_change.take() {
-                            // Through the claim-aware seam: a window-mode
-                            // change must run with the GPU claim released and
-                            // retaken, and invalidates the viewport.
-                            let live = {
-                                let mut ops = SdlClaimedWindow {
-                                    window: &mut window,
-                                    renderer: &renderer,
-                                };
-                                crate::rts_ui::commit_setting_change_live(
-                                    &mut world,
-                                    &mut ops,
-                                    settings_store.as_ref(),
-                                    &mut session.settings,
-                                    session.audio.as_mut(),
-                                    change,
-                                )
-                            };
-                            let live = match live {
-                                Ok(live) => live,
-                                // No presentable window left: fatal, not a
-                                // "SETTINGS NOT SAVED" warning.
-                                Err(e) => {
-                                    release_window(&renderer, window);
-                                    return Err(RunError::Failed(e));
-                                }
-                            };
-                            if let Some(v) = live.viewport {
-                                win_state.viewport = v;
-                                viewport = v;
-                            }
-                            match live.result {
-                                Ok(()) => {
-                                    session.ui.warning = None;
-                                    win_state.mode = session.settings.display.mode;
-                                }
-                                Err(reason) => {
-                                    session.ui.warning =
-                                        Some(format!("SETTINGS NOT SAVED: {reason}"));
-                                }
-                            }
+                        // Non-slider modal clicks still stage on up; sliders
+                        // already drained on down/motion.
+                        if let Err(e) = drain_live_setting_change(
+                            &mut world,
+                            &mut window,
+                            &renderer,
+                            settings_store.as_ref(),
+                            &mut session,
+                            &mut win_state,
+                            &mut viewport,
+                        ) {
+                            release_window(&renderer, window);
+                            return Err(e);
                         }
                     } else {
                         // Release in a bar: no click/drag/order, per contract.
@@ -1237,36 +1270,47 @@ where
     }))
 }
 
-/// Drain a scripted click's pending settings edit (`T17`).
+/// Drain a scripted click/drag's pending settings edit (`T17`/`T3`).
 ///
-/// The live path drains it at the `MouseButtonUp` site, which owns the
-/// window and the store [`crate::rts_ui::commit_setting_change`] needs. A
-/// scripted click reaches [`apply`] with neither, so it commits **in memory
-/// only**: it validates, applies the camera-speed runtime and publishes the
-/// new value into `session.settings`, but never touches a window and never
-/// writes a user file. That is exactly the offscreen-isolation contract the
-/// deterministic acceptance run needs — a scripted settings edit must be
-/// observable on the exit line without ever becoming a side effect on the
-/// developer's machine.
-///
-/// A refused edit leaves `session.ui.warning` set, exactly as the live path
-/// does, so a script cannot silently apply an illegal value.
+/// Memory-only: validates, applies camera/audio runtime, publishes into
+/// `session.settings`, never touches a window or user file. Shared drain with
+/// the live path's transaction body (`rts_ui::drain_pending_setting_change_memory`).
 fn commit_scripted_setting_change(world: &mut RtsWorld, session: &mut RtsSession) {
-    let Some(change) = session.pending_setting_change.take() else {
-        return;
-    };
-    let outcome = crate::rts_ui::commit_setting_change::<SdlWindowOps<'_>>(
-        world,
-        None,
-        None,
-        &mut session.settings,
-        session.audio.as_mut(),
-        change,
-    );
-    match outcome {
-        Ok(()) => session.ui.warning = None,
-        Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+    crate::rts_ui::drain_pending_setting_change_memory(world, session);
+}
+
+/// Drain pending settings through the claim-aware live transaction (`T3`).
+///
+/// Empty pending is a no-op. A reclaim/viewport failure is fatal for the
+/// session; a soft commit refusal only sets the warning.
+fn drain_live_setting_change(
+    world: &mut RtsWorld,
+    window: &mut sdl3::video::Window,
+    renderer: &SpriteRenderer,
+    store: Option<&SettingsStore>,
+    session: &mut RtsSession,
+    win_state: &mut rts_window::RtsWindowState,
+    viewport: &mut mmd_engine::render::DisplayViewport,
+) -> Result<(), RunError> {
+    if session.pending_setting_change.is_none() {
+        return Ok(());
     }
+    let live = {
+        let mut ops = SdlClaimedWindow { window, renderer };
+        crate::rts_ui::drain_pending_setting_change_live(world, &mut ops, store, session)
+    };
+    let live = match live {
+        Ok(live) => live,
+        Err(e) => return Err(RunError::Failed(e)),
+    };
+    if let Some(v) = live.viewport {
+        win_state.viewport = v;
+        *viewport = v;
+    }
+    if live.result.is_ok() {
+        win_state.mode = session.settings.display.mode;
+    }
+    Ok(())
 }
 
 /// Release the window from the device, then drop it — in that order.

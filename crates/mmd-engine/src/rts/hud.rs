@@ -123,6 +123,165 @@ pub const VOLUME_MIN: u32 = 0;
 pub const VOLUME_MAX: u32 = 100;
 pub const VOLUME_STEP: u32 = 5;
 
+/// Stable identity of one numeric settings row (slider + future value field).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumericSettingId {
+    KeyboardPan,
+    EdgePan,
+    Master,
+    Music,
+    Voice,
+    Sfx,
+}
+
+/// Geometry + snap domain for one numeric settings row (`T3`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NumericSettingSpec {
+    pub id: NumericSettingId,
+    pub label: &'static str,
+    pub min: u32,
+    pub max: u32,
+    pub step: u32,
+    pub track: [f32; 4],
+    pub value_field: [f32; 4],
+}
+
+/// The six live-draggable numeric rows. Rects equal the pinned track/field
+/// constants — asserted by tests, never re-derived by callers.
+pub const NUMERIC_SETTING_SPECS: [NumericSettingSpec; 6] = [
+    NumericSettingSpec {
+        id: NumericSettingId::KeyboardPan,
+        label: "KEYBOARD PAN",
+        min: PAN_MIN,
+        max: PAN_MAX,
+        step: PAN_STEP,
+        track: KEYBOARD_PAN_TRACK,
+        value_field: [VALUE_FIELD_X, 276.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::EdgePan,
+        label: "EDGE PAN",
+        min: PAN_MIN,
+        max: PAN_MAX,
+        step: PAN_STEP,
+        track: EDGE_PAN_TRACK,
+        value_field: [VALUE_FIELD_X, 372.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Master,
+        label: "MASTER",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: MASTER_TRACK,
+        value_field: [VALUE_FIELD_X, 680.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Music,
+        label: "MUSIC",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: MUSIC_TRACK,
+        value_field: [VALUE_FIELD_X, 776.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Voice,
+        label: "VOICE",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: VOICE_TRACK,
+        value_field: [VALUE_FIELD_X, 872.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Sfx,
+        label: "SFX",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: SFX_TRACK,
+        value_field: [VALUE_FIELD_X, 968.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+];
+
+/// Slider thumb width in logical px.
+pub const SLIDER_THUMB_W_PX: f32 = 16.0;
+/// Thumb overhang above/below the track (thumb is 4px taller each side).
+pub const SLIDER_THUMB_OVERHANG_PX: f32 = 4.0;
+/// Empty track tint, premultiplied.
+pub const SLIDER_TRACK_TINT: [f32; 4] = [0.35, 0.35, 0.40, 1.00];
+/// Filled range tint, premultiplied.
+pub const SLIDER_FILL_TINT: [f32; 4] = [0.95, 0.85, 0.30, 1.00];
+/// Thumb tint, premultiplied.
+pub const SLIDER_THUMB_TINT: [f32; 4] = [0.98, 0.98, 0.98, 1.00];
+
+impl NumericSettingId {
+    /// Spec row for this id (exhaustive table index).
+    pub fn spec(self) -> &'static NumericSettingSpec {
+        match self {
+            Self::KeyboardPan => &NUMERIC_SETTING_SPECS[0],
+            Self::EdgePan => &NUMERIC_SETTING_SPECS[1],
+            Self::Master => &NUMERIC_SETTING_SPECS[2],
+            Self::Music => &NUMERIC_SETTING_SPECS[3],
+            Self::Voice => &NUMERIC_SETTING_SPECS[4],
+            Self::Sfx => &NUMERIC_SETTING_SPECS[5],
+        }
+    }
+
+    /// Stable slider [`ControlId`] for this numeric row.
+    pub fn slider_control(self) -> ControlId {
+        match self {
+            Self::KeyboardPan => ControlId::KeyboardPanSlider,
+            Self::EdgePan => ControlId::EdgePanSlider,
+            Self::Master => ControlId::MasterSlider,
+            Self::Music => ControlId::MusicSlider,
+            Self::Voice => ControlId::VoiceSlider,
+            Self::Sfx => ControlId::SfxSlider,
+        }
+    }
+}
+
+/// Map a stable slider control back to its numeric id.
+pub fn numeric_id_from_slider_control(id: ControlId) -> Option<NumericSettingId> {
+    match id {
+        ControlId::KeyboardPanSlider => Some(NumericSettingId::KeyboardPan),
+        ControlId::EdgePanSlider => Some(NumericSettingId::EdgePan),
+        ControlId::MasterSlider => Some(NumericSettingId::Master),
+        ControlId::MusicSlider => Some(NumericSettingId::Music),
+        ControlId::VoiceSlider => Some(NumericSettingId::Voice),
+        ControlId::SfxSlider => Some(NumericSettingId::Sfx),
+        _ => None,
+    }
+}
+
+/// Clamp `value` into `min..=max`, then snap to nearest `step`.
+/// Half-steps round upward (away from zero on the positive step axis).
+pub fn clamp_snap(value: u32, min: u32, max: u32, step: u32) -> u32 {
+    let value = value.clamp(min, max);
+    if step == 0 || max == min {
+        return value;
+    }
+    let steps = ((value - min) as f32 / step as f32).round() as u32;
+    (min + steps * step).min(max)
+}
+
+/// Thumb rect for a track at the given snapped `value`.
+pub fn slider_thumb_rect(track: [f32; 4], value: u32, min: u32, max: u32) -> [f32; 4] {
+    let span = (max - min) as f32;
+    let frac = if span <= 0.0 {
+        0.0
+    } else {
+        ((value.saturating_sub(min)) as f32 / span).clamp(0.0, 1.0)
+    };
+    [
+        track[0] + frac * (track[2] - SLIDER_THUMB_W_PX),
+        track[1] - SLIDER_THUMB_OVERHANG_PX,
+        SLIDER_THUMB_W_PX,
+        track[3] + 2.0 * SLIDER_THUMB_OVERHANG_PX,
+    ]
+}
+
 /// Flat aliases of [`HudLayout`]'s rects, for call sites that only need one.
 pub const TOP_BAR_RECT: [f32; 4] = HudLayout::TOP_BAR;
 pub const MENU_RECT: [f32; 4] = HudLayout::MENU;
@@ -1013,8 +1172,14 @@ pub fn snap_track(local_x: f32, track: [f32; 4], min: u32, max: u32, step: u32) 
     let frac = ((local_x - track[0]) / track[2]).clamp(0.0, 1.0);
     let span = (max - min) as f32;
     let raw = min as f32 + frac * span;
-    let steps = ((raw - min as f32) / step as f32).round();
-    (min + steps as u32 * step).min(max)
+    // Snap through the shared clamp path so pointer + typed values agree.
+    clamp_snap(raw.round() as u32, min, max, step)
+}
+
+/// Snapped value for a numeric row at pointer x (x clamped to the track).
+pub fn snap_numeric_at_x(id: NumericSettingId, local_x: f32) -> u32 {
+    let spec = id.spec();
+    snap_track(local_x, spec.track, spec.min, spec.max, spec.step)
 }
 
 /// Classify a logical (1920x1080) point against an open modal's own chrome.
@@ -1133,33 +1298,41 @@ fn push_modal_button(
 fn push_modal_track(
     props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,
-    rect: [f32; 4],
-    label: &str,
+    spec: &NumericSettingSpec,
     value: u32,
-    min: u32,
-    max: u32,
-    slider_id: ControlId,
     interaction: &InteractionSnapshot,
 ) {
+    let rect = spec.track;
+    let slider_id = spec.id.slider_control();
     push_text(
         font,
-        label,
+        spec.label,
         [rect[0], rect[1] - PANEL_LINE_PX],
         PANEL_TEXT_SCALE,
         TEXT_TINT,
     );
     let state = control_visual_state(slider_id, interaction, false, false);
     push_control_frame(props, rect, state);
-    let frac = ((value.saturating_sub(min)) as f32 / (max - min) as f32).clamp(0.0, 1.0);
+    push_panel(props, rect, SLIDER_TRACK_TINT);
+    let span = (spec.max - spec.min) as f32;
+    let frac = if span <= 0.0 {
+        0.0
+    } else {
+        ((value.saturating_sub(spec.min)) as f32 / span).clamp(0.0, 1.0)
+    };
     let fill = [rect[0], rect[1], rect[2] * frac, rect[3]];
-    push_panel(props, fill, [0.95, 0.85, 0.30, 1.0]);
+    push_panel(props, fill, SLIDER_FILL_TINT);
+    let thumb = slider_thumb_rect(rect, value, spec.min, spec.max);
+    push_panel(props, thumb, SLIDER_THUMB_TINT);
+    // Framed value field — T4 fills it with editable text; T3 shows the number.
+    push_control_frame(props, spec.value_field, ControlVisualState::Idle);
     let mut buf = [0u8; NUM_BUF];
     let s = fmt_u32(&mut buf, value);
-    // Value still drawn to the right of the track (field rect is reserved for T4).
+    let text_y = spec.value_field[1] + (spec.value_field[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
     push_text(
         font,
         s,
-        [rect[0] + rect[2] + 16.0, rect[1]],
+        [spec.value_field[0] + 4.0, text_y],
         PANEL_TEXT_SCALE,
         TEXT_TINT,
     );
@@ -1262,28 +1435,24 @@ pub fn pack_modal_interactive(
                     i as u8 == snapshot.window_mode_index,
                 );
             }
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                KEYBOARD_PAN_TRACK,
-                "KEYBOARD PAN",
+            let numeric_values = [
                 snapshot.keyboard_pan,
-                PAN_MIN,
-                PAN_MAX,
-                ControlId::KeyboardPanSlider,
-                interaction,
-            );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                EDGE_PAN_TRACK,
-                "EDGE PAN",
                 snapshot.edge_pan,
-                PAN_MIN,
-                PAN_MAX,
-                ControlId::EdgePanSlider,
-                interaction,
-            );
+                snapshot.master,
+                snapshot.music,
+                snapshot.voice,
+                snapshot.sfx,
+            ];
+            // Pan rows, then checkboxes, then audio — vertical stack order.
+            for i in 0..2 {
+                push_modal_track(
+                    &mut props.instances,
+                    &mut font.instances,
+                    &NUMERIC_SETTING_SPECS[i],
+                    numeric_values[i],
+                    interaction,
+                );
+            }
             push_modal_checkbox(
                 &mut props.instances,
                 &mut font.instances,
@@ -1304,50 +1473,15 @@ pub fn pack_modal_interactive(
                 interaction,
                 snapshot.pause_on_focus_loss,
             );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                MASTER_TRACK,
-                "MASTER",
-                snapshot.master,
-                VOLUME_MIN,
-                VOLUME_MAX,
-                ControlId::MasterSlider,
-                interaction,
-            );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                MUSIC_TRACK,
-                "MUSIC",
-                snapshot.music,
-                VOLUME_MIN,
-                VOLUME_MAX,
-                ControlId::MusicSlider,
-                interaction,
-            );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                VOICE_TRACK,
-                "VOICE",
-                snapshot.voice,
-                VOLUME_MIN,
-                VOLUME_MAX,
-                ControlId::VoiceSlider,
-                interaction,
-            );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                SFX_TRACK,
-                "SFX",
-                snapshot.sfx,
-                VOLUME_MIN,
-                VOLUME_MAX,
-                ControlId::SfxSlider,
-                interaction,
-            );
+            for i in 2..6 {
+                push_modal_track(
+                    &mut props.instances,
+                    &mut font.instances,
+                    &NUMERIC_SETTING_SPECS[i],
+                    numeric_values[i],
+                    interaction,
+                );
+            }
             push_modal_button(
                 &mut props.instances,
                 &mut font.instances,

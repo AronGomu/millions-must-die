@@ -1583,6 +1583,47 @@ fn menu_settings_button_navigates_and_back_returns() {
     );
 }
 
+/// Keyboard-pan track left/right ends (engine `KEYBOARD_PAN_TRACK`).
+fn keyboard_pan_track_point(value: u32) -> [f32; 2] {
+    // KEYBOARD_PAN_TRACK = [568, 276, 784, 24]; pan 6..=96 step 6.
+    const X: f32 = 568.0;
+    const W: f32 = 784.0;
+    const Y: f32 = 277.0;
+    let frac = (value as f32 - 6.0) / (96.0 - 6.0);
+    [X + frac * W, Y]
+}
+
+#[test]
+fn scripted_slider_drag_commits_keyboard_pan_memory_only() {
+    // Open settings, drag keyboard pan 48 → 72, leave the panel open.
+    let settings_btn = fmt_xy(pause_menu_settings_screen());
+    let a = fmt_xy(keyboard_pan_track_point(48));
+    let b = fmt_xy(keyboard_pan_track_point(72));
+    let script = format!("2:key:esc;3:lclick:{settings_btn};4:drag:{a},{b}");
+    let Some(cli) = or_skip(
+        "scripted_slider_drag_commits_keyboard_pan_memory_only",
+        rts(&["--frames", "6", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("keyboard_pan"),
+        "72",
+        "{cli}\nscripted slider drag must publish the final snapped value"
+    );
+    assert_eq!(
+        cli.exit_field("ui_page"),
+        "settings",
+        "{cli}\ndrag must not close settings or fall through to the world"
+    );
+    assert_eq!(
+        cli.exit_field("selected"),
+        "0",
+        "{cli}\nslider drag must never box-select the world"
+    );
+}
+
 #[test]
 fn menu_modal_consumes_clicks_outside_its_own_controls() {
     // While the menu is open, a click far outside the pause menu's own

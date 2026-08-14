@@ -232,3 +232,12 @@ command below except what a browser or a human eye must judge.
 - [ ] Hand-write `"music_muted": "yes"` into the JSON and relaunch: confirm warn-and-default (defaults load, warning names the file) rather than a crash or partial mute state.
 - [ ] With music playing, force mute via settings JSON (`master_muted: true`) and relaunch interactive: confirm levels in the debug line stay at prior numbers while audio is silent; flip flag back to false and confirm prior loudness returns without restarting streams mid-cue feel.
 - [ ] `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` still prints no settings warning and never touches the real pref path (defaults only).
+
+## T3 live-sliders
+
+- [ ] Launch `cargo run -- rts`, open Settings: confirm each of the six numeric rows (Keyboard Pan, Edge Pan, Master, Music, Voice, SFX) shows a track, filled range, light thumb, and a framed value field to the right.
+- [ ] Drag Keyboard Pan from the default (48) toward 60 and release outside the track: confirm the value and camera pan speed update *while dragging* (not only on release), ownership stays on that slider, and only one Settings SFX plays for the whole drag.
+- [ ] Drag Master (or Music/Voice/SFX) across several steps: confirm audio level changes live during the drag and repeated motion inside one step does not spam clicks/saves.
+- [ ] Click (no drag) a point on a volume track: confirm it still snaps to the nearest legal step (0..100 step 5) exactly as before.
+- [ ] Force a save failure mid-drag if you can (e.g. replace the settings file with a directory while the panel is open, then drag): confirm the old value/runtime stay, a `SETTINGS NOT SAVED:` warning appears, and a later legal drag step still works without releasing first.
+- [ ] While dragging a slider, release over the world: confirm no unit selection/order and the settings page stays open.

@@ -403,6 +403,11 @@ impl FakeSinkHandle {
         self.0.borrow()
     }
 
+    /// Fault-inject `set_gains` failures through the shared sink (`T3`).
+    pub fn set_fail_set_gains(&self, fail: bool) {
+        self.0.borrow_mut().set_fail_set_gains(fail);
+    }
+
     /// Another handle on the same sink, as a boxed [`AudioSink`].
     pub fn boxed(&self) -> Box<dyn AudioSink> {
         Box::new(self.clone())

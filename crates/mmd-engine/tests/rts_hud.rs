@@ -904,10 +904,11 @@ use mmd_engine::rts::{
     CONTROL_TINT_HOVER, CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED, CONTROL_TINT_SELECTED, ControlId,
     ControlVisualState, EDGE_PAN_TRACK, FOCUS_CHECKBOX, FOCUS_CONTROL_RECT, GRID_CONTROL_RECT,
     InteractionSnapshot, KEYBOARD_PAN_TRACK, MASTER_TRACK, MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_W,
-    ModalHit, ModalPage, ModalSnapshot, PAN_MAX, PAN_MIN, PAN_STEP, SFX_TRACK, VALUE_FIELD_H,
-    VALUE_FIELD_W, VALUE_FIELD_X, VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, WINDOW_MODE_BUTTONS,
+    ModalHit, ModalPage, ModalSnapshot, NUMERIC_SETTING_SPECS, NumericSettingId, PAN_MAX, PAN_MIN,
+    PAN_STEP, SFX_TRACK, SLIDER_THUMB_W_PX, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X,
+    VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, clamp_snap,
     command_slot_rect, control_tint, control_visual_state, modal_hit_test, mute_label_rect,
-    pack_modal, snap_track, value_field_rect,
+    pack_modal, slider_thumb_rect, snap_track, value_field_rect,
 };
 
 fn default_snapshot() -> ModalSnapshot {
@@ -1319,4 +1320,90 @@ fn settings_geometry_is_disjoint_and_inside_the_viewport() {
     assert!(inside_x_span(scrollbar, vp));
     // Back sits below the viewport (fixed footer).
     assert!(HudLayout::SETTINGS_BACK_BTN[1] > vp[1] + vp[3]);
+}
+
+// ---------------------------------------------------------------------------
+// T3 — live sliders: numeric specs, clamp_snap, thumb geometry
+// ---------------------------------------------------------------------------
+
+#[test]
+fn numeric_specs_cover_exactly_six_settings() {
+    assert_eq!(NUMERIC_SETTING_SPECS.len(), 6);
+    let ids: Vec<_> = NUMERIC_SETTING_SPECS.iter().map(|s| s.id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            NumericSettingId::KeyboardPan,
+            NumericSettingId::EdgePan,
+            NumericSettingId::Master,
+            NumericSettingId::Music,
+            NumericSettingId::Voice,
+            NumericSettingId::Sfx,
+        ]
+    );
+    for spec in &NUMERIC_SETTING_SPECS {
+        assert_eq!(spec.id.slider_control().numeric_pair(), spec.id);
+    }
+}
+
+/// Local helper: ControlId → NumericSettingId for the assert above.
+trait SliderPair {
+    fn numeric_pair(self) -> NumericSettingId;
+}
+impl SliderPair for ControlId {
+    fn numeric_pair(self) -> NumericSettingId {
+        mmd_engine::rts::numeric_id_from_slider_control(self).expect("slider control")
+    }
+}
+
+#[test]
+fn spec_rects_equal_the_pinned_layout_constants() {
+    let expected = [
+        (KEYBOARD_PAN_TRACK, value_field_rect(KEYBOARD_PAN_TRACK)),
+        (EDGE_PAN_TRACK, value_field_rect(EDGE_PAN_TRACK)),
+        (MASTER_TRACK, value_field_rect(MASTER_TRACK)),
+        (MUSIC_TRACK, value_field_rect(MUSIC_TRACK)),
+        (VOICE_TRACK, value_field_rect(VOICE_TRACK)),
+        (SFX_TRACK, value_field_rect(SFX_TRACK)),
+    ];
+    for (spec, (track, field)) in NUMERIC_SETTING_SPECS.iter().zip(expected) {
+        assert_eq!(spec.track, track, "{:?} track", spec.id);
+        assert_eq!(spec.value_field, field, "{:?} field", spec.id);
+        assert_eq!(
+            spec.value_field,
+            [VALUE_FIELD_X, track[1], VALUE_FIELD_W, VALUE_FIELD_H]
+        );
+    }
+    assert_eq!(NUMERIC_SETTING_SPECS[0].min, PAN_MIN);
+    assert_eq!(NUMERIC_SETTING_SPECS[0].max, PAN_MAX);
+    assert_eq!(NUMERIC_SETTING_SPECS[0].step, PAN_STEP);
+    assert_eq!(NUMERIC_SETTING_SPECS[2].min, VOLUME_MIN);
+    assert_eq!(NUMERIC_SETTING_SPECS[2].max, VOLUME_MAX);
+    assert_eq!(NUMERIC_SETTING_SPECS[2].step, VOLUME_STEP);
+}
+
+#[test]
+fn slider_thumb_reaches_both_track_ends_exactly() {
+    let track = KEYBOARD_PAN_TRACK;
+    let lo = slider_thumb_rect(track, PAN_MIN, PAN_MIN, PAN_MAX);
+    let hi = slider_thumb_rect(track, PAN_MAX, PAN_MIN, PAN_MAX);
+    assert_eq!(lo[0], track[0]);
+    assert_eq!(lo[2], SLIDER_THUMB_W_PX);
+    assert_eq!(hi[0] + hi[2], track[0] + track[2]);
+    assert_eq!(hi[1], track[1] - 4.0);
+    assert_eq!(hi[3], track[3] + 8.0);
+}
+
+#[test]
+fn clamp_snap_handles_bounds_and_half_steps() {
+    // Below / above clamp.
+    assert_eq!(clamp_snap(0, PAN_MIN, PAN_MAX, PAN_STEP), PAN_MIN);
+    assert_eq!(clamp_snap(200, PAN_MIN, PAN_MAX, PAN_STEP), PAN_MAX);
+    // Exact step.
+    assert_eq!(clamp_snap(48, PAN_MIN, PAN_MAX, PAN_STEP), 48);
+    // Half-step ties upward: midway 48↔54 is 51 → 54.
+    assert_eq!(clamp_snap(51, PAN_MIN, PAN_MAX, PAN_STEP), 54);
+    // Volume half-step 50↔55 is 52.5 → as u32 53 → nearest 55.
+    assert_eq!(clamp_snap(53, VOLUME_MIN, VOLUME_MAX, VOLUME_STEP), 55);
+    assert_eq!(clamp_snap(52, VOLUME_MIN, VOLUME_MAX, VOLUME_STEP), 50);
 }
