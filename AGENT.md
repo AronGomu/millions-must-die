@@ -64,6 +64,7 @@ decisions in ADR 016–020.
 
 Merge gate (must all pass):
 ```sh
+./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA
 cargo fmt --all -- --check
 cargo test --workspace --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -77,6 +78,7 @@ cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
+- DCO: `./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA` on candidate range only; substitute real SHAs for the two tokens; see `docs/05-testing.md`.
 - The `rts` line is the interactive RTS smoke: one tracked script drives select → gather → build (command card) → produce → minimap jump → pause menu → settings edit → `quit`, and asserts an exit line ending `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. `audio --check` regenerates every tracked WAV + manifest and byte-compares. Single source of truth for the gate: `docs/05-testing.md`.
 - Toolchain: Rust 1.95.0 pinned via `rust-toolchain.toml`. Linux/NixOS: `nix develop` / `nix flake check`. Windows/macOS: rustup from `rust-toolchain.toml`.
 - On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip.

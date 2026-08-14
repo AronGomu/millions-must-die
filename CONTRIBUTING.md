@@ -57,6 +57,17 @@ By making a contribution to this project, I certify that:
     this project or the open source license(s) involved.
 ```
 
+Maintainer enforces sign-off on the candidate commit range with the offline
+checker documented in the [required merge gate](docs/05-testing.md#required-merge-gate):
+
+```sh
+./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA
+```
+
+Replace `TRUSTED_BASE_SHA` and `EXACT_CANDIDATE_SHA` with real SHAs at run time.
+Only commits after the trusted base are checked. Do not rewrite legacy `main`
+history for DCO.
+
 ## Pull requests
 
 1. Open a PR against `main`. Direct pushes to `main` are blocked.
@@ -68,7 +79,7 @@ By making a contribution to this project, I certify that:
    cargo clippy --workspace --all-targets --all-features -- -D warnings
    ```
 
-3. Maintainer reviews, fetches the **exact** commit, runs the full [required merge gate](docs/05-testing.md#required-merge-gate) locally, posts a concise pass summary, and merges **only** that tested hash.
+3. Maintainer reviews, fetches the **exact** commit, runs the full [required merge gate](docs/05-testing.md#required-merge-gate) locally (including `./scripts/check-dco` on trusted-base→exact-candidate), posts a concise pass summary, and merges **only** that tested hash.
 4. No online CI. No auto-merge.
 
 The gate is behavioural. Performance measurement (`bench`, the 3-host validation

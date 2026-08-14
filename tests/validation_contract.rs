@@ -81,6 +81,12 @@ const REQUIRED_COMMANDS: &[&str] = &[
 /// would let drifted audio bytes merge unreviewed.
 const AUDIO_GATE_COMMAND: &str = "cargo run -p xtask -- audio --check";
 
+/// Offline DCO range gate (audit F11 / issue #10). Tokens TRUSTED_BASE_SHA and
+/// EXACT_CANDIDATE_SHA are literal placeholders in the doc fence; maintainer
+/// substitutes real SHAs at run time. No angle-bracket argv tokens (shell-safe).
+const DCO_GATE_COMMAND: &str =
+    "./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA";
+
 /// The interactive smokes, exactly as documented. The RTS one carries its
 /// frame budget and its tracked script inline: a smoke silently shortened to
 /// 160 frames, or pointed at an untracked script, still exits 0 while proving
@@ -1211,6 +1217,19 @@ fn required_gate_contains_audio_check() {
             "{rel} '{GATE_HEADING}' does not list `{AUDIO_GATE_COMMAND}`; the \
              tracked audio bytes would then be the only generated assets no \
              gate regenerates and compares"
+        );
+    }
+}
+
+/// DCO range check stays on the required gate in both doc mirrors.
+#[test]
+fn required_gate_contains_dco_check() {
+    for rel in [CONTRACT_DOC, README_DOC] {
+        let gate = gate_section(rel);
+        assert!(
+            gate.commands.iter().any(|c| c == DCO_GATE_COMMAND),
+            "{rel} '{GATE_HEADING}' does not list `{DCO_GATE_COMMAND}`; \
+             unsigned candidate commits could pass every other gate command"
         );
     }
 }
