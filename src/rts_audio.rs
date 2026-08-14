@@ -789,6 +789,49 @@ mod tests {
         }
     }
 
+    /// Mute is gain-only: queued PCM + stream count stay put across set_gains.
+    #[test]
+    fn mute_gain_update_does_not_clear_streams() {
+        let mut engine = test_engine(100);
+        engine.emit(AudioEvent::StartMusic).expect("start music");
+        engine.maintain().expect("prime music queue");
+        let music_queued_before = engine.music.queued_bytes().unwrap();
+        assert!(music_queued_before > 0, "music must have queued bytes");
+
+        // Seed one voice lane so we can prove mute doesn't clear it either.
+        engine.voice[0].put_data(&[1, 2, 3, 4]).expect("seed voice");
+        let voice_queued_before = engine.voice[0].queued_bytes().unwrap();
+        let clears = |s: &FakeStream| s.log().iter().filter(|l| *l == "clear").count();
+        let music_clears_before = clears(&engine.music);
+        let voice_clears_before = clears(&engine.voice[0]);
+
+        engine
+            .set_gains(EffectiveGains {
+                music_basis_points: 0,
+                voice_basis_points: 0,
+                sfx_basis_points: 0,
+            })
+            .expect("mute via gains");
+
+        assert_eq!(engine.music.queued_bytes().unwrap(), music_queued_before);
+        assert_eq!(engine.voice[0].queued_bytes().unwrap(), voice_queued_before);
+        assert_eq!(engine.music.gain.get(), 0.0);
+        assert_eq!(engine.voice[0].gain.get(), 0.0);
+        assert_eq!(
+            clears(&engine.music),
+            music_clears_before,
+            "mute must not clear music"
+        );
+        assert_eq!(
+            clears(&engine.voice[0]),
+            voice_clears_before,
+            "mute must not clear voice"
+        );
+        // Stream inventory unchanged (engine still owns the same lanes).
+        assert_eq!(engine.voice.len(), VOICE_STREAMS);
+        assert_eq!(engine.sfx.len(), SFX_STREAMS);
+    }
+
     // -- Buffered replay ---------------------------------------------------
 
     #[test]

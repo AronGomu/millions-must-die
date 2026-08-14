@@ -89,9 +89,25 @@ impl Default for CameraSettings {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+fn default_show_grid() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameplaySettings {
     pub pause_on_focus_loss: bool,
+    /// World grid overlay. Missing in legacy schema-1 JSON → on.
+    #[serde(default = "default_show_grid")]
+    pub show_grid: bool,
+}
+
+impl Default for GameplaySettings {
+    fn default() -> Self {
+        Self {
+            pause_on_focus_loss: false,
+            show_grid: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -100,6 +116,15 @@ pub struct AudioSettings {
     pub music: u32,
     pub voice: u32,
     pub sfx: u32,
+    /// Non-destructive mute: levels stay; [`crate::rts_feedback::effective_gains`] zeroes buses.
+    #[serde(default)]
+    pub master_muted: bool,
+    #[serde(default)]
+    pub music_muted: bool,
+    #[serde(default)]
+    pub voice_muted: bool,
+    #[serde(default)]
+    pub sfx_muted: bool,
 }
 
 impl Default for AudioSettings {
@@ -109,6 +134,10 @@ impl Default for AudioSettings {
             music: 35,
             voice: 70,
             sfx: 60,
+            master_muted: false,
+            music_muted: false,
+            voice_muted: false,
+            sfx_muted: false,
         }
     }
 }
@@ -181,7 +210,8 @@ impl RtsSettings {
     pub fn debug_line(&self) -> String {
         format!(
             "rts: settings mode={:?} confine_pointer={} keyboard_pan={} edge_pan={} \
-             pause_on_focus_loss={} master={} music={} voice={} sfx={}",
+             pause_on_focus_loss={} master={} music={} voice={} sfx={} \
+             show_grid={} master_muted={} music_muted={} voice_muted={} sfx_muted={}",
             self.display.mode,
             self.display.confine_pointer,
             self.camera.keyboard_pan,
@@ -191,6 +221,11 @@ impl RtsSettings {
             self.audio.music,
             self.audio.voice,
             self.audio.sfx,
+            self.gameplay.show_grid,
+            self.audio.master_muted,
+            self.audio.music_muted,
+            self.audio.voice_muted,
+            self.audio.sfx_muted,
         )
     }
 }
@@ -394,11 +429,139 @@ mod tests {
         assert_eq!(d.camera.keyboard_pan, 48);
         assert_eq!(d.camera.edge_pan, 48);
         assert!(!d.gameplay.pause_on_focus_loss);
+        assert!(d.gameplay.show_grid);
         assert_eq!(d.audio.master, 80);
         assert_eq!(d.audio.music, 35);
         assert_eq!(d.audio.voice, 70);
         assert_eq!(d.audio.sfx, 60);
+        assert!(!d.audio.master_muted);
+        assert!(!d.audio.music_muted);
+        assert!(!d.audio.voice_muted);
+        assert!(!d.audio.sfx_muted);
         assert!(d.validate().is_ok(), "defaults must themselves validate");
+    }
+
+    /// Pre-grid/mute schema-1 JSON must keep every old field and default the new ones.
+    #[test]
+    fn legacy_schema_one_preserves_values_and_defaults_new_fields() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(SETTINGS_FILE);
+        // Non-default legacy payload — no show_grid / mute keys.
+        let legacy = r#"{
+  "schema_version": 1,
+  "display": {
+    "mode": "windowed1280x720",
+    "confine_pointer": false
+  },
+  "camera": {
+    "keyboard_pan": 24,
+    "edge_pan": 12
+  },
+  "gameplay": {
+    "pause_on_focus_loss": true
+  },
+  "audio": {
+    "master": 55,
+    "music": 40,
+    "voice": 65,
+    "sfx": 25
+  }
+}
+"#;
+        fs::write(&path, legacy).expect("write legacy");
+        let store = SettingsStore::at(path.clone());
+
+        let loaded = store.load();
+        assert!(
+            loaded.warning.is_none(),
+            "legacy schema-1 must load clean: {:?}",
+            loaded.warning
+        );
+        let v = loaded.value;
+        assert_eq!(v.schema_version, 1);
+        assert_eq!(v.display.mode, WindowMode::Windowed1280x720);
+        assert!(!v.display.confine_pointer);
+        assert_eq!(v.camera.keyboard_pan, 24);
+        assert_eq!(v.camera.edge_pan, 12);
+        assert!(v.gameplay.pause_on_focus_loss);
+        assert!(v.gameplay.show_grid, "missing show_grid → true");
+        assert_eq!(v.audio.master, 55);
+        assert_eq!(v.audio.music, 40);
+        assert_eq!(v.audio.voice, 65);
+        assert_eq!(v.audio.sfx, 25);
+        assert!(!v.audio.master_muted);
+        assert!(!v.audio.music_muted);
+        assert!(!v.audio.voice_muted);
+        assert!(!v.audio.sfx_muted);
+
+        // Migrated save stays schema-1 / same path; second save byte-stable.
+        store.save(&v).expect("save migrated");
+        let bytes1 = fs::read(&path).expect("read1");
+        let text = String::from_utf8(bytes1.clone()).expect("utf8");
+        assert!(text.contains("\"show_grid\": true"));
+        assert!(text.contains("\"master_muted\": false"));
+        assert!(text.contains("\"music_muted\": false"));
+        assert!(text.contains("\"voice_muted\": false"));
+        assert!(text.contains("\"sfx_muted\": false"));
+        assert!(text.contains("\"schema_version\": 1"));
+        store.save(&v).expect("second save");
+        let bytes2 = fs::read(&path).expect("read2");
+        assert_eq!(bytes1, bytes2, "canonical save must be byte-stable");
+    }
+
+    #[test]
+    fn schema_one_round_trips_grid_and_mutes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(SETTINGS_FILE);
+        let store = SettingsStore::at(path);
+        let mut settings = RtsSettings::default();
+        settings.gameplay.show_grid = false;
+        settings.audio.master_muted = true;
+        settings.audio.music_muted = true;
+        settings.audio.voice_muted = false;
+        settings.audio.sfx_muted = true;
+
+        store.save(&settings).expect("save");
+        let loaded = store.load();
+        assert!(loaded.warning.is_none());
+        assert_eq!(loaded.value, settings);
+
+        let line = settings.debug_line();
+        assert!(
+            line.contains("show_grid=false")
+                && line.contains("master_muted=true")
+                && line.contains("music_muted=true")
+                && line.contains("voice_muted=false")
+                && line.contains("sfx_muted=true"),
+            "debug_line must append grid + mute tokens: {line}"
+        );
+    }
+
+    #[test]
+    fn malformed_new_bool_warns_and_defaults() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join(SETTINGS_FILE);
+        let bad = r#"{
+  "schema_version": 1,
+  "display": { "mode": "borderless_desktop", "confine_pointer": true },
+  "camera": { "keyboard_pan": 48, "edge_pan": 48 },
+  "gameplay": { "pause_on_focus_loss": false, "show_grid": true },
+  "audio": {
+    "master": 80,
+    "music": 35,
+    "voice": 70,
+    "sfx": 60,
+    "music_muted": "yes"
+  }
+}
+"#;
+        fs::write(&path, bad).expect("write bad bool");
+        let store = SettingsStore::at(path.clone());
+
+        let loaded = store.load();
+        assert_eq!(loaded.value, RtsSettings::default());
+        let warning = loaded.warning.expect("malformed bool must warn");
+        assert!(warning.contains(&path.display().to_string()));
     }
 
     #[test]

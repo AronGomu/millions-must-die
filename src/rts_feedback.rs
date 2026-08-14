@@ -189,15 +189,33 @@ impl EffectiveGains {
     }
 }
 
-/// `master% * bus%` in basis points. Both factors are already validated to
-/// `0..=100` by [`crate::rts_settings::RtsSettings::validate`], so the
-/// product never leaves `u16`.
+/// One bus product in basis points. Mute flags zero gain without touching
+/// stored volume levels; unmuted path keeps integer `master * bus`.
+fn bus_level(master: u32, bus: u32, master_muted: bool, bus_muted: bool) -> u16 {
+    if master_muted || bus_muted {
+        0
+    } else {
+        (master.min(100) * bus.min(100)) as u16
+    }
+}
+
+/// `master% * bus%` in basis points, then mute mask. Levels already
+/// validated to `0..=100` by [`crate::rts_settings::RtsSettings::validate`].
 pub fn effective_gains(audio: &AudioSettings) -> EffectiveGains {
-    let scale = |bus: u32| (audio.master.min(100) * bus.min(100)) as u16;
     EffectiveGains {
-        music_basis_points: scale(audio.music),
-        voice_basis_points: scale(audio.voice),
-        sfx_basis_points: scale(audio.sfx),
+        music_basis_points: bus_level(
+            audio.master,
+            audio.music,
+            audio.master_muted,
+            audio.music_muted,
+        ),
+        voice_basis_points: bus_level(
+            audio.master,
+            audio.voice,
+            audio.master_muted,
+            audio.voice_muted,
+        ),
+        sfx_basis_points: bus_level(audio.master, audio.sfx, audio.master_muted, audio.sfx_muted),
     }
 }
 
@@ -575,6 +593,64 @@ mod tests {
             ),
             (0, 0, 0)
         );
+    }
+
+    #[test]
+    fn master_mute_zeroes_all_buses_without_changing_levels() {
+        let mut audio = AudioSettings {
+            master: 80,
+            music: 35,
+            voice: 70,
+            sfx: 60,
+            ..AudioSettings::default()
+        };
+        audio.master_muted = true;
+
+        let gains = effective_gains(&audio);
+        assert_eq!(
+            (
+                gains.music_basis_points,
+                gains.voice_basis_points,
+                gains.sfx_basis_points
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            (audio.master, audio.music, audio.voice, audio.sfx),
+            (80, 35, 70, 60)
+        );
+
+        audio.master_muted = false;
+        let restored = effective_gains(&audio);
+        assert_eq!(
+            (
+                restored.music_basis_points,
+                restored.voice_basis_points,
+                restored.sfx_basis_points
+            ),
+            (2800, 5600, 4800)
+        );
+    }
+
+    #[test]
+    fn bus_mute_zeroes_only_its_bus() {
+        let mut audio = AudioSettings {
+            master: 80,
+            music: 35,
+            voice: 70,
+            sfx: 60,
+            ..AudioSettings::default()
+        };
+        audio.music_muted = true;
+
+        let gains = effective_gains(&audio);
+        assert_eq!(gains.music_basis_points, 0);
+        assert_eq!(gains.voice_basis_points, 5600);
+        assert_eq!(gains.sfx_basis_points, 4800);
+        assert_eq!(audio.music, 35, "level stays while muted");
+
+        audio.music_muted = false;
+        assert_eq!(effective_gains(&audio).music_basis_points, 2800);
     }
 
     // -- Selection delta -------------------------------------------------

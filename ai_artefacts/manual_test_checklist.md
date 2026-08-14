@@ -224,3 +224,11 @@ command below except what a browser or a human eye must judge.
 - [ ] Open Menu, press on modal chrome, drag onto the world, release: confirm no world select/order.
 - [ ] Escape nesting still works (Gameplay→Menu→Settings→Menu→Gameplay); no F10 binding appears.
 - [ ] Open Settings: confirm panel is wider, audio rows sit lower (96px pitch), checkbox label rows are fully hittable, Back still works; keyboard-pan track at x=1170 still reads 78 after a click there.
+
+## T2 settings-schema-grid-mutes
+
+- [ ] Back up any existing `~/.local/share/AronGomu/MillionsMustDie/settings-v1.json`, replace it with a pre-grid legacy body (schema 1, no `show_grid` / `*_muted` keys, non-default pan/volumes), launch `cargo run -- rts`, quit: confirm startup `rts: settings ...` line keeps the old numeric values and ends with `show_grid=true master_muted=false music_muted=false voice_muted=false sfx_muted=false` and no warning.
+- [ ] After that first load, open Settings (once UI exposes mutes) or hand-edit the saved file: confirm a subsequent save keeps `schema_version: 1`, same filename, and writes explicit `show_grid` + four mute keys; second identical save is byte-stable.
+- [ ] Hand-write `"music_muted": "yes"` into the JSON and relaunch: confirm warn-and-default (defaults load, warning names the file) rather than a crash or partial mute state.
+- [ ] With music playing, force mute via settings JSON (`master_muted: true`) and relaunch interactive: confirm levels in the debug line stay at prior numbers while audio is silent; flip flag back to false and confirm prior loudness returns without restarting streams mid-cue feel.
+- [ ] `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` still prints no settings warning and never touches the real pref path (defaults only).
