@@ -251,3 +251,14 @@ command below except what a browser or a human eye must judge.
 - [ ] With a valid buffer in a field, click the PAUSE ON FOCUS LOSS checkbox: confirm the typed value commits first, then the checkbox toggles.
 - [ ] With a valid buffer in a field, Alt-Tab away (focus loss): confirm value is saved, text input stops (no stuck IME), pointer/keys clear, and if pause-on-focus-loss is on the pause menu opens.
 - [ ] With no field focused, Escape nesting still works: Gameplay→Menu→Settings→Menu→Gameplay.
+
+## T5 mute-label-controls
+
+- [ ] Launch `cargo run -- rts`, open Settings: confirm each of the four audio rows (Master, Music, Voice, SFX) shows a framed label button above its slider (text: "MASTER", "MUSIC", "VOICE", "SFX" in idle/green tint when unmuted).
+- [ ] Click the MASTER label: confirm it turns selected (green frame), text changes to "MASTER MUTED", all audio buses go silent, and the master/per-bus numeric sliders and fields remain interactive showing the same stored numbers.
+- [ ] Click MASTER label again: confirm it reverts to idle, text returns to "MASTER", audio restores to the exact previous levels, and the slider/field values are unchanged.
+- [ ] Click MUSIC label to mute it, then drag the MUSIC slider to a new value: confirm the stored level changes (slider and field update), but the effective music gain stays 0 while muted.
+- [ ] Unmute MUSIC: confirm the new stored level is immediately heard (gain goes to the dragged value, not the old pre-mute value).
+- [ ] Click VOICE label to mute, then click it again (unmute): confirm only the voice bus is affected; master, music, SFX are unaffected.
+- [ ] Open Settings, mute SFX, close Settings, relaunch `cargo run -- rts` with the same pref path: confirm sfx_muted persists in the settings file and SFX remains muted on relaunch.
+- [ ] Force a save failure (replace settings file with a directory) and click a mute label: confirm the flag rolls back (label stays idle), the old gains are restored, and a `SETTINGS NOT SAVED:` warning appears.

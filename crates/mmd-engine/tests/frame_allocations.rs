@@ -534,6 +534,10 @@ fn settings_edit_field_pack_allocates_nothing() {
         music: 35,
         voice: 70,
         sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
     };
     let interaction = InteractionSnapshot::default();
     let digits: &[u8] = b"999";

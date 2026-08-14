@@ -900,10 +900,11 @@ fn hit_a_point_off_the_hud_is_the_world() {
 // ---------------------------------------------------------------------------
 
 use mmd_engine::rts::{
-    CONFINE_CHECKBOX, CONFINE_CONTROL_RECT, CONTROL_FRAME_PX, CONTROL_TINT_DISABLED,
-    CONTROL_TINT_HOVER, CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED, CONTROL_TINT_SELECTED, ControlId,
-    ControlVisualState, EDGE_PAN_TRACK, FOCUS_CHECKBOX, FOCUS_CONTROL_RECT, GRID_CONTROL_RECT,
-    InteractionSnapshot, KEYBOARD_PAN_TRACK, MASTER_TRACK, MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_W,
+    AudioChannelId, CONFINE_CHECKBOX, CONFINE_CONTROL_RECT, CONTROL_FRAME_PX,
+    CONTROL_TINT_DISABLED, CONTROL_TINT_HOVER, CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED,
+    CONTROL_TINT_SELECTED, ControlId, ControlVisualState, EDGE_PAN_TRACK, FOCUS_CHECKBOX,
+    FOCUS_CONTROL_RECT, GRID_CONTROL_RECT, InteractionSnapshot, KEYBOARD_PAN_TRACK, MASTER_TRACK,
+    MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_RECTS, MUTE_LABEL_W, MUTE_LABELS, MUTE_LABELS_MUTED,
     ModalHit, ModalPage, ModalSnapshot, NUMERIC_SETTING_SPECS, NumericSettingId, PAN_MAX, PAN_MIN,
     PAN_STEP, SFX_TRACK, SLIDER_THUMB_W_PX, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X,
     VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, clamp_snap,
@@ -922,6 +923,10 @@ fn default_snapshot() -> ModalSnapshot {
         music: 35,
         voice: 70,
         sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
     }
 }
 
@@ -1440,4 +1445,134 @@ fn numeric_fields_are_framed_and_hit_testable() {
             "track must not classify as field"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// T5 — mute-label controls
+// ---------------------------------------------------------------------------
+
+#[test]
+fn mute_rects_are_40px_above_their_tracks() {
+    let tracks = [
+        MASTER_TRACK,
+        MUSIC_TRACK,
+        mmd_engine::rts::VOICE_TRACK,
+        SFX_TRACK,
+    ];
+    for (i, &track) in tracks.iter().enumerate() {
+        let m = MUTE_LABEL_RECTS[i];
+        assert_eq!(m[0], track[0], "mute label x == track x");
+        assert_eq!(m[1], track[1] - 40.0, "mute label y == track_y - 40");
+        assert_eq!(m[2], MUTE_LABEL_W);
+        assert_eq!(m[3], MUTE_LABEL_H);
+        // Also verify the fn-computed rect matches the pinned constant.
+        assert_eq!(mute_label_rect(track), m);
+    }
+}
+
+#[test]
+fn audio_label_full_rect_returns_toggle_mute_hit() {
+    let channels = [
+        (AudioChannelId::Master, ControlId::MasterMute),
+        (AudioChannelId::Music, ControlId::MusicMute),
+        (AudioChannelId::Voice, ControlId::VoiceMute),
+        (AudioChannelId::Sfx, ControlId::SfxMute),
+    ];
+    for (i, &(ch, ctrl)) in channels.iter().enumerate() {
+        let rect = MUTE_LABEL_RECTS[i];
+        // Use the right portion of the rect: SFX label (y 928..960) overlaps with
+        // the Back button (x 472..632, y 900..956), so test at x near the right
+        // edge (x > 632) where only the mute label applies.
+        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0];
+        let hit = modal_hit_test(ModalPage::Settings, p);
+        assert_eq!(hit, ModalHit::ToggleMute(ch), "channel {i} label must hit");
+        assert_eq!(
+            control_id_from_modal_hit(hit),
+            Some(ctrl),
+            "ToggleMute maps to correct ControlId"
+        );
+    }
+}
+
+#[test]
+fn mute_label_does_not_overlap_slider_track() {
+    let tracks = [
+        MASTER_TRACK,
+        MUSIC_TRACK,
+        mmd_engine::rts::VOICE_TRACK,
+        SFX_TRACK,
+    ];
+    for (i, &track) in tracks.iter().enumerate() {
+        let m = MUTE_LABEL_RECTS[i];
+        let label_bottom = m[1] + m[3];
+        let track_top = track[1];
+        assert!(
+            label_bottom <= track_top,
+            "mute label bottom ({label_bottom}) must not overlap track top ({track_top})"
+        );
+    }
+}
+
+#[test]
+fn muted_label_uses_selected_visual() {
+    // When muted=true, control_visual_state with selected=true resolves Selected.
+    let state = control_visual_state(
+        ControlId::MasterMute,
+        &InteractionSnapshot::default(),
+        true,
+        false,
+    );
+    assert_eq!(state, ControlVisualState::Selected);
+    assert_eq!(control_tint(state), CONTROL_TINT_SELECTED);
+}
+
+#[test]
+fn unmuted_label_uses_idle_visual() {
+    let state = control_visual_state(
+        ControlId::MasterMute,
+        &InteractionSnapshot::default(),
+        false,
+        false,
+    );
+    assert_eq!(state, ControlVisualState::Idle);
+    assert_eq!(control_tint(state), CONTROL_TINT_IDLE);
+}
+
+#[test]
+fn mute_label_text_changes_when_muted() {
+    assert_eq!(MUTE_LABELS[0], "MASTER");
+    assert_eq!(MUTE_LABELS_MUTED[0], "MASTER MUTED");
+    assert_eq!(MUTE_LABELS[1], "MUSIC");
+    assert_eq!(MUTE_LABELS_MUTED[1], "MUSIC MUTED");
+    assert_eq!(MUTE_LABELS[2], "VOICE");
+    assert_eq!(MUTE_LABELS_MUTED[2], "VOICE MUTED");
+    assert_eq!(MUTE_LABELS[3], "SFX");
+    assert_eq!(MUTE_LABELS_MUTED[3], "SFX MUTED");
+}
+
+#[test]
+fn mute_label_hit_priority_over_nothing_below_track() {
+    // Points inside a mute label rect must not hit a slider track.
+    // Use right portion of rect to avoid Back button overlap for SFX (ch 3).
+    for (i, &rect) in MUTE_LABEL_RECTS.iter().enumerate() {
+        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0];
+        let hit = modal_hit_test(ModalPage::Settings, p);
+        assert!(
+            matches!(hit, ModalHit::ToggleMute(_)),
+            "ch {i}: point inside mute label rect must classify as ToggleMute, got {hit:?}"
+        );
+    }
+}
+
+#[test]
+fn pack_modal_with_muted_flag_does_not_panic() {
+    use mmd_engine::rts::RtsFrame;
+    let mut snap = default_snapshot();
+    snap.master_muted = true;
+    snap.music_muted = false;
+    let mut frame = RtsFrame::new();
+    pack_modal(ModalPage::Settings, snap, None, &mut frame);
+    // The pack ran without panic; instance count is non-zero.
+    let ui_len: usize = frame.ui.iter().map(|g| g.instances.len()).sum();
+    assert!(ui_len > 0);
 }

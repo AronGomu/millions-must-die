@@ -14,11 +14,11 @@
 //! paused for the menu.
 
 use mmd_engine::rts::{
-    BuildingKind, CommandId, ControlId, HudHit, HudLayout, InteractionSnapshot, ModalHit,
-    ModalPage, ModalSnapshot, NumericSettingId, RtsWorld, UnitKind, clamp_snap, command_slots,
-    control_id_from_hud_hit, control_id_from_modal_hit, hud_hit_test, minimap_projection,
-    modal_hit_test, numeric_id_from_slider_control, pack_hud_interactive, pack_modal_interactive,
-    snap_numeric_at_x,
+    AudioChannelId, BuildingKind, CommandId, ControlId, HudHit, HudLayout, InteractionSnapshot,
+    ModalHit, ModalPage, ModalSnapshot, NumericSettingId, RtsWorld, UnitKind, clamp_snap,
+    command_slots, control_id_from_hud_hit, control_id_from_modal_hit, hud_hit_test,
+    minimap_projection, modal_hit_test, numeric_id_from_slider_control, pack_hud_interactive,
+    pack_modal_interactive, snap_numeric_at_x,
 };
 
 use crate::rts_feedback::{AudioEvent, AudioSink, UiCue, effective_gains};
@@ -89,6 +89,10 @@ pub enum SettingsChange {
     Music(u32),
     Voice(u32),
     Sfx(u32),
+    MasterMuted(bool),
+    MusicMuted(bool),
+    VoiceMuted(bool),
+    SfxMuted(bool),
 }
 
 impl SettingsChange {
@@ -103,6 +107,10 @@ impl SettingsChange {
             Self::Music(v) => settings.audio.music = v,
             Self::Voice(v) => settings.audio.voice = v,
             Self::Sfx(v) => settings.audio.sfx = v,
+            Self::MasterMuted(v) => settings.audio.master_muted = v,
+            Self::MusicMuted(v) => settings.audio.music_muted = v,
+            Self::VoiceMuted(v) => settings.audio.voice_muted = v,
+            Self::SfxMuted(v) => settings.audio.sfx_muted = v,
         }
     }
 }
@@ -536,6 +544,15 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
         ModalHit::Music(v) => Some(SettingsChange::Music(v)),
         ModalHit::Voice(v) => Some(SettingsChange::Voice(v)),
         ModalHit::Sfx(v) => Some(SettingsChange::Sfx(v)),
+        ModalHit::ToggleMute(ch) => {
+            let audio = &session.settings.audio;
+            Some(match ch {
+                AudioChannelId::Master => SettingsChange::MasterMuted(!audio.master_muted),
+                AudioChannelId::Music => SettingsChange::MusicMuted(!audio.music_muted),
+                AudioChannelId::Voice => SettingsChange::VoiceMuted(!audio.voice_muted),
+                AudioChannelId::Sfx => SettingsChange::SfxMuted(!audio.sfx_muted),
+            })
+        }
         ModalHit::NumericField(id) => {
             begin_numeric_edit(session, id);
             None
@@ -570,6 +587,10 @@ fn modal_snapshot(settings: &RtsSettings, pending: Option<SettingsChange>) -> Mo
         music: preview.audio.music,
         voice: preview.audio.voice,
         sfx: preview.audio.sfx,
+        master_muted: preview.audio.master_muted,
+        music_muted: preview.audio.music_muted,
+        voice_muted: preview.audio.voice_muted,
+        sfx_muted: preview.audio.sfx_muted,
     }
 }
 
@@ -1975,6 +1996,161 @@ mod tests {
         // FSM exclusively.
         finish_numeric_edit(&mut session, NumericEditEnd::Cancel);
         assert!(session.numeric_edit.is_none());
+    }
+
+    // -- T5: mute-label controls -----------------------------------------
+
+    fn mute_label_point(ch: usize) -> [f32; 2] {
+        let rect = mmd_engine::rts::MUTE_LABEL_RECTS[ch];
+        // Use right edge to avoid the Back button (x 472..632) for SFX (ch=3, y 928..960).
+        [rect[0] + rect[2] - 1.0, rect[1] + 1.0]
+    }
+
+    #[test]
+    fn muting_master_keeps_stored_levels() {
+        let (mut world, mut session, _) = session_open_settings();
+        let orig_master = session.settings.audio.master;
+        let orig_music = session.settings.audio.music;
+        assert!(!session.settings.audio.master_muted);
+
+        let p = mute_label_point(0);
+        pointer_down(&mut world, &mut session, p);
+        pointer_up(&mut world, &mut session, p, false);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+
+        assert!(session.settings.audio.master_muted, "flag must flip");
+        assert_eq!(
+            session.settings.audio.master, orig_master,
+            "stored level unchanged"
+        );
+        assert_eq!(
+            session.settings.audio.music, orig_music,
+            "other level unchanged"
+        );
+    }
+
+    #[test]
+    fn muting_zeroes_gains_without_touching_stored_levels() {
+        let (mut world, mut session, audio) = session_open_settings();
+        let orig_music_level = session.settings.audio.music;
+        assert!(orig_music_level > 0);
+
+        let p = mute_label_point(1); // Music mute label
+        pointer_down(&mut world, &mut session, p);
+        pointer_up(&mut world, &mut session, p, false);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+
+        assert!(session.settings.audio.music_muted);
+        assert_eq!(
+            session.settings.audio.music, orig_music_level,
+            "stored level unchanged"
+        );
+        assert_eq!(
+            audio.sink().gains().music_basis_points,
+            0,
+            "gain zeroed while muted"
+        );
+    }
+
+    #[test]
+    fn unmuting_restores_gain_to_stored_level() {
+        let (mut world, mut session, audio) = session_open_settings();
+        session.settings.audio.sfx_muted = true;
+        session.settings.audio.sfx = 60;
+
+        let p = mute_label_point(3); // SFX mute label
+        pointer_down(&mut world, &mut session, p);
+        pointer_up(&mut world, &mut session, p, false);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+
+        assert!(
+            !session.settings.audio.sfx_muted,
+            "must flip back to unmuted"
+        );
+        assert!(
+            audio.sink().gains().sfx_basis_points > 0,
+            "gain restored after unmute"
+        );
+    }
+
+    #[test]
+    fn mute_commit_pushes_gains_and_saves_once() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SettingsStore::at(dir.path().join("settings-v1.json"));
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+
+        let result = commit_setting_change::<FakeWindow>(
+            &mut world,
+            None,
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::MasterMuted(true),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert!(settings.audio.master_muted);
+        assert_eq!(audio.gain_calls(), 1, "exactly one gain push per commit");
+        let bytes = std::fs::read(dir.path().join("settings-v1.json")).expect("file written");
+        let text = String::from_utf8(bytes).expect("utf8");
+        assert!(
+            text.contains("\"master_muted\": true"),
+            "persisted muted flag"
+        );
+    }
+
+    #[test]
+    fn mute_gain_failure_rolls_back_flag_and_gains() {
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        audio.set_fail_set_gains(true);
+
+        let result = commit_setting_change::<FakeWindow>(
+            &mut world,
+            None,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::MusicMuted(true),
+        );
+        assert!(result.is_err(), "gain failure must be reported");
+        assert!(
+            !settings.audio.music_muted,
+            "flag must roll back on gain failure"
+        );
+    }
+
+    #[test]
+    fn mute_save_failure_rolls_back_flag_and_gains() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings-v1.json");
+        std::fs::create_dir(&path).expect("seed directory in place of file");
+        let store = SettingsStore::at(path);
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        let old_gains = effective_gains(&settings.audio);
+
+        let result = commit_setting_change::<FakeWindow>(
+            &mut world,
+            None,
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::VoiceMuted(true),
+        );
+        assert!(result.is_err(), "save failure must be reported");
+        assert!(
+            !settings.audio.voice_muted,
+            "flag must roll back on save failure"
+        );
+        assert_eq!(
+            audio.gains(),
+            old_gains,
+            "gains must roll back on save failure"
+        );
     }
 }
 

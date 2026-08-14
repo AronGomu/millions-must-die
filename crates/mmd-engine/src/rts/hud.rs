@@ -100,6 +100,16 @@ pub const VALUE_FIELD_H: f32 = 24.0;
 /// Mute label row geometry — one label per audio channel, above its track.
 pub const MUTE_LABEL_W: f32 = 240.0;
 pub const MUTE_LABEL_H: f32 = 32.0;
+/// Pinned mute-label rects `[x, track_y - 40, 240, 32]` for Master/Music/Voice/Sfx.
+pub const MUTE_LABEL_RECTS: [[f32; 4]; 4] = [
+    [568.0, 640.0, 240.0, 32.0],
+    [568.0, 736.0, 240.0, 32.0],
+    [568.0, 832.0, 240.0, 32.0],
+    [568.0, 928.0, 240.0, 32.0],
+];
+pub const MUTE_LABELS: [&str; 4] = ["MASTER", "MUSIC", "VOICE", "SFX"];
+pub const MUTE_LABELS_MUTED: [&str; 4] =
+    ["MASTER MUTED", "MUSIC MUTED", "VOICE MUTED", "SFX MUTED"];
 
 /// Value-field rect for a slider track row: `[VALUE_FIELD_X, track_y, 56, 24]`.
 pub fn value_field_rect(track: [f32; 4]) -> [f32; 4] {
@@ -1146,6 +1156,8 @@ pub enum ModalHit {
     Sfx(u32),
     /// Framed numeric value field (typed edit target).
     NumericField(NumericSettingId),
+    /// Click on an audio channel mute label — toggle its mute flag.
+    ToggleMute(AudioChannelId),
     /// Anywhere else inside the modal — consumed, no action.
     Consumed,
 }
@@ -1166,8 +1178,21 @@ pub fn control_id_from_modal_hit(hit: ModalHit) -> Option<ControlId> {
         ModalHit::Voice(_) => Some(ControlId::VoiceSlider),
         ModalHit::Sfx(_) => Some(ControlId::SfxSlider),
         ModalHit::NumericField(id) => Some(id.field_control()),
+        ModalHit::ToggleMute(AudioChannelId::Master) => Some(ControlId::MasterMute),
+        ModalHit::ToggleMute(AudioChannelId::Music) => Some(ControlId::MusicMute),
+        ModalHit::ToggleMute(AudioChannelId::Voice) => Some(ControlId::VoiceMute),
+        ModalHit::ToggleMute(AudioChannelId::Sfx) => Some(ControlId::SfxMute),
         ModalHit::Consumed => None,
     }
+}
+
+/// Identifies one audio channel mute label control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AudioChannelId {
+    Master,
+    Music,
+    Voice,
+    Sfx,
 }
 
 /// The raw settings values [`pack_modal`] renders, in the numeric domain the
@@ -1185,6 +1210,10 @@ pub struct ModalSnapshot {
     pub music: u32,
     pub voice: u32,
     pub sfx: u32,
+    pub master_muted: bool,
+    pub music_muted: bool,
+    pub voice_muted: bool,
+    pub sfx_muted: bool,
 }
 
 fn point_in_modal_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
@@ -1268,6 +1297,16 @@ pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
             {
                 return ModalHit::Focus;
             }
+            for (i, &rect) in MUTE_LABEL_RECTS.iter().enumerate() {
+                if point_in_modal_rect(point, rect) {
+                    return ModalHit::ToggleMute(match i {
+                        0 => AudioChannelId::Master,
+                        1 => AudioChannelId::Music,
+                        2 => AudioChannelId::Voice,
+                        _ => AudioChannelId::Sfx,
+                    });
+                }
+            }
             if point_in_modal_rect(point, MASTER_TRACK) {
                 return ModalHit::Master(snap_track(
                     point[0],
@@ -1330,6 +1369,27 @@ fn push_modal_button(
     );
 }
 
+fn push_modal_mute_label(
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    rect: [f32; 4],
+    label: &str,
+    id: ControlId,
+    interaction: &InteractionSnapshot,
+    muted: bool,
+) {
+    let state = control_visual_state(id, interaction, muted, false);
+    push_control_frame(props, rect, state);
+    let text_y = rect[1] + (rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
+    push_text(
+        font,
+        label,
+        [rect[0] + 12.0, text_y],
+        PANEL_TEXT_SCALE,
+        TEXT_TINT,
+    );
+}
+
 fn push_modal_track(
     props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,
@@ -1337,16 +1397,19 @@ fn push_modal_track(
     value: u32,
     interaction: &InteractionSnapshot,
     active_edit: Option<(NumericSettingId, &[u8])>,
+    render_text_label: bool,
 ) {
     let rect = spec.track;
     let slider_id = spec.id.slider_control();
-    push_text(
-        font,
-        spec.label,
-        [rect[0], rect[1] - PANEL_LINE_PX],
-        PANEL_TEXT_SCALE,
-        TEXT_TINT,
-    );
+    if render_text_label {
+        push_text(
+            font,
+            spec.label,
+            [rect[0], rect[1] - PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            TEXT_TINT,
+        );
+    }
     let state = control_visual_state(slider_id, interaction, false, false);
     push_control_frame(props, rect, state);
     push_panel(props, rect, SLIDER_TRACK_TINT);
@@ -1500,6 +1563,7 @@ pub fn pack_modal_interactive(
                     numeric_values[i],
                     interaction,
                     active_edit,
+                    true,
                 );
             }
             push_modal_checkbox(
@@ -1522,7 +1586,28 @@ pub fn pack_modal_interactive(
                 interaction,
                 snapshot.pause_on_focus_loss,
             );
-            for i in 2..6 {
+            let mute_states = [
+                (ControlId::MasterMute, snapshot.master_muted),
+                (ControlId::MusicMute, snapshot.music_muted),
+                (ControlId::VoiceMute, snapshot.voice_muted),
+                (ControlId::SfxMute, snapshot.sfx_muted),
+            ];
+            for (i, &(mute_id, muted)) in (2usize..6).zip(mute_states.iter()) {
+                let ch = i - 2;
+                let label = if muted {
+                    MUTE_LABELS_MUTED[ch]
+                } else {
+                    MUTE_LABELS[ch]
+                };
+                push_modal_mute_label(
+                    &mut props.instances,
+                    &mut font.instances,
+                    MUTE_LABEL_RECTS[ch],
+                    label,
+                    mute_id,
+                    interaction,
+                    muted,
+                );
                 push_modal_track(
                     &mut props.instances,
                     &mut font.instances,
@@ -1530,6 +1615,7 @@ pub fn pack_modal_interactive(
                     numeric_values[i],
                     interaction,
                     active_edit,
+                    false,
                 );
             }
             push_modal_button(
