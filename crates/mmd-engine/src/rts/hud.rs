@@ -240,6 +240,31 @@ impl NumericSettingId {
             Self::Sfx => ControlId::SfxSlider,
         }
     }
+
+    /// Stable value-field [`ControlId`] for this numeric row.
+    pub fn field_control(self) -> ControlId {
+        match self {
+            Self::KeyboardPan => ControlId::KeyboardPanField,
+            Self::EdgePan => ControlId::EdgePanField,
+            Self::Master => ControlId::MasterField,
+            Self::Music => ControlId::MusicField,
+            Self::Voice => ControlId::VoiceField,
+            Self::Sfx => ControlId::SfxField,
+        }
+    }
+}
+
+/// Map a stable value-field control back to its numeric id.
+pub fn numeric_id_from_field_control(id: ControlId) -> Option<NumericSettingId> {
+    match id {
+        ControlId::KeyboardPanField => Some(NumericSettingId::KeyboardPan),
+        ControlId::EdgePanField => Some(NumericSettingId::EdgePan),
+        ControlId::MasterField => Some(NumericSettingId::Master),
+        ControlId::MusicField => Some(NumericSettingId::Music),
+        ControlId::VoiceField => Some(NumericSettingId::Voice),
+        ControlId::SfxField => Some(NumericSettingId::Sfx),
+        _ => None,
+    }
 }
 
 /// Map a stable slider control back to its numeric id.
@@ -1119,6 +1144,8 @@ pub enum ModalHit {
     Music(u32),
     Voice(u32),
     Sfx(u32),
+    /// Framed numeric value field (typed edit target).
+    NumericField(NumericSettingId),
     /// Anywhere else inside the modal — consumed, no action.
     Consumed,
 }
@@ -1138,6 +1165,7 @@ pub fn control_id_from_modal_hit(hit: ModalHit) -> Option<ControlId> {
         ModalHit::Music(_) => Some(ControlId::MusicSlider),
         ModalHit::Voice(_) => Some(ControlId::VoiceSlider),
         ModalHit::Sfx(_) => Some(ControlId::SfxSlider),
+        ModalHit::NumericField(id) => Some(id.field_control()),
         ModalHit::Consumed => None,
     }
 }
@@ -1202,6 +1230,13 @@ pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
             for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
                 if point_in_modal_rect(point, *rect) {
                     return ModalHit::WindowMode(i as u8);
+                }
+            }
+            // Value fields sit to the right of tracks (no overlap); test before
+            // tracks so a future layout slip cannot steal field clicks.
+            for spec in &NUMERIC_SETTING_SPECS {
+                if point_in_modal_rect(point, spec.value_field) {
+                    return ModalHit::NumericField(spec.id);
                 }
             }
             if point_in_modal_rect(point, KEYBOARD_PAN_TRACK) {
@@ -1301,6 +1336,7 @@ fn push_modal_track(
     spec: &NumericSettingSpec,
     value: u32,
     interaction: &InteractionSnapshot,
+    active_edit: Option<(NumericSettingId, &[u8])>,
 ) {
     let rect = spec.track;
     let slider_id = spec.id.slider_control();
@@ -1324,10 +1360,18 @@ fn push_modal_track(
     push_panel(props, fill, SLIDER_FILL_TINT);
     let thumb = slider_thumb_rect(rect, value, spec.min, spec.max);
     push_panel(props, thumb, SLIDER_THUMB_TINT);
-    // Framed value field — T4 fills it with editable text; T3 shows the number.
-    push_control_frame(props, spec.value_field, ControlVisualState::Idle);
+    // Framed value field: selected + buffer text while this row is being edited.
+    let field_id = spec.id.field_control();
+    let editing = active_edit.filter(|(id, _)| *id == spec.id);
+    let selected = editing.is_some();
+    let field_state = control_visual_state(field_id, interaction, selected, false);
+    push_control_frame(props, spec.value_field, field_state);
     let mut buf = [0u8; NUM_BUF];
-    let s = fmt_u32(&mut buf, value);
+    let s = if let Some((_, digits)) = editing {
+        core::str::from_utf8(digits).unwrap_or("")
+    } else {
+        fmt_u32(&mut buf, value)
+    };
     let text_y = spec.value_field[1] + (spec.value_field[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
     push_text(
         font,
@@ -1373,7 +1417,7 @@ fn push_modal_checkbox(
 /// `SETTINGS NOT SAVED: <reason>` line a failed transactional commit leaves
 /// up.
 ///
-/// Neutral wrapper: no hover/press tinting.
+/// Neutral wrapper: no hover/press tinting / no active field edit.
 pub fn pack_modal(
     page: ModalPage,
     snapshot: ModalSnapshot,
@@ -1385,16 +1429,20 @@ pub fn pack_modal(
         snapshot,
         warning,
         &InteractionSnapshot::default(),
+        None,
         frame,
     );
 }
 
 /// Interactive modal pack — frames + hover/press/selected tints from `interaction`.
+///
+/// `active_edit` is `(row, ascii digits)` for the focused value field, if any.
 pub fn pack_modal_interactive(
     page: ModalPage,
     snapshot: ModalSnapshot,
     warning: Option<&str>,
     interaction: &InteractionSnapshot,
+    active_edit: Option<(NumericSettingId, &[u8])>,
     frame: &mut RtsFrame,
 ) {
     let [_, _, _, props, font] = frame.ui.as_mut_slice() else {
@@ -1451,6 +1499,7 @@ pub fn pack_modal_interactive(
                     &NUMERIC_SETTING_SPECS[i],
                     numeric_values[i],
                     interaction,
+                    active_edit,
                 );
             }
             push_modal_checkbox(
@@ -1480,6 +1529,7 @@ pub fn pack_modal_interactive(
                     &NUMERIC_SETTING_SPECS[i],
                     numeric_values[i],
                     interaction,
+                    active_edit,
                 );
             }
             push_modal_button(

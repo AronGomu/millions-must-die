@@ -51,8 +51,9 @@ pub use hud::{
     VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, WINDOW_MODE_LABELS, clamp_snap,
     command_slot_rect, command_slots, control_id_from_modal_hit, control_tint,
     control_visual_state, fmt_ratio, fmt_u32, kind_label, modal_hit_test, mute_label_rect,
-    numeric_id_from_slider_control, pack_hud, pack_hud_interactive, pack_modal,
-    pack_modal_interactive, slider_thumb_rect, snap_numeric_at_x, snap_track, value_field_rect,
+    numeric_id_from_field_control, numeric_id_from_slider_control, pack_hud, pack_hud_interactive,
+    pack_modal, pack_modal_interactive, slider_thumb_rect, snap_numeric_at_x, snap_track,
+    value_field_rect,
 };
 pub use minimap::{
     HudHit, MinimapProjection, control_id_from_hud_hit, hud_hit_test, minimap_projection,

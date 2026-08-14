@@ -878,13 +878,13 @@ mod tests {
             HudLayout::PAUSE_MENU_CLOSE_BTN[1] + 10.0,
         ];
         // Down Settings, up Close → no activation / no cue.
-        crate::rts_run::pointer_down(&world, &mut session, settings);
+        crate::rts_run::pointer_down(&mut world, &mut session, settings);
         crate::rts_run::pointer_up(&mut world, &mut session, close, false);
         assert_eq!(session.ui.page, crate::rts_ui::UiPage::PauseMenu);
         assert!(audio.sink().ui_cues().is_empty());
 
         // Matching down/up on Settings still opens.
-        crate::rts_run::pointer_down(&world, &mut session, settings);
+        crate::rts_run::pointer_down(&mut world, &mut session, settings);
         crate::rts_run::pointer_up(&mut world, &mut session, settings, false);
         assert_eq!(session.ui.page, crate::rts_ui::UiPage::Settings);
         assert_eq!(audio.sink().ui_cues(), vec![UiCue::Menu]);
@@ -898,7 +898,7 @@ mod tests {
         let modal_gap = [10.0, 10.0];
         let world_pt = [960.0, 400.0];
         // Down on modal, move to world, up — no select/order.
-        crate::rts_run::pointer_down(&world, &mut session, modal_gap);
+        crate::rts_run::pointer_down(&mut world, &mut session, modal_gap);
         crate::rts_run::pointer_up(&mut world, &mut session, world_pt, false);
         assert_eq!(world.selection().ids(), before.as_slice());
         assert_eq!(session.ui.page, crate::rts_ui::UiPage::PauseMenu);

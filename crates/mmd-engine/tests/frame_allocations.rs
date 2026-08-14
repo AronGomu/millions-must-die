@@ -13,9 +13,10 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order,
-    OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots,
-    hud_hit_test, minimap_projection, pack_frame, pack_hud,
+    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, InteractionSnapshot,
+    ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER, Order, OrderReceiptBuffer,
+    ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots, hud_hit_test,
+    minimap_projection, pack_frame, pack_hud, pack_modal_interactive,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -514,6 +515,64 @@ fn new_hud_pack_allocates_nothing() {
         packed,
         "re-packing an unchanged world changed the frame"
     );
+}
+
+/// Settings modal with an active typed field must also pack allocation-free
+/// after warmup (`T4`).
+#[test]
+fn settings_edit_field_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let snapshot = ModalSnapshot {
+        window_mode_index: 0,
+        keyboard_pan: 48,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+    };
+    let interaction = InteractionSnapshot::default();
+    let digits: &[u8] = b"999";
+    let active = Some((NumericSettingId::KeyboardPan, digits));
+
+    let mut frame = RtsFrame::new();
+    pack_modal_interactive(
+        ModalPage::Settings,
+        snapshot,
+        Some("SETTINGS NOT SAVED: test"),
+        &interaction,
+        active,
+        &mut frame,
+    );
+    let packed = frame.instance_count();
+    assert!(packed > 0, "warmup must pack the settings modal");
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        frame.clear();
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            Some("SETTINGS NOT SAVED: test"),
+            &interaction,
+            active,
+            &mut frame,
+        );
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "packing settings with active edit allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(frame.instance_count(), packed);
 }
 
 #[test]

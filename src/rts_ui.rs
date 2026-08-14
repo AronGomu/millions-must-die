@@ -15,7 +15,7 @@
 
 use mmd_engine::rts::{
     BuildingKind, CommandId, ControlId, HudHit, HudLayout, InteractionSnapshot, ModalHit,
-    ModalPage, ModalSnapshot, NumericSettingId, RtsWorld, UnitKind, command_slots,
+    ModalPage, ModalSnapshot, NumericSettingId, RtsWorld, UnitKind, clamp_snap, command_slots,
     control_id_from_hud_hit, control_id_from_modal_hit, hud_hit_test, minimap_projection,
     modal_hit_test, numeric_id_from_slider_control, pack_hud_interactive, pack_modal_interactive,
     snap_numeric_at_x,
@@ -129,6 +129,144 @@ pub fn current_numeric_value(settings: &RtsSettings, id: NumericSettingId) -> u3
         NumericSettingId::Voice => settings.audio.voice,
         NumericSettingId::Sfx => settings.audio.sfx,
     }
+}
+
+/// Fixed no-heap edit buffer for one typed numeric field (`T4`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumericEdit {
+    pub id: NumericSettingId,
+    pub original: u32,
+    digits: [u8; 3],
+    len: u8,
+}
+
+impl NumericEdit {
+    /// Begin edit on `id`, seeding the buffer with `original`'s decimal digits.
+    pub fn begin(id: NumericSettingId, original: u32) -> Self {
+        let mut digits = [0u8; 3];
+        let len = write_u32_3(&mut digits, original);
+        Self {
+            id,
+            original,
+            digits,
+            len,
+        }
+    }
+
+    /// Push one ASCII digit. Non-digits and a full buffer are ignored.
+    pub fn push_ascii_digit(&mut self, c: u8) -> bool {
+        if !c.is_ascii_digit() || self.len >= 3 {
+            return false;
+        }
+        self.digits[self.len as usize] = c;
+        self.len += 1;
+        true
+    }
+
+    /// Drop the last digit, if any.
+    pub fn backspace(&mut self) {
+        self.len = self.len.saturating_sub(1);
+    }
+
+    /// Parsed decimal value, or `None` when the buffer is empty.
+    pub fn parsed(&self) -> Option<u32> {
+        if self.len == 0 {
+            return None;
+        }
+        let mut v = 0u32;
+        for &d in &self.digits[..self.len as usize] {
+            v = v * 10 + u32::from(d - b'0');
+        }
+        Some(v)
+    }
+
+    /// ASCII digit bytes currently in the buffer (length 0..=3).
+    pub fn display(&self) -> &[u8] {
+        &self.digits[..self.len as usize]
+    }
+
+    /// Drop the edit; caller keeps `original` already stored in settings.
+    pub fn cancel(self) -> u32 {
+        self.original
+    }
+}
+
+/// How [`finish_numeric_edit`] ends an active field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NumericEditEnd {
+    /// Enter / pointer blur / OS focus loss: parse → clamp_snap → maybe stage.
+    Commit,
+    /// Escape: restore original (already in settings), no stage.
+    Cancel,
+}
+
+/// Write `v` as up to 3 decimal ASCII digits into `out`. Returns length.
+fn write_u32_3(out: &mut [u8; 3], mut v: u32) -> u8 {
+    if v == 0 {
+        out[0] = b'0';
+        return 1;
+    }
+    let mut tmp = [0u8; 3];
+    let mut n = 0u8;
+    while v > 0 && n < 3 {
+        tmp[n as usize] = b'0' + (v % 10) as u8;
+        v /= 10;
+        n += 1;
+    }
+    for i in 0..n {
+        out[i as usize] = tmp[(n - 1 - i) as usize];
+    }
+    n
+}
+
+/// Begin typing into one numeric field (replaces any prior edit).
+pub fn begin_numeric_edit(session: &mut RtsSession, id: NumericSettingId) {
+    let original = current_numeric_value(&session.settings, id);
+    session.numeric_edit = Some(NumericEdit::begin(id, original));
+}
+
+/// Route one SDL `TextInput` string into the active field. Non-digits ignored.
+pub fn numeric_edit_text_input(session: &mut RtsSession, text: &str) {
+    let Some(edit) = session.numeric_edit.as_mut() else {
+        return;
+    };
+    for b in text.bytes() {
+        let _ = edit.push_ascii_digit(b);
+    }
+}
+
+/// End the active numeric edit. Stages at most one pending change on Commit.
+pub fn finish_numeric_edit(session: &mut RtsSession, mode: NumericEditEnd) {
+    let Some(edit) = session.numeric_edit.take() else {
+        return;
+    };
+    match mode {
+        NumericEditEnd::Cancel => {
+            let _ = edit.cancel();
+        }
+        NumericEditEnd::Commit => {
+            let Some(raw) = edit.parsed() else {
+                // Empty buffer: restore original / no save.
+                return;
+            };
+            let spec = edit.id.spec();
+            let value = clamp_snap(raw, spec.min, spec.max, spec.step);
+            if current_numeric_value(&session.settings, edit.id) == value {
+                return;
+            }
+            session.emit_audio(AudioEvent::Ui(UiCue::Settings));
+            session.pending_setting_change = Some(settings_change_for_numeric(edit.id, value));
+        }
+    }
+}
+
+/// Focus-loss half of the T4 order before pause policy runs:
+/// finalize edit → clear ptr/keys. Caller stops SDL text input, clears world
+/// pan dirs, then applies `focus_lost` only when pause-on-focus-loss is on.
+pub fn finalize_numeric_edit_on_focus_loss(session: &mut RtsSession) {
+    finish_numeric_edit(session, NumericEditEnd::Commit);
+    session.clear_press();
+    session.keyboard_held = [0.0, 0.0];
 }
 
 /// Stage one slider step when the snapped value differs from the live cfg.
@@ -398,6 +536,10 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
         ModalHit::Music(v) => Some(SettingsChange::Music(v)),
         ModalHit::Voice(v) => Some(SettingsChange::Voice(v)),
         ModalHit::Sfx(v) => Some(SettingsChange::Sfx(v)),
+        ModalHit::NumericField(id) => {
+            begin_numeric_edit(session, id);
+            None
+        }
         ModalHit::Consumed => None,
     };
     if let Some(change) = change {
@@ -463,11 +605,13 @@ pub fn pack_hud(world: &RtsWorld, session: &RtsSession, frame: &mut mmd_engine::
         UiPage::Settings => ModalPage::Settings,
     };
     let snapshot = modal_snapshot(&session.settings, session.pending_setting_change);
+    let active_edit = session.numeric_edit.as_ref().map(|e| (e.id, e.display()));
     pack_modal_interactive(
         page,
         snapshot,
         session.ui.warning.as_deref(),
         &interaction,
+        active_edit,
         frame,
     );
 }
@@ -594,12 +738,12 @@ pub fn commit_setting_change_live<W: ClaimedWindow>(
     })
 }
 
-/// Drain `session.pending_setting_change` through the memory-only transaction
-/// (scripted / offscreen). Shared with the live drain's non-window path.
-pub fn drain_pending_setting_change_memory(world: &mut RtsWorld, session: &mut RtsSession) {
-    let Some(change) = session.pending_setting_change.take() else {
-        return;
-    };
+/// Drain one pending change through the memory-only transaction.
+fn drain_one_setting_change_memory(
+    world: &mut RtsWorld,
+    session: &mut RtsSession,
+    change: SettingsChange,
+) {
     // Window type is never used when `window` is `None`.
     let outcome = commit_setting_change::<crate::rts_window::SdlWindowOps<'_>>(
         world,
@@ -615,8 +759,19 @@ pub fn drain_pending_setting_change_memory(world: &mut RtsWorld, session: &mut R
     }
 }
 
-/// Drain `session.pending_setting_change` through the live (claim-aware)
-/// transaction. Returns the live commit result; empty pending is a no-op Ok.
+/// Drain `session.pending_setting_change` (+ optional follow-up) through the
+/// memory-only transaction (scripted / offscreen).
+pub fn drain_pending_setting_change_memory(world: &mut RtsWorld, session: &mut RtsSession) {
+    if let Some(change) = session.pending_setting_change.take() {
+        drain_one_setting_change_memory(world, session, change);
+    }
+    if let Some(change) = session.followup_setting_change.take() {
+        drain_one_setting_change_memory(world, session, change);
+    }
+}
+
+/// Drain `session.pending_setting_change` (+ optional follow-up) through the
+/// live (claim-aware) transaction. Empty pending is a no-op Ok.
 pub fn drain_pending_setting_change_live<W: ClaimedWindow>(
     world: &mut RtsWorld,
     window: &mut W,
@@ -624,6 +779,11 @@ pub fn drain_pending_setting_change_live<W: ClaimedWindow>(
     session: &mut RtsSession,
 ) -> Result<LiveCommit, String> {
     let Some(change) = session.pending_setting_change.take() else {
+        // Follow-up alone is still drained (defensive).
+        if let Some(follow) = session.followup_setting_change.take() {
+            session.pending_setting_change = Some(follow);
+            return drain_pending_setting_change_live(world, window, store, session);
+        }
         return Ok(LiveCommit {
             result: Ok(()),
             viewport: None,
@@ -640,6 +800,33 @@ pub fn drain_pending_setting_change_live<W: ClaimedWindow>(
     match &live.result {
         Ok(()) => session.ui.warning = None,
         Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+    }
+    if let Some(follow) = session.followup_setting_change.take() {
+        // Chain the same-down slider step after the blur commit.
+        let follow_live = commit_setting_change_live(
+            world,
+            window,
+            store,
+            &mut session.settings,
+            session.audio.as_mut(),
+            follow,
+        )?;
+        match &follow_live.result {
+            Ok(()) => {
+                if live.result.is_ok() {
+                    session.ui.warning = None;
+                }
+            }
+            Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+        }
+        let result = match (live.result, follow_live.result) {
+            (Ok(()), Ok(())) => Ok(()),
+            (Err(e), _) | (_, Err(e)) => Err(e),
+        };
+        return Ok(LiveCommit {
+            result,
+            viewport: live.viewport.or(follow_live.viewport),
+        });
     }
     Ok(live)
 }
@@ -1440,7 +1627,7 @@ mod tests {
     fn slider_drag_retains_stable_control() {
         let (mut world, mut session, _) = session_open_settings();
         let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
-        pointer_down(&world, &mut session, start);
+        pointer_down(&mut world, &mut session, start);
         assert_eq!(
             session.pressed_control(),
             Some(ControlId::KeyboardPanSlider)
@@ -1462,7 +1649,7 @@ mod tests {
         let (mut world, mut session, audio) = session_open_settings();
         let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
         // Default keyboard_pan is 48 — down at 48 stages nothing.
-        pointer_down(&world, &mut session, start);
+        pointer_down(&mut world, &mut session, start);
         drain_pending_setting_change_memory(&mut world, &mut session);
         let gains_before = audio.sink().gain_calls();
 
@@ -1493,7 +1680,7 @@ mod tests {
         let (mut world, mut session, audio) = session_open_settings();
         // Camera: 48 → 60.
         let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
-        pointer_down(&world, &mut session, p60);
+        pointer_down(&mut world, &mut session, p60);
         drain_pending_setting_change_memory(&mut world, &mut session);
         assert_eq!(session.settings.camera.keyboard_pan, 60);
         assert_eq!(world.camera_speeds().0, 60.0);
@@ -1501,7 +1688,7 @@ mod tests {
 
         // Audio: master default 80 → 50 via a fresh drag.
         let p50 = track_point(MASTER_TRACK, 50, 0, 100);
-        pointer_down(&world, &mut session, p50);
+        pointer_down(&mut world, &mut session, p50);
         drain_pending_setting_change_memory(&mut world, &mut session);
         assert_eq!(session.settings.audio.master, 50);
         assert_eq!(
@@ -1518,7 +1705,7 @@ mod tests {
         let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
         let old = session.settings.camera.keyboard_pan;
         let old_speed = world.camera_speeds();
-        pointer_down(&world, &mut session, p60);
+        pointer_down(&mut world, &mut session, p60);
         drain_pending_setting_change_memory(&mut world, &mut session);
         assert_eq!(session.settings.camera.keyboard_pan, old);
         assert_eq!(world.camera_speeds(), old_speed);
@@ -1544,7 +1731,7 @@ mod tests {
         let (mut world, mut session, _) = session_open_settings();
         let before = world.selection().ids().to_vec();
         let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
-        pointer_down(&world, &mut session, start);
+        pointer_down(&mut world, &mut session, start);
         // Drag out into the world and release.
         apply(&mut world, &mut session, RtsCommand::Move([960.0, 400.0]));
         pointer_up(&mut world, &mut session, [960.0, 400.0], false);
@@ -1587,5 +1774,214 @@ mod tests {
                 spec.id
             );
         }
+    }
+
+    // -- T4 typed numeric fields ---------------------------------------------
+
+    fn field_point(id: NumericSettingId) -> [f32; 2] {
+        let f = id.spec().value_field;
+        [f[0] + 1.0, f[1] + 1.0]
+    }
+
+    fn click_field(world: &mut RtsWorld, session: &mut RtsSession, id: NumericSettingId) {
+        let p = field_point(id);
+        apply(world, session, RtsCommand::LeftClick(p));
+    }
+
+    #[test]
+    fn numeric_edit_accepts_three_ascii_digits() {
+        let mut edit = NumericEdit::begin(NumericSettingId::KeyboardPan, 48);
+        // Clear seed then type 999.
+        edit.backspace();
+        edit.backspace();
+        assert!(edit.push_ascii_digit(b'9'));
+        assert!(edit.push_ascii_digit(b'9'));
+        assert!(edit.push_ascii_digit(b'9'));
+        assert!(!edit.push_ascii_digit(b'9'), "4th digit must be ignored");
+        assert_eq!(edit.display(), b"999");
+        assert_eq!(edit.parsed(), Some(999));
+    }
+
+    #[test]
+    fn unsupported_text_is_ignored() {
+        let mut edit = NumericEdit::begin(NumericSettingId::Master, 80);
+        edit.backspace();
+        edit.backspace();
+        assert!(!edit.push_ascii_digit(b'a'));
+        assert!(!edit.push_ascii_digit(b'-'));
+        assert!(!edit.push_ascii_digit(b'.'));
+        assert!(!edit.push_ascii_digit(b' '));
+        assert_eq!(edit.len_for_test(), 0);
+        assert!(edit.push_ascii_digit(b'5'));
+        assert_eq!(edit.display(), b"5");
+    }
+
+    #[test]
+    fn backspace_edits_fixed_buffer() {
+        let mut edit = NumericEdit::begin(NumericSettingId::EdgePan, 48);
+        assert_eq!(edit.display(), b"48");
+        edit.backspace();
+        assert_eq!(edit.display(), b"4");
+        edit.backspace();
+        assert_eq!(edit.display(), b"");
+        edit.backspace(); // empty stays empty
+        assert_eq!(edit.parsed(), None);
+        assert!(edit.push_ascii_digit(b'1'));
+        assert!(edit.push_ascii_digit(b'2'));
+        assert_eq!(edit.display(), b"12");
+    }
+
+    #[test]
+    fn enter_clamps_snaps_and_commits() {
+        let (mut world, mut session, audio) = session_open_settings();
+        click_field(&mut world, &mut session, NumericSettingId::KeyboardPan);
+        assert!(session.numeric_edit.is_some());
+        // Replace seed with 999 → clamp_snap → 96.
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            edit.backspace();
+            edit.backspace();
+            let _ = edit.push_ascii_digit(b'9');
+            let _ = edit.push_ascii_digit(b'9');
+            let _ = edit.push_ascii_digit(b'9');
+        }
+        finish_numeric_edit(&mut session, NumericEditEnd::Commit);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, PAN_MAX);
+        assert_eq!(world.camera_speeds().0, PAN_MAX as f32);
+        assert!(session.numeric_edit.is_none());
+        assert_eq!(audio.sink().ui_cues(), vec![UiCue::Settings]);
+
+        // Volume half-step 53 → 55.
+        click_field(&mut world, &mut session, NumericSettingId::Master);
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            edit.backspace();
+            edit.backspace();
+            let _ = edit.push_ascii_digit(b'5');
+            let _ = edit.push_ascii_digit(b'3');
+        }
+        finish_numeric_edit(&mut session, NumericEditEnd::Commit);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.audio.master, 55);
+    }
+
+    #[test]
+    fn empty_enter_restores_without_save() {
+        let (mut world, mut session, audio) = session_open_settings();
+        let old = session.settings.camera.keyboard_pan;
+        let gains_before = audio.sink().gain_calls();
+        click_field(&mut world, &mut session, NumericSettingId::KeyboardPan);
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            while edit.parsed().is_some() {
+                edit.backspace();
+            }
+        }
+        finish_numeric_edit(&mut session, NumericEditEnd::Commit);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, old);
+        assert_eq!(audio.sink().gain_calls(), gains_before);
+        assert!(session.ui.warning.is_none());
+        assert!(session.numeric_edit.is_none());
+    }
+
+    #[test]
+    fn pointer_blur_commits_before_activation() {
+        let (mut world, mut session, _) = session_open_settings();
+        click_field(&mut world, &mut session, NumericSettingId::KeyboardPan);
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            edit.backspace();
+            edit.backspace();
+            let _ = edit.push_ascii_digit(b'6');
+            let _ = edit.push_ascii_digit(b'0');
+        }
+        // Click the focus-loss checkbox — blur commits 60, then toggles checkbox.
+        let focus = mmd_engine::rts::FOCUS_CONTROL_RECT;
+        let p = [focus[0] + 1.0, focus[1] + 1.0];
+        apply(&mut world, &mut session, RtsCommand::LeftClick(p));
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, 60);
+        assert!(session.settings.gameplay.pause_on_focus_loss);
+        assert!(session.numeric_edit.is_none());
+    }
+
+    #[test]
+    fn escape_restores_and_consumes_navigation() {
+        let (mut world, mut session, audio) = session_open_settings();
+        let old = session.settings.camera.keyboard_pan;
+        let gains_before = audio.sink().gain_calls();
+        click_field(&mut world, &mut session, NumericSettingId::KeyboardPan);
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            edit.backspace();
+            edit.backspace();
+            let _ = edit.push_ascii_digit(b'9');
+            let _ = edit.push_ascii_digit(b'9');
+            let _ = edit.push_ascii_digit(b'9');
+        }
+        apply(&mut world, &mut session, RtsCommand::Escape);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        assert_eq!(session.settings.camera.keyboard_pan, old);
+        assert_eq!(audio.sink().gain_calls(), gains_before);
+        assert_eq!(
+            session.ui.page,
+            UiPage::Settings,
+            "Escape must not leave Settings"
+        );
+        assert!(session.numeric_edit.is_none());
+    }
+
+    #[test]
+    fn os_focus_loss_finalizes_before_pause_and_clear() {
+        let (mut world, mut session, _) = session_open_settings();
+        click_field(&mut world, &mut session, NumericSettingId::Master);
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            edit.backspace();
+            edit.backspace();
+            let _ = edit.push_ascii_digit(b'5');
+            let _ = edit.push_ascii_digit(b'3');
+        }
+        // Simulate a held key + press before focus loss.
+        session.keyboard_held = [1.0, 0.0];
+        pointer_down(
+            &mut world,
+            &mut session,
+            field_point(NumericSettingId::Master),
+        );
+        finalize_numeric_edit_on_focus_loss(&mut session);
+        drain_pending_setting_change_memory(&mut world, &mut session);
+        // Live path only calls focus_lost when pause-on-focus-loss is on.
+        session.ui.focus_lost();
+        assert_eq!(session.settings.audio.master, 55);
+        assert!(session.numeric_edit.is_none());
+        assert!(session.pressed_control().is_none());
+        assert_eq!(session.keyboard_held, [0.0, 0.0]);
+        assert!(session.ui.pauses.focus);
+        assert_eq!(session.ui.page, UiPage::PauseMenu);
+    }
+
+    #[test]
+    fn offscreen_never_starts_text_input() {
+        // Pure apply/pointer path focuses a field + accepts digits with no SDL.
+        let (mut world, mut session, _) = session_open_settings();
+        click_field(&mut world, &mut session, NumericSettingId::Sfx);
+        assert!(session.numeric_edit.is_some());
+        if let Some(edit) = session.numeric_edit.as_mut() {
+            while edit.parsed().is_some() {
+                edit.backspace();
+            }
+        }
+        numeric_edit_text_input(&mut session, "abc40x5");
+        assert_eq!(session.numeric_edit.as_ref().unwrap().display(), b"405");
+        // Offscreen/scripted path never touches VideoSubsystem::text_input —
+        // only the interactive window loop does. This test exercises the pure
+        // FSM exclusively.
+        finish_numeric_edit(&mut session, NumericEditEnd::Cancel);
+        assert!(session.numeric_edit.is_none());
+    }
+}
+
+impl NumericEdit {
+    /// Test-only length accessor (field is private).
+    #[cfg(test)]
+    fn len_for_test(&self) -> u8 {
+        self.len
     }
 }

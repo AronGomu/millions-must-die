@@ -241,3 +241,13 @@ command below except what a browser or a human eye must judge.
 - [ ] Click (no drag) a point on a volume track: confirm it still snaps to the nearest legal step (0..100 step 5) exactly as before.
 - [ ] Force a save failure mid-drag if you can (e.g. replace the settings file with a directory while the panel is open, then drag): confirm the old value/runtime stay, a `SETTINGS NOT SAVED:` warning appears, and a later legal drag step still works without releasing first.
 - [ ] While dragging a slider, release over the world: confirm no unit selection/order and the settings page stays open.
+
+## T4 numeric-editing
+
+- [ ] Launch `cargo run -- rts`, open Settings, click a framed value field (right of Keyboard Pan): confirm it shows selected frame and the current digits; type `999` and press Enter: confirm value becomes 96 (pan max) and camera pan speed matches; one Settings SFX on commit.
+- [ ] Click Master field, type `53`, Enter: confirm it snaps to 55; drag is unnecessary — typed path uses the same clamp_snap.
+- [ ] Click a field, Backspace until empty, Enter: confirm old value remains and no save/gain change occurs.
+- [ ] Click a field, type a new value, press Escape: confirm original value restored and page stays Settings (one Escape does not back to pause menu).
+- [ ] With a valid buffer in a field, click the PAUSE ON FOCUS LOSS checkbox: confirm the typed value commits first, then the checkbox toggles.
+- [ ] With a valid buffer in a field, Alt-Tab away (focus loss): confirm value is saved, text input stops (no stuck IME), pointer/keys clear, and if pause-on-focus-loss is on the pause menu opens.
+- [ ] With no field focused, Escape nesting still works: Gameplay→Menu→Settings→Menu→Gameplay.

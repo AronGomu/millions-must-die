@@ -907,8 +907,8 @@ use mmd_engine::rts::{
     ModalHit, ModalPage, ModalSnapshot, NUMERIC_SETTING_SPECS, NumericSettingId, PAN_MAX, PAN_MIN,
     PAN_STEP, SFX_TRACK, SLIDER_THUMB_W_PX, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X,
     VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, clamp_snap,
-    command_slot_rect, control_tint, control_visual_state, modal_hit_test, mute_label_rect,
-    pack_modal, slider_thumb_rect, snap_track, value_field_rect,
+    command_slot_rect, control_id_from_modal_hit, control_tint, control_visual_state,
+    modal_hit_test, mute_label_rect, pack_modal, slider_thumb_rect, snap_track, value_field_rect,
 };
 
 fn default_snapshot() -> ModalSnapshot {
@@ -1406,4 +1406,38 @@ fn clamp_snap_handles_bounds_and_half_steps() {
     // Volume half-step 50↔55 is 52.5 → as u32 53 → nearest 55.
     assert_eq!(clamp_snap(53, VOLUME_MIN, VOLUME_MAX, VOLUME_STEP), 55);
     assert_eq!(clamp_snap(52, VOLUME_MIN, VOLUME_MAX, VOLUME_STEP), 50);
+}
+
+// ---------------------------------------------------------------------------
+// T4 — typed numeric value fields
+// ---------------------------------------------------------------------------
+
+#[test]
+fn numeric_fields_are_framed_and_hit_testable() {
+    for spec in &NUMERIC_SETTING_SPECS {
+        assert_eq!(
+            spec.value_field,
+            [VALUE_FIELD_X, spec.track[1], VALUE_FIELD_W, VALUE_FIELD_H]
+        );
+        let p = [spec.value_field[0] + 1.0, spec.value_field[1] + 1.0];
+        assert_eq!(
+            modal_hit_test(ModalPage::Settings, p),
+            ModalHit::NumericField(spec.id),
+            "{:?} field must hit",
+            spec.id
+        );
+        assert_eq!(
+            control_id_from_modal_hit(ModalHit::NumericField(spec.id)),
+            Some(spec.id.field_control())
+        );
+        // Track still hits as slider, not field.
+        let tp = [spec.track[0] + 1.0, spec.track[1] + 1.0];
+        assert!(
+            !matches!(
+                modal_hit_test(ModalPage::Settings, tp),
+                ModalHit::NumericField(_)
+            ),
+            "track must not classify as field"
+        );
+    }
 }
