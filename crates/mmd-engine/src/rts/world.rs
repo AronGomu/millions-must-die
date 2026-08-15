@@ -11,7 +11,9 @@ use super::build::{
     Placement, PlacementError, build_ticks, building_cost, placement_valid, supply_grant,
 };
 use super::collision::{
-    GATHER_PAIR_ACTIVE, GatherCollisionState, moving_circle_hits_point, units_overlap,
+    GATHER_PAIR_ACTIVE, GATHER_SEPARATION_STEP_CELLS, GATHER_SEPARATION_TICKS,
+    GatherCollisionState, concentric_pair_normal, moving_circle_hits_point, pair_byte_exempts,
+    pair_byte_is_transition, units_overlap,
 };
 use super::economy::{
     GATHER_TICKS, Resources, Supply, WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
@@ -171,6 +173,13 @@ pub enum TickError {
     /// them into. The movement system is skipped for that tick rather than
     /// compounding an illegal state, and the overlap is reported here rather
     /// than silently kept.
+    ///
+    /// Also the terminal state of a gather exit that ran out of bound: a pair
+    /// that neither separated within [`GATHER_SEPARATION_TICKS`] attempts nor
+    /// found a free centre to relocate into is put back to *hard* and reported
+    /// here, so it is counted by [`RtsWorld::body_overlap_count`] and retried
+    /// by the next tick's repair. An exit that fails is a failure that says
+    /// so, never a permanent exemption.
     #[error("a merged unit body could not be repaired: no legal free position exists")]
     UnrepairableOverlap,
 }
@@ -201,6 +210,12 @@ pub struct RtsWorld {
     /// system has processed this tick, still last tick's for one it has not.
     /// Reserved to [`MAX_ENTITIES`] so a tick never grows it.
     candidate_pos: Vec<[f32; 2]>,
+    /// Parallel to [`Self::unit_scratch`]: every unit body's position as it
+    /// stood when the gather-exit separation pass began, so that pass decides
+    /// *which* pairs it acts on from one consistent picture of the tick rather
+    /// than from a world its own earlier moves have already changed. Reserved
+    /// to [`MAX_ENTITIES`] so a tick never grows it.
+    snapshot_pos: Vec<[f32; 2]>,
     /// Parallel to [`Self::unit_scratch`]: has this body already been pushed
     /// aside by a mover this tick? One push per body per tick is what keeps a
     /// crowd from shoving one unit several cells in a single tick. Reserved to
@@ -321,6 +336,15 @@ const _: () = assert!(
     "the soldier outruns the push chain's endpoint check: raise MAX_PUSH_DEPTH's \
      cost or lower the speed — see MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC"
 );
+
+/// How close two body centres have to be before "directly away from the
+/// partner" stops being a direction at all.
+///
+/// Not a collision tolerance — the collision rule itself is exact and has no
+/// epsilon. This is only the point below which normalising the separation
+/// vector stops producing a usable unit vector, and
+/// [`concentric_pair_normal`] takes over.
+const CONCENTRIC_CELLS: f32 = 1e-6;
 
 /// The headings one mover tries in a tick, as `(cos, sin)` rotations of its
 /// own field descent vector: straight ahead first, then 45 degrees to each
@@ -619,6 +643,7 @@ impl RtsWorld {
             live_scratch: Vec::with_capacity(MAX_ENTITIES),
             unit_scratch: Vec::with_capacity(MAX_ENTITIES),
             candidate_pos: Vec::with_capacity(MAX_ENTITIES),
+            snapshot_pos: Vec::with_capacity(MAX_ENTITIES),
             pushed: Vec::with_capacity(MAX_ENTITIES),
             gather_pairs: GatherCollisionState::new(),
             last_tick_error: None,
@@ -666,6 +691,12 @@ impl RtsWorld {
     /// available to tests as [`Self::raw_body_overlap_count`], which is what
     /// keeps a reading of `0` here from being vacuous.
     ///
+    /// What `T14` added: a pair that has *stopped* gathering is exempt too,
+    /// but only while it is inside its [`GATHER_SEPARATION_TICKS`] bound. That
+    /// is a strictly finite licence — [`Self::separate_exiting_pairs`] spends
+    /// one attempt of it per tick and cannot renew it — so a pair that never
+    /// separates ends up counted here rather than hidden here forever.
+    ///
     /// The policy this reads is the one the **most recent completed tick**
     /// recorded ([`Self::mark_active_gather_pairs`]), not one re-derived at
     /// call time: the oracle and the movement gates must agree about which
@@ -710,7 +741,7 @@ impl RtsWorld {
         for (n, &(a, ra)) in units.iter().enumerate() {
             let pa = store.position(a);
             for &(b, rb) in &units[n + 1..] {
-                if policy && self.gather_pairs.state(a, b) == GATHER_PAIR_ACTIVE {
+                if policy && pair_byte_exempts(self.gather_pairs.state(a, b)) {
                     continue;
                 }
                 if units_overlap(pa, ra, store.position(b), rb) {
@@ -760,6 +791,26 @@ impl RtsWorld {
         };
         self.orders.set(slot, order);
         true
+    }
+
+    /// Test-only: the collision-policy byte the most recent completed tick
+    /// left on the pair `{a, b}`.
+    ///
+    /// `0` hard, [`GATHER_PAIR_ACTIVE`] active gather provenance, and
+    /// `1..=`[`GATHER_SEPARATION_TICKS`] the number of separation attempts an
+    /// exit has already spent. The two overlap oracles can only see the
+    /// *effect* of a byte — whether an overlap counts — which cannot tell a
+    /// pair one attempt into its bound from a pair eleven attempts in, and the
+    /// whole point of `T14` is that those are different. `0` for a stale id.
+    #[cfg(feature = "testkit")]
+    pub fn gather_pair_state_for_test(&self, a: EntityId, b: EntityId) -> u8 {
+        let (Some(sa), Some(sb)) = (self.entities.slot(a), self.entities.slot(b)) else {
+            return 0;
+        };
+        if sa == sb {
+            return 0;
+        }
+        self.gather_pairs.state(sa, sb)
     }
 
     /// What went wrong in the most recent [`Self::tick`], if anything.
@@ -2092,6 +2143,16 @@ impl RtsWorld {
     /// which every one of those gates consults, so the exemption is either
     /// honoured by all of them or by none.
     ///
+    /// Exempt means one of exactly two things, and both are bounded: an
+    /// *active* gather pair ([`Self::mark_active_gather_pairs`]), which loses
+    /// the exemption the tick its order does, and a pair inside its bounded
+    /// exit ([`Self::separate_exiting_pairs`]), which loses it after at most
+    /// [`GATHER_SEPARATION_TICKS`] attempts whatever happens. Both passes run
+    /// before the generic repair on purpose: an exit that finishes early is
+    /// hard again *within the same tick*, so the repair sees legal geometry
+    /// and normal movement sees a hard pair that cannot re-merge on the very
+    /// tick it separated.
+    ///
     /// The traversal start rotates by `tick_index % unit_count` so that
     /// contention is not settled by slot number forever: a unit queued behind
     /// another gets the first proposal on its share of ticks instead of being
@@ -2107,8 +2168,17 @@ impl RtsWorld {
     /// asked for, and re-acquires when it is not — see step 2 in
     /// [`Self::step_one_unit`].
     fn movement(&mut self) {
+        self.last_tick_error = None;
         self.collect_unit_bodies();
         self.mark_active_gather_pairs();
+        self.separate_exiting_pairs();
+        if self.last_tick_error.is_some() {
+            // An exit the fallback could not land. Same rule as below: the
+            // pair is hard again (its byte is cleared), so it is counted and
+            // handed to the next tick's generic repair rather than moved on
+            // top of.
+            return;
+        }
         self.repair_body_overlaps();
         if self.last_tick_error.is_some() {
             // The world was handed a penetration nothing could repair. Moving
@@ -2160,21 +2230,26 @@ impl RtsWorld {
     ///
     /// Provenance, not a reaction to geometry: **every** active gather pair is
     /// marked, overlapping or not, so the exemption is a fact about what the
-    /// pair is doing rather than about where it happens to be standing. A pair
-    /// that is no longer active has its marker cleared here, and the generic
-    /// repair below then restores hard geometry for it immediately — the
-    /// bounded exit transition is `T14`'s slice, not this one.
+    /// pair is doing rather than about where it happens to be standing.
+    ///
+    /// A pair that is *not* active is deliberately left alone here rather than
+    /// cleared. Its byte is what the pair carried out of the last tick, and
+    /// that byte is the exit's whole memory: [`Self::separate_exiting_pairs`]
+    /// runs immediately after and is the one place that reads it, advances it
+    /// and — always within this tick — either clears it or hands the pair to
+    /// the fallback. So no pair leaves this phase pair holding a marker it did
+    /// not earn this tick.
     fn mark_active_gather_pairs(&mut self) {
         let n = self.unit_scratch.len();
         for i in 0..n {
             for j in (i + 1)..n {
-                let value = if self.pair_is_active_gather(i, j) {
-                    GATHER_PAIR_ACTIVE
-                } else {
-                    0
-                };
-                self.gather_pairs
-                    .set_state(self.unit_scratch[i], self.unit_scratch[j], value);
+                if self.pair_is_active_gather(i, j) {
+                    self.gather_pairs.set_state(
+                        self.unit_scratch[i],
+                        self.unit_scratch[j],
+                        GATHER_PAIR_ACTIVE,
+                    );
+                }
             }
         }
     }
@@ -2203,14 +2278,296 @@ impl RtsWorld {
     /// so an exemption cannot be honoured by one check and ignored by the
     /// next — which is how a pair gets marked legal by the sweep and then torn
     /// apart by the repair pass on the following tick. Reads the table
-    /// [`Self::mark_active_gather_pairs`] wrote, never the orders directly, so
-    /// the policy has exactly one author per tick.
+    /// [`Self::mark_active_gather_pairs`] and [`Self::separate_exiting_pairs`]
+    /// wrote, never the orders directly, so the policy has exactly one author
+    /// per tick.
+    ///
+    /// Two bytes exempt and they mean different things
+    /// ([`pair_byte_exempts`]): active gather provenance, and an exit still
+    /// inside its [`GATHER_SEPARATION_TICKS`] bound. Both are mutual, and
+    /// neither survives a tick that did not re-earn it.
     ///
     /// Static geometry is not a pair and is never exempt.
     fn pair_ignores_collision(&self, i: usize, j: usize) -> bool {
+        pair_byte_exempts(
+            self.gather_pairs
+                .state(self.unit_scratch[i], self.unit_scratch[j]),
+        )
+    }
+
+    /// Phase 2b: walk every live pair once and advance the ones that are
+    /// *leaving* a gather exemption behind.
+    ///
+    /// An exemption ends the moment the order that earned it does, but a pair
+    /// that has been standing inside itself cannot become legal geometry in
+    /// one frame without teleporting — the very thing this pass exists to
+    /// avoid. So the exit is spread over at most [`GATHER_SEPARATION_TICKS`]
+    /// attempts of at most [`GATHER_SEPARATION_STEP_CELLS`] each, one attempt
+    /// per pair per tick, and the pair byte counts the attempts already spent.
+    ///
+    /// The bound is the whole point, so it is enforced from both ends: the
+    /// count only ever rises, and the tick that spends the last attempt also
+    /// runs the fallback, so no pair is ever observed between two ticks
+    /// holding [`GATHER_SEPARATION_TICKS`]. A pair that neither separates nor
+    /// relocates ends the tick at `0` — hard, counted by
+    /// [`Self::body_overlap_count`], reported through [`TickError`] and handed
+    /// to the next tick's generic repair. There is no state in which a pair
+    /// keeps an exemption indefinitely.
+    ///
+    /// Order-independence: the walk is the same ascending live-slot order the
+    /// pair hash frames, always with `i < j`, and each accepted move is
+    /// committed immediately — so a later pair collision-tests against the
+    /// world as earlier pairs left it, while *which* pairs act at all is read
+    /// from [`Self::snapshot_pos`], the picture taken before the walk began.
+    /// One pass, never iterated to a fixpoint.
+    fn separate_exiting_pairs(&mut self) {
+        let n = self.unit_scratch.len();
+        if n < 2 {
+            return;
+        }
+        self.snapshot_pos.clear();
+        self.snapshot_pos.extend_from_slice(&self.candidate_pos);
+        for i in 0..n {
+            for j in (i + 1)..n {
+                self.step_pair_transition(i, j, n);
+            }
+        }
+    }
+
+    /// One pair's whole transition for this tick.
+    ///
+    /// `pair_is_active_gather` rather than the byte is what says "active":
+    /// [`Self::mark_active_gather_pairs`] has just written
+    /// [`GATHER_PAIR_ACTIVE`] for exactly these pairs from exactly this
+    /// predicate, and a byte carried out of the last tick is the same value —
+    /// so only the predicate can tell an exemption being *earned* from one
+    /// being *left*.
+    fn step_pair_transition(&mut self, i: usize, j: usize, n: usize) {
+        if self.pair_is_active_gather(i, j) {
+            return;
+        }
+        let (a, b) = (self.unit_scratch[i], self.unit_scratch[j]);
+        let mut state = self.gather_pairs.state(a, b);
+        if state == 0 {
+            return;
+        }
+        if !units_overlap(
+            self.snapshot_pos[i],
+            self.body_radius(i),
+            self.snapshot_pos[j],
+            self.body_radius(j),
+        ) {
+            // The exit is over: whatever the pair was carrying, it is legal
+            // geometry now and goes back to being a hard pair this instant.
+            self.gather_pairs.set_state(a, b, 0);
+            return;
+        }
+        // `<` rather than `!=`, so the bound is enforced on the whole byte
+        // range and not only on the one value the writers below can produce:
+        // any count at or past it goes to the fallback, and none can climb
+        // through it into a second lap of the counter.
+        if state == GATHER_PAIR_ACTIVE || state < GATHER_SEPARATION_TICKS {
+            if self.try_separation_attempt(i, j, n) {
+                self.gather_pairs.set_state(a, b, 0);
+                return;
+            }
+            state = if state == GATHER_PAIR_ACTIVE {
+                1
+            } else {
+                state + 1
+            };
+        } else {
+            state = GATHER_SEPARATION_TICKS;
+        }
+        self.gather_pairs.set_state(a, b, state);
+        if state == GATHER_SEPARATION_TICKS {
+            // The bound is spent. Never a further attempt, and never a tick
+            // boundary at this value: the relocation below ends at `0` either
+            // way.
+            self.relocate_stuck_pair(i, j, n);
+        }
+    }
+
+    /// Spend one separation attempt on the pair `(i, j)`.
+    ///
+    /// `true` when the pair is no longer penetrating afterwards — including
+    /// the case where an earlier pair in this same pass already pulled them
+    /// apart, which costs no move at all.
+    ///
+    /// Only one of the two bodies moves. The tick rotation picks which one
+    /// gets the first proposal, exactly as it does for a walk, so an exit is
+    /// not paid for by the same body every tick; the partner is tried only
+    /// when the first has nowhere legal to go.
+    fn try_separation_attempt(&mut self, i: usize, j: usize, n: usize) -> bool {
+        let (first, second) = self.rotated_pair_priority(i, j, n);
+        if !self.try_separation_move(first, second, i, j) {
+            self.try_separation_move(second, first, i, j);
+        }
+        !units_overlap(
+            self.candidate_pos[i],
+            self.body_radius(i),
+            self.candidate_pos[j],
+            self.body_radius(j),
+        )
+    }
+
+    /// The pair's two bodies, first-proposal first, by the same tick-rotated
+    /// rank [`Self::movement`] walks units in.
+    fn rotated_pair_priority(&self, i: usize, j: usize, n: usize) -> (usize, usize) {
+        let start = (self.tick_index % n as u64) as usize;
+        let rank = |k: usize| (k + n - start) % n;
+        if rank(i) <= rank(j) { (i, j) } else { (j, i) }
+    }
+
+    /// Move `mover` directly away from `partner` by at most
+    /// [`GATHER_SEPARATION_STEP_CELLS`], never past contact.
+    ///
+    /// `true` when the pair needs no move from this body at all or the move
+    /// was committed; `false` when the candidate was refused, which is what
+    /// makes trying the partner next safe — nothing has been mutated.
+    ///
+    /// The step is clamped to the penetration depth, so the best an attempt
+    /// can do is put the two bodies exactly in contact. Contact is legal, so
+    /// no epsilon is needed to make it legal; an attempt that lands a hair
+    /// short simply leaves the pair one more attempt inside its bound.
+    fn try_separation_move(
+        &mut self,
+        mover: usize,
+        partner: usize,
+        pair_i: usize,
+        pair_j: usize,
+    ) -> bool {
+        let from = self.candidate_pos[mover];
+        let q = self.candidate_pos[partner];
+        let rm = self.body_radius(mover);
+        let sum = rm + self.body_radius(partner);
+        let dx = from[0] - q[0];
+        let dy = from[1] - q[1];
+        let d2 = dx * dx + dy * dy;
+        let (dir, depth) = if d2 < CONCENTRIC_CELLS * CONCENTRIC_CELLS {
+            // No "away" to move along. The pair's own stable axis instead,
+            // signed so the lower slot always goes one way and the higher the
+            // other — which is also the direction the general case picks on
+            // every attempt after this one.
+            let normal =
+                concentric_pair_normal(self.unit_scratch[pair_i], self.unit_scratch[pair_j]);
+            let sign = if mover == pair_i { -1.0 } else { 1.0 };
+            ([normal[0] * sign, normal[1] * sign], sum)
+        } else {
+            let d = d2.sqrt();
+            ([dx / d, dy / d], sum - d)
+        };
+        if depth <= 0.0 {
+            return true;
+        }
+        let step = depth.min(GATHER_SEPARATION_STEP_CELLS);
+        let to = [from[0] + dir[0] * step, from[1] + dir[1] * step];
+        if !self.displacement_is_legal_statically(from, to, rm)
+            || self.sweep_hits_a_hard_body(mover, from, to)
+            || self.crowds_another_transition(mover, partner, to)
+        {
+            return false;
+        }
+        self.entities.set_position(self.unit_scratch[mover], to);
+        self.candidate_pos[mover] = to;
+        true
+    }
+
+    /// Whether `mover`'s swept separation step runs into a body the policy
+    /// does *not* exempt it from.
+    ///
+    /// A separation attempt shoves nobody: it is the pair's own business, and
+    /// a third body is entitled to stand where it stands. Swept rather than
+    /// endpoint-tested for the same reason every other body check is.
+    fn sweep_hits_a_hard_body(&self, mover: usize, from: [f32; 2], to: [f32; 2]) -> bool {
+        let r = self.body_radius(mover);
+        (0..self.candidate_pos.len()).any(|k| {
+            k != mover
+                && !self.pair_ignores_collision(mover, k)
+                && moving_circle_hits_point(from, to, r, self.candidate_pos[k], self.body_radius(k))
+        })
+    }
+
+    /// Whether the candidate `to` would move `mover` *closer* to a body it is
+    /// separating from some other pair.
+    ///
+    /// A unit can be exiting two gathers at once, and its two escapes can
+    /// point at each other. Refusing the step that undoes another pair's
+    /// progress is what keeps a cluster's exits monotone instead of letting
+    /// two bounds trade the same overlap back and forth until both expire.
+    fn crowds_another_transition(&self, mover: usize, partner: usize, to: [f32; 2]) -> bool {
+        let from = self.candidate_pos[mover];
+        let m = self.unit_scratch[mover];
+        (0..self.unit_scratch.len()).any(|k| {
+            k != mover
+                && k != partner
+                && pair_byte_is_transition(self.gather_pairs.state(m, self.unit_scratch[k]))
+                && dist2(to, self.candidate_pos[k]) < dist2(from, self.candidate_pos[k])
+        })
+    }
+
+    /// The end of a spent bound: relocate one of the two bodies to the nearest
+    /// free legal centre in its own connected region.
+    ///
+    /// Tried on the rotated-priority body first, then the partner. The search
+    /// is the same [`nearest_free_body_center`] every other relocation in this
+    /// world uses, with the mover itself ignored and every other live body —
+    /// exempt or not — occupied, so the destination is clear of the whole
+    /// world rather than only of the pair.
+    ///
+    /// Neither body having anywhere to go is a *reported* failure, not a
+    /// silent exemption: the pair goes hard, which makes it a violation the
+    /// oracle counts and the next tick's generic repair retries.
+    fn relocate_stuck_pair(&mut self, i: usize, j: usize, n: usize) {
+        let (first, second) = self.rotated_pair_priority(i, j, n);
+        for m in [first, second] {
+            let Some(p) = nearest_free_body_center(
+                &self.static_nav,
+                &self.candidate_pos,
+                Some(m),
+                None,
+                self.candidate_pos[m],
+            ) else {
+                continue;
+            };
+            self.entities.set_position(self.unit_scratch[m], p);
+            self.candidate_pos[m] = p;
+            self.clear_settled_transitions(m);
+            return;
+        }
         self.gather_pairs
-            .state(self.unit_scratch[i], self.unit_scratch[j])
-            == GATHER_PAIR_ACTIVE
+            .set_state(self.unit_scratch[i], self.unit_scratch[j], 0);
+        self.last_tick_error = Some(TickError::UnrepairableOverlap);
+    }
+
+    /// After `m` has been relocated: end every *transition* of its that the
+    /// move settled.
+    ///
+    /// Transitions only. A [`GATHER_PAIR_ACTIVE`] byte on one of `m`'s pairs
+    /// is this tick's provenance for a gather `m` is still doing with some
+    /// third worker, and every active pair is required to carry one — dropping
+    /// it would take mandatory provenance out of the state hash to say nothing
+    /// about the collision the pair is still entitled to.
+    fn clear_settled_transitions(&mut self, m: usize) {
+        let rm = self.body_radius(m);
+        let slot_m = self.unit_scratch[m];
+        for k in 0..self.unit_scratch.len() {
+            if k == m {
+                continue;
+            }
+            let slot_k = self.unit_scratch[k];
+            if !pair_byte_is_transition(self.gather_pairs.state(slot_m, slot_k))
+                || units_overlap(
+                    self.candidate_pos[m],
+                    rm,
+                    self.candidate_pos[k],
+                    self.body_radius(k),
+                )
+            {
+                continue;
+            }
+            self.gather_pairs.set_state(slot_m, slot_k, 0);
+        }
     }
 
     /// Whether bodies `i` and `j` are merged *and* the policy forbids it.
@@ -2237,8 +2594,12 @@ impl RtsWorld {
     ///
     /// A unit with nowhere legal to go stashes [`TickError::UnrepairableOverlap`]
     /// rather than letting the tick complete with a merged pair unreported.
+    ///
+    /// This runs *after* [`Self::separate_exiting_pairs`], so a pair still
+    /// inside its exit bound is not torn apart here — and one that has just
+    /// spent the last of it is, because that pass has already cleared its byte
+    /// back to hard.
     fn repair_body_overlaps(&mut self) {
-        self.last_tick_error = None;
         let n = self.unit_scratch.len();
         if n < 2 {
             return;

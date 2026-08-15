@@ -24,7 +24,9 @@
 
 use sha2::{Digest, Sha256};
 
-use super::entity::{EntityId, EntityKind, EntityStore, MAX_ENTITIES};
+use super::entity::{
+    EntityId, EntityKind, EntityStore, MAX_ENTITIES, RTS_UNIT_BODY_DIAMETER_CELLS,
+};
 
 /// Pair byte meaning "these two bodies are an *active* gather pair right now":
 /// their mutual dynamic collision is exempt for this tick.
@@ -32,6 +34,57 @@ use super::entity::{EntityId, EntityKind, EntityStore, MAX_ENTITIES};
 /// Only mutual, and only dynamic. Static geometry, every other pair, and every
 /// placement search stay hard.
 pub const GATHER_PAIR_ACTIVE: u8 = u8::MAX;
+
+/// How many gradual separation attempts a pair that has *stopped* gathering
+/// gets before its exit is handed to the relocation fallback.
+///
+/// The exemption an active gather pair enjoys does not survive the order that
+/// earned it. It is not revoked in one frame either — that is the visible
+/// teleport this bound exists to avoid — so an exited pair separates over at
+/// most this many completed attempts, one per tick, and is then relocated. A
+/// pair byte in `1..=GATHER_SEPARATION_TICKS` counts those completed attempts,
+/// which is why the bound is an exemption's whole lifetime and not a grace
+/// period that can be renewed.
+pub const GATHER_SEPARATION_TICKS: u8 = 12;
+
+/// How far one separation attempt may move one body: half a cell.
+///
+/// Derived, not chosen. The worst case an exit has to clear is two concentric
+/// bodies, which are a whole [`RTS_UNIT_BODY_DIAMETER_CELLS`] from contact, so
+/// a bound of [`GATHER_SEPARATION_TICKS`] attempts is only honest if each one
+/// may cover its share of that distance — and exactly its share, so the worst
+/// case resolves on the last attempt rather than falling through to the
+/// fallback.
+pub const GATHER_SEPARATION_STEP_CELLS: f32 =
+    RTS_UNIT_BODY_DIAMETER_CELLS / GATHER_SEPARATION_TICKS as f32;
+
+/// Whether a pair byte exempts its pair from *mutual dynamic* collision.
+///
+/// Two meanings, one answer: [`GATHER_PAIR_ACTIVE`] provenance, and a bounded
+/// exit transition. `0` — hard — is the only byte that does not exempt, which
+/// is what makes "clear the byte" the single way an exemption ends.
+pub(crate) fn pair_byte_exempts(state: u8) -> bool {
+    state != 0
+}
+
+/// Whether a pair byte is a bounded exit transition rather than active gather
+/// provenance or a hard pair.
+pub(crate) fn pair_byte_is_transition(state: u8) -> bool {
+    (1..=GATHER_SEPARATION_TICKS).contains(&state)
+}
+
+/// The separation axis of a pair whose centres coincide, so "directly away"
+/// has no direction to offer.
+///
+/// Points from the **lower** slot toward the higher one: the lower-slot body
+/// separates along `-normal`, the higher-slot body along `+normal`, whichever
+/// of the two the tick rotation picks as the mover. Keyed by the canonical
+/// triangular pair index, so it is the same axis on every attempt that pair
+/// ever makes, and neighbouring pairs do not all pile onto one axis.
+pub(crate) fn concentric_pair_normal(a: usize, b: usize) -> [f32; 2] {
+    const NORMALS: [[f32; 2]; 4] = [[1.0, 0.0], [0.0, 1.0], [-1.0, 0.0], [0.0, -1.0]];
+    NORMALS[pair_index(a, b) % NORMALS.len()]
+}
 
 /// Length of the dense triangular pair table: one byte per unordered pair of
 /// the [`MAX_ENTITIES`] slots, `2 048 * 2 047 / 2 == 2_096_128`.
@@ -347,6 +400,71 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 1 + 6, "four units make six framed pairs");
+    }
+
+    #[test]
+    fn the_separation_bound_covers_the_worst_case_exit_exactly() {
+        // The worst exit is two concentric bodies, a whole diameter from
+        // contact. The bound is only honest if the attempts add up to exactly
+        // that: short and the worst case always falls through to the fallback,
+        // long and an attempt could overshoot past contact.
+        assert_eq!(GATHER_SEPARATION_STEP_CELLS, 0.5);
+        assert_eq!(
+            GATHER_SEPARATION_STEP_CELLS * GATHER_SEPARATION_TICKS as f32,
+            RTS_UNIT_BODY_DIAMETER_CELLS
+        );
+    }
+
+    #[test]
+    fn transition_bytes_are_exactly_one_through_the_bound() {
+        assert!(!pair_byte_is_transition(0));
+        assert!(!pair_byte_is_transition(GATHER_PAIR_ACTIVE));
+        for n in 1..=GATHER_SEPARATION_TICKS {
+            assert!(pair_byte_is_transition(n), "{n} is a completed attempt");
+        }
+        assert!(!pair_byte_is_transition(GATHER_SEPARATION_TICKS + 1));
+
+        // Every byte but `0` exempts, so clearing the byte is the one way an
+        // exemption ends.
+        assert!(!pair_byte_exempts(0));
+        assert!(pair_byte_exempts(GATHER_PAIR_ACTIVE));
+        assert!(pair_byte_exempts(1));
+        assert!(pair_byte_exempts(GATHER_SEPARATION_TICKS));
+    }
+
+    #[test]
+    fn the_concentric_normal_is_cardinal_stable_and_lower_slot_signed() {
+        for a in 0..16usize {
+            for b in (a + 1)..16usize {
+                let n = concentric_pair_normal(a, b);
+                assert_eq!(
+                    n[0] * n[0] + n[1] * n[1],
+                    1.0,
+                    "pair ({a}, {b}) has a non-unit normal {n:?}"
+                );
+                assert!(
+                    n[0] == 0.0 || n[1] == 0.0,
+                    "pair ({a}, {b}) is not axis-aligned: {n:?}"
+                );
+                // Unordered, so "lower slot goes along -normal" is well
+                // defined however the caller names the pair.
+                assert_eq!(n, concentric_pair_normal(b, a));
+            }
+        }
+        // All four axes are actually used: a cluster of exits does not pile
+        // onto one line.
+        let mut axes: Vec<[f32; 2]> = Vec::new();
+        for b in 1..8usize {
+            let n = concentric_pair_normal(0, b);
+            if !axes.contains(&n) {
+                axes.push(n);
+            }
+        }
+        assert_eq!(
+            axes.len(),
+            4,
+            "only {axes:?} of the four axes are reachable"
+        );
     }
 
     #[test]

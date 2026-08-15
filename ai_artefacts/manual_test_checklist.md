@@ -394,3 +394,73 @@ Known regression handed to the parent (out of this ticket's Inputs):
       frames 24/40 and only holds "while the six relocated workers are still on the spawn cells";
       gathering workers now leave sooner, so one selection click misses (`voice_select` 7 vs 8).
       Needs a script-coordinate refresh ticket — the script is not in T13's Inputs.
+
+## T14 — bound gather-exit separation with same-component relocation fallback
+
+Branch `plan/rts-feedback-polish`. Ticket
+`ai_artefacts/PLAN_2026_08_14_rts-feedback-polish/T14_gather-exit-separation.md`.
+
+What changed: an active gather pair's collision exemption no longer ends in one frame. A pair
+that stops gathering keeps it for at most `GATHER_SEPARATION_TICKS` (12) separation attempts of
+`GATHER_SEPARATION_STEP_CELLS` (0.5) each, one attempt per pair per tick; the tick that spends
+the last attempt relocates one of the two through the existing same-component
+`nearest_free_body_center` search instead. Either way the pair byte is back to `0` — hard,
+counted by `body_overlap_count`, repairable — before the tick ends. A fallback that finds
+nowhere sets the pair hard, stashes `TickError::UnrepairableOverlap`, and hands the pair to the
+next tick's generic repair. There is no state in which a pair keeps an exemption it did not
+earn.
+
+Automated gates (all run on this branch, this diff):
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo clippy -p mmd-engine --all-targets --all-features --locked` — no new warning in any
+      file this ticket touched (the remaining `too_many_arguments` / unused-import warnings are
+      pre-existing in `rts/hud.rs` and `src/rts_run.rs`)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_collision --locked` — 43 passed
+      (20 new T14 cases + 3 new `rts::collision` unit tests)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_world --locked` — 51 passed
+- [x] `cargo test -p mmd-engine --features testkit --test rts_acceptance --locked` — 7 passed
+- [x] `cargo test -p mmd-engine --features testkit --test frame_allocations --locked --
+      --test-threads=1` — 30 passed, including the new `gather_exit_allocates_nothing`
+- [x] `git diff -- crates/mmd-engine/src/sim` empty (horde sim untouched)
+- [x] Red proven, not assumed: temporarily restoring T13's clear-to-`0` behaviour in
+      `mark_active_gather_pairs` fails 11 of the new cases; restoring T14 returns 43/43
+
+Pre-existing red gates — unchanged by this ticket, not this ticket's to fix:
+
+- [x] `cargo test --test rts_acceptance` (shipped-binary script replay): **6 failures before,
+      6 after** — the same six script-coordinate/milestone cases T13 handed to the parent.
+      This host's Vulkan driver intermittently returns `VK_ERROR_DEVICE_LOST` and inflates that
+      count to 7 or 14 on a bad run; three consecutive clean runs give 6.
+- [x] `cargo test -p mmd-engine --features testkit --test rts_economy`: **3 failures before,
+      3 after** (`context_order_with_no_selection_is_a_no_op`,
+      `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`)
+- [x] `cargo test --test validation_contract`: 2 failures, pre-existing — the close docs name
+      `the_drag_box_is_four_edges` and `the_gear_icon_appears_in_the_top_bar`, neither of which
+      exists at `HEAD` (`git grep <name> HEAD -- <file>` returns nothing). Owned by whoever
+      renamed them in `e16f7d7`; this ticket touches neither `rts_pack.rs` nor `rts_hud.rs`.
+
+App functional, run on this diff:
+
+- [x] `cargo run --release -- rts --frames 1600 --inject-input-file
+      assets/scenarios/rts_acceptance_v1.script` clean-exit line reports `body_overlaps=0` over
+      a full script replay that issues *and cancels* gather orders — so real exits ran and the
+      hard-body invariant still held at every completed tick.
+
+Manual, by hand at the keyboard (not yet run — needs a human at `cargo run -- rts`):
+
+- [ ] Box-select several workers, right-click a crystal node. They still walk through and stand
+      on each other around the node (T13's behaviour, unchanged).
+- [ ] While a gather crowd is overlapping, right-click empty ground with one of them selected.
+      The worker must now **slide** out of the crowd over a few frames instead of snapping to a
+      clear cell. Nothing should visibly teleport.
+- [ ] Same, but with the crowd wedged into a corner or against a wall so it cannot slide: after
+      about a fifth of a second the stuck worker relocates to a nearby cell centre exactly once.
+      One jump, not a stutter, and never across a wall into a region it could not have walked to.
+- [ ] Send soldiers (or idle workers) into a gathering or exiting crowd — they must still
+      collide hard and never overlap. A pair mid-exit is exempt from *each other only*.
+- [ ] Exiting workers must still be stopped by walls, buildings and the map edge; no clipping
+      through static geometry while separating.
+- [ ] Known corridor behaviour: walk a group through the narrow corridor on the tracked scene
+      and confirm it is unchanged — the exit path adds no shove and no push chain.

@@ -836,6 +836,78 @@ fn the_gather_loop_allocates_nothing() {
     );
 }
 
+/// The bounded gather-exit transition is under the same contract as the rest
+/// of the movement pass.
+///
+/// It is the one part of the pass that is easy to get wrong here: it takes a
+/// snapshot of every unit body, walks every live pair, and — when a bound runs
+/// out — falls through to the whole-grid relocation search. All three are
+/// preallocated or allocation-free, and the measured window covers a full
+/// bound plus the fallback so none of them is skipped.
+#[test]
+fn gather_exit_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    // Warm-up outside the scope, exactly as `movement_allocates_nothing` does:
+    // the first field acquire is the miss that settles the scratch heap.
+    let crystal_nodes = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal));
+    assert_eq!(
+        h.world_mut().order_gather_group(&workers, crystal_nodes[0]),
+        Ok(6)
+    );
+    h.step_exact(120);
+
+    // Park the whole shift inside one another and give the heap one tick of
+    // active-gather provenance, so cutting the orders below starts six real
+    // exits at once rather than five clean pairs.
+    for (k, &id) in workers.iter().enumerate() {
+        assert!(
+            h.world_mut()
+                .force_position_for_test(id, [162.5 + k as f32 * 0.5, 178.5])
+        );
+        assert!(h.world_mut().force_order_for_test(
+            id,
+            Order::Gather {
+                node: crystal_nodes[0],
+                phase: GatherPhase::Mining { ticks_left: 10_000 },
+            }
+        ));
+    }
+    h.step_exact(1);
+    assert!(
+        h.world().raw_body_overlap_count() >= 1,
+        "the shift must really be merged, or the measured ticks exercise no \
+         exit at all"
+    );
+
+    let guard = MeasureGuard::enter();
+    for &id in &workers {
+        assert!(h.world_mut().force_order_for_test(id, Order::Idle));
+    }
+    h.step_exact(40);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "the gather-exit transition allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and the exits really ran to their end: a pass that did nothing
+    // allocates nothing either.
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "every exit must have finished inside its bound"
+    );
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
+}
+
 /// Selection is under the same zero-allocation contract as the rest of the
 /// per-frame path: a box select is bounded and preallocated, not a fresh
 /// `Vec` per drag.

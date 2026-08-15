@@ -15,8 +15,9 @@ use std::process::Command;
 
 use mmd_engine::nav::field_pool::FieldRef;
 use mmd_engine::rts::{
-    BuildingKind, EntityId, EntityKind, FormationGoal, GatherPhase, OWNER_PLAYER, Order,
-    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
+    BuildingKind, EntityId, EntityKind, FormationGoal, GATHER_PAIR_ACTIVE,
+    GATHER_SEPARATION_STEP_CELLS, GATHER_SEPARATION_TICKS, GatherPhase, OWNER_PLAYER, Order,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, TickError, UnitKind,
     moving_circle_hits_point, units_overlap,
 };
 use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
@@ -980,18 +981,18 @@ fn print_collision_hash_for_child_process() {
     println!("{HASH_PREFIX}{}", canonical_hash());
 }
 
-fn hash_from_child_process() -> String {
+fn hash_from_child_process(child_env: &str, child_test: &str, prefix: &str) -> String {
     let exe = std::env::current_exe().expect("current test binary");
     let out = Command::new(&exe)
         .args([
             "--exact",
-            CHILD_TEST,
+            child_test,
             "--ignored",
             "--nocapture",
             "--test-threads",
             "1",
         ])
-        .env(CHILD_ENV, "1")
+        .env(child_env, "1")
         // Coverage runs point this at the parent's profile file; letting the
         // child inherit it would clobber the parent's data.
         .env_remove("LLVM_PROFILE_FILE")
@@ -1009,9 +1010,9 @@ fn hash_from_child_process() -> String {
         "child ran no test — filter or test name drifted:\n{stdout}"
     );
     let tail = stdout
-        .find(HASH_PREFIX)
-        .map(|i| &stdout[i + HASH_PREFIX.len()..])
-        .unwrap_or_else(|| panic!("child printed no `{HASH_PREFIX}` marker:\n{stdout}"));
+        .find(prefix)
+        .map(|i| &stdout[i + prefix.len()..])
+        .unwrap_or_else(|| panic!("child printed no `{prefix}` marker:\n{stdout}"));
     let hash: String = tail.chars().take_while(char::is_ascii_hexdigit).collect();
     assert_eq!(hash.len(), 64, "child hash malformed: {hash:?}");
     hash
@@ -1027,7 +1028,903 @@ fn hard_collision_is_reproducible() {
     );
     assert_eq!(
         first,
-        hash_from_child_process(),
+        hash_from_child_process(CHILD_ENV, CHILD_TEST, HASH_PREFIX),
         "a contended collision run must reproduce its state hash across processes"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T14 — the bounded gather-exit transition
+// ---------------------------------------------------------------------------
+//
+// An exemption never outlives the order that earned it, but revoking one in a
+// single frame teleports two merged workers apart in front of the player. So
+// a pair that has *stopped* gathering keeps its exemption for at most
+// `GATHER_SEPARATION_TICKS` separation attempts of `GATHER_SEPARATION_STEP_CELLS`
+// each, and the tick that spends the last one relocates instead. Either way
+// the pair's byte is back to `0` — hard, counted, repairable — the moment the
+// bound is gone. There is no state in which a pair keeps an exemption it did
+// not earn.
+
+/// How far one attempt may move one body.
+const STEP: f32 = GATHER_SEPARATION_STEP_CELLS;
+/// The whole bound, in completed attempts.
+const BOUND: u8 = GATHER_SEPARATION_TICKS;
+
+/// Cancel every gather order, which is what starts an exit.
+fn exit_gather(h: &mut RtsHarness, ids: &[EntityId]) {
+    for &id in ids {
+        assert!(h.world_mut().force_order_for_test(id, Order::Idle));
+    }
+}
+
+/// Put `ids` under a `Mining` gather order and run one tick, so the pair table
+/// carries this tick's active-gather provenance into the exit below.
+fn gather_one_tick(h: &mut RtsHarness, ids: &[EntityId]) {
+    for &id in ids {
+        gathering(h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+    h.step_exact(1);
+    for (n, &a) in ids.iter().enumerate() {
+        for &b in &ids[n + 1..] {
+            assert_eq!(
+                h.world().gather_pair_state_for_test(a, b),
+                GATHER_PAIR_ACTIVE,
+                "every active gather pair must carry provenance before the exit"
+            );
+        }
+    }
+}
+
+fn pair_state(h: &RtsHarness, a: EntityId, b: EntityId) -> u8 {
+    h.world().gather_pair_state_for_test(a, b)
+}
+
+/// Advance one tick and hand back every unit's displacement over it.
+fn step_and_measure(h: &mut RtsHarness, ids: &[EntityId]) -> Vec<f32> {
+    let before: Vec<[f32; 2]> = ids.iter().map(|&id| pos(h, id)).collect();
+    h.step_exact(1);
+    ids.iter()
+        .enumerate()
+        .map(|(k, &id)| dist(before[k], pos(h, id)))
+        .collect()
+}
+
+/// [`gather_one_tick`], but padded so the movement pass that the *next*
+/// `step_exact(1)` runs starts its rotation at `start`.
+///
+/// The rotation is `tick_index % unit_count` and `tick` increments the index
+/// before the movement pass, so the next pass runs at `tick_index() + 1`. The
+/// padding is spent *while the pair is still gathering* on purpose: an active
+/// pair is skipped by the transition pass entirely, so no attempt of the bound
+/// under test is quietly spent lining the rotation up.
+fn gather_until_rotation(h: &mut RtsHarness, ids: &[EntityId], units: u64, start: u64) {
+    for &id in ids {
+        gathering(h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+    for _ in 0..=units {
+        h.step_exact(1);
+        if (h.tick_index() + 1) % units == start {
+            return;
+        }
+    }
+    panic!("no tick in one full rotation starts at {start}");
+}
+
+#[test]
+fn active_pair_overlaps_during_movement_then_exits_into_transition() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    gather_one_tick(&mut h, &w);
+    assert!(h.world().raw_body_overlap_count() >= 1);
+
+    exit_gather(&mut h, &w);
+    let moved = step_and_measure(&mut h, &w);
+
+    // A transition, not a repair: the exemption is gone, but nothing was
+    // teleported to a free cell centre to pay for it.
+    for (k, &d) in moved.iter().enumerate() {
+        assert!(
+            d <= STEP + EPS,
+            "worker {k} moved {d} cells in one exit tick: that is a relocation, \
+             not a bounded separation attempt"
+        );
+    }
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        1,
+        "the pair must be one completed attempt into its bound"
+    );
+    assert!(
+        h.world().raw_body_overlap_count() >= 1,
+        "one {STEP}-cell attempt cannot clear a body-deep penetration, so the \
+         case would be measuring nothing"
+    );
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "a pair inside its exit bound is not a policy violation"
+    );
+    assert_eq!(h.world().last_tick_error(), None);
+}
+
+#[test]
+fn first_attempt_stores_one_not_two_fifty_six() {
+    // The one arithmetic the encoding cannot get wrong: the byte a pair
+    // carries out of an active gather is `GATHER_PAIR_ACTIVE`, and the first
+    // completed attempt has to *restart* the count at 1. Incrementing it
+    // instead wraps to 0 and drops the pair straight into the repair pass;
+    // leaving it alone gives the pair an exemption with no bound at all.
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    gather_one_tick(&mut h, &w);
+    assert_eq!(pair_state(&h, w[0], w[1]), GATHER_PAIR_ACTIVE);
+
+    exit_gather(&mut h, &w);
+    h.step_exact(1);
+
+    assert_eq!(pair_state(&h, w[0], w[1]), 1);
+}
+
+#[test]
+fn exited_pair_separates_gradually() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    gather_one_tick(&mut h, &w);
+    exit_gather(&mut h, &w);
+
+    // Parked half a cell apart, so 11 attempts of half a cell each is exactly
+    // what reaching contact costs.
+    let mut last = dist(pos(&h, w[0]), pos(&h, w[1]));
+    for attempt in 1..=11u8 {
+        let moved = step_and_measure(&mut h, &w);
+        let now = dist(pos(&h, w[0]), pos(&h, w[1]));
+        assert!(
+            now >= last - EPS,
+            "attempt {attempt}: the pair closed up, from {last} to {now}"
+        );
+        assert!(
+            now - last <= STEP + EPS,
+            "attempt {attempt}: the pair jumped {} cells, which is a teleport",
+            now - last
+        );
+        assert!(
+            moved.iter().all(|&d| d <= STEP + EPS),
+            "attempt {attempt}: a body moved further than one attempt allows"
+        );
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "attempt {attempt}: the pair is still inside its bound"
+        );
+        assert_eq!(h.world().last_tick_error(), None, "attempt {attempt}");
+        last = now;
+    }
+
+    assert!(
+        last >= DIAMETER - EPS,
+        "eleven attempts must have carried the pair to contact: {last} cells"
+    );
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        0,
+        "a settled exit is hard again"
+    );
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
+}
+
+#[test]
+fn separated_pair_clears_to_hard_in_the_same_tick() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    // Exactly one attempt from contact, so the exit finishes on its first try.
+    park(&mut h, &w, &[[20.5, 20.5], [26.0, 20.5]]);
+    gather_one_tick(&mut h, &w);
+    exit_gather(&mut h, &w);
+
+    h.step_exact(1);
+
+    let d = dist(pos(&h, w[0]), pos(&h, w[1]));
+    assert!(
+        d >= DIAMETER - EPS,
+        "one attempt reaches contact: {d} cells"
+    );
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        0,
+        "the attempt that reaches contact must clear the byte in that same \
+         tick, not leave the pair one attempt in"
+    );
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
+    assert_eq!(h.world().body_overlap_count(), 0);
+
+    // And the byte really is the hard one: forced back together, this pair is
+    // now repaired outright rather than given another bounded exit — a repair
+    // separates them completely in one tick, an attempt would move half a cell.
+    park(&mut h, &w, &[[20.5, 20.5], [21.0, 20.5]]);
+    h.step_exact(1);
+    let d = dist(pos(&h, w[0]), pos(&h, w[1]));
+    assert!(
+        d >= DIAMETER - EPS,
+        "a cleared pair is a hard pair: the generic repair must separate it \
+         whole, but it is {d} cells apart"
+    );
+}
+
+#[test]
+fn separated_pair_cannot_remerge_on_the_tick_it_cleared() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    let (walker, standing) = (w[0], w[1]);
+    park(&mut h, &w, &[[20.5, 20.5], [26.0, 20.5]]);
+    // The standing body takes the first proposal, so the walk below starts
+    // from exactly where it was measured rather than from a separation step.
+    gather_until_rotation(&mut h, &w, 2, 1);
+
+    // The walker leaves the gather and is sent *through* its old partner. The
+    // separation pass clears the pair on this very tick; normal movement runs
+    // afterwards in the same tick and must already see a hard body.
+    assert!(h.world_mut().force_order_for_test(walker, Order::Idle));
+    assert!(h.world_mut().order_move(walker, Cell { x: 40, y: 20 }));
+    let before = pos(&h, walker);
+
+    h.step_exact(1);
+
+    assert_eq!(pair_state(&h, walker, standing), 0);
+    assert!(
+        pos(&h, walker)[0] > before[0],
+        "the walker never moved: the case measured no normal movement at all"
+    );
+    assert_eq!(
+        h.world().raw_body_overlap_count(),
+        0,
+        "the pair separated and then walked straight back into itself on the \
+         same tick"
+    );
+    assert_eq!(h.world().body_overlap_count(), 0);
+}
+
+#[test]
+fn open_concentric_pair_reaches_contact_by_attempt_twelve() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    // The worst exit there is: no separation vector at all, and a whole body
+    // diameter to cover.
+    park(&mut h, &w, &[[20.5, 20.5], [20.5, 20.5]]);
+    gather_one_tick(&mut h, &w);
+    exit_gather(&mut h, &w);
+
+    for attempt in 1..BOUND {
+        let moved = step_and_measure(&mut h, &w);
+        assert!(
+            moved.iter().all(|&d| d <= STEP + EPS),
+            "attempt {attempt}: a body moved further than one attempt allows, \
+             so the fallback fired early"
+        );
+        assert_eq!(
+            pair_state(&h, w[0], w[1]),
+            attempt,
+            "attempt {attempt}: the count must rise by exactly one per tick"
+        );
+        assert!(h.world().raw_body_overlap_count() >= 1);
+        assert_eq!(h.world().body_overlap_count(), 0);
+    }
+
+    let moved = step_and_measure(&mut h, &w);
+    assert!(
+        moved.iter().all(|&d| d <= STEP + EPS),
+        "the last attempt must reach contact by walking, not by relocating"
+    );
+    let d = dist(pos(&h, w[0]), pos(&h, w[1]));
+    assert!(
+        d >= DIAMETER - EPS,
+        "the bound is only honest if the worst case fits inside it: {d} cells \
+         after {BOUND} attempts"
+    );
+    assert_eq!(pair_state(&h, w[0], w[1]), 0);
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
+    assert_eq!(
+        h.world().last_tick_error(),
+        None,
+        "no fallback may have fired"
+    );
+}
+
+#[test]
+fn concentric_normal_moves_lower_slot_negative() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park(&mut h, &w, &[[20.5, 20.5], [20.5, 20.5]]);
+    gather_one_tick(&mut h, &w);
+    let start: Vec<[f32; 2]> = w.iter().map(|&id| pos(&h, id)).collect();
+    let slots: Vec<usize> = w
+        .iter()
+        .map(|&id| h.world().entities().slot(id).expect("live"))
+        .collect();
+    assert!(slots[0] < slots[1], "w[0] is the lower slot");
+
+    exit_gather(&mut h, &w);
+    // One tick each: the tick rotation hands the first proposal to the other
+    // body every tick, and only one body moves per attempt.
+    h.step_exact(2);
+
+    let low = [
+        pos(&h, w[0])[0] - start[0][0],
+        pos(&h, w[0])[1] - start[0][1],
+    ];
+    let high = [
+        pos(&h, w[1])[0] - start[1][0],
+        pos(&h, w[1])[1] - start[1][1],
+    ];
+    assert_eq!(
+        high,
+        [-low[0], -low[1]],
+        "the two bodies must separate along one axis in opposite senses"
+    );
+    assert_eq!(
+        high[0] * high[0] + high[1] * high[1],
+        STEP * STEP,
+        "each body moved exactly one attempt: {high:?}"
+    );
+    assert!(
+        high[0] == 0.0 || high[1] == 0.0,
+        "the concentric normal must be cardinal: {high:?}"
+    );
+    let normal = [high[0] / STEP, high[1] / STEP];
+    assert_eq!(
+        low,
+        [-normal[0] * STEP, -normal[1] * STEP],
+        "the normal points from the lower slot toward the higher one, so the \
+         lower slot moves along -normal"
+    );
+}
+
+// --- blocked exits: a crowd the gradual attempt cannot get past -------------
+
+/// Two merged workers with a hard body parked just outside contact on each
+/// side of the separation axis, so every gradual attempt is refused by a
+/// third-body sweep and the exit has to run its whole bound out.
+///
+/// `w[0]` and `w[1]` are the merged pair, `w[2]` and `w[3]` the blockers. The
+/// 6.4-cell offsets are outside the 6-cell body diameter — nothing starts
+/// merged but the pair — and a half-cell attempt closes them to 5.9, which is
+/// inside it.
+fn blocked_exit_scene() -> (RtsHarness, Vec<EntityId>) {
+    let mut h = harness(scattered_spawns(4));
+    let w = workers(&h);
+    park(
+        &mut h,
+        &w,
+        &[
+            [20.5, 20.5],
+            [21.0, 20.5],
+            [20.5 - 6.4, 20.5],
+            [21.0 + 6.4, 20.5],
+        ],
+    );
+    gather_one_tick(&mut h, &w[..2]);
+    assert_eq!(
+        h.world().raw_body_overlap_count(),
+        1,
+        "only the pair may start merged, or the blockers are too close"
+    );
+    (h, w)
+}
+
+#[test]
+fn blocked_pair_relocates_after_attempt_twelve_same_tick() {
+    let (mut h, w) = blocked_exit_scene();
+    exit_gather(&mut h, &w[..2]);
+
+    for attempt in 1..BOUND {
+        let moved = step_and_measure(&mut h, &w);
+        assert!(
+            moved.iter().all(|&d| d == 0.0),
+            "attempt {attempt}: every gradual candidate is blocked, so nobody \
+             may move: {moved:?}"
+        );
+        assert_eq!(pair_state(&h, w[0], w[1]), attempt);
+        assert_eq!(h.world().body_overlap_count(), 0);
+    }
+
+    let moved = step_and_measure(&mut h, &w);
+
+    let relocated = moved.iter().filter(|&&d| d > STEP + EPS).count();
+    assert_eq!(
+        relocated, 1,
+        "the tick that spends the last attempt must relocate exactly one of \
+         the two, in that same tick: {moved:?}"
+    );
+    let p = pos(&h, if moved[0] > 0.0 { w[0] } else { w[1] });
+    assert_eq!(
+        [p[0].fract(), p[1].fract()],
+        [0.5, 0.5],
+        "a relocation lands on a legal cell centre: {p:?}"
+    );
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        0,
+        "the bound is spent: the pair is hard again, whatever happened"
+    );
+    assert_eq!(h.world().last_tick_error(), None);
+    assert_eq!(h.world().body_overlap_count(), 0);
+    assert_no_overlap(&h, "after a fallback relocation");
+}
+
+#[test]
+fn transition_never_exempts_third_body() {
+    // The blockers are the third bodies, and the only reason the pair cannot
+    // separate is that its attempts keep running into them. A transition that
+    // leaked past its own pair would walk straight through one.
+    let (mut h, w) = blocked_exit_scene();
+    exit_gather(&mut h, &w[..2]);
+
+    for attempt in 1..BOUND {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().raw_body_overlap_count(),
+            1,
+            "attempt {attempt}: exactly one geometric overlap — the pair's own"
+        );
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "attempt {attempt}: and it is not a violation"
+        );
+        for k in 2..4 {
+            for m in 0..2 {
+                let d = dist(pos(&h, w[m]), pos(&h, w[k]));
+                assert!(
+                    d >= DIAMETER - EPS,
+                    "attempt {attempt}: transitioning body {m} is {d} cells \
+                     from blocker {k}, inside its body"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn normal_movement_respects_transition_pair() {
+    // A pair may be transitioning and one of its bodies may be walking at the
+    // same time. The walk is gated by the same pair table the separation is,
+    // so the walker passes over its transition partner and over nobody else.
+    let (mut h, w) = blocked_exit_scene();
+    let (walker, partner) = (w[0], w[1]);
+    exit_gather(&mut h, &w[..2]);
+    // North, across the pair's own east-west separation axis, so the walk and
+    // the attempts do not fight over the same direction.
+    assert!(h.world_mut().order_move(walker, Cell { x: 20, y: 8 }));
+    let start = pos(&h, walker);
+
+    for tick in 1..=3 {
+        h.step_exact(1);
+        assert!(
+            h.world().raw_body_overlap_count() >= 1,
+            "tick {tick}: the walker left its partner behind rather than \
+             walking over it, so the exemption was never exercised"
+        );
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick}: the pair is still inside its bound"
+        );
+        assert!(
+            pair_state(&h, walker, partner) <= BOUND,
+            "tick {tick}: the transition byte left its range"
+        );
+    }
+    assert!(
+        pos(&h, walker)[1] < start[1] - EPS,
+        "the walker never moved: normal movement did not run at all"
+    );
+}
+
+#[test]
+fn fallback_priority_rotates() {
+    // Which of the two the fallback relocates is the same tick-rotated rank a
+    // walk uses, so the cost of a stuck exit is not paid by the same body
+    // forever. Two runs of one scene, differing only in the tick the last
+    // attempt lands on.
+    let mut relocated = Vec::new();
+    for pad in [0u32, 1] {
+        let (mut h, w) = blocked_exit_scene();
+        for _ in 0..pad {
+            h.step_exact(1);
+        }
+        exit_gather(&mut h, &w[..2]);
+        h.step_exact(BOUND as u64 - 1);
+        let moved = step_and_measure(&mut h, &w);
+        assert_eq!(
+            moved.iter().filter(|&&d| d > STEP + EPS).count(),
+            1,
+            "pad {pad}: exactly one body relocates"
+        );
+        relocated.push(if moved[0] > 0.0 { 0 } else { 1 });
+    }
+    assert_ne!(
+        relocated[0], relocated[1],
+        "one tick of difference must hand the relocation to the other body"
+    );
+}
+
+// --- pocket scenes: exits with nowhere to go -------------------------------
+
+/// Grid edge of the pocket scenes below.
+const POCKET_GRID: u32 = 48;
+/// Half-open cell rectangle `[x0, x1) x [y0, y1)`.
+type OpenRect = (u32, u32, u32, u32);
+/// The HQ's own 12 x 12 footprint, which `StaticNav` stamps solid at load, so
+/// this block holds no legal body centre at all.
+const POCKET_HQ: OpenRect = (4, 16, 4, 16);
+/// Four cells wide: raw-walkable, so the scenario's point-agent reachability
+/// check passes, and far too narrow for a 3-cell body to stand or pass.
+const POCKET_CORRIDOR: OpenRect = (16, 20, 8, 12);
+/// A 7 x 7 pocket holds exactly one legal body centre — the smallest open
+/// square a 3-cell body fits in, and it fits in one place.
+const POCKET_ONE: OpenRect = (20, 27, 6, 13);
+/// The single legal body centre of [`POCKET_ONE`].
+const POCKET_ONE_CENTRE: [f32; 2] = [23.5, 9.5];
+
+/// An RTS scene whose only open ground is `open`, everything else solid.
+fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
+    let obstacle_cells = (0..POCKET_GRID * POCKET_GRID)
+        .filter(|idx| {
+            let (x, y) = (idx % POCKET_GRID, idx / POCKET_GRID);
+            !open
+                .iter()
+                .any(|&(x0, x1, y0, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
+        })
+        .collect();
+    let mut spec = collision_spec(vec![Cell { x: 22, y: 9 }], obstacle_cells);
+    spec.width = POCKET_GRID;
+    spec.height = POCKET_GRID;
+    spec.destination = Cell { x: 23, y: 9 };
+    spec.rts = Some(RtsSpec {
+        start_crystal: 300,
+        start_gas: 100,
+        start_supply_cap: 10,
+        hq_cell: Cell { x: 4, y: 4 },
+        // Both nodes sit in the corridor: raw-walkable and reachable, and no
+        // body can stand there anyway, so they add and remove no centre.
+        crystal_nodes: vec![Cell { x: 17, y: 9 }],
+        gas_nodes: vec![Cell { x: 18, y: 10 }],
+    });
+    RtsHarness::spec(spec)
+        .build()
+        .expect("pocket scene harness")
+}
+
+/// Add a worker directly to the store, on top of whatever is already there.
+fn add_worker(h: &mut RtsHarness, at: [f32; 2]) -> EntityId {
+    h.world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, at)
+        .expect("spawn worker")
+}
+
+#[test]
+fn failed_fallback_clears_to_hard_and_reports_a_violation() {
+    // One legal body centre in the whole grid and two bodies on it. The
+    // gradual attempts run out of pocket, and the fallback has nowhere to put
+    // either body: whichever one it tries, the only centre is inside the
+    // other's body.
+    let mut h = pocket_scene(&[POCKET_HQ, POCKET_CORRIDOR, POCKET_ONE]);
+    let seeded = workers(&h);
+    assert_eq!(seeded.len(), 1);
+    assert_eq!(pos(&h, seeded[0]), POCKET_ONE_CENTRE);
+    let second = add_worker(&mut h, POCKET_ONE_CENTRE);
+    let w = [seeded[0], second];
+    gather_one_tick(&mut h, &w);
+    exit_gather(&mut h, &w);
+
+    h.step_exact(BOUND as u64);
+
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        0,
+        "a fallback that found nowhere must put the pair back to hard, not \
+         park it on a marker it can never leave"
+    );
+    assert_eq!(
+        h.world().last_tick_error(),
+        Some(TickError::UnrepairableOverlap),
+        "and it must say so"
+    );
+    assert!(
+        h.world().body_overlap_count() >= 1,
+        "a hard merged pair is a counted violation: the exit line has to see it"
+    );
+
+    // Self-retrying, not stuck: the generic repair takes the pair from here
+    // and reports the same failure again for as long as it really is one.
+    h.step_exact(1);
+    assert_eq!(
+        h.world().last_tick_error(),
+        Some(TickError::UnrepairableOverlap)
+    );
+    assert!(h.world().body_overlap_count() >= 1);
+}
+
+#[test]
+fn fallback_never_crosses_connected_component() {
+    // A second pocket, joined by a corridor no body can walk, holds a free
+    // legal centre closer to the stuck pair than anything in their own pocket
+    // — which has none free at all. Taking it would drop a body somewhere it
+    // could never have walked to and can never walk out of.
+    const POCKET_TWO: OpenRect = (20, 27, 14, 21);
+    const LINK: OpenRect = (22, 26, 13, 14);
+    let mut h = pocket_scene(&[POCKET_HQ, POCKET_CORRIDOR, POCKET_ONE, LINK, POCKET_TWO]);
+    let seeded = workers(&h);
+    let second = add_worker(&mut h, POCKET_ONE_CENTRE);
+    let w = [seeded[0], second];
+    assert_eq!(pos(&h, w[0]), POCKET_ONE_CENTRE);
+    gather_one_tick(&mut h, &w);
+    exit_gather(&mut h, &w);
+
+    h.step_exact(BOUND as u64);
+
+    assert_eq!(
+        h.world().last_tick_error(),
+        Some(TickError::UnrepairableOverlap),
+        "the free centre in the far pocket is not a destination"
+    );
+    for (k, &id) in w.iter().enumerate() {
+        let p = pos(&h, id);
+        assert!(
+            p[1] < 13.0,
+            "worker {k} left its own connected region for the far pocket: {p:?}"
+        );
+    }
+    assert_eq!(pair_state(&h, w[0], w[1]), 0);
+}
+
+#[test]
+fn fallback_tries_the_partner_when_the_first_body_has_nowhere_to_go() {
+    // Both bodies are stuck in the body-impassable link between two pockets,
+    // so neither can separate. They anchor to *different* pockets — each to
+    // the nearer one — and the leading body's pocket is already occupied. The
+    // relocation is only recoverable if the partner is tried too.
+    const POCKET_TWO: OpenRect = (20, 27, 20, 27);
+    const POCKET_TWO_CENTRE: [f32; 2] = [23.5, 23.5];
+    const LINK: OpenRect = (22, 26, 13, 20);
+    let mut h = pocket_scene(&[POCKET_HQ, POCKET_CORRIDOR, POCKET_ONE, LINK, POCKET_TWO]);
+    let seeded = workers(&h);
+    let near_two = add_worker(&mut h, [23.5, 17.0]);
+    let squatter = add_worker(&mut h, POCKET_TWO_CENTRE);
+    // The seeded worker moves into the link beside `near_two`; it is nearer
+    // the first pocket, which is empty, so only it can be relocated.
+    let near_one = seeded[0];
+    park(&mut h, &[near_one], &[[23.5, 16.0]]);
+    let w = [near_one, near_two, squatter];
+    // `near_two` is the higher slot, so it takes the first proposal only on
+    // the ticks the rotation starts at its own rank. The bound is a whole
+    // number of ticks, so lining the *first* attempt up lines the last one up
+    // too.
+    gather_until_rotation(&mut h, &w[..2], w.len() as u64, 1);
+    exit_gather(&mut h, &w[..2]);
+    let before = pos(&h, near_two);
+
+    h.step_exact(BOUND as u64);
+
+    assert_eq!(
+        pos(&h, near_two),
+        before,
+        "the first-priority body has no free centre in its own region, so it \
+         must not have moved"
+    );
+    assert_eq!(
+        pos(&h, near_one),
+        POCKET_ONE_CENTRE,
+        "the partner does, and the fallback has to try it"
+    );
+    assert_eq!(h.world().last_tick_error(), None);
+    assert_eq!(pair_state(&h, near_one, near_two), 0);
+}
+
+#[test]
+fn fallback_preserves_active_provenance_of_a_third_pair() {
+    // The relocated body is still gathering with a third worker. That pair's
+    // exemption is this tick's provenance, which every active pair is required
+    // to carry: clearing it along with the transitions would take a mandatory
+    // byte out of the state hash and revoke a collision the pair is still
+    // entitled to.
+    let (mut h, w) = blocked_exit_scene();
+    let third = add_worker(&mut h, [20.5, 26.5]);
+    // The pair's own provenance first, then the exit — and `w[0]` keeps
+    // gathering, with the third worker, right through its own relocation.
+    gather_one_tick(&mut h, &[w[0], w[1]]);
+    assert!(h.world_mut().force_order_for_test(w[1], Order::Idle));
+    gathering(&mut h, third, GatherPhase::Mining { ticks_left: 10_000 });
+
+    h.step_exact(BOUND as u64);
+
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        0,
+        "the exiting pair spent its bound and is hard again"
+    );
+    assert_eq!(
+        pair_state(&h, w[0], third),
+        GATHER_PAIR_ACTIVE,
+        "the relocated worker is still gathering with the third one: its \
+         provenance must survive the relocation"
+    );
+    assert_eq!(h.world().body_overlap_count(), 0);
+}
+
+// --- several exits at once --------------------------------------------------
+
+#[test]
+fn multi_pair_pass_is_snapshot_eligible_and_order_stable() {
+    // Three workers, three exiting pairs, one pass. Whether a pair acts at all
+    // is read from the picture taken before the pass — `(0, 2)` is a body
+    // apart there — even though `(0, 1)`'s own accepted move, committed
+    // earlier in the same pass, has already pushed them inside each other by
+    // the time `(0, 2)` is reached.
+    let mut h = harness(scattered_spawns(3));
+    let w = workers(&h);
+    park(
+        &mut h,
+        &w,
+        &[[20.5, 20.5], [21.0, 20.5], [20.5 - 6.4, 20.5]],
+    );
+    // `w[0]` must take the first proposal on `(0, 1)`, or its move — the one
+    // that closes the gap to `w[2]` — never happens.
+    gather_until_rotation(&mut h, &w, w.len() as u64, 0);
+    assert_eq!(
+        h.world().raw_body_overlap_count(),
+        1,
+        "only (0, 1) may start merged"
+    );
+    exit_gather(&mut h, &w);
+
+    h.step_exact(1);
+
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        1,
+        "the pair that was merged in the snapshot spent an attempt"
+    );
+    assert_eq!(
+        pair_state(&h, w[0], w[2]),
+        0,
+        "the pair that was a body apart in the snapshot must be cleared, \
+         however the pass's own earlier moves left it"
+    );
+    assert_eq!(pair_state(&h, w[1], w[2]), 0);
+
+    // One pass, not a fixpoint: a body is proposed once per pair it is in.
+    let hashes: Vec<String> = (0..2)
+        .map(|_| {
+            let mut h = harness(scattered_spawns(3));
+            let w = workers(&h);
+            park(
+                &mut h,
+                &w,
+                &[[20.5, 20.5], [21.0, 20.5], [20.5 - 6.4, 20.5]],
+            );
+            gather_one_tick(&mut h, &w);
+            exit_gather(&mut h, &w);
+            h.step_exact(40);
+            h.state_hash_hex()
+        })
+        .collect();
+    assert_eq!(
+        hashes[0], hashes[1],
+        "the pass must be a pure function of the world it walks"
+    );
+}
+
+#[test]
+fn multi_pair_move_never_decreases_other_transition_distance() {
+    // `w[1]` is exiting both neighbours at once and its two escapes point at
+    // each other. Backing away from `w[2]` would undo the progress `(0, 1)`
+    // just made, so the candidate is refused and `w[2]` moves instead.
+    let mut h = harness(scattered_spawns(3));
+    let w = workers(&h);
+    park(&mut h, &w, &[[20.5, 20.5], [21.0, 20.5], [26.5, 20.5]]);
+    // Rank order `w[0] < w[1] < w[2]`, so `w[0]` moves for `(0, 1)` and `w[1]`
+    // gets the refused first proposal on `(1, 2)`.
+    gather_until_rotation(&mut h, &w, w.len() as u64, 0);
+    exit_gather(&mut h, &w);
+    let before = pos(&h, w[1]);
+
+    h.step_exact(1);
+
+    assert_eq!(
+        pos(&h, w[1]),
+        before,
+        "the middle body's only candidate closes up a pair it is already \
+         separating from, so it must stand still"
+    );
+    assert_eq!(
+        pos(&h, w[0]),
+        [20.0, 20.5],
+        "the first pair still separated"
+    );
+    assert_eq!(
+        pos(&h, w[2]),
+        [27.0, 20.5],
+        "and the partner moved instead, ending that exit at contact"
+    );
+    assert_eq!(pair_state(&h, w[1], w[2]), 0);
+    assert_eq!(h.world().body_overlap_count(), 0);
+}
+
+#[test]
+fn forced_non_gather_overlap_repairs_immediately() {
+    // Nothing about the transition softens a plain forced overlap: a pair that
+    // never gathered has no provenance to spend, so it is repaired on the
+    // first tick rather than given a bound.
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    assert_eq!(pair_state(&h, w[0], w[1]), 0);
+
+    h.step_exact(1);
+
+    assert_eq!(
+        pair_state(&h, w[0], w[1]),
+        0,
+        "no bound was ever handed out"
+    );
+    assert_no_overlap(&h, "a pair that never gathered is repaired outright");
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
+    assert_eq!(h.world().body_overlap_count(), 0);
+}
+
+// --- determinism ------------------------------------------------------------
+
+const EXIT_CHILD_ENV: &str = "MMD_RTS_GATHER_EXIT_CHILD_HASH";
+const EXIT_CHILD_TEST: &str = "print_gather_exit_hash_for_child_process";
+const EXIT_HASH_PREFIX: &str = "MMD_RTS_GATHER_EXIT_HASH=";
+
+/// Four workers merged into one heap, given gather provenance and then cut
+/// loose: every branch of the transition — gradual attempts, refused
+/// candidates, the concentric normal and the fallback — runs inside this.
+fn gather_exit_hash() -> String {
+    let mut h = harness(scattered_spawns(4));
+    let w = workers(&h);
+    park(
+        &mut h,
+        &w,
+        &[[20.5, 20.5], [20.5, 20.5], [21.0, 20.5], [20.5, 21.0]],
+    );
+    gather_one_tick(&mut h, &w);
+    exit_gather(&mut h, &w);
+    h.step_exact(60);
+    h.state_hash_hex()
+}
+
+/// Child entry point for `gather_exit_state_reproduces_cross_process`.
+#[test]
+#[ignore = "child entry point driven by gather_exit_state_reproduces_cross_process"]
+fn print_gather_exit_hash_for_child_process() {
+    assert!(
+        std::env::var_os(EXIT_CHILD_ENV).is_some(),
+        "child entry point must only run via the parent, which sets {EXIT_CHILD_ENV}"
+    );
+    println!("{EXIT_HASH_PREFIX}{}", gather_exit_hash());
+}
+
+#[test]
+fn gather_exit_state_reproduces_cross_process() {
+    // The pair table is hashed state, and the transition writes to it every
+    // tick. A replay that spent its attempts in a different order, or kept one
+    // byte a tick longer, diverges here.
+    let first = gather_exit_hash();
+    assert_eq!(
+        first,
+        gather_exit_hash(),
+        "a bounded exit must reproduce its state hash in-process"
+    );
+    assert_eq!(
+        first,
+        hash_from_child_process(EXIT_CHILD_ENV, EXIT_CHILD_TEST, EXIT_HASH_PREFIX),
+        "a bounded exit must reproduce its state hash across processes"
     );
 }
