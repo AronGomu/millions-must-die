@@ -299,28 +299,32 @@ fn assert_no_user_config(label: &str) {
 /// A dedicated sentinel `HOME`/`XDG_DATA_HOME` for `case`, pre-seeded with a
 /// valid settings file that makes an *interactive* run harmless on a live
 /// desktop: a plain 1280x720 window (so no display mode is changed), no
-/// pointer confinement, and a silent master bus.
+/// pointer confinement, and a silent master bus. `show_grid` is the one knob
+/// a caller picks, because `T15`'s replay-isolation case needs a persisted
+/// value the run must be proven to ignore.
 ///
 /// The interactive path legitimately loads and creates a pref directory — that
 /// is what shipping does. What must never happen is that it is the developer's
 /// own, with the developer's own persisted window mode and
 /// `confine_pointer: true`. Seeding the sentinel uses the shipping load path
 /// rather than adding a test-only knob to the binary.
-fn seeded_settings_home(case: &str) -> PathBuf {
+fn seeded_settings_home(case: &str, show_grid: bool) -> PathBuf {
     let home = tmp_dir(case);
     let dir = home.join(SETTINGS_ORG_DIR).join("MillionsMustDie");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create sentinel pref dir");
     std::fs::write(
         dir.join("settings-v1.json"),
-        r#"{
+        format!(
+            r#"{{
   "schema_version": 1,
-  "display": { "mode": "windowed1280x720", "confine_pointer": false },
-  "camera": { "keyboard_pan": 48, "edge_pan": 48 },
-  "gameplay": { "pause_on_focus_loss": false },
-  "audio": { "master": 0, "music": 0, "voice": 0, "sfx": 0 }
-}
-"#,
+  "display": {{ "mode": "windowed1280x720", "confine_pointer": false }},
+  "camera": {{ "keyboard_pan": 48, "edge_pan": 48 }},
+  "gameplay": {{ "pause_on_focus_loss": false, "show_grid": {show_grid} }},
+  "audio": {{ "master": 0, "music": 0, "voice": 0, "sfx": 0 }}
+}}
+"#
+        ),
     )
     .expect("seed sentinel settings");
     home
@@ -1239,7 +1243,7 @@ fn usage_error_exits_with_code_two() {
 /// desktop with `confine_pointer: true`.
 #[test]
 fn the_window_is_released_before_it_drops() {
-    let home = seeded_settings_home("the_window_is_released_before_it_drops");
+    let home = seeded_settings_home("the_window_is_released_before_it_drops", true);
     let mut cmd = app_bin();
     cmd.args(["rts", "--frames", "600", "--inject-input", "4:quit"]);
     cmd.env("HOME", &home);
@@ -1992,5 +1996,70 @@ fn a_red_click_with_no_snap_is_a_noop() {
         cli.exit_field("buildings"),
         "1",
         "{cli}\na red click with no valid snap must not place a building"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T15: replay isolation for the focused feedback-polish script
+// ---------------------------------------------------------------------------
+
+/// The focused script's `show_grid=false` exit token must be a property of the
+/// *script*, never of whoever ran it.
+///
+/// The script toggles SHOW GRID exactly once, so the token it ends on is
+/// entirely decided by the value the run *started* from. Two independent
+/// guards make that value `true` regardless of this machine: a non-interactive
+/// video driver never resolves a pref path at all, and `replay_settings`
+/// normalises `gameplay` to defaults for any scripted run. This case seeds a
+/// persisted `show_grid: false` into a sentinel `HOME`/`XDG_DATA_HOME` and
+/// proves the run still ends on `false` — if either guard were dropped the run
+/// would start from `false` and the one toggle would end on `true`.
+#[test]
+fn focused_script_is_independent_of_persisted_gameplay_settings() {
+    const CASE: &str = "focused_script_is_independent_of_persisted_gameplay_settings";
+    const FOCUSED: &str = "assets/scenarios/rts_feedback_polish_v1.script";
+    let home = seeded_settings_home(CASE, false);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_millions_must_die"));
+    cmd.args(["rts", "--frames", "300", "--inject-input-file", FOCUSED]);
+    cmd.env("HOME", &home);
+    cmd.env("XDG_DATA_HOME", &home);
+    cmd.env("SDL_VIDEODRIVER", "offscreen");
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    let Some(cli) = or_skip(
+        CASE,
+        run_to_completion(
+            cmd,
+            format!(
+                "HOME=<sentinel show_grid:false> rts --frames 300 --inject-input-file {FOCUSED}"
+            ),
+        ),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("show_grid"),
+        "false",
+        "{cli}\nthe focused run read this machine's persisted show_grid: it started from \
+         `false`, so its single toggle ended on `true`"
+    );
+    assert_eq!(
+        cli.exit_field("keyboard_pan"),
+        "78",
+        "{cli}\nthe slider drag did not land, so the show_grid claim above is not about \
+         a run that reached the settings panel"
+    );
+    // The persisted file is also untouched: a replay has no store to save
+    // through, so a scripted settings edit can never be written back.
+    let persisted = std::fs::read_to_string(
+        home.join(SETTINGS_ORG_DIR)
+            .join("MillionsMustDie")
+            .join("settings-v1.json"),
+    )
+    .expect("read the seeded settings file");
+    assert!(
+        persisted.contains("\"show_grid\": false"),
+        "the replay wrote its own scripted settings back over the seeded file:\n{persisted}"
     );
 }

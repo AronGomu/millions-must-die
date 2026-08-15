@@ -433,6 +433,8 @@ Pre-existing red gates — unchanged by this ticket, not this ticket's to fix:
       6 after** — the same six script-coordinate/milestone cases T13 handed to the parent.
       This host's Vulkan driver intermittently returns `VK_ERROR_DEVICE_LOST` and inflates that
       count to 7 or 14 on a bad run; three consecutive clean runs give 6.
+      **Superseded by T15**, which owns the script re-timing those six cases were waiting for:
+      the same command now reads 21 passed / 0 failed.
 - [x] `cargo test -p mmd-engine --features testkit --test rts_economy`: **3 failures before,
       3 after** (`context_order_with_no_selection_is_a_no_op`,
       `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`)
@@ -464,3 +466,107 @@ Manual, by hand at the keyboard (not yet run — needs a human at `cargo run -- 
       through static geometry while separating.
 - [ ] Known corridor behaviour: walk a group through the narrow corridor on the tracked scene
       and confirm it is unchanged — the exit path adds no shove and no push chain.
+
+## T15 (rts-feedback-polish) — Gate feedback polish end to end
+
+Integration proof, not new behavior: **no production file changed**. `git diff --stat` for this
+ticket is two script assets and four test files.
+
+What moved, and why:
+
+- `assets/scenarios/rts_acceptance_v1.script` — **re-timed**, not re-aimed. T13 lets an active
+  gather pair pass through its partner instead of shouldering it aside, so the six T3-relocated
+  workers clear the spawn cells sooner than they used to and the builder clicks at frames 40–52
+  landed on empty ground. The two build blocks moved to frames 22–28 and 30–36; every coordinate
+  is unchanged.
+- One coordinate *did* move: the HQ selection at frame 120 is now `960,518`, not `960,540`.
+  `960,540` is the HQ's screen centre, and gathering workers shuttle their loads back to the HQ
+  for the whole run, so a worker sprite quad outranks the building on pick depth at essentially
+  every frame after the group starts working — measured, not guessed: the click failed at frames
+  60, 120, 200, 300, 500, 700 and 1000 alike. `960,518` is `screen_of(160.5, 160.5)`, the HQ's
+  own footprint corner, which `tests/rts_cli_contract.rs`'s `hq_click_screen` already uses for
+  exactly this reason. `960,540` is still in the script — as the SETTINGS button at frame 1330.
+- `assets/scenarios/rts_feedback_polish_v1.script` — new, focused, and deliberately *not* folded
+  into the canonical script: `acceptance_audio_counts_are_exact` pins the canonical run's audio
+  counters cue by cue, and adding chrome to it would inflate every one of those numbers.
+
+No expected value in `tests/rts_acceptance.rs` changed. Once the script was re-timed, every
+pinned counter recovered its documented value on its own — `buildings=3`, `units=8`,
+`supply=9/20`, `voice_select=8`, `voice_order=9`, `voice_reject=1`, `sfx_ui=8`, and the
+`rts: audio` line's `voice=7 cues=17 ui=8 reject=1 music=1`.
+
+Automated gates (all run on this branch, this diff):
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --features testkit --test rts_acceptance --locked` — **12 passed**
+      (was 7): `focused_script_hq_click_picks_the_building_not_a_worker`,
+      `focused_script_back_button_is_fixed_under_scroll`,
+      `the_focused_script_coordinates_hit_what_they_name`,
+      `grid_toggle_changes_frame_not_world_hash`, `canonical_gather_overlap_is_non_vacuous`
+- [x] `cargo test -p mmd-engine --features testkit --test frame_allocations --locked --
+      --test-threads=1` — **31 passed**, including the new
+      `combined_feedback_frame_allocates_nothing` (grid-on world pack + HUD + interactive
+      settings modal at a non-zero scroll offset + the bounded gather-exit transition, entered
+      inside the measured window by cutting a merged gather group loose on iteration 0)
+- [x] `cargo test --locked --test rts_acceptance` — **21 passed, 0 failed** (was 11 passed /
+      **6 failed** at `f6165ca`). New: `feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q`,
+      `canonical_acceptance_reports_zero_collision_policy_violations`,
+      `focused_run_is_cross_process_deterministic`, `the_focused_run_fires_every_entry`
+- [x] `cargo test --locked --test rts_cli_contract` — **60 passed**, including the new
+      `focused_script_is_independent_of_persisted_gameplay_settings`
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
+      exit 0 — `hash=565369dbcf2f49e74a5cdd15acf2b154a646e012706c6b10ddb2fdc6dd71f941`,
+      `buildings=3 units=8 supply=9/20 body_overlaps=0 ui_page=gameplay sfx_ui=8`
+- [x] `cargo run -- rts --frames 300 --inject-input-file assets/scenarios/rts_feedback_polish_v1.script`
+      exit 0 — `hash=89131ec96678215e2906df57332525f867fbb9e484262606d5e38b4dc00df741`,
+      `crystal=250 supply=7/10 keyboard_pan=78 show_grid=false settings_scroll_px=72
+      ui_page=gameplay paused=false sfx_ui=6 voice_select=0 voice_order=0 voice_reject=0`
+- [x] `cargo run -- run --agents 5000 --frames 300` exit 0,
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` — the value pinned
+      since T4, unchanged. `collision_mid_v1` → `3df604770021490eb416b38bcd9bc4a25bb417638010c458d5563a17578d268a`,
+      `collision_sprite_v1` → `5561f201e8040451c8c1692849643e7c9ca8c48ffd89e949883a13c2db97cce4`
+- [x] `git diff -- crates/mmd-engine/src/sim` empty (horde sim untouched)
+- [x] GPU goldens inspected, **not** regenerated: `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine
+      --features testkit --test gpu_golden --locked` 12 passed with no `MMD_UPDATE_GOLDEN`;
+      `gpu_smoke` 13 passed; `render_correctness` 50 passed;
+      `git status --porcelain lab/goldens/ assets/sprites/generated/` empty
+
+Pre-existing red gates — unchanged by this ticket, not this ticket's to fix:
+
+- [x] `cargo test -p mmd-engine --features testkit --test rts_economy`: **3 failures before,
+      3 after** (`context_order_with_no_selection_is_a_no_op`,
+      `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`)
+- [x] `cargo test --locked --test validation_contract`: **2 failures before, 2 after** —
+      `phase1_close_doc_names_only_real_tests` and `phase1_1_close_names_only_real_tests`, both
+      on close docs naming `the_drag_box_is_four_edges` / `the_gear_icon_appears_in_the_top_bar`,
+      renamed before this branch. This ticket adds test names and renames none, so the count is
+      untouched; the close docs are outside its Inputs list.
+- [x] `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`: **3
+      `too_many_arguments` errors before, 3 after**, all in `crates/mmd-engine/src/rts/hud.rs`
+      (lines 1078, 1118, 1637) — a production file this ticket does not touch.
+
+Known host flake, not a code defect: this machine's NVIDIA driver raises `NVRM: Xid 69` for the
+app under sustained back-to-back GPU runs, and the affected process exits 1 with
+`vkQueueSubmit VK_ERROR_DEVICE_LOST` before it prints an exit line. The first Xid of this session
+predates the first file edit. Every gate above was captured on a run that did **not** hit it;
+`tests/rts_acceptance.rs` reads 21/21 on a rested device. Mitigation applied inside this ticket's
+own Inputs: `the_acceptance_run_is_deterministic` and `phase1_1_run_is_cross_process_deterministic`
+now share one *second* canonical process (`second_acceptance_run`) instead of spawning one each,
+so the file spends two thousand-frame processes on the device rather than three.
+
+Manual, by hand at the keyboard (not yet run — needs a human at `cargo run -- rts`):
+
+- [ ] Open the game. The isometric world grid is on by default. Open MENU → SETTINGS, click the
+      SHOW GRID row anywhere along its width (not only the 32 px box), and confirm the grid
+      disappears; back out and confirm it stays off for the rest of the session.
+- [ ] With SETTINGS open, drag the KEYBOARD PAN slider from its left edge to the middle and watch
+      the number track the pointer *while dragging*, not only on release.
+- [ ] Scroll the settings body with the wheel. The BACK button must not move — it is a fixed
+      footer below the scrolling area — while the rows above it slide under the panel edge.
+- [ ] From the settings panel press BACK, then CLOSE MENU. You must land back in gameplay with
+      the simulation running, not on a paused menu.
+- [ ] Select the HQ by clicking its near footprint corner (not its centre while workers are
+      standing on it) and press `Q`. A Worker must be enqueued — the card's slot 0 highlights and
+      50 crystal leaves the bank.
+- [ ] Do the same with nothing selected: `Q` must do nothing at all (no cue, no debit).

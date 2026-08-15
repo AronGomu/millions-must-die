@@ -16,8 +16,8 @@ use mmd_engine::rts::{
     BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, FramePackOptions, GatherPhase,
     InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER,
     Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS,
-    command_slots, hud_hit_test, minimap_projection, pack_frame, pack_frame_with_options, pack_hud,
-    pack_modal_interactive, placement_candidate,
+    command_slots, hud_hit_test, minimap_projection, modal_hit_test, pack_frame,
+    pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -1472,5 +1472,146 @@ fn grid_capacity_is_at_least_max_map() {
         "overlay capacity {} < MAX_ENTITIES + MAX_GRID_LINES ({})",
         frame.overlay.capacity(),
         mmd_engine::rts::MAX_ENTITIES + MAX_GRID_LINES
+    );
+}
+
+/// T15: the *joined feedback* frame — everything the focused polish path and
+/// the canonical run exercise together, in one measured window.
+///
+/// On top of `joined_phase1_1_frame_allocates_nothing` this adds the three
+/// surfaces the feedback-polish slice introduced: the world pack with the
+/// default-on grid (`T12`), the interactive settings modal packed at a
+/// non-zero scroll offset with its hit test (`T1`/`T6`), and the bounded
+/// gather-exit transition (`T13`/`T14`), which is entered *inside* the
+/// window by cutting a merged gather group loose on the first iteration.
+///
+/// Each of those already has its own case above; this one exists because an
+/// allocation can hide in the seam between two individually-clean subsystems,
+/// and the seam is what ships.
+///
+/// `raw_body_overlap_count` / `body_overlap_count` are deliberately outside
+/// the measured window: both are observation seams that build their own live
+/// list, never a per-frame path.
+#[test]
+fn combined_feedback_frame_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6, "the scene's six starting workers");
+    for &id in &workers {
+        h.world_mut().selection_mut().insert(id);
+    }
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    assert!(
+        h.world_mut().order_gather_group(&workers, node).is_ok(),
+        "the whole group must take the gather order before measuring"
+    );
+
+    // The two scripts' own geometry, so this frame is the shipped one.
+    let cursor = [960.0, 540.0];
+    let drag = Some(DragBox {
+        a: [850.0, 520.0],
+        b: [1000.0, 600.0],
+    });
+    let node_quad_corner = [897.0, 411.0];
+    let command_slot_1 = [1800.0, 888.0];
+    let grid_row = [960.0, 580.0];
+    let options = FramePackOptions { show_grid: true };
+    let scroll = mmd_engine::rts::SETTINGS_SCROLL_STEP_PX;
+    let snapshot = ModalSnapshot {
+        window_mode_index: 2,
+        keyboard_pan: 78,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        show_grid: false,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
+        scroll_offset: scroll,
+    };
+    let interaction = InteractionSnapshot::default();
+
+    let mut frame = RtsFrame::new();
+    let mut receipts = OrderReceiptBuffer::new();
+
+    // Warm-up outside the scope: the nav field, every packing buffer and the
+    // receipt buffer grow now, not under the guard. Long enough that the
+    // group has converged on the node and really is interpenetrating under
+    // the T13 gather exemption — otherwise cutting it loose below would enter
+    // no separation transition at all.
+    for _ in 0..8 {
+        h.step_exact(1);
+        let view = h.world().iso_view();
+        let _ = h
+            .world_mut()
+            .issue_context_order_at(&view, node_quad_corner, &mut receipts);
+        pack_frame_with_options(h.world(), cursor, drag, options, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            None,
+            &interaction,
+            None,
+            &mut frame,
+        );
+    }
+    h.step_exact(400);
+    let merged = h.world().raw_body_overlap_count();
+    assert!(
+        merged > 0,
+        "the gather group never merged, so the measured window would enter no \
+         separation transition"
+    );
+    let packed = frame.instance_count();
+    assert!(
+        packed > 17,
+        "the warm-up must have packed more than the bare world"
+    );
+
+    let far = [1200.0, 700.0];
+    let guard = MeasureGuard::enter();
+    for i in 0..120 {
+        h.step_exact(1);
+        let view = h.world().iso_view();
+        // Iteration 0 cuts the merged gather group loose: every following tick
+        // runs the bounded exit — gradual attempts, refused candidates and the
+        // same-component relocation fallback — inside the measured window.
+        let target = if i == 0 { far } else { node_quad_corner };
+        let result = h
+            .world_mut()
+            .issue_context_order_at(&view, target, &mut receipts);
+        std::hint::black_box((result.accepted, receipts.as_slice().len()));
+        pack_frame_with_options(h.world(), cursor, drag, options, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            None,
+            &interaction,
+            None,
+            &mut frame,
+        );
+        std::hint::black_box(minimap_projection(h.world()).scale);
+        std::hint::black_box(command_slots(h.world())[1].enabled);
+        std::hint::black_box(hud_hit_test(h.world(), command_slot_1));
+        std::hint::black_box(modal_hit_test(ModalPage::Settings, grid_row, scroll));
+    }
+    assert_eq!(guard.allocations(), 0, "a joined feedback frame allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "the measured window left a collision-policy violation behind"
     );
 }

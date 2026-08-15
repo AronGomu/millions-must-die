@@ -9,8 +9,11 @@
 #     falls back to "any live worker", so a placement can succeed with an
 #     empty selection — the card cannot, and neither may this run.
 #
-# The selection clicks therefore all land in the first ~50 frames, while the
-# six relocated workers (T3) are still on the spawn cells named below.
+# The selection clicks therefore all land in the first ~40 frames, while the
+# six relocated workers (T3) are still near the spawn cells named below. T13
+# lets an active gather pair pass through its partner instead of shouldering
+# it aside, so the group leaves those cells sooner than it used to: the two
+# builder clicks are timed for the faster departure, not the old one.
 
 1:move:960,540
 5:drag:850,520,1000,600        # box-select the six starting workers (T3 scatters them wider than one row)
@@ -19,22 +22,22 @@
 16:rclick:1049,559             # gas node, one pixel inside its visible quad [1048,558,48,48] (ground 1072,606)
 20:rclick:1900,100             # off the map, one worker selected: exactly one Reject
 
-# --- Depot, built by the worker on spawn cell (162,178) ---
-24:lclick:896,558
-28:lclick:1800,888             # command slot 1 = Depot ghost
-32:move:976,606
-34:lclick:976,606              # place it at min corner (180,176)
-36:rclick:976,606              # order that worker onto its own site: one Build receipt
+# --- Depot, built by the worker still over spawn cell (162,178) ---
+22:lclick:896,558
+24:lclick:1800,888             # command slot 1 = Depot ghost
+26:move:976,606
+27:lclick:976,606              # place it at min corner (180,176)
+28:rclick:976,606              # order that worker onto its own site: one Build receipt
 
-# --- Barracks, built by the worker on spawn cell (165,178) ---
-40:lclick:906,563
-44:lclick:1872,888             # command slot 2 = Barracks ghost
-48:move:840,542
-50:lclick:840,542              # place it at min corner (146,176)
-52:rclick:840,542              # order that worker onto its own site: one Build receipt
+# --- Barracks, built by the worker still over spawn cell (165,178) ---
+30:lclick:906,563
+32:lclick:1872,888             # command slot 2 = Barracks ghost
+34:move:840,542
+35:lclick:840,542              # place it at min corner (146,176)
+36:rclick:840,542              # order that worker onto its own site: one Build receipt
 
 # --- a Worker from the HQ ---
-120:lclick:960,540             # select the HQ
+120:lclick:960,518             # select the HQ, at its own footprint corner (160.5,160.5)
 125:lclick:1728,888            # command slot 0 = Worker
 
 # --- a Soldier from the Barracks ---
