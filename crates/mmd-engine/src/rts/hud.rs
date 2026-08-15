@@ -1306,6 +1306,8 @@ pub enum ModalHit {
     Confine,
     /// Pause-on-focus-loss checkbox (full label row).
     Focus,
+    /// Show-grid checkbox (full label row).
+    Grid,
     Master(u32),
     Music(u32),
     Voice(u32),
@@ -1333,6 +1335,7 @@ pub fn control_id_from_modal_hit(hit: ModalHit) -> Option<ControlId> {
         ModalHit::EdgePan(_) => Some(ControlId::EdgePanSlider),
         ModalHit::Confine => Some(ControlId::Confine),
         ModalHit::Focus => Some(ControlId::Focus),
+        ModalHit::Grid => Some(ControlId::Grid),
         ModalHit::Master(_) => Some(ControlId::MasterSlider),
         ModalHit::Music(_) => Some(ControlId::MusicSlider),
         ModalHit::Voice(_) => Some(ControlId::VoiceSlider),
@@ -1368,6 +1371,7 @@ pub struct ModalSnapshot {
     pub edge_pan: u32,
     pub confine_pointer: bool,
     pub pause_on_focus_loss: bool,
+    pub show_grid: bool,
     pub master: u32,
     pub music: u32,
     pub voice: u32,
@@ -1476,6 +1480,11 @@ pub fn modal_hit_test(page: ModalPage, point: [f32; 2], scroll_offset: f32) -> M
                 || point_in_modal_rect(body_point, FOCUS_CHECKBOX)
             {
                 return ModalHit::Focus;
+            }
+            if point_in_modal_rect(body_point, GRID_CONTROL_RECT)
+                || point_in_modal_rect(body_point, GRID_CHECKBOX)
+            {
+                return ModalHit::Grid;
             }
             for (i, &rect) in MUTE_LABEL_RECTS.iter().enumerate() {
                 if point_in_modal_rect(body_point, rect) {
@@ -1771,6 +1780,16 @@ pub fn pack_modal_interactive(
                 ControlId::Focus,
                 interaction,
                 snapshot.pause_on_focus_loss,
+            );
+            push_modal_checkbox(
+                &mut props.instances,
+                &mut font.instances,
+                GRID_CHECKBOX,
+                GRID_CONTROL_RECT,
+                "SHOW GRID",
+                ControlId::Grid,
+                interaction,
+                snapshot.show_grid,
             );
             let mute_states = [
                 (ControlId::MasterMute, snapshot.master_muted),

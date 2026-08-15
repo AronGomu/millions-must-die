@@ -6,10 +6,12 @@
 //! quietly changes.
 //!
 //! The three layers of a [`ScenePass`] are not interchangeable. `overlay` is
-//! drawn with texture slot 0 bound and is only honest for procedural rings
-//! ([`SpriteInstance::ring`]); every *textured* depth-off instance — the
-//! placement ghost, the rally flags, the drag box — goes in `ui` instead, or it
-//! would sample the wrong sheet.
+//! drawn with texture slot 0 bound and is only honest for texture-free
+//! procedural instances: selection rings ([`SpriteInstance::ring`]) and world
+//! grid lines ([`SpriteInstance::diagonal_line`]). Every *textured* depth-off
+//! instance — the placement ghost, the rally flags, the drag box — goes in
+//! `ui` instead, or it would sample the wrong sheet. A textured instance in
+//! the overlay layer is always a bug.
 
 use super::build::{Placement, PlacementCandidate, placement_candidate};
 use super::entity::{BuildingKind, EntityKind, MAX_ENTITIES, ResourceKind, UnitKind};
@@ -20,6 +22,7 @@ use crate::render::{
     SLOT_RTS_WORKER, SLOT_UI_FONT, ScenePass, SpriteInstance, frame_uv_rect, quad_is_visible,
 };
 use crate::runtime::ring_quad_size_px;
+use crate::scenario::RTS_MAX_MAP_EDGE;
 
 /// Columns of every RTS sheet — the grid [`frame_uv_rect`] addresses.
 const SHEET_COLS: u32 = 4;
@@ -34,6 +37,19 @@ const NODE_DEPLETED_COL_OFFSET: u32 = 2;
 
 /// HUD glyph ceiling for the UI font group — T13 fills it.
 const UI_TEXT_CAPACITY: usize = 4_096;
+
+/// Maximum grid lines for a full-map isometric lattice.
+///
+/// Two boundary families: `x = 0..=width` (width+1 lines) and
+/// `y = 0..=height` (height+1 lines). The map is square-bounded by
+/// [`RTS_MAX_MAP_EDGE`], so the ceiling is `2 * (RTS_MAX_MAP_EDGE + 1)`.
+pub const MAX_GRID_LINES: usize = 2 * (RTS_MAX_MAP_EDGE as usize + 1);
+
+/// Grid-line stroke width in screen pixels.
+pub const GRID_LINE_PX: f32 = 1.0;
+
+/// Grid-line tint (premultiplied). Thin subdued green, nearly transparent.
+pub const GRID_TINT: [f32; 4] = [0.05, 0.08, 0.05, 0.16];
 
 /// Named cells of the props sheet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +128,13 @@ pub const DRAG_BOX_BORDER_TINT: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// colour and the alpha.
 pub const GHOST_TINT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
+/// Per-frame packing options forwarded by the app.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FramePackOptions {
+    /// Render the full-map isometric grid lattice in the overlay layer.
+    pub show_grid: bool,
+}
+
 /// Reusable per-frame instance buffers.
 ///
 /// Owned by the caller (the app, or a test), not by [`RtsWorld`]: packing is a
@@ -120,7 +143,7 @@ pub const GHOST_TINT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 pub struct RtsFrame {
     /// Depth-tested world groups, in slot order 4, 5, 6.
     pub world: Vec<DrawGroup>,
-    /// Procedural rings only — selection rings.
+    /// Texture-free procedural instances: world grid lines, then selection rings.
     pub overlay: Vec<SpriteInstance>,
     /// Depth-off textured groups, texture slots [`SLOT_RTS_WORKER`] through
     /// [`SLOT_UI_FONT`] in order: worker, soldier, building, props, font.
@@ -162,7 +185,7 @@ impl RtsFrame {
                     instances: Vec::with_capacity(MAX_ENTITIES),
                 })
                 .collect(),
-            overlay: Vec::with_capacity(MAX_ENTITIES),
+            overlay: Vec::with_capacity(MAX_ENTITIES + MAX_GRID_LINES),
             ui: [
                 SLOT_RTS_WORKER,
                 SLOT_RTS_SOLDIER,
@@ -240,7 +263,34 @@ pub struct DragBox {
     pub b: [f32; 2],
 }
 
-/// Pack one frame of `world` into `frame`.
+/// Pack the isometric world-grid lattice into `frame.overlay`.
+///
+/// Two families of boundary lines: `x = 0..=width` projected as column edges,
+/// and `y = 0..=height` projected as row edges. Exactly `width + height + 2`
+/// lines are pushed; the caller must ensure `frame.overlay` has capacity.
+fn pack_grid(world: &RtsWorld, frame: &mut RtsFrame) {
+    let iso = world.iso_view();
+    let w = world.scenario().width();
+    let h = world.scenario().height();
+    // x-family: vertical column edges, x in 0..=width.
+    for x in 0..=w {
+        let a = iso.project(x as f32, 0.0);
+        let b = iso.project(x as f32, h as f32);
+        frame
+            .overlay
+            .push(SpriteInstance::diagonal_line(a, b, GRID_LINE_PX, GRID_TINT));
+    }
+    // y-family: horizontal row edges, y in 0..=height.
+    for y in 0..=h {
+        let a = iso.project(0.0, y as f32);
+        let b = iso.project(w as f32, y as f32);
+        frame
+            .overlay
+            .push(SpriteInstance::diagonal_line(a, b, GRID_LINE_PX, GRID_TINT));
+    }
+}
+
+/// Pack one frame of `world` into `frame`, with options forwarded from the app.
 ///
 /// `cursor` is the pointer position in screen pixels, used to place the
 /// placement ghost. `drag` is the live drag rectangle, if any.
@@ -251,7 +301,37 @@ pub struct DragBox {
 /// slot. The order does not affect the picture — the depth test sorts it — but
 /// it does fix the packed byte order, and a frame is compared byte for byte in
 /// tests.
+///
+/// The overlay is ordered: grid lines (if enabled), then selection rings.
+pub fn pack_frame_with_options(
+    world: &RtsWorld,
+    cursor: [f32; 2],
+    drag: Option<DragBox>,
+    options: FramePackOptions,
+    frame: &mut RtsFrame,
+) {
+    pack_frame_inner(world, cursor, drag, options, frame);
+}
+
+/// Legacy wrapper: grid is always off. Preserved for tests that predated
+/// [`FramePackOptions`] and do not want grid lines in their overlay counts.
 pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, frame: &mut RtsFrame) {
+    pack_frame_inner(
+        world,
+        cursor,
+        drag,
+        FramePackOptions { show_grid: false },
+        frame,
+    );
+}
+
+fn pack_frame_inner(
+    world: &RtsWorld,
+    cursor: [f32; 2],
+    drag: Option<DragBox>,
+    options: FramePackOptions,
+    frame: &mut RtsFrame,
+) {
     frame.clear();
 
     let iso = world.iso_view();
@@ -312,7 +392,12 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
     }
     frame.scratch = scratch;
 
-    // 2. Overlay: one procedural ring per selected entity, centred on its
+    // 2a. Grid overlay: full-map isometric lattice, packed before rings.
+    if options.show_grid {
+        pack_grid(world, frame);
+    }
+
+    // 2b. Overlay: one procedural ring per selected entity, centred on its
     //    ground point. The quad is the same expression the hitbox overlay
     //    uses, so "the ring shows the shape the world uses" stays one
     //    derivation: a unit's body radius, a footprint's half edge.

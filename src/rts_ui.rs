@@ -93,6 +93,7 @@ pub enum SettingsChange {
     MusicMuted(bool),
     VoiceMuted(bool),
     SfxMuted(bool),
+    ShowGrid(bool),
 }
 
 impl SettingsChange {
@@ -111,6 +112,7 @@ impl SettingsChange {
             Self::MusicMuted(v) => settings.audio.music_muted = v,
             Self::VoiceMuted(v) => settings.audio.voice_muted = v,
             Self::SfxMuted(v) => settings.audio.sfx_muted = v,
+            Self::ShowGrid(v) => settings.gameplay.show_grid = v,
         }
     }
 }
@@ -535,6 +537,7 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
     // `session`, which needs the whole struct mutably.
     let confine_pointer = session.settings.display.confine_pointer;
     let pause_on_focus_loss = session.settings.gameplay.pause_on_focus_loss;
+    let show_grid = session.settings.gameplay.show_grid;
     let change = match hit {
         ModalHit::OpenSettings => {
             session.ui.open_settings();
@@ -556,6 +559,7 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
         ModalHit::EdgePan(v) => Some(SettingsChange::EdgePan(v)),
         ModalHit::Confine => Some(SettingsChange::Confine(!confine_pointer)),
         ModalHit::Focus => Some(SettingsChange::PauseOnFocusLoss(!pause_on_focus_loss)),
+        ModalHit::Grid => Some(SettingsChange::ShowGrid(!show_grid)),
         ModalHit::Master(v) => Some(SettingsChange::Master(v)),
         ModalHit::Music(v) => Some(SettingsChange::Music(v)),
         ModalHit::Voice(v) => Some(SettingsChange::Voice(v)),
@@ -614,6 +618,7 @@ fn modal_snapshot(
         edge_pan: preview.camera.edge_pan,
         confine_pointer: preview.display.confine_pointer,
         pause_on_focus_loss: preview.gameplay.pause_on_focus_loss,
+        show_grid: preview.gameplay.show_grid,
         master: preview.audio.master,
         music: preview.audio.music,
         voice: preview.audio.voice,
@@ -2322,6 +2327,37 @@ mod tests {
             audio.gains(),
             old_gains,
             "gains must roll back on save failure"
+        );
+    }
+
+    #[test]
+    fn show_grid_toggle_applies() {
+        use mmd_engine::rts::ModalHit;
+
+        // Default show_grid is true; clicking the row toggles it to false.
+        let mut session = RtsSession::default();
+        session.ui.open_menu();
+        session.ui.open_settings();
+        assert!(session.settings.gameplay.show_grid, "default must be true");
+
+        handle_modal_click(&mut session, ModalHit::Grid);
+        // Drain pending change manually (no disk, no window).
+        if let Some(change) = session.pending_setting_change.take() {
+            change.apply_to(&mut session.settings);
+        }
+        assert!(
+            !session.settings.gameplay.show_grid,
+            "first toggle must set show_grid=false"
+        );
+
+        // Clicking again toggles back.
+        handle_modal_click(&mut session, ModalHit::Grid);
+        if let Some(change) = session.pending_setting_change.take() {
+            change.apply_to(&mut session.settings);
+        }
+        assert!(
+            session.settings.gameplay.show_grid,
+            "second toggle must restore show_grid=true"
         );
     }
 }

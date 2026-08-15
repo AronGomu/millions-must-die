@@ -341,3 +341,15 @@ command below except what a browser or a human eye must judge.
 - [ ] Manual: drag a selection rectangle — world visible through 10% green fill; border is bright opaque green 2px
 - [ ] Manual: backward drag (start bottom-right, drag to top-left) produces identical box
 - [ ] App functional: entities inside the drag rect are still selected on release
+
+## T12 world-grid
+
+- [ ] `cargo run -- rts` shows a thin subdued isometric grid across the full map at startup (show_grid default true).
+- [ ] Opening Settings → SHOW GRID checkbox is visible at scroll 0; clicking it turns the grid off immediately next frame.
+- [ ] Relaunching after toggling off: grid remains off (persisted false).
+- [ ] Toggling back on and relaunching: grid is on (persisted true).
+- [ ] Camera pan: grid lines stay aligned to map edges while panning.
+- [ ] HUD overlays grid (minimap panel, command panel, etc. render above grid).
+- [ ] Selection rings appear on top of grid lines.
+- [ ] No visible performance regression at 320×320 map.
+- [ ] `cargo run -- rts --frames 30` clean-exit line contains `show_grid=true` by default.

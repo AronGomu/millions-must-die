@@ -13,10 +13,11 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, InteractionSnapshot,
-    ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER, Order, OrderReceiptBuffer,
-    ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots, hud_hit_test,
-    minimap_projection, pack_frame, pack_hud, pack_modal_interactive, placement_candidate,
+    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, FramePackOptions, GatherPhase,
+    InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER,
+    Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS,
+    command_slots, hud_hit_test, minimap_projection, pack_frame, pack_frame_with_options, pack_hud,
+    pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -530,6 +531,7 @@ fn settings_edit_field_pack_allocates_nothing() {
         edge_pan: 48,
         confine_pointer: true,
         pause_on_focus_loss: false,
+        show_grid: true,
         master: 80,
         music: 35,
         voice: 70,
@@ -592,6 +594,7 @@ fn scroll_pack_allocates_nothing() {
         edge_pan: 48,
         confine_pointer: true,
         pause_on_focus_loss: false,
+        show_grid: true,
         master: 80,
         music: 35,
         voice: 70,
@@ -1359,4 +1362,43 @@ fn placement_search_allocates_nothing() {
     }
     assert_eq!(guard.allocations(), 0, "placement_candidate allocated");
     guard.assert_zero();
+}
+
+// ── T12: Grid no-alloc ───────────────────────────────────────────────────────
+
+/// `pack_frame_with_options(show_grid=true)` must not allocate — the overlay
+/// buffer is reserved at `MAX_ENTITIES + MAX_GRID_LINES` in `RtsFrame::new`.
+#[test]
+fn grid_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let cursor = [960.0, 540.0];
+    let options = FramePackOptions { show_grid: true };
+
+    // Warm-up.
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), cursor, None, options, &mut frame);
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        pack_frame_with_options(h.world(), cursor, None, options, &mut frame);
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(guard.allocations(), 0, "grid pack allocated");
+    guard.assert_zero();
+}
+
+#[test]
+fn grid_capacity_is_at_least_max_map() {
+    // Total overlay capacity at construction must cover MAX_ENTITIES rings
+    // plus MAX_GRID_LINES grid instances without growing the buffer.
+    let frame = RtsFrame::new();
+    assert!(
+        frame.overlay.capacity() >= mmd_engine::rts::MAX_ENTITIES + MAX_GRID_LINES,
+        "overlay capacity {} < MAX_ENTITIES + MAX_GRID_LINES ({})",
+        frame.overlay.capacity(),
+        mmd_engine::rts::MAX_ENTITIES + MAX_GRID_LINES
+    );
 }

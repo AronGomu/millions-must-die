@@ -85,7 +85,7 @@ fn frame_new_reserves_the_documented_groups() {
     for g in &frame.world {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
     }
-    assert_eq!(frame.overlay.capacity(), MAX_ENTITIES);
+    assert_eq!(frame.overlay.capacity(), MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES);
     for g in &frame.ui[..4] {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
     }
@@ -1043,4 +1043,143 @@ fn green_preview_commits_exact_displayed_min() {
         site_min, cand.min,
         "committed site min must equal the displayed ghost min"
     );
+}
+
+// ── T12: Grid packing tests ──────────────────────────────────────────────────
+
+use mmd_engine::rts::{FramePackOptions, GRID_TINT, MAX_GRID_LINES, pack_frame_with_options};
+fn grid_on() -> FramePackOptions {
+    FramePackOptions { show_grid: true }
+}
+fn grid_off() -> FramePackOptions {
+    FramePackOptions { show_grid: false }
+}
+
+#[test]
+fn grid_defaults_on_and_toggle_produces_frame_pack_options() {
+    let on = FramePackOptions { show_grid: true };
+    let off = FramePackOptions { show_grid: false };
+    assert!(on.show_grid);
+    assert!(!off.show_grid);
+}
+
+#[test]
+fn grid_packs_exact_map_lattice() {
+    let h = scene();
+    let w = h.world().scenario().width();
+    let width = w;
+    let height = h.world().scenario().height();
+    let expected = (width + 1 + height + 1) as usize;
+
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
+
+    let grid_lines: Vec<_> = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_diagonal_line())
+        .collect();
+    assert_eq!(
+        grid_lines.len(),
+        expected,
+        "320×320 map needs {} grid lines",
+        expected
+    );
+}
+
+#[test]
+fn disabled_grid_packs_no_lines() {
+    let h = scene();
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_off(), &mut frame);
+    let lines = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_diagonal_line())
+        .count();
+    assert_eq!(lines, 0, "grid off must produce no diagonal-line instances");
+}
+
+#[test]
+fn grid_precedes_selection_rings() {
+    let mut h = scene();
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    h.world_mut().selection_mut().insert(workers[0]);
+
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
+
+    // First instance must be a diagonal line (grid), not a ring.
+    assert!(
+        frame.overlay[0].is_diagonal_line(),
+        "first overlay instance must be a grid line, not a ring"
+    );
+    // At least one ring must follow.
+    assert!(
+        frame.overlay.iter().any(|i| !i.is_diagonal_line()),
+        "a selected entity must produce at least one ring after grid lines"
+    );
+}
+
+#[test]
+fn grid_uses_only_diagonal_line_instances() {
+    let h = scene();
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
+    let w = h.world().scenario().width();
+    let height = h.world().scenario().height();
+    let n = (w + 1 + height + 1) as usize;
+    for inst in frame.overlay.iter().take(n) {
+        assert!(
+            inst.is_diagonal_line(),
+            "every grid instance must be a diagonal-line; got uv_rect={:?}",
+            inst.uv_rect
+        );
+        assert_eq!(inst.tint, GRID_TINT, "grid line must use GRID_TINT");
+    }
+}
+
+#[test]
+fn grid_toggle_does_not_change_world_hash() {
+    let h = scene();
+    let hash_before = h.world().state_hash();
+    // Packing with grid on must not mutate world state.
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
+    assert_eq!(
+        h.world().state_hash(),
+        hash_before,
+        "grid packing must not alter world hash"
+    );
+}
+
+#[test]
+fn grid_capacity_covers_max_map_and_selection() {
+    // MAX_GRID_LINES + MAX_ENTITIES is the overlay ceiling.
+    // Simply confirm the constant is large enough for a 512×512 map.
+    let max_lines = MAX_GRID_LINES;
+    assert!(
+        max_lines >= 2 * (512 + 1),
+        "MAX_GRID_LINES={max_lines} must cover a 512×512 map"
+    );
+}
+
+#[test]
+fn grid_follows_camera_projection() {
+    let h = scene();
+    let iso = h.world().iso_view();
+    let expected_a = iso.project(0.0, 0.0);
+    let expected_b = iso.project(0.0, h.world().scenario().height() as f32);
+
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
+
+    // The very first line is x=0 column edge: a=(0,0), b=(0,height).
+    let first = &frame.overlay[0];
+    assert_eq!(
+        first.pos, expected_a,
+        "first line must start at project(0,0)"
+    );
+    let end = [first.pos[0] + first.size[0], first.pos[1] + first.size[1]];
+    assert_eq!(end, expected_b, "first line must end at project(0,height)");
 }

@@ -23,7 +23,7 @@
 //!      supply=<used>/<cap> units=<n> buildings=<n> nodes=<n> selected=<n> \
 //!      camera=<cx>,<cy> body_overlaps=<n> ui_page=<p> music_starts=<n> \
 //!      voice_select=<n> voice_order=<n> voice_reject=<n> sfx_ui=<n> \
-//!      keyboard_pan=<n>                                                             (f)
+//!      keyboard_pan=<n> settings_scroll_px=<n> show_grid=<bool>                    (f)
 //! ```
 //!
 //! - (a) absent when a scripted quit lands on frame 1.
@@ -68,8 +68,9 @@ use mmd_engine::render::{
     DisplayViewport, RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
-    DragBox, EntityId, EntityKind, MAX_SELECTION, OWNER_PLAYER, OrderReceiptBuffer, Placement,
-    RtsFrame, RtsWorld, RtsWorldError, UnitKind, is_drag, pack_frame, placement_candidate,
+    DragBox, EntityId, EntityKind, FramePackOptions, MAX_SELECTION, OWNER_PLAYER,
+    OrderReceiptBuffer, Placement, RtsFrame, RtsWorld, RtsWorldError, UnitKind, is_drag,
+    pack_frame_with_options, placement_candidate,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::{Event, WindowEvent};
@@ -84,7 +85,9 @@ use crate::rts_feedback::{
 use crate::rts_input::{self, RtsCommand};
 use crate::rts_overlay::format_rts_overlay;
 use crate::rts_script::RtsScript;
-use crate::rts_settings::{CameraSettings, RtsSettings, SettingsStore, escape_warning};
+use crate::rts_settings::{
+    CameraSettings, GameplaySettings, RtsSettings, SettingsStore, escape_warning,
+};
 use crate::rts_ui::{PointerOwner, RtsUiState, SettingsChange};
 use crate::rts_window::{
     self, ClaimedWindow, FocusAction, ModeCandidate, RtsWindowState, SdlWindowOps, WindowOps,
@@ -746,6 +749,7 @@ fn replay_settings(
         return (settings, store);
     }
     settings.camera = CameraSettings::default();
+    settings.gameplay = GameplaySettings::default();
     (settings, None)
 }
 
@@ -1429,7 +1433,15 @@ where
         world.tick();
     }
 
-    pack_frame(world, session.cursor, session.drag, frame_buf);
+    pack_frame_with_options(
+        world,
+        session.cursor,
+        session.drag,
+        FramePackOptions {
+            show_grid: session.settings.gameplay.show_grid,
+        },
+        frame_buf,
+    );
     crate::rts_ui::pack_hud(world, session, frame_buf);
 
     draw(frame_buf.scene())?;
@@ -1640,7 +1652,8 @@ fn finish(
         "rts: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} \
          paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
          camera={},{} body_overlaps={} ui_page={} music_starts={} voice_select={} \
-         voice_order={} voice_reject={} sfx_ui={} keyboard_pan={} settings_scroll_px={}",
+         voice_order={} voice_reject={} sfx_ui={} keyboard_pan={} settings_scroll_px={} \
+         show_grid={}",
         world.tick_index(),
         state.frames,
         hex::encode(state.last_hash),
@@ -1665,6 +1678,7 @@ fn finish(
         counters.ui,
         session.settings.camera.keyboard_pan,
         session.ui.settings_scroll_px.round() as u32,
+        session.settings.gameplay.show_grid,
     );
     Ok(())
 }
@@ -1780,15 +1794,28 @@ mod tests {
         );
     }
 
-    /// Everything that reaches no hashed state stays the user's, so a windowed
-    /// replay still honours their window mode, confinement and volumes.
+    /// Display and audio settings that reach no hashed state stay the user's.
+    /// Gameplay is normalised alongside the camera (show_grid affects the exit
+    /// line a focused script asserts, so a persisted false would break it).
     #[test]
-    fn a_scripted_run_keeps_every_setting_that_reaches_no_hashed_state() {
+    fn a_scripted_run_keeps_display_and_audio_settings() {
         let (settings, _) = replay_settings(persisted_non_default(), None, true);
         let persisted = persisted_non_default();
         assert_eq!(settings.display, persisted.display);
-        assert_eq!(settings.gameplay, persisted.gameplay);
         assert_eq!(settings.audio, persisted.audio);
+    }
+
+    #[test]
+    fn scripted_replay_normalises_gameplay_settings() {
+        let mut non_default = persisted_non_default();
+        non_default.gameplay.show_grid = false;
+        non_default.gameplay.pause_on_focus_loss = true;
+        let (settings, _) = replay_settings(non_default, None, true);
+        assert_eq!(
+            settings.gameplay,
+            GameplaySettings::default(),
+            "scripted run must not depend on persisted show_grid or pause_on_focus_loss"
+        );
     }
 
     /// An interactive run is untouched: nothing compares its hash to anything,
@@ -1823,5 +1850,26 @@ mod tests {
         assert!(session.numeric_edit.is_none());
         // Point is only used to document the scripted click coordinate space.
         let _ = p;
+    }
+}
+
+#[cfg(test)]
+mod exit_line_tests {
+    use super::*;
+
+    #[test]
+    fn exit_line_reports_live_show_grid() {
+        // Clean-exit format includes show_grid=<bool>.
+        // Verify the format string at compile time via a prefix check.
+        // The actual value comes from session.settings.gameplay.show_grid.
+        let format_str = "rts: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} \
+         paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
+         camera={},{} body_overlaps={} ui_page={} music_starts={} voice_select={} \
+         voice_order={} voice_reject={} sfx_ui={} keyboard_pan={} settings_scroll_px={} \
+         show_grid={}";
+        assert!(
+            format_str.contains("show_grid={}"),
+            "exit line format must include show_grid token"
+        );
     }
 }

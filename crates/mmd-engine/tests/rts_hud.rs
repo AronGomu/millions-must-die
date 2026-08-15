@@ -903,13 +903,13 @@ use mmd_engine::rts::{
     AudioChannelId, CONFINE_CHECKBOX, CONFINE_CONTROL_RECT, CONTROL_FRAME_PX,
     CONTROL_TINT_DISABLED, CONTROL_TINT_HOVER, CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED,
     CONTROL_TINT_SELECTED, ControlId, ControlVisualState, EDGE_PAN_TRACK, FOCUS_CHECKBOX,
-    FOCUS_CONTROL_RECT, GRID_CONTROL_RECT, InteractionSnapshot, KEYBOARD_PAN_TRACK, MASTER_TRACK,
-    MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_RECTS, MUTE_LABEL_W, MUTE_LABELS, MUTE_LABELS_MUTED,
-    ModalHit, ModalPage, ModalSnapshot, NUMERIC_SETTING_SPECS, NumericSettingId, PAN_MAX, PAN_MIN,
-    PAN_STEP, SFX_TRACK, SLIDER_THUMB_W_PX, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X,
-    VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, clamp_snap,
-    control_id_from_modal_hit, control_tint, control_visual_state, modal_hit_test, mute_label_rect,
-    pack_modal, slider_thumb_rect, snap_track, value_field_rect,
+    FOCUS_CONTROL_RECT, GRID_CHECKBOX, GRID_CONTROL_RECT, InteractionSnapshot, KEYBOARD_PAN_TRACK,
+    MASTER_TRACK, MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_RECTS, MUTE_LABEL_W, MUTE_LABELS,
+    MUTE_LABELS_MUTED, ModalHit, ModalPage, ModalSnapshot, NUMERIC_SETTING_SPECS, NumericSettingId,
+    PAN_MAX, PAN_MIN, PAN_STEP, SFX_TRACK, SLIDER_THUMB_W_PX, VALUE_FIELD_H, VALUE_FIELD_W,
+    VALUE_FIELD_X, VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS,
+    clamp_snap, control_id_from_modal_hit, control_tint, control_visual_state, modal_hit_test,
+    mute_label_rect, pack_modal, slider_thumb_rect, snap_track, value_field_rect,
 };
 
 fn default_snapshot() -> ModalSnapshot {
@@ -919,6 +919,7 @@ fn default_snapshot() -> ModalSnapshot {
         edge_pan: 48,
         confine_pointer: true,
         pause_on_focus_loss: false,
+        show_grid: true,
         master: 80,
         music: 35,
         voice: 70,
@@ -1822,5 +1823,35 @@ fn zero_supply_and_empty_queue_are_explicit() {
             12
         ),
         "PROGRESS -"
+    );
+}
+
+// ── T12: Grid control row ────────────────────────────────────────────────────
+
+#[test]
+fn grid_control_rect_is_visible_and_hittable_at_zero_scroll() {
+    // GRID_CONTROL_RECT sits at content y 564..596, inside body viewport 160..880.
+    // At scroll offset 0, clicking its centre returns ModalHit::Grid.
+    let cx = GRID_CONTROL_RECT[0] + GRID_CONTROL_RECT[2] * 0.5;
+    let cy = GRID_CONTROL_RECT[1] + GRID_CONTROL_RECT[3] * 0.5;
+    let hit = modal_hit_test(ModalPage::Settings, [cx, cy], 0.0);
+    assert_eq!(
+        hit,
+        ModalHit::Grid,
+        "centre of GRID_CONTROL_RECT must return ModalHit::Grid"
+    );
+}
+
+#[test]
+fn grid_checkbox_corner_also_returns_grid_hit() {
+    let hit = modal_hit_test(ModalPage::Settings, corner(GRID_CHECKBOX), 0.0);
+    assert_eq!(hit, ModalHit::Grid);
+}
+
+#[test]
+fn control_id_from_grid_hit_returns_grid_control() {
+    assert_eq!(
+        control_id_from_modal_hit(ModalHit::Grid),
+        Some(ControlId::Grid)
     );
 }
