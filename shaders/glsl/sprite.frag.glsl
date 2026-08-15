@@ -13,6 +13,12 @@ layout(location = 0) out vec4 out_color;
 
 void main()
 {
+    if (v_ring.x > 1.5)
+    {
+        out_color = v_tint;
+        return;
+    }
+
     if (v_ring.x > 0.5)
     {
         float d = length(v_uv - 0.5);

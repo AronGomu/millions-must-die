@@ -44,15 +44,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use mmd_engine::render::{
-    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_SLOT_COUNT, ATLAS_WIDTH_PX, DrawGroup, FRAME_SIZE_PX,
-    GOLDEN_DIFF_ACTUAL_PNG, GOLDEN_DIFF_MASK_PNG, GOLDEN_DIFF_SUMMARY_JSON,
-    GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_STATUS_CAPTURED, GoldenDiffSummary, GoldenError,
-    GoldenManifest, HostBinding, ISO_DEPTH_EPSILON, IsoView, MAX_INSTANCES, RTS_FILES, Readback,
-    RenderError, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER,
-    SLOT_UI_FONT, ScenePass, SpriteInstance, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH,
-    clip_to_pixel, compare_readback_writing_diff, diff_readback, frame_uv_rect, golden_family_dir,
-    host_binding_hashes, iso_depth, load_atlases, load_golden_image, load_golden_manifest,
-    load_rts_atlases, load_ui_font, rts_atlas_dir, ui_atlas_dir, world_to_clip, write_golden_diff,
+    ATLAS_COUNT, ATLAS_HEIGHT_PX, ATLAS_SLOT_COUNT, ATLAS_WIDTH_PX, DIAGONAL_LINE_SENTINEL,
+    DrawGroup, FRAME_SIZE_PX, GOLDEN_DIFF_ACTUAL_PNG, GOLDEN_DIFF_MASK_PNG,
+    GOLDEN_DIFF_SUMMARY_JSON, GOLDEN_MAX_CHANNEL_DELTA_POLICY, GOLDEN_STATUS_CAPTURED,
+    GoldenDiffSummary, GoldenError, GoldenManifest, HostBinding, ISO_DEPTH_EPSILON, IsoView,
+    MAX_INSTANCES, RTS_FILES, Readback, RenderError, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS,
+    SLOT_RTS_SOLDIER, SLOT_RTS_WORKER, SLOT_UI_FONT, ScenePass, SpriteInstance, SpriteRenderer,
+    VIEW_HEIGHT, VIEW_WIDTH, clip_to_pixel, compare_readback_writing_diff, diff_readback,
+    frame_uv_rect, golden_family_dir, host_binding_hashes, iso_depth, load_atlases,
+    load_golden_image, load_golden_manifest, load_rts_atlases, load_ui_font, rts_atlas_dir,
+    ui_atlas_dir, world_to_clip, write_golden_diff,
 };
 use mmd_engine::runtime::{
     RING_INNER, RING_OUTER, RING_TINT, build_instance_groups, ring_quad_size_px, ring_radius_px,
@@ -3234,4 +3235,231 @@ fn clear_dir(dir: &Path) {
 /// Quantize a pixel coordinate to 1/256 px for exact multiset comparison.
 fn q256(v: f32) -> i64 {
     (v as f64 * 256.0).round() as i64
+}
+
+// ---------------------------------------------------------------------------
+// T11 — diagonal-line renderer (CPU + GPU)
+// ---------------------------------------------------------------------------
+
+/// The line instance encodes endpoints and thickness without changing the
+/// 48-byte record size or field layout.
+#[test]
+fn line_instance_keeps_pinned_layout() {
+    use std::mem::size_of;
+
+    let a = [100.0f32, 200.0];
+    let b = [300.0f32, 400.0];
+    let thickness = 4.0f32;
+    let tint = [1.0f32, 0.5, 0.0, 1.0];
+
+    let inst = SpriteInstance::diagonal_line(a, b, thickness, tint);
+
+    assert_eq!(
+        size_of::<SpriteInstance>(),
+        48,
+        "struct size must stay 48 bytes"
+    );
+    assert_eq!(SpriteInstance::STRIDE, 48);
+
+    assert_eq!(inst.pos, a, "pos = a");
+    assert_eq!(inst.size, [b[0] - a[0], b[1] - a[1]], "size = b - a");
+    assert_eq!(
+        inst.uv_rect[0], DIAGONAL_LINE_SENTINEL,
+        "uv_rect.x = sentinel"
+    );
+    assert_eq!(inst.uv_rect[1], thickness, "uv_rect.y = thickness");
+    assert_eq!(inst.uv_rect[2], 0.0);
+    assert_eq!(inst.uv_rect[3], 0.0);
+    assert_eq!(inst.tint, tint);
+
+    assert!(inst.is_diagonal_line(), "is_diagonal_line must be true");
+    assert!(!inst.is_ring(), "is_ring must be false for a line instance");
+}
+
+/// A zero-length segment produces a valid, NaN-free instance.
+/// The vertex stage collapses all four corners to `a`, so nothing rasterises.
+#[test]
+fn zero_length_line_is_degenerate_not_nan() {
+    let a = [50.0f32, 75.0];
+    let inst = SpriteInstance::diagonal_line(a, a, 2.0, SpriteInstance::WHITE);
+
+    assert!(inst.pos[0].is_finite() && inst.pos[1].is_finite());
+    assert_eq!(inst.size, [0.0, 0.0], "segment vector is zero");
+    assert_eq!(inst.uv_rect[0], DIAGONAL_LINE_SENTINEL);
+    assert!(inst.is_diagonal_line());
+    assert!(!inst.is_ring());
+}
+
+/// Line, ring and sprite sentinels occupy disjoint predicate ranges.
+#[test]
+fn ring_and_line_sentinels_are_disjoint() {
+    use mmd_engine::render::RING_SENTINEL;
+
+    let line = SpriteInstance::diagonal_line([0.0, 0.0], [10.0, 0.0], 2.0, SpriteInstance::WHITE);
+    let ring = SpriteInstance::ring([0.0, 0.0], [48.0, 48.0], 0.3, 0.45, SpriteInstance::WHITE);
+    let sprite = SpriteInstance::new(
+        [0.0, 0.0],
+        [32.0, 32.0],
+        frame_uv_rect(0, 0),
+        SpriteInstance::WHITE,
+    );
+
+    assert!(line.is_diagonal_line());
+    assert!(!line.is_ring());
+
+    assert!(ring.is_ring());
+    assert!(!ring.is_diagonal_line());
+
+    assert!(!sprite.is_ring());
+    assert!(!sprite.is_diagonal_line());
+
+    // Sentinel ordering: line < threshold < ring < 0 <= sprite
+    assert!(
+        DIAGONAL_LINE_SENTINEL < -1.5,
+        "line sentinel must be below -1.5"
+    );
+    assert!(
+        RING_SENTINEL >= -1.5 && RING_SENTINEL < 0.0,
+        "ring sentinel must be in [-1.5, 0)"
+    );
+}
+
+/// Rising and falling diagonal lines rasterise pixels only along their
+/// expected rotated quad; the background is cleared elsewhere.
+#[test]
+fn rising_and_falling_lines_raster() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("rising_and_falling_lines_raster") else {
+        return;
+    };
+
+    let tint = [1.0f32, 0.5, 0.0, 1.0]; // orange, fully opaque premul
+    let thickness = 8.0f32;
+
+    // Rising line: from bottom-left to top-right (dy < 0 in y-down space)
+    let rising_a = [100.0f32, 350.0];
+    let rising_b = [350.0f32, 100.0];
+
+    // Falling line: from top-left to bottom-right (dy > 0)
+    let falling_a = [700.0f32, 100.0];
+    let falling_b = [950.0f32, 350.0];
+
+    let lines = [
+        SpriteInstance::diagonal_line(rising_a, rising_b, thickness, tint),
+        SpriteInstance::diagonal_line(falling_a, falling_b, thickness, tint),
+    ];
+    let groups = empty_groups();
+    let rb = r
+        .draw_offscreen_readback_with_rings(&groups, &lines)
+        .expect("line readback");
+
+    let lit = |px: u32, py: u32| rb.pixel(px, py) != [0, 0, 0, 0];
+
+    // Midpoints of each line must be lit.
+    let rising_mid = [
+        ((rising_a[0] + rising_b[0]) * 0.5) as u32,
+        ((rising_a[1] + rising_b[1]) * 0.5) as u32,
+    ];
+    assert!(
+        lit(rising_mid[0], rising_mid[1]),
+        "rising line midpoint ({},{}) is dark",
+        rising_mid[0],
+        rising_mid[1]
+    );
+
+    let falling_mid = [
+        ((falling_a[0] + falling_b[0]) * 0.5) as u32,
+        ((falling_a[1] + falling_b[1]) * 0.5) as u32,
+    ];
+    assert!(
+        lit(falling_mid[0], falling_mid[1]),
+        "falling line midpoint ({},{}) is dark",
+        falling_mid[0],
+        falling_mid[1]
+    );
+
+    // Off-line pixels (far from both lines) must be background.
+    assert!(
+        !lit(600, 540),
+        "pixel (600,540) between the two lines should be background"
+    );
+    assert!(!lit(50, 50), "top-left corner should be background");
+}
+
+/// A horizontal line's cross-section at its midpoint has exactly `thickness`
+/// lit pixels, no more and no fewer (±1 for rasterisation edge).
+#[test]
+fn line_thickness_is_exact() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("line_thickness_is_exact") else {
+        return;
+    };
+
+    let thickness = 4.0f32;
+    let tint = [0.0f32, 1.0, 0.0, 1.0]; // green premul
+    // Horizontal line: dy = 0
+    let a = [200.0f32, 540.0];
+    let b = [1720.0f32, 540.0];
+
+    let lines = [SpriteInstance::diagonal_line(a, b, thickness, tint)];
+    let groups = empty_groups();
+    let rb = r
+        .draw_offscreen_readback_with_rings(&groups, &lines)
+        .expect("thickness readback");
+
+    // Vertical scan at the horizontal midpoint.
+    let mid_x = ((a[0] + b[0]) * 0.5) as u32;
+    let centre_y = a[1] as u32; // y is the same on both ends (horizontal)
+    let half = thickness as u32 / 2 + 2; // scan window with margin
+
+    let mut lit_count = 0u32;
+    for py in (centre_y.saturating_sub(half))..(centre_y + half + 1) {
+        if rb.pixel(mid_x, py) != [0, 0, 0, 0] {
+            lit_count += 1;
+        }
+    }
+    assert!(
+        (lit_count as f32 - thickness).abs() <= 1.0,
+        "horizontal line cross-section at x={mid_x} has {lit_count} lit pixels, \
+         expected ~{thickness}"
+    );
+}
+
+/// A diagonal line drawn with a specific tint renders that tint colour.
+/// Because the line branch never samples the atlas, atlas content does not
+/// contribute to the output.
+#[test]
+fn line_branch_never_samples_atlas() {
+    let _g = gpu_guard();
+    let Some(mut r) = renderer_or_skip("line_branch_never_samples_atlas") else {
+        return;
+    };
+
+    let tint = [0.0f32, 0.5, 1.0, 1.0]; // cyan-ish premul
+    let a = [200.0f32, 200.0];
+    let b = [600.0f32, 600.0];
+
+    let lines = [SpriteInstance::diagonal_line(a, b, 6.0, tint)];
+    let groups = empty_groups();
+    let rb = r
+        .draw_offscreen_readback_with_rings(&groups, &lines)
+        .expect("atlas-sample readback");
+
+    // Midpoint of the line must be lit with the specified tint.
+    let mid_x = ((a[0] + b[0]) * 0.5) as u32;
+    let mid_y = ((a[1] + b[1]) * 0.5) as u32;
+    let pixel = rb.pixel(mid_x, mid_y);
+    assert!(
+        pixel != [0, 0, 0, 0],
+        "line midpoint ({mid_x},{mid_y}) is background — nothing was drawn"
+    );
+
+    let want = tint.map(|c| (c * 255.0).round() as i32);
+    let got = pixel.map(i32::from);
+    for (i, (g, w)) in got.iter().zip(want).enumerate() {
+        assert!(
+            (g - w).abs() <= 2,
+            "channel {i}: got {g}, want {w} — line tint did not round-trip (atlas sampled?)"
+        );
+    }
 }

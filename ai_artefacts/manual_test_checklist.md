@@ -318,3 +318,15 @@ command below except what a browser or a human eye must judge.
 - [ ] Manual: right-click still cancels placement (regression)
 - [ ] Manual: units still do not block placement (regression)
 - [ ] Manual: costs/orders unchanged on successful snap-click
+
+## T11 — Procedural diagonal-line renderer
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `nix shell nixpkgs#shaderc -c bash -c 'glslc -fshader-stage=vertex shaders/glsl/sprite.vert.glsl -o shaders/generated/sprite.vert.spv; glslc -fshader-stage=fragment shaders/glsl/sprite.frag.glsl -o shaders/generated/sprite.frag.spv'` exits 0
+- [x] `cargo run -p xtask -- shaders --check` exits 0 (all 6 manifest hashes re-pinned)
+- [x] `cargo test -p mmd-engine --test gpu_smoke --locked` exits 0 (13 passed)
+- [x] `cargo test -p mmd-engine --test render_correctness --locked` exits 0 (50 passed, includes 5 new T11 tests)
+- [x] `every_tracked_manifest_pins_the_live_shader_and_atlas` passes (shader_canonical_sha256 pinned in all 6 manifests)
+- [x] `golden_frame_matches` passes (phase-0 sprite/ring scene pixel-identical)
+- [ ] Manual: launch `cargo run -- rts`, confirm the existing sprite/ring display is visually unchanged

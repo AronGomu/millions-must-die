@@ -40,7 +40,30 @@ void main()
     float ground_y = instance_pos.y + instance_size.y;
     float depth = max(clamp(ground_y * frame.depth_scale + frame.depth_bias, 0.0, 1.0), 0.0000152587890625);
 
-    if (uv_rect.x < 0.0)
+    if (uv_rect.x < -1.5)
+    {
+        float thickness = uv_rect.y;
+        vec2 seg = instance_size;
+        float seg_len = length(seg);
+        vec2 line_world;
+        if (seg_len < 1e-6)
+        {
+            line_world = instance_pos;
+        }
+        else
+        {
+            vec2 tangent = seg / seg_len;
+            vec2 normal = vec2(-tangent.y, tangent.x);
+            vec2 center = instance_pos + seg * 0.5;
+            line_world = center + corner.x * seg + corner.y * normal * thickness;
+        }
+        vec2 line_ndc = (line_world / frame.view_size) * 2.0 - 1.0;
+        line_ndc.y = -line_ndc.y;
+        gl_Position = vec4(line_ndc, 0.0, 1.0);
+        v_uv = uv;
+        v_ring = vec3(2.0, 0.0, 0.0);
+    }
+    else if (uv_rect.x < 0.0)
     {
         gl_Position = vec4(ndc, 0.0, 1.0);
         v_uv = uv;
