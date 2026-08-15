@@ -36,6 +36,16 @@
 - [Architecture decision records](ADR/README.md) — 016–020
 - Manual (human-only) checks: `../ai_artefacts/manual_test_checklist.md`
 
+## Feedback polish
+
+- [RTS feedback polish](rts-feedback-polish-architecture.html) — the landed
+  control/settings/grid/placement/pick/command/collision design, with the test
+  that backs each claim
+- [RTS feedback polish functional close](rts-feedback-polish-functional-close.md)
+  — what it proves, what only a human can check, the narrowed collision
+  invariant, and the one open regression
+- [Architecture decision records](ADR/README.md) — 021
+
 ## Implementation plan
 
 - `.tmp/IMPLEMENTATION_PLAN_technical_prototype.md`

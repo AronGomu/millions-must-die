@@ -570,3 +570,136 @@ Manual, by hand at the keyboard (not yet run — needs a human at `cargo run -- 
       standing on it) and press `Q`. A Worker must be enqueued — the card's slot 0 highlights and
       50 crystal leaves the bank.
 - [ ] Do the same with nothing selected: `Q` must do nothing at all (no cue, no debit).
+
+## T16 (rts-feedback-polish) — Docs, ADR close, and the human-only pass
+
+Docs-only ticket: no production file changed. `git diff --stat` for this ticket is docs, the
+ADR set, this checklist and `tests/validation_contract.rs`.
+
+Automated gates (run on this branch, this diff — full output in the ticket report):
+
+- [x] `cargo test --locked --test validation_contract` — **21 passed, 0 failed** (was 12 passed /
+      2 failed at `d5ccfcd`). Seven new tests: `feedback_polish_close_names_only_real_tests`,
+      `feedback_polish_systems_have_behavioral_tests`,
+      `feedback_polish_adr_is_accepted_and_amended_forward`,
+      `feedback_polish_architecture_page_is_landed_with_evidence`,
+      `rts_overlap_invariant_names_its_gather_exception`,
+      `glossary_defines_the_feedback_polish_vocabulary`,
+      `manual_checklist_covers_every_human_only_flow`. The two pre-existing failures were stale
+      test names in the phase-1 and phase-1.1 close docs and are repaired here.
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `git diff -- crates/mmd-engine/src/sim` empty (horde sim untouched)
+- [x] No golden PNG regenerated: `git status --porcelain lab/goldens/ assets/sprites/generated/`
+      empty
+
+Pre-existing red gates — **still red**, out of this ticket's Requirements:
+
+- [x] `cargo test -p mmd-engine --test rts_economy`: 3 failures before, 3 after. Bisected to
+      `af16e7c` (building sprite ∪ footprint pick): green at `d7ddb60`, red at `af16e7c`. Now
+      documented as an open regression in the feedback-polish functional close instead of being
+      silently carried.
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 3
+      `too_many_arguments` before, 3 after, all in `crates/mmd-engine/src/rts/hud.rs`.
+
+### Manual pass — every flow no offscreen test can prove
+
+Run `cargo run -- rts` on the development host, with sound on and a real pointer.
+
+**Control feedback**
+
+- [ ] Hover each of MENU, a command cell, a checkbox label row and a mute label: the frame
+      brightens on hover and darkens while pressed, and releasing off the control does nothing.
+- [ ] A selected command cell stays in its selected tint after the pointer leaves; a disabled
+      cell never lights up on hover, pressed or click, and plays no sound.
+
+**Menu, Close and pause**
+
+- [ ] MENU (top right) opens the pause menu; Escape backs out one level at a time
+      (Settings → pause menu → gameplay).
+- [ ] CLOSE MENU returns to gameplay with the simulation running.
+- [ ] Press Space to pause manually, open and close the menu: the manual pause survives, and the
+      sim is still paused after CLOSE MENU.
+
+**Sliders**
+
+- [ ] Drag all six sliders (keyboard pan, edge pan, master, music, voice, SFX) end to end. Each
+      number tracks the pointer while dragging, snaps to legal steps, and the effect is audible
+      or visible immediately — not on release.
+- [ ] Drag a slider off the panel and release: the value stays where the drag left it and no
+      world selection happens underneath.
+
+**Numeric fields**
+
+- [ ] Type into a numeric field and press Enter: the value clamps, snaps to the nearest step and
+      commits.
+- [ ] Type and then click elsewhere (pointer blur): the same commit happens.
+- [ ] Type and then Alt-Tab away: the edit finalises before the window loses focus, and the
+      pause-on-focus-loss behaviour is unchanged.
+- [ ] Type and press Escape: the original value returns and the menu does **not** navigate back.
+- [ ] Clear the field and press Enter: the original value returns and nothing is saved.
+
+**Mutes**
+
+- [ ] Click each of the four bus labels (master, music, voice, SFX). Sound from that bus stops,
+      the label reads muted and takes the selected frame, and the number beside it is unchanged.
+- [ ] Unmute: the exact previous level returns. Quit, relaunch, and confirm the mute flags and
+      the levels persisted.
+
+**Scrolling and clipping**
+
+- [ ] Scroll the settings body with the wheel: content moves in the direction the wheel says,
+      and stops at both ends.
+- [ ] Drag the scrollbar thumb: it follows the pointer and keeps following it outside the panel.
+- [ ] Watch a row at the viewport edge: it is clipped mid-row, not popped in or out whole.
+- [ ] BACK and the warning line stay fixed while the body scrolls.
+- [ ] Resize the window to a 4:3 shape so letterbox bars appear, then scroll with the pointer
+      **inside a bar**: nothing scrolls. Scroll inside the content: it scrolls normally.
+
+**World grid**
+
+- [ ] The grid is visible on first launch and covers the whole map, including its far corners.
+- [ ] Toggle SHOW GRID off, quit, relaunch: the grid is still off (it persists).
+- [ ] With the grid on, select units: selection rings draw over the grid, never under it.
+
+**Placement**
+
+- [ ] Start a Depot placement and move the cursor onto blocked ground: the green preview snaps to
+      a nearby legal footprint; click and confirm the building lands exactly on the green
+      footprint you saw, not on the cell under the cursor.
+- [ ] Repeat at a map corner, where the ghost saturates: the snap still ranks from the drawn
+      corner, and the committed footprint is the previewed one.
+- [ ] Move onto deeply blocked ground with nothing legal nearby: the ghost is red and the click
+      does nothing.
+
+**Building card**
+
+- [ ] Click the top of an HQ sprite corner, well above its footprint: the building is selected,
+      not the worker standing next to it.
+- [ ] Read the card: exactly six lines — kind, READY/BUILDING %, SUPPLY, QUEUE, PROGRESS, RALLY.
+      Queue entries read oldest first.
+
+**Commands**
+
+- [ ] With the HQ selected, press each of Q W E A S D Z X C in turn: the key fires the command
+      in that positional cell of the 3×3 card and nothing else.
+- [ ] Confirm the keyboard fires no click sound while pointer clicks on the same cells do.
+- [ ] With a placement pending, right-click: the placement cancels. Right-click with nothing
+      pending: no order is issued.
+
+**Gather overlap**
+
+- [ ] Send six workers onto one crystal node: they overlap on the node instead of shoving each
+      other off it, and keep delivering.
+- [ ] Right-click a distant point to pull one overlapping worker away: it separates smoothly
+      over several ticks (its bounded exit), it does not teleport, and the pair goes hard again
+      the moment it is clear.
+- [ ] Wall a merged pair in — build so the pair is boxed against terrain, then order one away.
+      Watch the fallback relocate a worker inside the same region. If nothing is reachable the
+      run must report a violation on the exit line (`body_overlaps=` non-zero) rather than
+      leaving the pair quietly merged forever.
+- [ ] Move a soldier into a gathering worker: they collide hard, as any non-gather pair does.
+
+**Docs**
+
+- [ ] Open `docs/rts-feedback-polish-architecture.html` in a browser: the badge reads LANDED,
+      the evidence table resolves, and both footer links open.

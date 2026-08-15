@@ -81,6 +81,23 @@ Consolidated from former `00-vision.md`, `02-prototype-roadmap.md`, `03-mvp.md`.
      [ADR 020](ADR/020_ADR_audio_events_buses_and_generated_assets.md), with
      the shape of the slice on the
      [architecture page](rts-interaction-ui-audio-hardening-architecture.html).
+   - Status (2026-08-15), **feedback polish** on top of phase 1.1:
+     **closed on functional scope, with one open regression.** Eighteen
+     systems answer the feedback a person driving the game gave: framed
+     control states, a menu you can close, live and typed settings with
+     per-bus mutes and a scrolled body, a persisted world grid, assisted
+     placement, a building pick that matches the drawn sprite plus a six-line
+     card, positional command keys, an exact pure-green selection box, and
+     workers that may overlap **only** while both are gathering or while that
+     pair is inside its bounded exit — every other merged pair is repaired or
+     reported. The horde is untouched and still overlaps freely. Performance
+     stays **unmeasured**. The open regression (a building winning a click on
+     a resource node it covers) is named in
+     [the functional close](rts-feedback-polish-functional-close.md);
+     the decision is
+     [ADR 021](ADR/021_ADR_rts_feedback_polish_and_gather_collision.md), with
+     the shape of the slice on the
+     [architecture page](rts-feedback-polish-architecture.html).
 2. **Combat Prototype** — weapons, damage, turrets, enemy AI.
 3. **Horde Prototype** — tens of thousands of enemies.
 4. **Defense Prototype** — walls, waves, multiple entrances.

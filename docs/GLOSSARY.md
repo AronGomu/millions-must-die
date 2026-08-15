@@ -60,6 +60,15 @@
 | audiosink   | Where semantic audio events go: SDL device, buffer, or fake    | `src/rts_feedback.rs`, `trait AudioSink`                                     |
 | audiobus    | Music / Voice / SFX gain lane under the master scalar          | `src/rts_feedback.rs`, `enum AudioBus`                                       |
 
+## RTS (feedback polish)
+
+| word             | short description                                              | ref in code                                                                  |
+| ---------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| uicontrol        | Discrete control with a stable id and a framed visual state      | `crates/mmd-engine/src/rts/hud.rs`, `enum ControlVisualState`                 |
+| worldgrid        | Full-map isometric lattice of texture-free line instances        | `crates/mmd-engine/src/rts/pack.rs`, `FramePackOptions::show_grid`            |
+| placementassist  | Bounded search snapping a blocked ghost to the nearest legal min corner | `crates/mmd-engine/src/rts/build.rs`, `fn placement_candidate`         |
+| gathertransition | Bounded exit a formerly exempt gather pair walks before going hard again | `crates/mmd-engine/src/rts/collision.rs`, `struct GatherCollisionState` |
+
 ## Render
 
 | word      | short description                              | ref in code                                                             |

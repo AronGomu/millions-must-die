@@ -218,3 +218,24 @@ positions across the tracked 1,600-frame acceptance run and therefore re-bases
 that script and its contracted exit line — a ticket of its own, not a
 review-fix. Nothing on the tracked acceptance path routes through that
 corridor.
+
+## Amendment 2026-08-15 — the invariant is no longer unconditional
+
+Superseded in part by
+[ADR 021](021_ADR_rts_feedback_polish_and_gather_collision.md). The decision
+above stands as written for every pair it still covers; what changed is its
+scope, so it is amended here rather than rewritten.
+
+The unconditional form — *no completed tick leaves two RTS unit bodies merged*
+— is now narrowed to:
+
+> Every penetrating RTS-unit pair after a tick is either both active gather
+> workers, or the exact remembered pair inside its bounded 12-attempt
+> gather-exit transition. Every other pair is non-penetrating, or is counted
+> by `body_overlaps` and reported through `TickError::UnrepairableOverlap`.
+
+Everything else in this record is unchanged: static terrain, map edges, nodes
+and finished buildings stay hard for every unit; a pair with a non-worker or
+non-gathering member stays hard; formation slots, spawn, production,
+construction evacuation and placement relocation stay all-body-free. The
+parked single-file corridor defect below is still open and still out of scope.

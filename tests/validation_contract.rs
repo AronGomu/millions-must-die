@@ -29,8 +29,22 @@ const PHASE1_ARCH_DOC: &str = "docs/rts-engine-prototype-architecture.html";
 const PHASE1_1_CLOSE_DOC: &str = "docs/rts-interaction-ui-audio-hardening-functional-close.md";
 /// Phase-1.1 architecture page. A live doc: it describes what shipped.
 const PHASE1_1_ARCH_DOC: &str = "docs/rts-interaction-ui-audio-hardening-architecture.html";
+/// Doc that closes the feedback-polish slice on functional evidence (T16).
+const POLISH_CLOSE_DOC: &str = "docs/rts-feedback-polish-functional-close.md";
+/// Feedback-polish architecture page. A live doc: it describes what shipped.
+const POLISH_ARCH_DOC: &str = "docs/rts-feedback-polish-architecture.html";
+/// The decision record the feedback-polish slice closes on.
+const POLISH_ADR_DOC: &str = "docs/ADR/021_ADR_rts_feedback_polish_and_gather_collision.md";
 /// Doc that states what each phase claims (roadmap + vision + MVP scope, consolidated).
 const ROADMAP_DOC: &str = "docs/CONTEXT.md";
+/// Design doc: the live description of both collision contracts.
+const DESIGN_DOC: &str = "docs/DESIGN.md";
+/// Shared vocabulary.
+const GLOSSARY_DOC: &str = "docs/GLOSSARY.md";
+/// Repo context file, read before any change.
+const AGENT_DOC: &str = "AGENT.md";
+/// The human-only checklist: everything an offscreen gate can neither see nor hear.
+const MANUAL_CHECKLIST: &str = "ai_artefacts/manual_test_checklist.md";
 
 /// Heading text (any level) introducing the required-command list. Matched
 /// case-insensitively and ignoring trailing punctuation.
@@ -1201,6 +1215,489 @@ fn phase1_1_systems_have_behavioral_tests() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// T16 feedback-polish close: the slice's coverage map, its ADR, its invariant,
+// its architecture page, its vocabulary and its human-only checklist.
+// ---------------------------------------------------------------------------
+
+/// Floor on the rows of the feedback-polish coverage table.
+const POLISH_MIN_ROWS: usize = 28;
+
+/// Floor on the total test names that table maps, set at what it maps today.
+const POLISH_MIN_MAPPED_TESTS: usize = 190;
+
+/// The systems the feedback-polish slice claims, and one representative test
+/// each. As with `PHASE1_1_SYSTEMS`, this list — not the document — is the
+/// source of truth for what the slice claims.
+const POLISH_SYSTEMS: &[(&str, &str, &str)] = &[
+    (
+        "control feedback",
+        "crates/mmd-engine/tests/rts_hud.rs",
+        "control_visual_states_have_distinct_tints",
+    ),
+    (
+        "interaction FSM",
+        "src/rts_ui.rs",
+        "close_menu_clears_menu_and_focus_pause",
+    ),
+    (
+        "settings schema 1",
+        "src/rts_settings.rs",
+        "legacy_schema_one_preserves_values_and_defaults_new_fields",
+    ),
+    (
+        "live sliders",
+        "src/rts_ui.rs",
+        "slider_drag_commits_only_distinct_steps",
+    ),
+    (
+        "numeric fields",
+        "src/rts_ui.rs",
+        "enter_clamps_snaps_and_commits",
+    ),
+    (
+        "mute labels",
+        "src/rts_ui.rs",
+        "unmuting_restores_gain_to_stored_level",
+    ),
+    (
+        "settings scroll",
+        "tests/rts_cli_contract.rs",
+        "exit_line_reports_settings_scroll_px",
+    ),
+    (
+        "positional command keys",
+        "src/rts_input.rs",
+        "all_nine_command_keys_map_row_major",
+    ),
+    (
+        "building pick",
+        "crates/mmd-engine/tests/rts_selection.rs",
+        "building_pick_contains_sprite_and_footprint",
+    ),
+    (
+        "building detail card",
+        "crates/mmd-engine/tests/rts_hud.rs",
+        "building_details_use_exact_six_line_contract",
+    ),
+    (
+        "assisted placement",
+        "crates/mmd-engine/tests/rts_build.rs",
+        "blocked_raw_snaps_to_nearest_valid_footprint",
+    ),
+    (
+        "line primitive",
+        "crates/mmd-engine/tests/render_correctness.rs",
+        "line_instance_keeps_pinned_layout",
+    ),
+    (
+        "world grid",
+        "crates/mmd-engine/tests/rts_pack.rs",
+        "grid_packs_exact_map_lattice",
+    ),
+    (
+        "area selection",
+        "crates/mmd-engine/tests/rts_pack.rs",
+        "drag_box_has_opaque_two_pixel_pure_green_border",
+    ),
+    (
+        "gather-pair collision",
+        "crates/mmd-engine/tests/rts_collision.rs",
+        "two_gathering_workers_may_overlap",
+    ),
+    (
+        "bounded gather exit",
+        "crates/mmd-engine/tests/rts_collision.rs",
+        "blocked_pair_relocates_after_attempt_twelve_same_tick",
+    ),
+    (
+        "feedback-polish acceptance",
+        "tests/rts_acceptance.rs",
+        "feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q",
+    ),
+    (
+        "allocation invariant",
+        "crates/mmd-engine/tests/frame_allocations.rs",
+        "combined_feedback_frame_allocates_nothing",
+    ),
+];
+
+/// Every test the feedback-polish close document maps to a system must exist.
+#[test]
+fn feedback_polish_close_names_only_real_tests() {
+    resolve_close_doc(POLISH_CLOSE_DOC, POLISH_MIN_ROWS, POLISH_MIN_MAPPED_TESTS);
+}
+
+/// Every system the feedback-polish slice claims owns a live behavioural test,
+/// and the close doc names the system, the file and the representative test.
+#[test]
+fn feedback_polish_systems_have_behavioral_tests() {
+    let close = read_doc(POLISH_CLOSE_DOC);
+    assert_eq!(
+        POLISH_SYSTEMS.len(),
+        18,
+        "the feedback-polish slice claims 18 systems; adding one is fine — bump \
+         this number. Removing one shrinks a closed claim and must be deliberate."
+    );
+
+    for (system, file, representative) in POLISH_SYSTEMS {
+        let declared = declared_tests(file);
+        let found = declared
+            .iter()
+            .find(|d| d.name == *representative)
+            .unwrap_or_else(|| {
+                let all: Vec<&str> = declared.iter().map(|d| d.name.as_str()).collect();
+                panic!(
+                    "system `{system}` maps to `{representative}`, which does not \
+                     exist in {file}. Found there: {all:?}"
+                )
+            });
+        assert!(
+            !found.ignored,
+            "`{representative}` ({file}) is #[ignore]d; an ignored test proves \
+             nothing about system `{system}`"
+        );
+        for needle in [*system, *file, *representative] {
+            assert!(
+                close.contains(needle),
+                "{POLISH_CLOSE_DOC} does not name `{needle}`, which system \
+                 `{system}` closes on"
+            );
+        }
+    }
+}
+
+/// Docs that state the RTS collision invariant in live prose.
+///
+/// ADRs are excluded on purpose: they are the append-only record, and ADR 017
+/// must keep stating the unconditional invariant it decided at the time.
+const INVARIANT_DOCS: &[&str] = &[AGENT_DOC, DESIGN_DOC, PHASE1_1_CLOSE_DOC, POLISH_CLOSE_DOC];
+
+/// Phrases that assert RTS bodies never end a tick merged.
+const NO_OVERLAP_PHRASES: &[&str] = &[
+    "bodies merged",
+    "never penetrate",
+    "no penetration",
+    "body penetration",
+    "cannot overlap",
+    "cannot penetrate",
+];
+
+/// Tokens that narrow such a sentence to the policy that actually landed.
+const INVARIANT_QUALIFIERS: &[&str] = &[
+    "gather",
+    "adr 021",
+    "policy violation",
+    "body_overlaps",
+    "except",
+    "unless",
+];
+
+/// Tokens marking a line as being about the horde, whose overlap contract is
+/// the opposite one and must stay readable next to the RTS rule.
+const HORDE_TOKENS: &[&str] = &["horde", "adr 009", "sim/", "soft separation"];
+
+/// Strip backticked spans, so a test name like `touching_bodies_do_not_overlap`
+/// in a coverage table is not read as a prose claim.
+fn without_code_spans(line: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for c in line.chars() {
+        if c == '`' {
+            inside = !inside;
+        } else if !inside {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// No live doc states the RTS no-overlap invariant without its gather
+/// exception, and every one of them keeps the horde contrast next to it.
+///
+/// ADR 021 narrowed ADR 017: a penetrating pair is legal only while both units
+/// are active gather workers, or while that exact pair is inside its bounded
+/// exit transition. Every other merged pair is repaired, or counted and
+/// reported as a policy violation. A doc still promising the unconditional
+/// version is not a stale sentence — it is the sentence a reader would use to
+/// call the landed engine broken.
+#[test]
+fn rts_overlap_invariant_names_its_gather_exception() {
+    for rel in INVARIANT_DOCS {
+        let doc = read_doc(rel);
+        let lines = scan(&doc);
+        let mut stated = 0usize;
+        for (n, line) in lines.iter().enumerate() {
+            if line.fenced || line.delimiter {
+                continue;
+            }
+            let lower = line.text.to_ascii_lowercase();
+            // A wrapped sentence puts "horde" and "cannot overlap" on
+            // different lines, so the horde test reads a small lookback
+            // window — but only for a line that does not name the RTS side
+            // itself, or an RTS rule written directly under a horde paragraph
+            // would inherit the exemption and stop being checked.
+            let context = lines[n.saturating_sub(2)..=n]
+                .iter()
+                .map(|l| l.text.to_ascii_lowercase())
+                .collect::<Vec<_>>()
+                .join(" ");
+            if !lower.contains("rts") && HORDE_TOKENS.iter().any(|t| context.contains(t)) {
+                continue;
+            }
+            let prose = without_code_spans(&lower);
+            let Some(phrase) = NO_OVERLAP_PHRASES.iter().find(|p| prose.contains(**p)) else {
+                continue;
+            };
+            stated += 1;
+            assert!(
+                INVARIANT_QUALIFIERS.iter().any(|q| lower.contains(q)),
+                "{rel}:{}: states `{phrase}` with nothing narrowing it to the \
+                 landed policy:\n  {}\nADR 021 legalises exactly two penetrating \
+                 cases — an active gather-worker pair, and that same pair inside \
+                 its bounded exit — and counts every other one as a violation.",
+                n + 1,
+                line.text
+            );
+        }
+        assert!(
+            stated >= 1,
+            "{rel} no longer states the RTS body invariant at all; the scan is \
+             passing because there is nothing left to scan"
+        );
+        assert!(
+            doc.to_ascii_lowercase().contains("soft separation"),
+            "{rel} states the RTS invariant without the horde contrast; ADR 009 \
+             keeps `crates/mmd-engine/src/sim` soft and overlap-capable, and a \
+             doc that drops that scope reads as one engine-wide rule"
+        );
+    }
+}
+
+/// The three cross-cutting decisions the plan pinned late, each as a token no
+/// future ticket can re-litigate without editing this list.
+const CROSS_CUTTING_DECISIONS: &[(&str, &str)] = &[
+    (
+        "exact UI colours come from the texture-free line primitive",
+        "texture-free line primitive",
+    ),
+    (
+        "a scripted run normalises gameplay settings like the camera",
+        "normalises `gameplay` settings",
+    ),
+    (
+        "one ticket owns every settings rect",
+        "one ticket pins the whole settings geometry",
+    ),
+];
+
+/// ADR 021 is Accepted, records the cross-cutting decisions, and states the
+/// narrowed invariant — and ADR 017 through 020 carry forward amendments
+/// rather than rewritten decisions.
+#[test]
+fn feedback_polish_adr_is_accepted_and_amended_forward() {
+    let adr = read_doc(POLISH_ADR_DOC);
+    assert!(
+        adr.contains("- Status: Accepted"),
+        "{POLISH_ADR_DOC} is not Accepted; the slice cannot close on a Proposed \
+         decision"
+    );
+    let lower = adr.to_ascii_lowercase();
+    for (decision, token) in CROSS_CUTTING_DECISIONS {
+        assert!(
+            lower.contains(&token.to_ascii_lowercase()),
+            "{POLISH_ADR_DOC} does not record `{decision}` (looked for \
+             `{token}`); an unrecorded cross-cutting decision is one the next \
+             ticket re-litigates"
+        );
+    }
+
+    let amended = [
+        "docs/ADR/017_ADR_rts_hard_collision_navigation_and_formations.md",
+        "docs/ADR/018_ADR_settings_window_canvas_and_camera.md",
+        "docs/ADR/019_ADR_hud_minimap_and_input_routing.md",
+        "docs/ADR/020_ADR_audio_events_buses_and_generated_assets.md",
+    ];
+    for rel in amended {
+        let doc = read_doc(rel);
+        assert!(
+            doc.contains("## Amendment"),
+            "{rel} carries no `## Amendment` section; ADR 021 changed what it \
+             decided, and a reader landing on {rel} first would follow the old rule"
+        );
+        assert!(
+            doc.contains("021_ADR_rts_feedback_polish_and_gather_collision.md"),
+            "{rel}'s amendment does not link ADR 021"
+        );
+    }
+
+    // Append-only: ADR 017's original decision text must survive intact.
+    let adr017 = read_doc("docs/ADR/017_ADR_rts_hard_collision_navigation_and_formations.md");
+    assert!(
+        adr017.contains("- Status: Accepted"),
+        "ADR 017 stopped being Accepted; a superseded-in-part decision keeps its \
+         status and gains an amendment, it is not demoted"
+    );
+}
+
+/// Test symbols the architecture page publishes as its landed evidence, with
+/// the file each must exist in.
+const POLISH_ARCH_EVIDENCE: &[(&str, &str)] = &[
+    (
+        "grid_packs_exact_map_lattice",
+        "crates/mmd-engine/tests/rts_pack.rs",
+    ),
+    (
+        "drag_box_has_opaque_two_pixel_pure_green_border",
+        "crates/mmd-engine/tests/rts_pack.rs",
+    ),
+    (
+        "blocked_raw_snaps_to_nearest_valid_footprint",
+        "crates/mmd-engine/tests/rts_build.rs",
+    ),
+    (
+        "building_pick_contains_sprite_and_footprint",
+        "crates/mmd-engine/tests/rts_selection.rs",
+    ),
+    (
+        "separated_pair_clears_to_hard_in_the_same_tick",
+        "crates/mmd-engine/tests/rts_collision.rs",
+    ),
+    (
+        "failed_fallback_clears_to_hard_and_reports_a_violation",
+        "crates/mmd-engine/tests/rts_collision.rs",
+    ),
+    (
+        "gather_exit_state_reproduces_cross_process",
+        "crates/mmd-engine/tests/rts_collision.rs",
+    ),
+    (
+        "line_instance_keeps_pinned_layout",
+        "crates/mmd-engine/tests/render_correctness.rs",
+    ),
+    (
+        "exit_line_reports_settings_scroll_px",
+        "tests/rts_cli_contract.rs",
+    ),
+    (
+        "feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q",
+        "tests/rts_acceptance.rs",
+    ),
+];
+
+/// The architecture page describes what shipped, not what was proposed, and
+/// every test it cites as evidence exists.
+#[test]
+fn feedback_polish_architecture_page_is_landed_with_evidence() {
+    let page = read_doc(POLISH_ARCH_DOC);
+    assert!(
+        page.contains("LANDED"),
+        "{POLISH_ARCH_DOC} is not marked LANDED; a target design left in place \
+         after the code lands reads as the design still being pending"
+    );
+    assert!(
+        !page.contains(">PROPOSED<"),
+        "{POLISH_ARCH_DOC} still carries the PROPOSED status badge"
+    );
+    for link in [
+        "rts-feedback-polish-functional-close.md",
+        "ADR/021_ADR_rts_feedback_polish_and_gather_collision.md",
+    ] {
+        assert!(
+            page.contains(link),
+            "{POLISH_ARCH_DOC} does not link `{link}`; the page is the entry \
+             point to the evidence and the decision"
+        );
+    }
+    for (name, file) in POLISH_ARCH_EVIDENCE {
+        assert!(
+            page.contains(name),
+            "{POLISH_ARCH_DOC} does not cite `{name}` as evidence"
+        );
+        assert!(
+            declared_tests(file).iter().any(|d| d.name == *name),
+            "{POLISH_ARCH_DOC} cites `{name}`, which does not exist in {file}"
+        );
+    }
+}
+
+/// Vocabulary the feedback-polish slice added, with the file each term points at.
+const POLISH_GLOSSARY_TERMS: &[(&str, &str)] = &[
+    ("uicontrol", "crates/mmd-engine/src/rts/hud.rs"),
+    ("worldgrid", "crates/mmd-engine/src/rts/pack.rs"),
+    ("placementassist", "crates/mmd-engine/src/rts/build.rs"),
+    ("gathertransition", "crates/mmd-engine/src/rts/collision.rs"),
+];
+
+/// The glossary defines every word the new docs use as if it were shared.
+#[test]
+fn glossary_defines_the_feedback_polish_vocabulary() {
+    let glossary = read_doc(GLOSSARY_DOC);
+    for (term, file) in POLISH_GLOSSARY_TERMS {
+        let row = glossary
+            .lines()
+            .find(|l| l.trim_start().starts_with(&format!("| {term}")))
+            .unwrap_or_else(|| panic!("{GLOSSARY_DOC} defines no `{term}` row"));
+        assert!(
+            row.contains(file),
+            "{GLOSSARY_DOC}: `{term}` does not point at {file}:\n  {row}"
+        );
+        assert!(
+            repo_root().join(file).is_file(),
+            "{GLOSSARY_DOC}: `{term}` points at {file}, which is not a file"
+        );
+    }
+}
+
+/// Flows no offscreen test can prove, each of which the manual checklist owns.
+const MANUAL_FLOWS: &[(&str, &[&str])] = &[
+    (
+        "control visual states",
+        &["hover", "pressed", "selected", "disabled"],
+    ),
+    ("menu and pause", &["CLOSE MENU", "manual pause"]),
+    ("sliders", &["six slider", "drag"]),
+    ("numeric fields", &["Enter", "blur", "Alt-Tab", "Escape"]),
+    ("mutes", &["mute", "relaunch"]),
+    (
+        "scrolling",
+        &["wheel", "thumb", "clipp", "Back", "letterbox"],
+    ),
+    ("world grid", &["grid", "persist"]),
+    ("placement", &["snap", "map corner"]),
+    ("building card", &["sprite corner", "six line"]),
+    ("commands", &["positional", "right-click"]),
+    (
+        "gather collision",
+        &["overlap", "exit", "fallback", "violation"],
+    ),
+];
+
+/// Every human-only flow the close doc leans on has steps on the checklist.
+///
+/// The close doc is allowed to say "proven by hand" only because this file
+/// says what the hand did. A flow named in one and missing from the other is a
+/// claim with no procedure behind it.
+#[test]
+fn manual_checklist_covers_every_human_only_flow() {
+    let checklist = read_doc(MANUAL_CHECKLIST);
+    let lower = checklist.to_ascii_lowercase();
+    assert!(
+        checklist.contains("## T16"),
+        "{MANUAL_CHECKLIST} has no T16 section; the close ticket's own manual \
+         pass is the one that covers the joined slice"
+    );
+    for (flow, tokens) in MANUAL_FLOWS {
+        for token in *tokens {
+            assert!(
+                lower.contains(&token.to_ascii_lowercase()),
+                "{MANUAL_CHECKLIST} has no step covering `{token}` for the \
+                 `{flow}` flow, which no offscreen test can prove"
+            );
+        }
+    }
+}
+
 /// The generated-audio check is on the required gate, in both mirrors.
 #[test]
 fn required_gate_contains_audio_check() {
@@ -1249,6 +1746,8 @@ const LIVE_DOCS: &[&str] = &[
     PHASE1_ARCH_DOC,
     PHASE1_1_CLOSE_DOC,
     PHASE1_1_ARCH_DOC,
+    POLISH_CLOSE_DOC,
+    POLISH_ARCH_DOC,
     "CONTRIBUTING.md",
 ];
 
@@ -1472,9 +1971,9 @@ fn adr_index_lists_every_adr_file() {
     files.sort();
 
     assert!(
-        files.len() >= 20,
-        "docs/ADR holds {} records, expected at least 20 (001-020, phase 1.1 \
-         included); the scan is broken",
+        files.len() >= 21,
+        "docs/ADR holds {} records, expected at least 21 (001-021, feedback \
+         polish included); the scan is broken",
         files.len()
     );
 
