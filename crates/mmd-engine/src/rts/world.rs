@@ -10,7 +10,9 @@ use crate::sim::{TICK_DT, dir_from_vector};
 use super::build::{
     Placement, PlacementError, build_ticks, building_cost, placement_valid, supply_grant,
 };
-use super::collision::{moving_circle_hits_point, units_overlap};
+use super::collision::{
+    GATHER_PAIR_ACTIVE, GatherCollisionState, moving_circle_hits_point, units_overlap,
+};
 use super::economy::{
     GATHER_TICKS, Resources, Supply, WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
     supply_cost,
@@ -204,6 +206,10 @@ pub struct RtsWorld {
     /// crowd from shoving one unit several cells in a single tick. Reserved to
     /// [`MAX_ENTITIES`] so a tick never grows it.
     pushed: Vec<bool>,
+    /// One byte per unordered slot pair: which pairs the collision policy
+    /// currently exempts from *mutual dynamic* collision. Preallocated at load
+    /// (see [`GatherCollisionState`]) so a tick never grows it.
+    gather_pairs: GatherCollisionState,
     /// What went wrong in the most recent tick, if anything. Cleared at the
     /// start of every movement pass, so it always describes the last tick and
     /// never an older one.
@@ -614,6 +620,7 @@ impl RtsWorld {
             unit_scratch: Vec::with_capacity(MAX_ENTITIES),
             candidate_pos: Vec::with_capacity(MAX_ENTITIES),
             pushed: Vec::with_capacity(MAX_ENTITIES),
+            gather_pairs: GatherCollisionState::new(),
             last_tick_error: None,
             selection: Selection::new(),
             pick_scratch: Vec::with_capacity(MAX_ENTITIES),
@@ -640,19 +647,52 @@ impl RtsWorld {
         &self.entities
     }
 
-    /// How many pairs of live units currently penetrate each other (`T17`).
+    /// How many pairs of live units penetrate each other **in violation of the
+    /// collision policy** (`T17`, redefined by `T13`).
     ///
     /// The one shared body-safety oracle: the engine acceptance run asserts
-    /// it at every milestone, and the app's `rts` exit line reports it, so a
-    /// scripted run and a world-call run cannot disagree about what "hard
-    /// bodies" means. Exactly [`units_overlap`]'s test — touching at
-    /// `r1 + r2` is legal, anything closer is a penetration — over every
-    /// unordered pair, buildings and nodes excluded (they are footprints,
-    /// not circles).
+    /// it at every milestone, and the app's `rts` exit line reports it as
+    /// `body_overlaps`, so a scripted run and a world-call run cannot disagree
+    /// about what "hard bodies" means. Exactly [`units_overlap`]'s test —
+    /// touching at `r1 + r2` is legal, anything closer is a penetration — over
+    /// every unordered pair, buildings and nodes excluded (they are
+    /// footprints, not circles).
+    ///
+    /// What changed with `T13`: an *active gather pair* — two workers both
+    /// under [`Order::Gather`], whatever their owners or phases — is exempt
+    /// from mutual collision, so its overlap is legal and is not counted. The
+    /// token this feeds keeps its name; its meaning is now "policy
+    /// violations", not "raw geometric overlaps". The raw count stays
+    /// available to tests as [`Self::raw_body_overlap_count`], which is what
+    /// keeps a reading of `0` here from being vacuous.
+    ///
+    /// The policy this reads is the one the **most recent completed tick**
+    /// recorded ([`Self::mark_active_gather_pairs`]), not one re-derived at
+    /// call time: the oracle and the movement gates must agree about which
+    /// pairs were exempt while the bodies were being moved, and re-deriving
+    /// here would let an order issued between two ticks change the verdict on
+    /// a tick that had already run under the old policy.
     ///
     /// `O(n^2)` on purpose: this is an observation seam for tests and the
     /// exit line, never a per-tick path.
     pub fn body_overlap_count(&self) -> u32 {
+        self.count_body_overlaps(true)
+    }
+
+    /// Every penetrating pair of live units, policy ignored.
+    ///
+    /// A test hook, and specifically the anti-vacuity twin of
+    /// [`Self::body_overlap_count`]: an exemption that produced no geometric
+    /// overlap at all would let the policy oracle read `0` without proving
+    /// anything.
+    #[cfg(feature = "testkit")]
+    pub fn raw_body_overlap_count(&self) -> u32 {
+        self.count_body_overlaps(false)
+    }
+
+    /// The one scan behind both oracles. `policy` selects whether an exempt
+    /// pair's overlap counts.
+    fn count_body_overlaps(&self, policy: bool) -> u32 {
         let store = &self.entities;
         let radius = |slot: usize| match store.kind(slot) {
             EntityKind::Unit(k) => Some(k.body_radius_cells()),
@@ -670,6 +710,9 @@ impl RtsWorld {
         for (n, &(a, ra)) in units.iter().enumerate() {
             let pa = store.position(a);
             for &(b, rb) in &units[n + 1..] {
+                if policy && self.gather_pairs.state(a, b) == GATHER_PAIR_ACTIVE {
+                    continue;
+                }
                 if units_overlap(pa, ra, store.position(b), rb) {
                     overlaps += 1;
                 }
@@ -699,6 +742,23 @@ impl RtsWorld {
             return false;
         };
         self.entities.set_position(slot, pos);
+        true
+    }
+
+    /// Test-only: put any live entity under any order, bypassing the issue
+    /// rules.
+    ///
+    /// The gather-collision policy is deliberately owner-blind and
+    /// phase-blind, and phase 1 has no way to hand another owner's worker a
+    /// gather order or to park one in a chosen phase — so without this seam
+    /// the "any owner, any phase" half of the rule could only be asserted by
+    /// reading the code. `false` for a stale id.
+    #[cfg(feature = "testkit")]
+    pub fn force_order_for_test(&mut self, id: EntityId, order: Order) -> bool {
+        let Some(slot) = self.entities.slot(id) else {
+            return false;
+        };
+        self.orders.set(slot, order);
         true
     }
 
@@ -2000,20 +2060,23 @@ impl RtsWorld {
     ///
     /// 1. collect every live unit's slot and body position
     ///    ([`Self::collect_unit_bodies`]);
-    /// 2. repair any penetration the world was handed
-    ///    ([`Self::repair_body_overlaps`]) — nothing in the game can produce
-    ///    one, only [`Self::force_position_for_test`] and a raw store
-    ///    mutation can;
-    /// 3. propose and commit one candidate step per unit, sequentially, in an
+    /// 2. record this tick's collision policy over every unit pair
+    ///    ([`Self::mark_active_gather_pairs`]);
+    /// 3. repair any penetration the world was handed that the policy does
+    ///    *not* allow ([`Self::repair_body_overlaps`]) — nothing in the game
+    ///    can produce one, only [`Self::force_position_for_test`] and a raw
+    ///    store mutation can;
+    /// 4. propose and commit one candidate step per unit, sequentially, in an
     ///    order rotated by the tick index.
     ///
-    /// **Why sequential, and why that is a proof.** Phase 3 accepts a
+    /// **Why sequential, and why that is a proof.** The final phase accepts a
     /// candidate only when its whole swept segment clears every *other*
     /// unit's current body — final position for a unit already processed this
     /// tick, last tick's position for one not yet processed. So by induction
-    /// on the traversal: the set of committed bodies starts non-overlapping
-    /// (phase 2 guarantees it), and each accepted candidate is non-overlapping
-    /// against every member of that set at the moment it joins it, including
+    /// on the traversal: the set of committed bodies starts free of every
+    /// *policy-forbidden* overlap (the repair phase guarantees it), and each
+    /// accepted candidate is likewise clear of every member of that set at the
+    /// moment it joins it, including
     /// the ones that will move later — because they have not moved yet and
     /// their own candidates will in turn be tested against this one. A
     /// rejected candidate simply does not move, which cannot create an
@@ -2024,7 +2087,10 @@ impl RtsWorld {
     /// commits nothing unless the displaced body's own new position is clear
     /// of the mover's candidate and of every other body (swept, so it cannot
     /// tunnel), which is exactly the property the step above assumes of the
-    /// set it joins. Therefore no completed tick leaves two bodies merged.
+    /// set it joins. Therefore no completed tick leaves two bodies merged
+    /// **unless the pair is exempt** — see [`Self::pair_ignores_collision`],
+    /// which every one of those gates consults, so the exemption is either
+    /// honoured by all of them or by none.
     ///
     /// The traversal start rotates by `tick_index % unit_count` so that
     /// contention is not settled by slot number forever: a unit queued behind
@@ -2042,6 +2108,7 @@ impl RtsWorld {
     /// [`Self::step_one_unit`].
     fn movement(&mut self) {
         self.collect_unit_bodies();
+        self.mark_active_gather_pairs();
         self.repair_body_overlaps();
         if self.last_tick_error.is_some() {
             // The world was handed a penetration nothing could repair. Moving
@@ -2077,15 +2144,89 @@ impl RtsWorld {
             if !matches!(self.entities.kind(slot), EntityKind::Unit(_)) {
                 continue;
             }
+            let id = self.entities.id_at(slot).expect("live unit");
+            // Before anything reads this slot's pair bytes: a slot recycled
+            // since the table last saw it must not hand its old exemptions to
+            // whoever lives there now.
+            self.gather_pairs.sync_slot(id);
             self.unit_scratch.push(slot);
             self.candidate_pos.push(self.entities.position(slot));
             self.pushed.push(false);
         }
     }
 
-    /// Phase 2: move any unit that starts the tick merged into another body to
-    /// the nearest legal free cell centre, in the same rotated order phase 3
-    /// walks.
+    /// Phase 2: write this tick's collision policy into the pair table — one
+    /// byte per unordered pair of live units.
+    ///
+    /// Provenance, not a reaction to geometry: **every** active gather pair is
+    /// marked, overlapping or not, so the exemption is a fact about what the
+    /// pair is doing rather than about where it happens to be standing. A pair
+    /// that is no longer active has its marker cleared here, and the generic
+    /// repair below then restores hard geometry for it immediately — the
+    /// bounded exit transition is `T14`'s slice, not this one.
+    fn mark_active_gather_pairs(&mut self) {
+        let n = self.unit_scratch.len();
+        for i in 0..n {
+            for j in (i + 1)..n {
+                let value = if self.pair_is_active_gather(i, j) {
+                    GATHER_PAIR_ACTIVE
+                } else {
+                    0
+                };
+                self.gather_pairs
+                    .set_state(self.unit_scratch[i], self.unit_scratch[j], value);
+            }
+        }
+    }
+
+    /// Whether the entity in store slot `slot` is a worker currently under a
+    /// gather order — any phase, any owner.
+    fn is_gathering_worker_slot(&self, slot: usize) -> bool {
+        matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker))
+            && matches!(self.orders.get(slot), Order::Gather { .. })
+    }
+
+    /// Whether the two [`Self::unit_scratch`] bodies `i` and `j` form an active
+    /// gather pair: both workers, both gathering. Eligibility is deliberately
+    /// blind to owner and to which of the nine `ToNode`/`Mining`/`Returning`
+    /// phase combinations the two are in — a resource cluster is crowded by
+    /// whoever is working it.
+    fn pair_is_active_gather(&self, i: usize, j: usize) -> bool {
+        self.is_gathering_worker_slot(self.unit_scratch[i])
+            && self.is_gathering_worker_slot(self.unit_scratch[j])
+    }
+
+    /// Whether the pair `(i, j)` is exempt from *mutual dynamic* collision
+    /// this tick.
+    ///
+    /// The single gate every pairwise body check in the movement system asks,
+    /// so an exemption cannot be honoured by one check and ignored by the
+    /// next — which is how a pair gets marked legal by the sweep and then torn
+    /// apart by the repair pass on the following tick. Reads the table
+    /// [`Self::mark_active_gather_pairs`] wrote, never the orders directly, so
+    /// the policy has exactly one author per tick.
+    ///
+    /// Static geometry is not a pair and is never exempt.
+    fn pair_ignores_collision(&self, i: usize, j: usize) -> bool {
+        self.gather_pairs
+            .state(self.unit_scratch[i], self.unit_scratch[j])
+            == GATHER_PAIR_ACTIVE
+    }
+
+    /// Whether bodies `i` and `j` are merged *and* the policy forbids it.
+    fn pair_penetrates(&self, i: usize, j: usize) -> bool {
+        !self.pair_ignores_collision(i, j)
+            && units_overlap(
+                self.candidate_pos[i],
+                self.body_radius(i),
+                self.candidate_pos[j],
+                self.body_radius(j),
+            )
+    }
+
+    /// Phase 3: move any unit that starts the tick merged into another body it
+    /// may not be merged with to the nearest legal free cell centre, in the
+    /// same rotated order the step phase walks.
     ///
     /// Only an explicitly invalid state reaches this: every in-game path that
     /// places a unit (seeding, movement, the push off a finished building)
@@ -2125,25 +2266,27 @@ impl RtsWorld {
         }
     }
 
-    /// Whether unit `i`'s current body penetrates any other unit's.
+    /// Whether unit `i`'s current body penetrates any other unit's in a way
+    /// the collision policy forbids.
     fn body_penetrates_any(&self, i: usize) -> bool {
-        let r = self.body_radius(i);
-        self.candidate_pos.iter().enumerate().any(|(j, &q)| {
-            j != i && units_overlap(self.candidate_pos[i], r, q, self.body_radius(j))
-        })
+        (0..self.candidate_pos.len()).any(|j| j != i && self.pair_penetrates(i, j))
     }
 
     /// What the swept segment `from -> to` of unit `i`'s body runs into.
     ///
-    /// Unit `i` is skipped against itself; every other unit counts, whatever
-    /// its owner, kind or order — an idle, mining or site-attending unit is a
-    /// body exactly like a walking one.
+    /// Unit `i` is skipped against itself, and against any body the policy
+    /// exempts it from ([`Self::pair_ignores_collision`]); every other unit
+    /// counts, whatever its owner, kind or order — an idle, mining or
+    /// site-attending unit is a body exactly like a walking one.
     fn body_sweep_hit(&self, i: usize, from: [f32; 2], to: [f32; 2]) -> BodySweep {
         let r = self.body_radius(i);
         let mut hit = [0usize; MAX_PUSHED_BODIES];
         let mut count = 0usize;
         for (j, &q) in self.candidate_pos.iter().enumerate() {
-            if j == i || !moving_circle_hits_point(from, to, r, q, self.body_radius(j)) {
+            if j == i
+                || self.pair_ignores_collision(i, j)
+                || !moving_circle_hits_point(from, to, r, q, self.body_radius(j))
+            {
                 continue;
             }
             if count == MAX_PUSHED_BODIES {
@@ -2235,7 +2378,11 @@ impl RtsWorld {
     ///   candidate, with every body that is *not* displaced (swept, so a shove
     ///   cannot tunnel one body through a third), and with every other
     ///   displaced body's final position. One illegal link rejects the mover's
-    ///   candidate whole and nothing moves at all.
+    ///   candidate whole and nothing moves at all. Each of those three
+    ///   pairwise tests goes through [`Self::pair_ignores_collision`], so an
+    ///   exempt pair neither drags a nested push it does not need nor gets the
+    ///   whole chain falsely rejected — while static legality, which is not a
+    ///   pair, still holds for every link.
     /// - **State is untouched.** Only positions move; order, cargo, facing and
     ///   animation stay exactly as they were.
     ///
@@ -2285,13 +2432,15 @@ impl RtsWorld {
             if !self.displacement_is_legal_statically(from, d.to, r) {
                 return false;
             }
-            // The mover is never displaced by its own push.
-            if units_overlap(candidate, ri, d.to, r) {
+            // The mover is never displaced by its own push — unless the two
+            // are an exempt pair, which may end the tick merged.
+            if !self.pair_ignores_collision(i, d.body) && units_overlap(candidate, ri, d.to, r) {
                 return false;
             }
             for k in 0..self.candidate_pos.len() {
                 if k == i
                     || k == d.body
+                    || self.pair_ignores_collision(d.body, k)
                     || moved[..n_moved].iter().any(|m| m.body == k)
                     || !moving_circle_hits_point(
                         from,
@@ -2322,12 +2471,14 @@ impl RtsWorld {
         // final positions.
         for a in 0..n_moved {
             for b in (a + 1)..n_moved {
-                if units_overlap(
-                    moved[a].to,
-                    self.body_radius(moved[a].body),
-                    moved[b].to,
-                    self.body_radius(moved[b].body),
-                ) {
+                if !self.pair_ignores_collision(moved[a].body, moved[b].body)
+                    && units_overlap(
+                        moved[a].to,
+                        self.body_radius(moved[a].body),
+                        moved[b].to,
+                        self.body_radius(moved[b].body),
+                    )
+                {
                     return false;
                 }
             }
@@ -2621,10 +2772,12 @@ impl RtsWorld {
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
     /// progress_target, amount, carry kind, carry amount), then every live
-    /// slot's order, then the selection, production queues and rally points,
-    /// then the camera centre, then the pending placement ghost (one tag byte
-    /// plus the kind byte), then resources and supply. `f32` goes in
-    /// as raw bits, matching `Simulation::state_hash`.
+    /// slot's order, then the gather-collision pair table
+    /// ([`GatherCollisionState::hash_into`] — self-framing, so it pins which
+    /// unit each pair byte belongs to), then the selection, production queues
+    /// and rally points, then the camera centre, then the pending placement
+    /// ghost (one tag byte plus the kind byte), then resources and supply.
+    /// `f32` goes in as raw bits, matching `Simulation::state_hash`.
     ///
     /// The camera is in here because it is world state, not view state: a
     /// replay that ends looking somewhere else did not reproduce.
@@ -2638,6 +2791,7 @@ impl RtsWorld {
         let mut live = Vec::with_capacity(self.entities.len());
         self.entities.collect_live(&mut live);
         self.orders.hash_into(&mut h, &live);
+        self.gather_pairs.hash_into(&mut h, &self.entities);
         self.selection.hash_into(&mut h);
         self.production.hash_into(&mut h, &live);
         let center = self.camera.center();
@@ -2659,9 +2813,131 @@ impl RtsWorld {
 mod tests {
     use super::*;
     use crate::rts::entity::RTS_UNIT_BODY_RADIUS_CELLS;
+    use crate::scenario::{RtsSpec, ScenarioSpec};
 
     const W: u32 = 40;
     const H: u32 = 40;
+
+    /// A minimal valid RTS scene with two worker spawn cells far enough apart
+    /// that the seed keeps both where they are.
+    fn two_worker_scene() -> RtsWorld {
+        let spec = ScenarioSpec {
+            version: "rts_prototype_v1".to_string(),
+            width: 64,
+            height: 64,
+            cell_size_px: 4,
+            sprite_size_px: 48,
+            hard_agent_count: 0,
+            stretch_agent_count: 0,
+            seed: 1,
+            destination: Cell { x: 0, y: 0 },
+            spawn_cells: vec![Cell { x: 6, y: 50 }, Cell { x: 30, y: 50 }],
+            atlas_count: 4,
+            direction_count: 8,
+            frame_count: 4,
+            collision_radius_q8: 0,
+            separation_strength_q8: 0,
+            separation_phases: 1,
+            mass_class_count: 1,
+            separation_threads: 1,
+            obstacle_cells: vec![],
+            rts: Some(RtsSpec {
+                start_crystal: 300,
+                start_gas: 100,
+                start_supply_cap: 10,
+                hq_cell: Cell { x: 51, y: 51 },
+                crystal_nodes: vec![Cell { x: 1, y: 62 }],
+                gas_nodes: vec![Cell { x: 1, y: 61 }],
+            }),
+        };
+        RtsWorld::from_scenario(scenario::Scenario::from_spec(spec).expect("valid spec"))
+            .expect("rts world")
+    }
+
+    fn live_slots_of<F: Fn(EntityKind) -> bool>(world: &RtsWorld, want: F) -> Vec<usize> {
+        (0..world.entities.slot_count())
+            .filter(|&s| world.entities.alive(s) && want(world.entities.kind(s)))
+            .collect()
+    }
+
+    fn crystal_node(world: &RtsWorld) -> EntityId {
+        let slot = live_slots_of(world, |k| {
+            matches!(k, EntityKind::Node(ResourceKind::Crystal))
+        })[0];
+        world.entities.id_at(slot).expect("live node")
+    }
+
+    /// Park every worker under a gather order that stands still.
+    fn set_all_mining(world: &mut RtsWorld, slots: &[usize]) {
+        let node = crystal_node(world);
+        for &slot in slots {
+            world.orders.set(
+                slot,
+                Order::Gather {
+                    node,
+                    // A phase that stands still, so a pair cannot drift into
+                    // an overlap and make a mark look like a reaction to one.
+                    phase: GatherPhase::Mining { ticks_left: 10_000 },
+                },
+            );
+        }
+    }
+
+    /// The exemption is provenance, not a reaction to geometry: a pair that is
+    /// gathering is marked whether or not it is anywhere near overlapping.
+    ///
+    /// Asserted on the table rather than on behaviour, because behaviour is
+    /// exactly what cannot distinguish "marked" from "never had to be marked"
+    /// while the two bodies are 24 cells apart.
+    #[test]
+    fn active_pair_provenance_is_marked_before_overlap() {
+        let mut world = two_worker_scene();
+        let workers = live_slots_of(&world, |k| k == EntityKind::Unit(UnitKind::Worker));
+        assert_eq!(workers.len(), 2);
+        set_all_mining(&mut world, &workers);
+        world.tick();
+
+        let (a, b) = (workers[0], workers[1]);
+        assert!(
+            !units_overlap(
+                world.entities.position(a),
+                RTS_UNIT_BODY_RADIUS_CELLS,
+                world.entities.position(b),
+                RTS_UNIT_BODY_RADIUS_CELLS,
+            ),
+            "the two bodies must be nowhere near each other for this to prove \
+             anything"
+        );
+        assert_eq!(
+            world.gather_pairs.state(a, b),
+            GATHER_PAIR_ACTIVE,
+            "an active gather pair must be marked regardless of overlap"
+        );
+        assert_eq!(world.body_overlap_count(), 0);
+    }
+
+    /// ...and the marker is dropped the moment the pair stops qualifying, so
+    /// the exemption cannot outlive the orders that earned it.
+    #[test]
+    fn a_pair_that_stops_gathering_loses_its_marker() {
+        let mut world = two_worker_scene();
+        let workers = live_slots_of(&world, |k| k == EntityKind::Unit(UnitKind::Worker));
+        set_all_mining(&mut world, &workers);
+        world.tick();
+        assert_eq!(
+            world.gather_pairs.state(workers[0], workers[1]),
+            GATHER_PAIR_ACTIVE
+        );
+
+        world.orders.clear(workers[1]);
+        world.tick();
+
+        assert_eq!(
+            world.gather_pairs.state(workers[0], workers[1]),
+            0,
+            "the marker must be cleared as soon as the pair stops qualifying"
+        );
+    }
 
     fn idx(x: u32, y: u32) -> usize {
         (x + y * W) as usize

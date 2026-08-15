@@ -13,9 +13,11 @@
 
 use std::process::Command;
 
+use mmd_engine::nav::field_pool::FieldRef;
 use mmd_engine::rts::{
-    EntityId, EntityKind, OWNER_PLAYER, Order, RTS_UNIT_BODY_DIAMETER_CELLS,
-    RTS_UNIT_BODY_RADIUS_CELLS, UnitKind, moving_circle_hits_point, units_overlap,
+    BuildingKind, EntityId, EntityKind, FormationGoal, GatherPhase, OWNER_PLAYER, Order,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
+    moving_circle_hits_point, units_overlap,
 };
 use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
@@ -593,6 +595,353 @@ fn forced_overlap_is_repaired() {
             "repaired unit at {p:?} stands on a blocked cell"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// T13 — the gather-pair collision exemption
+// ---------------------------------------------------------------------------
+//
+// Two workers that are both collecting resources may pass through and stand
+// on each other; everything else about hard collision is unchanged. The rule
+// is deliberately blind to owner and to gather phase, and it exempts a pair
+// from *each other only* — never from static geometry, and never from a body
+// outside the pair.
+
+/// A never-issued field handle. Every order the mover walks re-checks its
+/// cached handle and re-acquires when it is stale, so a forced order does not
+/// have to know the pool's internals.
+const STALE_FIELD: FieldRef = FieldRef { slot: 0, epoch: 0 };
+
+fn crystal_node(h: &RtsHarness) -> EntityId {
+    h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0]
+}
+
+fn hq(h: &RtsHarness) -> EntityId {
+    h.ids_of_kind(EntityKind::Building(BuildingKind::Hq))[0]
+}
+
+/// One of each gather phase, in the order the round trip runs them.
+///
+/// `Mining` is parked far from finishing so a case that ticks for a while
+/// keeps the phase it asked for instead of advancing into the next one.
+fn all_phases(h: &RtsHarness) -> [GatherPhase; 3] {
+    let node_cell = Cell { x: 1, y: H - 2 };
+    [
+        GatherPhase::ToNode {
+            goal: FormationGoal {
+                anchor: node_cell,
+                slot: node_cell,
+            },
+            field: STALE_FIELD,
+        },
+        GatherPhase::Mining { ticks_left: 10_000 },
+        GatherPhase::Returning {
+            drop_off: hq(h),
+            field: STALE_FIELD,
+        },
+    ]
+}
+
+/// Park `ids` deep inside one another — half a cell apart, a fifth of the
+/// body diameter — so one tick of walking cannot separate them by accident.
+fn park_merged(h: &mut RtsHarness, ids: &[EntityId]) {
+    let ps: Vec<[f32; 2]> = (0..ids.len())
+        .map(|k| [20.5 + k as f32 * 0.5, 20.5])
+        .collect();
+    park(h, ids, &ps);
+}
+
+fn gathering(h: &mut RtsHarness, id: EntityId, phase: GatherPhase) {
+    let node = crystal_node(h);
+    assert!(
+        h.world_mut()
+            .force_order_for_test(id, Order::Gather { node, phase }),
+        "the order hook must accept a live id"
+    );
+}
+
+#[test]
+fn two_gathering_workers_may_overlap() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    for &id in &w {
+        gathering(&mut h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+
+    for tick in 0..60 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick}: an active gather pair's overlap is not a violation"
+        );
+    }
+
+    let d = dist(pos(&h, w[0]), pos(&h, w[1]));
+    assert!(
+        d < DIAMETER,
+        "the pair must still be merged after 60 ticks, not quietly repaired \
+         apart: {d} cells"
+    );
+    assert!(
+        h.world().raw_body_overlap_count() >= 1,
+        "the raw oracle must see the penetration the policy is forgiving, or \
+         the zero above proves nothing"
+    );
+}
+
+#[test]
+fn all_gather_phase_pairs_qualify() {
+    for a in 0..3 {
+        for b in 0..3 {
+            let mut h = harness(scattered_spawns(2));
+            let w = workers(&h);
+            let phases = all_phases(&h);
+            park_merged(&mut h, &w);
+            gathering(&mut h, w[0], phases[a]);
+            gathering(&mut h, w[1], phases[b]);
+
+            h.step_exact(1);
+
+            assert!(
+                h.world().raw_body_overlap_count() >= 1,
+                "phases ({a}, {b}): the pair must still be geometrically merged"
+            );
+            assert_eq!(
+                h.world().body_overlap_count(),
+                0,
+                "phases ({a}, {b}) must be exempt: all nine combinations count \
+                 as gathering"
+            );
+        }
+    }
+}
+
+#[test]
+fn gather_exemption_is_owner_blind() {
+    let mut h = harness(scattered_spawns(1));
+    let mine = workers(&h)[0];
+    const OWNER_ENEMY: u8 = 1;
+    assert_ne!(OWNER_ENEMY, OWNER_PLAYER);
+    let theirs = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Worker),
+            OWNER_ENEMY,
+            [20.5, 20.5],
+        )
+        .expect("spawn enemy worker");
+    park_merged(&mut h, &[mine, theirs]);
+    for &id in &[mine, theirs] {
+        gathering(&mut h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+
+    h.step_exact(30);
+
+    assert!(
+        h.world().raw_body_overlap_count() >= 1,
+        "the two bodies must still be merged"
+    );
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "a resource cluster is crowded by whoever works it: the exemption \
+         must not check ownership"
+    );
+}
+
+#[test]
+fn one_non_gather_worker_keeps_pair_hard() {
+    // The gate is *both* sides gathering. Idle and Move are the two ways the
+    // other side can fail it.
+    for other in [None, Some(Cell { x: 40, y: 20 })] {
+        let mut h = harness(scattered_spawns(2));
+        let w = workers(&h);
+        park_merged(&mut h, &w);
+        gathering(&mut h, w[0], GatherPhase::Mining { ticks_left: 10_000 });
+        if let Some(dest) = other {
+            assert!(h.world_mut().order_move(w[1], dest));
+        }
+
+        h.step_exact(1);
+
+        assert_eq!(
+            h.world().last_tick_error(),
+            None,
+            "the open map has a legal free centre to repair into"
+        );
+        assert_no_overlap(&h, "a half-gathering pair is a hard pair");
+        assert_eq!(h.world().raw_body_overlap_count(), 0);
+    }
+}
+
+#[test]
+fn worker_soldier_pair_stays_hard() {
+    let mut h = harness(scattered_spawns(1));
+    let worker = workers(&h)[0];
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [20.5, 20.5],
+        )
+        .expect("spawn soldier");
+    park_merged(&mut h, &[worker, soldier]);
+    // Both under a gather order: only the *kind* gate may refuse this pair,
+    // so a soldier that somehow holds one must still be a hard body.
+    for &id in &[worker, soldier] {
+        gathering(&mut h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+
+    h.step_exact(1);
+
+    assert_no_overlap(&h, "a soldier is never half of a gather pair");
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
+}
+
+#[test]
+fn gather_workers_still_hit_static_geometry() {
+    // A wall across the whole map at `y == 10`, with one body-wide gap at
+    // `x in 54..62`: the only way north is through the gap.
+    let wall: Vec<u32> = (0..W)
+        .filter(|x| !(54..62).contains(x))
+        .map(|x| x + 10 * W)
+        .collect();
+    let mut h = harness_with_obstacles(scattered_spawns(2), wall);
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    // Both walking at a cell on the far side of the wall, and exempt from each
+    // other — so nothing but static geometry is left to stop them.
+    let north = Cell { x: 20, y: 4 };
+    for &id in &w {
+        gathering(
+            &mut h,
+            id,
+            GatherPhase::ToNode {
+                goal: FormationGoal {
+                    anchor: north,
+                    slot: north,
+                },
+                field: STALE_FIELD,
+            },
+        );
+    }
+    let start: Vec<[f32; 2]> = w.iter().map(|&id| pos(&h, id)).collect();
+
+    let mut saw_merged = false;
+    for tick in 0..600 {
+        h.step_exact(1);
+        saw_merged |= h.world().raw_body_overlap_count() >= 1;
+        for &id in &w {
+            let p = pos(&h, id);
+            assert!(
+                h.world().static_nav().position_clear(p, RADIUS),
+                "tick {tick}: an exempt gather body at {p:?} is inside static \
+                 geometry"
+            );
+        }
+    }
+
+    assert!(
+        saw_merged,
+        "the pair must have been merged while walking, or the static rule was \
+         never tested against an exempt pair"
+    );
+    for (k, &id) in w.iter().enumerate() {
+        assert_ne!(
+            pos(&h, id),
+            start[k],
+            "worker {k} never moved: this measured nothing"
+        );
+    }
+}
+
+#[test]
+fn nested_push_checks_use_pair_policy() {
+    let mut h = harness(scattered_spawns(3));
+    let w = workers(&h);
+    let (mover, near, far) = (w[0], w[1], w[2]);
+    // The row `a_push_chain_moves_a_row_of_bodies` uses, but the two bodies
+    // ahead of the mover are an exempt gather pair. The mover is not part of
+    // it, so it still has to shove `near`; `near`'s displacement runs into
+    // `far`, and *that* check is the nested one the policy must reach.
+    park(&mut h, &w, &[[10.5, 20.5], [16.5, 20.5], [22.5, 20.5]]);
+    for &id in &[near, far] {
+        gathering(&mut h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+    let before: Vec<[f32; 2]> = w.iter().map(|&id| pos(&h, id)).collect();
+    assert!(h.world_mut().order_move(mover, Cell { x: 50, y: 20 }));
+
+    h.step_exact(1);
+
+    assert!(
+        pos(&h, mover)[0] > before[0][0],
+        "the chain must not be falsely rejected: the mover stood still"
+    );
+    assert!(
+        pos(&h, near)[0] > before[1][0],
+        "the mover is not in the exempt pair, so `near` must still be shoved"
+    );
+    assert_eq!(
+        pos(&h, far),
+        before[2],
+        "`near` and `far` are exempt from each other, so the shove must not \
+         have propagated to `far`"
+    );
+    assert!(
+        units_overlap(pos(&h, near), RADIUS, pos(&h, far), RADIUS),
+        "the nested check really was reached: `near` landed inside `far`"
+    );
+    assert!(
+        !units_overlap(pos(&h, mover), RADIUS, pos(&h, near), RADIUS),
+        "the mover/displaced check is not exempt and must still hold"
+    );
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "no hard pair may be left merged by an exempt chain"
+    );
+}
+
+#[test]
+fn body_overlap_count_reports_policy_violations() {
+    let mut h = harness(scattered_spawns(2));
+    let w = workers(&h);
+    park_merged(&mut h, &w);
+    for &id in &w {
+        gathering(&mut h, id, GatherPhase::Mining { ticks_left: 10_000 });
+    }
+    h.step_exact(1);
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "the exempt pair's overlap is not a violation"
+    );
+
+    // A third body dropped on top of the pair is in no exempt pair at all, so
+    // both of its overlaps are violations — while the pair's own stays free.
+    let on_top = pos(&h, w[0]);
+    let intruder = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, on_top)
+        .expect("spawn intruder");
+    assert!(h.world().entities().slot(intruder).is_some());
+
+    assert_eq!(
+        h.world().raw_body_overlap_count(),
+        3,
+        "three merged bodies are three penetrating pairs, geometrically"
+    );
+    assert_eq!(
+        h.world().body_overlap_count(),
+        2,
+        "only the two pairs the policy does not exempt are violations"
+    );
 }
 
 // ---------------------------------------------------------------------------

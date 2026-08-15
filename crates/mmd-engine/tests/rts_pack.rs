@@ -85,7 +85,10 @@ fn frame_new_reserves_the_documented_groups() {
     for g in &frame.world {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
     }
-    assert_eq!(frame.overlay.capacity(), MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES);
+    assert_eq!(
+        frame.overlay.capacity(),
+        MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES
+    );
     for g in &frame.ui[..4] {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
     }

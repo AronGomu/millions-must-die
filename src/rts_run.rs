@@ -43,7 +43,9 @@
 //!   opened by this line's sink.
 //! - (f) `T17`'s joined phase-1.1 observation, in exactly this order:
 //!   `body_overlaps` from [`mmd_engine::rts::RtsWorld::body_overlap_count`]
-//!   (penetrating live-unit pairs; a shipped run must always report 0),
+//!   (live-unit pairs penetrating in violation of the collision policy — an
+//!   active gather pair is allowed to overlap and is not counted; a shipped
+//!   run must always report 0),
 //!   `ui_page` from the `T13` menu FSM (`gameplay|pause_menu|settings`),
 //!   then the `T15` audio counters split by meaning — `music_starts`,
 //!   `voice_select` (Select cues), `voice_order` (accepted Move/Gather/Build

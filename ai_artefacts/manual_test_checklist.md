@@ -353,3 +353,44 @@ command below except what a browser or a human eye must judge.
 - [ ] Selection rings appear on top of grid lines.
 - [ ] No visible performance regression at 320×320 map.
 - [ ] `cargo run -- rts --frames 30` clean-exit line contains `show_grid=true` by default.
+
+## T13 (rts-feedback-polish) — Exempt active gather worker pairs from mutual collision
+
+Automated (all run on `plan/rts-feedback-polish`, base `db9c7e4`):
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --features testkit --test rts_collision --locked` exits 0 (24 passed, 1 ignored)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_world --locked` exits 0 (51 passed)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_acceptance --locked` exits 0 (7 passed)
+- [x] `cargo test -p mmd-engine --features testkit --test frame_allocations --locked -- --test-threads=1` exits 0 (29 passed)
+- [x] `cargo test -p mmd-engine --features testkit --lib --locked` exits 0 (63 passed)
+- [x] `git diff --exit-code -- crates/mmd-engine/src/sim` clean (horde sim untouched)
+- [x] Whole engine suite green except `rts_economy` (3 failures, identical at HEAD `db9c7e4` —
+      pre-existing pick regression `Building(0)` vs `Node(1)`, not from this ticket)
+
+Manual:
+
+- [ ] Manual: `cargo run -- rts` — box-select several workers, right-click a crystal node.
+      They may now walk through and stand on top of each other around the node instead of
+      queueing/shoving. This is the intended change.
+- [ ] Manual: while a gather crowd is overlapping, right-click empty ground with one of them
+      selected. The moment it stops gathering it is pushed back out to a clear cell (immediate
+      hard repair — T14 replaces this with a smoothed 12-tick exit).
+- [ ] Manual: send soldiers (or idle workers) into a gathering crowd — they must still collide
+      hard against the workers and never overlap them.
+- [ ] Manual: gathering workers must still be stopped by walls, buildings and the map edge;
+      no clipping through static geometry while overlapping each other.
+- [ ] Manual: place a building whose footprint covers a gathering crowd — evacuation must
+      still spread every worker to distinct, non-overlapping cells.
+- [ ] App functional: `cargo run -- rts --frames 30` clean-exit line still reports
+      `body_overlaps=0` (the token now counts *policy violations*, not raw overlaps).
+
+Known regression handed to the parent (out of this ticket's Inputs):
+
+- [ ] `cargo test --test rts_acceptance` (shipped-binary script replay) goes from 5 failures at
+      HEAD to 6. New: `the_acceptance_run_builds_two_buildings` (`buildings` 2 vs 3). The tracked
+      script `assets/scenarios/rts_acceptance_v1.script` selects workers by screen coordinate at
+      frames 24/40 and only holds "while the six relocated workers are still on the spawn cells";
+      gathering workers now leave sooner, so one selection click misses (`voice_select` 7 vs 8).
+      Needs a script-coordinate refresh ticket — the script is not in T13's Inputs.

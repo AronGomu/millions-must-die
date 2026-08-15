@@ -20,7 +20,7 @@ pub use build::{
     Placement, PlacementCandidate, PlacementError, build_ticks, building_cost, footprint_cells,
     ghost_min_corner, placement_candidate, placement_valid, supply_grant,
 };
-pub use collision::{moving_circle_hits_point, units_overlap};
+pub use collision::{GATHER_PAIR_ACTIVE, moving_circle_hits_point, units_overlap};
 pub use economy::{
     GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply, WORKER_CARRY_CAPACITY,
     WORKER_SUPPLY_COST, node_amount, supply_cost,
