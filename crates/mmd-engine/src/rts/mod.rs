@@ -65,9 +65,9 @@ pub use orders::{
     WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
 };
 pub use pack::{
-    DRAG_BOX_THICKNESS_PX, DRAG_BOX_TINT, DragBox, GHOST_TINT, Prop, RtsFrame,
-    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, node_uv, pack_frame,
-    prop_uv, unit_slot,
+    DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DragBox, GHOST_TINT, Prop,
+    RtsFrame, SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, node_uv,
+    pack_frame, prop_uv, unit_slot,
 };
 pub use production::{
     PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,

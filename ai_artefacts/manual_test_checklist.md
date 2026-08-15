@@ -330,3 +330,14 @@ command below except what a browser or a human eye must judge.
 - [x] `every_tracked_manifest_pins_the_live_shader_and_atlas` passes (shader_canonical_sha256 pinned in all 6 manifests)
 - [x] `golden_frame_matches` passes (phase-0 sprite/ring scene pixel-identical)
 - [ ] Manual: launch `cargo run -- rts`, confirm the existing sprite/ring display is visually unchanged
+
+## T8 (rts-feedback-polish) — Render exact green area selection
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --test rts_pack --locked` exits 0 (43 passed)
+- [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (27 passed)
+- [x] `cargo test -p mmd-engine --test render_correctness --locked` exits 0 (50 passed)
+- [ ] Manual: drag a selection rectangle — world visible through 10% green fill; border is bright opaque green 2px
+- [ ] Manual: backward drag (start bottom-right, drag to top-left) produces identical box
+- [ ] App functional: entities inside the drag rect are still selected on release

@@ -10,9 +10,10 @@ use mmd_engine::render::{
     SpriteInstance, frame_uv_rect, quad_is_visible, screen_axes_to_cells,
 };
 use mmd_engine::rts::{
-    BuildingKind, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind,
-    MAX_ENTITIES, OWNER_PLAYER, Prop, ResourceKind, RtsFrame, UnitKind, building_quad_px,
-    building_uv, ghost_min_corner, node_uv, pack_frame, placement_candidate, prop_uv, unit_slot,
+    BuildingKind, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT,
+    DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_ENTITIES, OWNER_PLAYER, Prop,
+    ResourceKind, RtsFrame, UnitKind, building_quad_px, building_uv, ghost_min_corner, node_uv,
+    pack_frame, placement_candidate, prop_uv, unit_slot,
 };
 use mmd_engine::runtime::ring_quad_size_px;
 use mmd_engine::scenario::Cell;
@@ -621,28 +622,67 @@ fn the_ghost_covers_the_whole_footprint() {
 }
 
 #[test]
-fn the_drag_box_is_four_edges() {
+fn drag_box_has_pure_green_ten_percent_fill() {
     let h = scene();
     let mut frame = RtsFrame::new();
-    pack_frame(h.world(), CURSOR, None, &mut frame);
-    let base = props(&frame).len();
-
     let drag = DragBox {
-        a: [10.0, 10.0],
-        b: [110.0, 60.0],
+        a: [10.0, 20.0],
+        b: [110.0, 80.0],
     };
     pack_frame(h.world(), CURSOR, Some(drag), &mut frame);
     let packed = props(&frame);
-    assert_eq!(packed.len(), base + 4, "a drag box is four edge quads");
-    for inst in &packed[base..] {
+    let fill = &packed[0];
+    assert!(
+        fill.is_diagonal_line(),
+        "fill must be a diagonal_line instance"
+    );
+    assert_eq!(fill.tint, DRAG_BOX_FILL_TINT, "fill tint must be 10% green");
+    // Thickness encoded in uv_rect[1] equals the rect height (60px).
+    assert_eq!(fill.uv_rect[1], 60.0, "fill thickness equals rect height");
+}
+
+#[test]
+fn drag_box_has_opaque_two_pixel_pure_green_border() {
+    let h = scene();
+    let mut frame = RtsFrame::new();
+    let drag = DragBox {
+        a: [10.0, 20.0],
+        b: [110.0, 80.0],
+    };
+    pack_frame(h.world(), CURSOR, Some(drag), &mut frame);
+    let packed = props(&frame);
+    assert_eq!(packed.len(), 5, "drag box must pack exactly 5 instances");
+    for inst in &packed[1..] {
         assert!(
-            inst.size[0] == DRAG_BOX_THICKNESS_PX || inst.size[1] == DRAG_BOX_THICKNESS_PX,
-            "each edge is {DRAG_BOX_THICKNESS_PX} px thick on one axis: {inst:?}"
+            inst.is_diagonal_line(),
+            "border edge must be a diagonal_line instance: {inst:?}"
         );
         assert_eq!(
-            inst.uv_rect,
-            frame_uv_rect(1, 3),
-            "edges use the panel fill"
+            inst.tint, DRAG_BOX_BORDER_TINT,
+            "border tint must be opaque green"
+        );
+        assert_eq!(
+            inst.uv_rect[1], DRAG_BOX_THICKNESS_PX,
+            "border thickness must be 2px"
+        );
+    }
+}
+
+#[test]
+fn drag_box_never_samples_the_atlas() {
+    let h = scene();
+    let mut frame = RtsFrame::new();
+    let drag = DragBox {
+        a: [10.0, 20.0],
+        b: [110.0, 80.0],
+    };
+    pack_frame(h.world(), CURSOR, Some(drag), &mut frame);
+    let packed = props(&frame);
+    assert_eq!(packed.len(), 5);
+    for inst in packed {
+        assert!(
+            inst.is_diagonal_line(),
+            "every drag instance must be texture-free: {inst:?}"
         );
     }
 }
@@ -666,7 +706,7 @@ fn the_drag_box_normalises_its_corners() {
     pack_frame(h.world(), CURSOR, Some(backward), &mut frame);
     let b: Vec<SpriteInstance> = props(&frame).to_vec();
 
-    assert_eq!(a.len(), 4);
+    assert_eq!(a.len(), 5);
     assert_eq!(
         a, b,
         "dragging up-left must draw the same box as down-right"

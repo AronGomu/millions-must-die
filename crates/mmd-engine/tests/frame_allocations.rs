@@ -445,7 +445,7 @@ fn pack_frame_allocates_nothing() {
     let packed = frame.instance_count();
     assert_eq!(
         packed,
-        17 + 1 + 1 + 65 + 4,
+        17 + 1 + 1 + 65 + 5,
         "the warm-up must exercise all three layers: world, ring, UI"
     );
 

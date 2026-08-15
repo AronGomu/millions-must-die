@@ -104,8 +104,10 @@ pub const SELECTION_RING_INNER: f32 = SELECTION_RING_OUTER - 1.0 / 24.0;
 
 /// Drag-rectangle edge thickness in screen pixels.
 pub const DRAG_BOX_THICKNESS_PX: f32 = 2.0;
-/// Drag-rectangle tint, premultiplied.
-pub const DRAG_BOX_TINT: [f32; 4] = [0.16, 0.80, 0.32, 0.80];
+/// Drag-rectangle 10%-opacity fill tint, premultiplied.
+pub const DRAG_BOX_FILL_TINT: [f32; 4] = [0.0, 0.1, 0.0, 0.1];
+/// Drag-rectangle opaque border tint, premultiplied.
+pub const DRAG_BOX_BORDER_TINT: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// Placement-ghost tint, premultiplied white — the sheet already carries the
 /// colour and the alpha.
 pub const GHOST_TINT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
@@ -413,21 +415,44 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
 
     if let Some(d) = drag {
         let (min, max) = normalise_rect(d.a, d.b);
-        let w = max[0] - min[0];
-        let h = max[1] - min[1];
+        let x = min[0];
+        let y = min[1];
+        let w = max[0] - x;
+        let h = max[1] - y;
         let t = DRAG_BOX_THICKNESS_PX;
-        let uv = prop_uv(Prop::PanelFill);
-        // Top, bottom, left, right. Purely screen space, so no cull: the
-        // rectangle is defined by pointer pixels that were on screen.
-        for (pos, size) in [
-            ([min[0], min[1]], [w, t]),
-            ([min[0], max[1] - t], [w, t]),
-            ([min[0], min[1]], [t, h]),
-            ([max[0] - t, min[1]], [t, h]),
-        ] {
-            frame
-                .prop_group()
-                .push(SpriteInstance::new(pos, size, uv, DRAG_BOX_TINT));
-        }
+        // Fill first: a horizontal segment whose thickness equals the rect height
+        // produces a solid-fill quad without sampling the atlas.
+        frame.prop_group().push(SpriteInstance::diagonal_line(
+            [x, y + h * 0.5],
+            [x + w, y + h * 0.5],
+            h,
+            DRAG_BOX_FILL_TINT,
+        ));
+        // Four edges with half-thickness insets so each border quad sits fully
+        // inside the rect rather than straddling its edge.
+        frame.prop_group().push(SpriteInstance::diagonal_line(
+            [x, y + 1.0],
+            [x + w, y + 1.0],
+            t,
+            DRAG_BOX_BORDER_TINT,
+        ));
+        frame.prop_group().push(SpriteInstance::diagonal_line(
+            [x, y + h - 1.0],
+            [x + w, y + h - 1.0],
+            t,
+            DRAG_BOX_BORDER_TINT,
+        ));
+        frame.prop_group().push(SpriteInstance::diagonal_line(
+            [x + 1.0, y],
+            [x + 1.0, y + h],
+            t,
+            DRAG_BOX_BORDER_TINT,
+        ));
+        frame.prop_group().push(SpriteInstance::diagonal_line(
+            [x + w - 1.0, y],
+            [x + w - 1.0, y + h],
+            t,
+            DRAG_BOX_BORDER_TINT,
+        ));
     }
 }
