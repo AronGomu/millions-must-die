@@ -184,6 +184,55 @@ pub fn is_drag(a: [f32; 2], b: [f32; 2]) -> bool {
     (b[0] - a[0]).abs() >= DRAG_MIN_PX || (b[1] - a[1]).abs() >= DRAG_MIN_PX
 }
 
+/// The screen-space pixel dimensions of a building of `edge_cells` cells.
+///
+/// Shared with [`super::pack`], which uses the same formula to size the quad
+/// the renderer draws — one derivation rather than two that must agree.
+pub fn building_quad_px(edge_cells: u32, tile_w: f32, tile_h: f32) -> [f32; 2] {
+    let edge = edge_cells as f32;
+    [edge * tile_w, edge * tile_h * 2.0]
+}
+
+/// The screen-space rect the renderer draws a building of `edge_cells` into.
+///
+/// `(min_x, min_y, max_x, max_y)`. The building stands on its footprint
+/// centre: [`stand_on`] positions the sprite so its bottom edge sits on the
+/// projected ground point.
+pub fn building_screen_rect(view: &IsoView, ground: [f32; 2], edge_cells: u32) -> [f32; 4] {
+    let g = view.project(ground[0], ground[1]);
+    let size = building_quad_px(edge_cells, view.tile_w, view.tile_h);
+    let pos = stand_on(g, size);
+    [pos[0], pos[1], pos[0] + size[0], pos[1] + size[1]]
+}
+
+/// Whether a building whose footprint is centred at `ground` (cell space) is
+/// hit by a click at `screen`.
+///
+/// Union of two shapes: the full rendered sprite rect (so the whole tower is
+/// always clickable) **or** the footprint cells that project below the sprite
+/// (so a click on the building's plot rather than its tower still picks it).
+pub fn building_pick_contains(
+    view: &IsoView,
+    ground: [f32; 2],
+    edge_cells: u32,
+    screen: [f32; 2],
+) -> bool {
+    let rect = building_screen_rect(view, ground, edge_cells);
+    if screen[0] >= rect[0] && screen[0] <= rect[2] && screen[1] >= rect[1] && screen[1] <= rect[3]
+    {
+        return true;
+    }
+    let p = view.unproject(screen[0], screen[1]);
+    if !p[0].is_finite() || !p[1].is_finite() {
+        return false;
+    }
+    let cell = Cell {
+        x: p[0].floor().max(0.0) as u32,
+        y: p[1].floor().max(0.0) as u32,
+    };
+    footprint_contains(ground, edge_cells, cell)
+}
+
 /// The top-left corner of a quad of `size` whose **bottom edge** sits on
 /// screen point `ground` and which is horizontally centred on it.
 ///
@@ -262,9 +311,6 @@ pub fn entity_pick_depth(view: &IsoView, ground: [f32; 2]) -> f32 {
 /// No type-priority branch: a worker standing on its own HQ wins only when its
 /// ground point renders strictly in front of the HQ's.
 pub fn pick_at(world: &RtsWorld, view: &IsoView, screen: [f32; 2]) -> Pick {
-    let width = world.scenario().width();
-    let height = world.scenario().height();
-    let cell = view.cell_at(screen[0], screen[1], width, height);
     let slot_count = world.entities().slot_count();
 
     let mut best: Option<(f32, usize)> = None;
@@ -284,9 +330,12 @@ pub fn pick_at(world: &RtsWorld, view: &IsoView, screen: [f32; 2]) -> Pick {
             }
             EntityKind::Building(b) => {
                 world.entities().owner(slot) == OWNER_PLAYER
-                    && cell.is_some_and(|c| {
-                        footprint_contains(world.entities().position(slot), b.footprint_cells(), c)
-                    })
+                    && building_pick_contains(
+                        view,
+                        world.entities().position(slot),
+                        b.footprint_cells(),
+                        screen,
+                    )
             }
             EntityKind::Node(_) => {
                 let rect = sprite_screen_rect(view, world.entities().position(slot));

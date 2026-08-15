@@ -20,7 +20,7 @@ use crate::scenario::Cell;
 
 use super::build::{Placement, placement_valid};
 use super::entity::{BuildingKind, EntityKind, MAX_ENTITIES, ResourceKind, UnitKind};
-use super::selection::{RTS_SPRITE_SIZE_PX, normalise_rect, stand_on};
+use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
 use super::world::RtsWorld;
 
 /// Columns of every RTS sheet — the grid [`frame_uv_rect`] addresses.
@@ -92,18 +92,6 @@ pub fn unit_slot(kind: UnitKind) -> u32 {
         UnitKind::Worker => SLOT_RTS_WORKER,
         UnitKind::Soldier => SLOT_RTS_SOLDIER,
     }
-}
-
-/// The screen quad of a building of `edge` cells under a given tile.
-///
-/// Width is the footprint diamond's full width (`edge * tile_w`); height is
-/// twice the diamond's height (`edge * tile_h * 2`), which is what makes a
-/// building read as a solid standing on its plot rather than as a flat decal on
-/// it. For the tracked scene (`tile 8 x 4`) that is 96x96 (HQ), 64x64 (Depot)
-/// and 80x80 (Barracks) px.
-pub fn building_quad_px(edge_cells: u32, tile_w: f32, tile_h: f32) -> [f32; 2] {
-    let edge = edge_cells as f32;
-    [edge * tile_w, edge * tile_h * 2.0]
 }
 
 /// The minimum corner of a footprint of `edge` cells centred on `cell`.

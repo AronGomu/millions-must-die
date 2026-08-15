@@ -66,8 +66,8 @@ pub use orders::{
 };
 pub use pack::{
     DRAG_BOX_THICKNESS_PX, DRAG_BOX_TINT, DragBox, GHOST_TINT, Prop, RtsFrame,
-    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_quad_px, building_uv,
-    ghost_min_corner, node_uv, pack_frame, prop_uv, unit_slot,
+    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, ghost_min_corner,
+    node_uv, pack_frame, prop_uv, unit_slot,
 };
 pub use production::{
     PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,
@@ -75,7 +75,8 @@ pub use production::{
     unit_cost,
 };
 pub use selection::{
-    DRAG_MIN_PX, MAX_SELECTION, Pick, RTS_SPRITE_SIZE_PX, Selection, box_select, entity_pick_depth,
+    DRAG_MIN_PX, MAX_SELECTION, Pick, RTS_SPRITE_SIZE_PX, Selection, box_select,
+    building_pick_contains, building_quad_px, building_screen_rect, entity_pick_depth,
     footprint_contains, footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect,
     unit_pick_contains,
 };

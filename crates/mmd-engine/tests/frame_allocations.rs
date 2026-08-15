@@ -1285,3 +1285,45 @@ fn joined_phase1_1_frame_allocates_nothing() {
         "the measured window let two bodies penetrate"
     );
 }
+
+/// Building detail with a full queue (5 Workers), rally, and SUPPLY/PROGRESS
+/// lines must be allocation-free — the longest-path building card.
+#[test]
+fn full_building_detail_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    h.world_mut().selection_mut().insert(hq);
+    h.world_mut().resources_mut().crystal = 10_000;
+    // Scene starts with 6 workers (6 supply used); HQ grants 10, leaving 4 free.
+    for _ in 0..4 {
+        assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    }
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    let cursor = [960.0, 540.0];
+
+    // Warm-up: any first-frame growth settles now.
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), cursor, None, &mut frame);
+    pack_hud(h.world(), &mut frame);
+    let packed = frame.instance_count();
+    assert!(packed > 0, "warmup must pack something");
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        pack_frame(h.world(), cursor, None, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(guard.allocations(), 0, "full building detail HUD allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        frame.instance_count(),
+        packed,
+        "re-packing changed the frame"
+    );
+}

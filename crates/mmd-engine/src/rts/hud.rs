@@ -12,9 +12,11 @@
 
 use crate::render::{DrawGroup, GLYPH_H_PX, GLYPH_W_PX, SpriteInstance, frame_uv_rect, push_text};
 
+use super::build::supply_grant;
 use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
 use super::minimap::minimap_projection;
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
+use super::production::produce_ticks;
 use super::world::RtsWorld;
 
 /// Every fixed logical-space rect the HUD's chrome occupies.
@@ -977,7 +979,10 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
         EntityKind::Unit(UnitKind::Soldier) => {
             push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
         }
-        EntityKind::Building(_) => {
+        EntityKind::Building(b) => {
+            let id = store.id_at(slot).expect("live slot");
+
+            // Line 2: READY or BUILDING N%
             let target = store.progress_target(slot);
             // Not a manual `checked_div`: `target == 0` is the site-vs-finished
             // business branch (READY has no percentage at all), not a guard
@@ -994,11 +999,59 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                 cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 push_text(font, "%", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
             }
+            y += PANEL_LINE_PX;
 
-            if let Some(id) = store.id_at(slot)
-                && let Some(cell) = world.rally(id)
+            // Line 3: SUPPLY +N (zero grant still shown)
             {
-                y += PANEL_LINE_PX;
+                let grant = supply_grant(b);
+                let mut cx = x;
+                cx += push_text(font, "SUPPLY +", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                let s = fmt_u32(&mut buf, grant);
+                push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            }
+            y += PANEL_LINE_PX;
+
+            // Line 4: QUEUE
+            let queue = world.production_queue(id);
+            if let Some(q) = queue
+                && !q.is_empty()
+            {
+                let mut cx = x;
+                cx += push_text(font, "QUEUE ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                for (i, &kind) in q.entries().iter().enumerate() {
+                    if i > 0 {
+                        cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    }
+                    let label = match kind {
+                        UnitKind::Worker => "W",
+                        UnitKind::Soldier => "S",
+                    };
+                    cx += push_text(font, label, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                }
+                let _ = cx;
+            } else {
+                push_text(font, "QUEUE -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            }
+            y += PANEL_LINE_PX;
+
+            // Line 5: PROGRESS (head only; saturated at 100)
+            if let Some(q) = queue
+                && let Some(head) = q.head()
+            {
+                let ticks = produce_ticks(head);
+                let pct = (q.progress() * 100 / ticks).min(100);
+                let mut cx = x;
+                cx += push_text(font, "PROGRESS ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                let s = fmt_u32(&mut buf, pct);
+                cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                push_text(font, "%", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            } else {
+                push_text(font, "PROGRESS -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            }
+            y += PANEL_LINE_PX;
+
+            // Line 6: RALLY
+            if let Some(cell) = world.rally(id) {
                 let mut cx = x;
                 cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 let s = fmt_u32(&mut buf, cell.x);
@@ -1006,6 +1059,9 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                 cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 let s = fmt_u32(&mut buf, cell.y);
                 push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                let _ = cx;
+            } else {
+                push_text(font, "RALLY -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
             }
         }
         EntityKind::Node(_) => {

@@ -7,8 +7,9 @@
 use mmd_engine::render::{Camera, IsoView};
 use mmd_engine::rts::{
     BuildingKind, DRAG_MIN_PX, EntityId, EntityKind, OWNER_NEUTRAL, OWNER_PLAYER, Pick,
-    RTS_SPRITE_SIZE_PX, ResourceKind, Selection, UnitKind, entity_pick_depth, footprint_contains,
-    footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect, unit_pick_contains,
+    RTS_SPRITE_SIZE_PX, ResourceKind, Selection, UnitKind, building_pick_contains,
+    building_screen_rect, entity_pick_depth, footprint_contains, footprint_min, is_drag,
+    normalise_rect, pick_at, sprite_screen_rect, unit_pick_contains,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
@@ -260,14 +261,24 @@ fn clicking_a_node_selects_it() {
     let slot = h.world().entities().slot(node).expect("live node");
     assert_eq!(h.world().entities().position(slot), [140.5, 150.5]);
 
-    let screen = view().project(140.5, 150.5);
+    // Click the upper-left corner of the node's sprite rect: that portion of
+    // the sprite is above/left of the HQ's 96x96 building sprite, which
+    // extends far enough south to overlap the node's ground point.
+    let rect = sprite_screen_rect(&view(), [140.5, 150.5]);
+    let screen = [rect[0] + 2.0, rect[1] + 2.0];
     assert_eq!(pick_at(h.world(), &view(), screen), Pick::Node(node));
 }
 
 #[test]
 fn clicking_a_node_one_cell_off_misses_it() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    let screen = view().project(141.5, 150.5);
+    // Pick a point above the node sprite (and above the HQ sprite) — genuinely
+    // outside all entity pick regions in this scene.
+    let node_rect = sprite_screen_rect(&view(), [140.5, 150.5]);
+    let screen = [
+        node_rect[0] + (node_rect[2] - node_rect[0]) * 0.5,
+        node_rect[1] - 4.0,
+    ];
     assert_eq!(pick_at(h.world(), &view(), screen), Pick::Nothing);
 }
 
@@ -599,4 +610,141 @@ fn state_hash_sees_the_selection() {
     let pick = h.world_mut().click_select(&view(), screen);
     assert!(matches!(pick, Pick::Unit(_)));
     assert_ne!(h.state_hash(), before);
+}
+
+// --- building pick: sprite rect union footprint --------------------------------
+
+#[test]
+fn all_building_sprite_corners_are_pickable() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    // Move all workers well clear so none overlap with the HQ sprite.
+    for id in workers(&h) {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
+    let hq = h.world().start_hq().expect("hq");
+    let slot = h.world().entities().slot(hq).expect("live hq");
+    let ground = h.world().entities().position(slot);
+    let rect = building_screen_rect(&view(), ground, BuildingKind::Hq.footprint_cells());
+    let (x0, y0, x1, y1) = (rect[0], rect[1], rect[2], rect[3]);
+
+    for (x, y) in [
+        (x0 + 1.0, y0 + 1.0),
+        (x1 - 1.0, y0 + 1.0),
+        (x0 + 1.0, y1 - 1.0),
+        (x1 - 1.0, y1 - 1.0),
+    ] {
+        assert_eq!(
+            pick_at(h.world(), &view(), [x, y]),
+            Pick::Building(hq),
+            "corner ({x}, {y}) inside sprite rect must pick the HQ"
+        );
+    }
+}
+
+#[test]
+fn building_footprint_only_region_remains_pickable() {
+    // A cell at the far corner of the HQ footprint projects below the sprite
+    // rect bottom (the tower stands on the ground point, footprint tiles below
+    // it). Clicking there must still select the building.
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    for id in workers(&h) {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
+    let hq = h.world().start_hq().expect("hq");
+    let slot = h.world().entities().slot(hq).expect("live hq");
+    let ground = h.world().entities().position(slot);
+    let rect = building_screen_rect(&view(), ground, BuildingKind::Hq.footprint_cells());
+
+    // Cell [171, 171] is the far corner of the footprint (min [160,160], edge 12).
+    // Its screen centre projects below the sprite bottom.
+    let screen = view().project(171.5, 171.5);
+    assert!(
+        screen[1] > rect[3],
+        "the footprint corner must project below the sprite rect (sprite bottom {}, \
+         footprint corner screen y {})",
+        rect[3],
+        screen[1]
+    );
+    assert_eq!(
+        pick_at(h.world(), &view(), screen),
+        Pick::Building(hq),
+        "a footprint-only screen point must still pick the building"
+    );
+}
+
+#[test]
+fn outside_building_union_misses() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    for id in workers(&h) {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
+    let hq = h.world().start_hq().expect("hq");
+    let slot = h.world().entities().slot(hq).expect("live hq");
+    let ground = h.world().entities().position(slot);
+    let rect = building_screen_rect(&view(), ground, BuildingKind::Hq.footprint_cells());
+
+    // One cell past the far corner of the footprint — outside both sprite and footprint.
+    let screen = view().project(172.5, 172.5);
+    assert!(
+        screen[1] > rect[3],
+        "the point must be below the sprite rect"
+    );
+    assert_eq!(
+        pick_at(h.world(), &view(), screen),
+        Pick::Nothing,
+        "a point outside both sprite and footprint must miss"
+    );
+}
+
+#[test]
+fn building_union_preserves_owner_and_depth_rules() {
+    // Only player-owned buildings are clickable; neutral ones must miss.
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    for id in workers(&h) {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
+
+    let neutral_building = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Depot),
+            OWNER_NEUTRAL,
+            [50.0, 50.0],
+        )
+        .expect("spawn neutral depot");
+    let slot = h
+        .world()
+        .entities()
+        .slot(neutral_building)
+        .expect("live depot");
+    let ground = h.world().entities().position(slot);
+    // Click the centre of the sprite rect — must miss because not player-owned.
+    let screen = view().project(ground[0], ground[1]);
+    assert_eq!(
+        pick_at(h.world(), &view(), screen),
+        Pick::Nothing,
+        "neutral-owned building must not be pickable"
+    );
+}
+
+#[test]
+fn building_pick_contains_sprite_and_footprint() {
+    let v = view();
+    let ground = [166.0, 166.0];
+    let edge = BuildingKind::Hq.footprint_cells();
+    let rect = building_screen_rect(&v, ground, edge);
+
+    // Inside sprite rect.
+    let centre = [(rect[0] + rect[2]) * 0.5, (rect[1] + rect[3]) * 0.5];
+    assert!(building_pick_contains(&v, ground, edge, centre));
+
+    // Below sprite but in footprint.
+    let footprint_screen = v.project(171.5, 171.5);
+    assert!(footprint_screen[1] > rect[3]);
+    assert!(building_pick_contains(&v, ground, edge, footprint_screen));
+
+    // Outside both.
+    let outside = v.project(172.5, 172.5);
+    assert!(!building_pick_contains(&v, ground, edge, outside));
 }

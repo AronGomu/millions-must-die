@@ -287,3 +287,18 @@ command below except what a browser or a human eye must judge.
 - [ ] R key: no effect in any context (unbound)
 - [ ] Banner text visible in OS window title: "QWE/ASD/ZXC card, right-click cancel"
 - [ ] Pointer clicks on command card still work as before (shared execute_slot path)
+
+## T9 — building sprite pick and full stats card
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --test rts_selection --locked` exits 0 (41 tests)
+- [x] `cargo test -p mmd-engine --test rts_hud --locked` exits 0 (67 tests)
+- [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (26 tests)
+- [ ] Manual: click on the top/side of a building sprite (above the footprint) — confirm it selects the building
+- [ ] Manual: click on a footprint cell below the building sprite — confirm it selects the building
+- [ ] Manual: select HQ with no queue — confirm six-line card: HQ / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
+- [ ] Manual: enqueue Workers at HQ — confirm QUEUE W,W,... and PROGRESS N% update live
+- [ ] Manual: rally flag set — confirm RALLY x,y on line 6
+- [ ] Manual: select Barracks — confirm SUPPLY +0 on line 3
+- [ ] Manual: select an under-construction site — confirm BUILDING N% on line 2, remaining lines explicit
