@@ -538,6 +538,7 @@ fn settings_edit_field_pack_allocates_nothing() {
         music_muted: false,
         voice_muted: false,
         sfx_muted: false,
+        scroll_offset: 0.0,
     };
     let interaction = InteractionSnapshot::default();
     let digits: &[u8] = b"999";
@@ -572,6 +573,69 @@ fn settings_edit_field_pack_allocates_nothing() {
         guard.allocations(),
         0,
         "packing settings with active edit allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(frame.instance_count(), packed);
+}
+
+/// Settings modal packed at non-zero scroll offset must be allocation-free after warmup (`T6`).
+#[test]
+fn scroll_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let snapshot = ModalSnapshot {
+        window_mode_index: 0,
+        keyboard_pan: 48,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
+        scroll_offset: mmd_engine::rts::settings_max_scroll(),
+    };
+    let interaction = InteractionSnapshot::default();
+
+    let mut frame = RtsFrame::new();
+    pack_modal_interactive(
+        ModalPage::Settings,
+        snapshot,
+        None,
+        &interaction,
+        None,
+        &mut frame,
+    );
+    let packed = frame.instance_count();
+    assert!(
+        packed > 0,
+        "warmup must pack the settings modal at max scroll"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        frame.clear();
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            None,
+            &interaction,
+            None,
+            &mut frame,
+        );
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "packing settings at non-zero scroll allocated"
     );
     guard.assert_zero();
     drop(guard);

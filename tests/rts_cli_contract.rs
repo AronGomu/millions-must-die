@@ -944,6 +944,18 @@ fn a_produces_a_worker_at_the_hq() {
 }
 
 #[test]
+fn exit_line_reports_settings_scroll_px() {
+    let Some(cli) = or_skip(
+        "exit_line_reports_settings_scroll_px",
+        rts(&["--frames", "1"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("settings_scroll_px"), "0", "{cli}");
+}
+
+#[test]
 fn the_exit_line_reports_every_counter() {
     let Some(cli) = or_skip(
         "the_exit_line_reports_every_counter",

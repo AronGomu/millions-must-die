@@ -61,6 +61,97 @@ impl HudLayout {
     pub const SETTINGS_SCROLLBAR_TRACK: [f32; 4] = [1432.0, 160.0, 16.0, 720.0];
 }
 
+/// Total content height of the scrollable settings body (y 160..1008).
+pub const SETTINGS_CONTENT_HEIGHT_PX: f32 = 848.0;
+/// Logical pixels scrolled per wheel notch.
+pub const SETTINGS_SCROLL_STEP_PX: f32 = 72.0;
+/// Minimum scrollbar thumb height.
+pub const SETTINGS_SCROLLBAR_MIN_THUMB_PX: f32 = 48.0;
+
+/// Maximum allowed scroll offset: content overrun beyond the viewport, floored at 0.
+pub fn settings_max_scroll() -> f32 {
+    (SETTINGS_CONTENT_HEIGHT_PX - HudLayout::SETTINGS_BODY_VIEWPORT[3]).max(0.0)
+}
+
+/// Clamp a scroll offset into `0.0..=settings_max_scroll()`.
+pub fn clamp_settings_scroll(v: f32) -> f32 {
+    v.clamp(0.0, settings_max_scroll())
+}
+
+/// Scrollbar thumb rect for the given scroll `offset`.
+///
+/// Thumb top is exactly at the viewport top when `offset == 0`; thumb bottom
+/// is exactly at the viewport bottom when `offset == settings_max_scroll()`.
+pub fn settings_scrollbar_thumb(offset: f32) -> [f32; 4] {
+    let vp = HudLayout::SETTINGS_BODY_VIEWPORT;
+    let track = HudLayout::SETTINGS_SCROLLBAR_TRACK;
+    let viewport_h = vp[3];
+    let thumb_len =
+        (viewport_h * viewport_h / SETTINGS_CONTENT_HEIGHT_PX).max(SETTINGS_SCROLLBAR_MIN_THUMB_PX);
+    let travel = viewport_h - thumb_len;
+    let max = settings_max_scroll();
+    let thumb_y = if max > 0.0 {
+        vp[1] + offset / max * travel
+    } else {
+        vp[1]
+    };
+    [track[0], thumb_y, track[2], thumb_len]
+}
+
+/// Clamp-and-crop a [`SpriteInstance`] to `clip`.
+///
+/// Returns `None` when the instance is fully outside. For partial overlap,
+/// adjusts `pos`, `size`, and `uv_rect` proportionally. Never call on
+/// ring-sentinel instances (negative `uv_rect[0]`).
+pub fn clip_sprite_to_rect(inst: SpriteInstance, clip: [f32; 4]) -> Option<SpriteInstance> {
+    let x0 = inst.pos[0];
+    let y0 = inst.pos[1];
+    let w = inst.size[0];
+    let h = inst.size[1];
+    let x1 = x0 + w;
+    let y1 = y0 + h;
+    let cx0 = clip[0];
+    let cy0 = clip[1];
+    let cx1 = cx0 + clip[2];
+    let cy1 = cy0 + clip[3];
+    if x1 <= cx0 || x0 >= cx1 || y1 <= cy0 || y0 >= cy1 {
+        return None;
+    }
+    let new_x0 = x0.max(cx0);
+    let new_y0 = y0.max(cy0);
+    let new_x1 = x1.min(cx1);
+    let new_y1 = y1.min(cy1);
+    let [u0, v0, u1, v1] = inst.uv_rect;
+    let uw = u1 - u0;
+    let vh = v1 - v0;
+    let new_u0 = if w > 0.0 {
+        u0 + (new_x0 - x0) / w * uw
+    } else {
+        u0
+    };
+    let new_u1 = if w > 0.0 {
+        u1 - (x1 - new_x1) / w * uw
+    } else {
+        u1
+    };
+    let new_v0 = if h > 0.0 {
+        v0 + (new_y0 - y0) / h * vh
+    } else {
+        v0
+    };
+    let new_v1 = if h > 0.0 {
+        v1 - (y1 - new_y1) / h * vh
+    } else {
+        v1
+    };
+    Some(SpriteInstance {
+        pos: [new_x0, new_y0],
+        size: [new_x1 - new_x0, new_y1 - new_y0],
+        uv_rect: [new_u0, new_v0, new_u1, new_v1],
+        tint: inst.tint,
+    })
+}
+
 /// Settings rows share one left margin/width inside [`HudLayout::SETTINGS_PANEL`]
 /// so every row lines up under the panel's own left/right padding. Unchanged
 /// from T13 so `snap_track` still reads 78 at x=1170 on the keyboard pan track.
@@ -1158,6 +1249,10 @@ pub enum ModalHit {
     NumericField(NumericSettingId),
     /// Click on an audio channel mute label — toggle its mute flag.
     ToggleMute(AudioChannelId),
+    /// Scrollbar track click: `+1` = page down, `-1` = page up.
+    ScrollbarTrack(i32),
+    /// Scrollbar thumb press (drag handled via retained move).
+    ScrollbarThumb,
     /// Anywhere else inside the modal — consumed, no action.
     Consumed,
 }
@@ -1182,6 +1277,8 @@ pub fn control_id_from_modal_hit(hit: ModalHit) -> Option<ControlId> {
         ModalHit::ToggleMute(AudioChannelId::Music) => Some(ControlId::MusicMute),
         ModalHit::ToggleMute(AudioChannelId::Voice) => Some(ControlId::VoiceMute),
         ModalHit::ToggleMute(AudioChannelId::Sfx) => Some(ControlId::SfxMute),
+        ModalHit::ScrollbarTrack(_) => Some(ControlId::ScrollbarTrack),
+        ModalHit::ScrollbarThumb => Some(ControlId::ScrollbarThumb),
         ModalHit::Consumed => None,
     }
 }
@@ -1214,6 +1311,8 @@ pub struct ModalSnapshot {
     pub music_muted: bool,
     pub voice_muted: bool,
     pub sfx_muted: bool,
+    /// Current settings-body scroll offset in logical pixels (0 = top, max = bottom).
+    pub scroll_offset: f32,
 }
 
 fn point_in_modal_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
@@ -1241,7 +1340,7 @@ pub fn snap_numeric_at_x(id: NumericSettingId, local_x: f32) -> u32 {
 
 /// Classify a logical (1920x1080) point against an open modal's own chrome.
 /// Never returns `None` — an open modal owns every pointer point.
-pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
+pub fn modal_hit_test(page: ModalPage, point: [f32; 2], scroll_offset: f32) -> ModalHit {
     match page {
         ModalPage::PauseMenu => {
             if point_in_modal_rect(point, HudLayout::PAUSE_MENU_SETTINGS_BTN) {
@@ -1253,33 +1352,49 @@ pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
             }
         }
         ModalPage::Settings => {
+            // Fixed footer: Back button is always hittable regardless of scroll.
             if point_in_modal_rect(point, HudLayout::SETTINGS_BACK_BTN) {
                 return ModalHit::Back;
             }
+            // Scrollbar: thumb first (narrower hit zone), then track.
+            if point_in_modal_rect(point, HudLayout::SETTINGS_SCROLLBAR_TRACK) {
+                let thumb = settings_scrollbar_thumb(scroll_offset);
+                if point_in_modal_rect(point, thumb) {
+                    return ModalHit::ScrollbarThumb;
+                }
+                let dir = if point[1] < thumb[1] { -1i32 } else { 1i32 };
+                return ModalHit::ScrollbarTrack(dir);
+            }
+            // Body elements: reject if outside viewport, then apply inverse scroll transform.
+            if !point_in_modal_rect(point, HudLayout::SETTINGS_BODY_VIEWPORT) {
+                return ModalHit::Consumed;
+            }
+            // body_point is in content coordinates (screen + offset).
+            let body_point = [point[0], point[1] + scroll_offset];
             for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
-                if point_in_modal_rect(point, *rect) {
+                if point_in_modal_rect(body_point, *rect) {
                     return ModalHit::WindowMode(i as u8);
                 }
             }
             // Value fields sit to the right of tracks (no overlap); test before
             // tracks so a future layout slip cannot steal field clicks.
             for spec in &NUMERIC_SETTING_SPECS {
-                if point_in_modal_rect(point, spec.value_field) {
+                if point_in_modal_rect(body_point, spec.value_field) {
                     return ModalHit::NumericField(spec.id);
                 }
             }
-            if point_in_modal_rect(point, KEYBOARD_PAN_TRACK) {
+            if point_in_modal_rect(body_point, KEYBOARD_PAN_TRACK) {
                 return ModalHit::KeyboardPan(snap_track(
-                    point[0],
+                    body_point[0],
                     KEYBOARD_PAN_TRACK,
                     PAN_MIN,
                     PAN_MAX,
                     PAN_STEP,
                 ));
             }
-            if point_in_modal_rect(point, EDGE_PAN_TRACK) {
+            if point_in_modal_rect(body_point, EDGE_PAN_TRACK) {
                 return ModalHit::EdgePan(snap_track(
-                    point[0],
+                    body_point[0],
                     EDGE_PAN_TRACK,
                     PAN_MIN,
                     PAN_MAX,
@@ -1287,18 +1402,18 @@ pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
                 ));
             }
             // Full label row is the control; the 32px square remains a subset.
-            if point_in_modal_rect(point, CONFINE_CONTROL_RECT)
-                || point_in_modal_rect(point, CONFINE_CHECKBOX)
+            if point_in_modal_rect(body_point, CONFINE_CONTROL_RECT)
+                || point_in_modal_rect(body_point, CONFINE_CHECKBOX)
             {
                 return ModalHit::Confine;
             }
-            if point_in_modal_rect(point, FOCUS_CONTROL_RECT)
-                || point_in_modal_rect(point, FOCUS_CHECKBOX)
+            if point_in_modal_rect(body_point, FOCUS_CONTROL_RECT)
+                || point_in_modal_rect(body_point, FOCUS_CHECKBOX)
             {
                 return ModalHit::Focus;
             }
             for (i, &rect) in MUTE_LABEL_RECTS.iter().enumerate() {
-                if point_in_modal_rect(point, rect) {
+                if point_in_modal_rect(body_point, rect) {
                     return ModalHit::ToggleMute(match i {
                         0 => AudioChannelId::Master,
                         1 => AudioChannelId::Music,
@@ -1307,36 +1422,36 @@ pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
                     });
                 }
             }
-            if point_in_modal_rect(point, MASTER_TRACK) {
+            if point_in_modal_rect(body_point, MASTER_TRACK) {
                 return ModalHit::Master(snap_track(
-                    point[0],
+                    body_point[0],
                     MASTER_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
                     VOLUME_STEP,
                 ));
             }
-            if point_in_modal_rect(point, MUSIC_TRACK) {
+            if point_in_modal_rect(body_point, MUSIC_TRACK) {
                 return ModalHit::Music(snap_track(
-                    point[0],
+                    body_point[0],
                     MUSIC_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
                     VOLUME_STEP,
                 ));
             }
-            if point_in_modal_rect(point, VOICE_TRACK) {
+            if point_in_modal_rect(body_point, VOICE_TRACK) {
                 return ModalHit::Voice(snap_track(
-                    point[0],
+                    body_point[0],
                     VOICE_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
                     VOLUME_STEP,
                 ));
             }
-            if point_in_modal_rect(point, SFX_TRACK) {
+            if point_in_modal_rect(body_point, SFX_TRACK) {
                 return ModalHit::Sfx(snap_track(
-                    point[0],
+                    body_point[0],
                     SFX_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
@@ -1534,7 +1649,13 @@ pub fn pack_modal_interactive(
             );
         }
         ModalPage::Settings => {
+            // Fixed chrome: the outer panel drawn under everything.
             push_panel(&mut props.instances, HudLayout::SETTINGS_PANEL, PANEL_TINT);
+
+            // --- scrollable body ------------------------------------------------
+            let body_props_start = props.instances.len();
+            let body_font_start = font.instances.len();
+
             for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
                 push_modal_button(
                     &mut props.instances,
@@ -1618,6 +1739,45 @@ pub fn pack_modal_interactive(
                     false,
                 );
             }
+
+            // Apply scroll transform + clip body instances in-place (no allocation).
+            let offset = snapshot.scroll_offset;
+            let clip = HudLayout::SETTINGS_BODY_VIEWPORT;
+            for inst in &mut props.instances[body_props_start..] {
+                inst.pos[1] -= offset;
+            }
+            let mut write = body_props_start;
+            for read in body_props_start..props.instances.len() {
+                if let Some(clipped) = clip_sprite_to_rect(props.instances[read], clip) {
+                    props.instances[write] = clipped;
+                    write += 1;
+                }
+            }
+            props.instances.truncate(write);
+            for inst in &mut font.instances[body_font_start..] {
+                inst.pos[1] -= offset;
+            }
+            write = body_font_start;
+            for read in body_font_start..font.instances.len() {
+                if let Some(clipped) = clip_sprite_to_rect(font.instances[read], clip) {
+                    font.instances[write] = clipped;
+                    write += 1;
+                }
+            }
+            font.instances.truncate(write);
+
+            // --- scrollbar (fixed, not scrolled) --------------------------------
+            push_panel(
+                &mut props.instances,
+                HudLayout::SETTINGS_SCROLLBAR_TRACK,
+                SLIDER_TRACK_TINT,
+            );
+            let thumb = settings_scrollbar_thumb(offset);
+            let thumb_state =
+                control_visual_state(ControlId::ScrollbarThumb, interaction, false, false);
+            push_control_frame(&mut props.instances, thumb, thumb_state);
+
+            // --- fixed footer ---------------------------------------------------
             push_modal_button(
                 &mut props.instances,
                 &mut font.instances,

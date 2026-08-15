@@ -927,6 +927,7 @@ fn default_snapshot() -> ModalSnapshot {
         music_muted: false,
         voice_muted: false,
         sfx_muted: false,
+        scroll_offset: 0.0,
     }
 }
 
@@ -940,26 +941,25 @@ fn settings_menu_contains_settings_and_close_actions() {
     assert_eq!(
         modal_hit_test(
             ModalPage::PauseMenu,
-            corner(HudLayout::PAUSE_MENU_SETTINGS_BTN)
+            corner(HudLayout::PAUSE_MENU_SETTINGS_BTN),
+            0.0,
         ),
         ModalHit::OpenSettings
     );
     assert_eq!(
         modal_hit_test(
             ModalPage::PauseMenu,
-            corner(HudLayout::PAUSE_MENU_CLOSE_BTN)
+            corner(HudLayout::PAUSE_MENU_CLOSE_BTN),
+            0.0,
         ),
         ModalHit::CloseMenu
     );
-    // The modal's own panel, off the buttons: consumed, not an action.
     assert_eq!(
-        modal_hit_test(ModalPage::PauseMenu, corner(HudLayout::PAUSE_MENU)),
+        modal_hit_test(ModalPage::PauseMenu, corner(HudLayout::PAUSE_MENU), 0.0),
         ModalHit::Consumed
     );
-    // Far outside the panel entirely: still consumed while the menu owns
-    // every point.
     assert_eq!(
-        modal_hit_test(ModalPage::PauseMenu, [10.0, 10.0]),
+        modal_hit_test(ModalPage::PauseMenu, [10.0, 10.0], 0.0),
         ModalHit::Consumed
     );
 }
@@ -967,7 +967,11 @@ fn settings_menu_contains_settings_and_close_actions() {
 #[test]
 fn settings_back_button_hits() {
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, corner(HudLayout::SETTINGS_BACK_BTN)),
+        modal_hit_test(
+            ModalPage::Settings,
+            corner(HudLayout::SETTINGS_BACK_BTN),
+            0.0
+        ),
         ModalHit::Back
     );
 }
@@ -976,7 +980,7 @@ fn settings_back_button_hits() {
 fn settings_window_mode_buttons_hit_their_own_index() {
     for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
         assert_eq!(
-            modal_hit_test(ModalPage::Settings, corner(*rect)),
+            modal_hit_test(ModalPage::Settings, corner(*rect), 0.0),
             ModalHit::WindowMode(i as u8)
         );
     }
@@ -985,11 +989,11 @@ fn settings_window_mode_buttons_hit_their_own_index() {
 #[test]
 fn settings_toggle_hits() {
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, corner(CONFINE_CHECKBOX)),
+        modal_hit_test(ModalPage::Settings, corner(CONFINE_CHECKBOX), 0.0),
         ModalHit::Confine
     );
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, corner(FOCUS_CHECKBOX)),
+        modal_hit_test(ModalPage::Settings, corner(FOCUS_CHECKBOX), 0.0),
         ModalHit::Focus
     );
 }
@@ -1000,6 +1004,7 @@ fn settings_tracks_snap_within_bounds() {
         let hit = modal_hit_test(
             ModalPage::Settings,
             [track[0] + track[2] * 0.5, track[1] + 1.0],
+            0.0,
         );
         let v = match hit {
             ModalHit::KeyboardPan(v) | ModalHit::EdgePan(v) => v,
@@ -1011,27 +1016,48 @@ fn settings_tracks_snap_within_bounds() {
         );
     }
 
-    for track in [MASTER_TRACK, MUSIC_TRACK, VOICE_TRACK, SFX_TRACK] {
-        // Leftmost point on the track: must snap to the minimum, never
-        // below it.
-        let hit = modal_hit_test(ModalPage::Settings, [track[0], track[1] + 1.0]);
+    for track in [MASTER_TRACK, MUSIC_TRACK, VOICE_TRACK] {
+        // Leftmost point: must snap to minimum.
+        let hit = modal_hit_test(ModalPage::Settings, [track[0], track[1] + 1.0], 0.0);
         let v = match hit {
-            ModalHit::Master(v) | ModalHit::Music(v) | ModalHit::Voice(v) | ModalHit::Sfx(v) => v,
+            ModalHit::Master(v) | ModalHit::Music(v) | ModalHit::Voice(v) => v,
             other => panic!("expected a volume hit, got {other:?}"),
         };
         assert_eq!(v, VOLUME_MIN);
 
-        // Rightmost point: must snap to the maximum, never past it.
         let hit = modal_hit_test(
             ModalPage::Settings,
             [track[0] + track[2] - 1.0, track[1] + 1.0],
+            0.0,
         );
         let v = match hit {
-            ModalHit::Master(v) | ModalHit::Music(v) | ModalHit::Voice(v) | ModalHit::Sfx(v) => v,
+            ModalHit::Master(v) | ModalHit::Music(v) | ModalHit::Voice(v) => v,
             other => panic!("expected a volume hit, got {other:?}"),
         };
         assert_eq!(v, VOLUME_MAX);
     }
+    // SFX track (content y 968) is below the viewport at offset 0;
+    // test at max scroll so it comes into view.
+    let offset = mmd_engine::rts::settings_max_scroll();
+    let hit = modal_hit_test(
+        ModalPage::Settings,
+        [SFX_TRACK[0], SFX_TRACK[1] + 1.0 - offset],
+        offset,
+    );
+    assert_eq!(hit, ModalHit::Sfx(VOLUME_MIN), "sfx leftmost at max scroll");
+    let hit = modal_hit_test(
+        ModalPage::Settings,
+        [
+            SFX_TRACK[0] + SFX_TRACK[2] - 1.0,
+            SFX_TRACK[1] + 1.0 - offset,
+        ],
+        offset,
+    );
+    assert_eq!(
+        hit,
+        ModalHit::Sfx(VOLUME_MAX),
+        "sfx rightmost at max scroll"
+    );
 }
 
 #[test]
@@ -1205,9 +1231,8 @@ fn all_command_cells_have_frames() {
 
 #[test]
 fn checkbox_label_row_is_one_control() {
-    // Square and far end of the label row must hit the same control.
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, corner(CONFINE_CHECKBOX)),
+        modal_hit_test(ModalPage::Settings, corner(CONFINE_CHECKBOX), 0.0),
         ModalHit::Confine
     );
     let row_end = [
@@ -1215,12 +1240,12 @@ fn checkbox_label_row_is_one_control() {
         CONFINE_CONTROL_RECT[1] + 1.0,
     ];
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, row_end),
+        modal_hit_test(ModalPage::Settings, row_end, 0.0),
         ModalHit::Confine,
         "label row end is part of the control"
     );
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, corner(FOCUS_CHECKBOX)),
+        modal_hit_test(ModalPage::Settings, corner(FOCUS_CHECKBOX), 0.0),
         ModalHit::Focus
     );
     let focus_end = [
@@ -1228,7 +1253,7 @@ fn checkbox_label_row_is_one_control() {
         FOCUS_CONTROL_RECT[1] + 1.0,
     ];
     assert_eq!(
-        modal_hit_test(ModalPage::Settings, focus_end),
+        modal_hit_test(ModalPage::Settings, focus_end, 0.0),
         ModalHit::Focus
     );
 }
@@ -1241,10 +1266,9 @@ fn close_menu_is_below_settings() {
     assert_eq!(close, [800.0, 588.0, 320.0, 64.0]);
     assert!(close[1] >= settings[1] + settings[3]);
     assert_eq!(
-        modal_hit_test(ModalPage::PauseMenu, corner(close)),
+        modal_hit_test(ModalPage::PauseMenu, corner(close), 0.0),
         ModalHit::CloseMenu
     );
-    // Close sits inside the unmoved pause menu panel.
     assert!(inside_rect(
         [close[0], close[1]],
         [close[2], close[3]],
@@ -1255,7 +1279,7 @@ fn close_menu_is_below_settings() {
 #[test]
 fn settings_button_still_contains_the_canonical_click() {
     assert_eq!(
-        modal_hit_test(ModalPage::PauseMenu, [960.0, 540.0]),
+        modal_hit_test(ModalPage::PauseMenu, [960.0, 540.0], 0.0),
         ModalHit::OpenSettings
     );
 }
@@ -1419,14 +1443,23 @@ fn clamp_snap_handles_bounds_and_half_steps() {
 
 #[test]
 fn numeric_fields_are_framed_and_hit_testable() {
+    use mmd_engine::rts::settings_max_scroll;
     for spec in &NUMERIC_SETTING_SPECS {
         assert_eq!(
             spec.value_field,
             [VALUE_FIELD_X, spec.track[1], VALUE_FIELD_W, VALUE_FIELD_H]
         );
-        let p = [spec.value_field[0] + 1.0, spec.value_field[1] + 1.0];
+        let vp_bottom = mmd_engine::rts::HudLayout::SETTINGS_BODY_VIEWPORT[1]
+            + mmd_engine::rts::HudLayout::SETTINGS_BODY_VIEWPORT[3];
+        let content_y = spec.value_field[1] + 1.0;
+        let offset = if content_y >= vp_bottom {
+            settings_max_scroll()
+        } else {
+            0.0
+        };
+        let p = [spec.value_field[0] + 1.0, content_y - offset];
         assert_eq!(
-            modal_hit_test(ModalPage::Settings, p),
+            modal_hit_test(ModalPage::Settings, p, offset),
             ModalHit::NumericField(spec.id),
             "{:?} field must hit",
             spec.id
@@ -1435,11 +1468,16 @@ fn numeric_fields_are_framed_and_hit_testable() {
             control_id_from_modal_hit(ModalHit::NumericField(spec.id)),
             Some(spec.id.field_control())
         );
-        // Track still hits as slider, not field.
-        let tp = [spec.track[0] + 1.0, spec.track[1] + 1.0];
+        let content_ty = spec.track[1] + 1.0;
+        let toffset = if content_ty >= vp_bottom {
+            settings_max_scroll()
+        } else {
+            0.0
+        };
+        let tp = [spec.track[0] + 1.0, content_ty - toffset];
         assert!(
             !matches!(
-                modal_hit_test(ModalPage::Settings, tp),
+                modal_hit_test(ModalPage::Settings, tp, toffset),
                 ModalHit::NumericField(_)
             ),
             "track must not classify as field"
@@ -1483,8 +1521,10 @@ fn audio_label_full_rect_returns_toggle_mute_hit() {
         // Use the right portion of the rect: SFX label (y 928..960) overlaps with
         // the Back button (x 472..632, y 900..956), so test at x near the right
         // edge (x > 632) where only the mute label applies.
-        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0];
-        let hit = modal_hit_test(ModalPage::Settings, p);
+        // SFX content_y=928 is outside viewport at offset=0; scroll enough to see it.
+        let offset = (rect[1] + 1.0 - 879.0).max(0.0);
+        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0 - offset];
+        let hit = modal_hit_test(ModalPage::Settings, p, offset);
         assert_eq!(hit, ModalHit::ToggleMute(ch), "channel {i} label must hit");
         assert_eq!(
             control_id_from_modal_hit(hit),
@@ -1555,8 +1595,10 @@ fn mute_label_hit_priority_over_nothing_below_track() {
     // Points inside a mute label rect must not hit a slider track.
     // Use right portion of rect to avoid Back button overlap for SFX (ch 3).
     for (i, &rect) in MUTE_LABEL_RECTS.iter().enumerate() {
-        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0];
-        let hit = modal_hit_test(ModalPage::Settings, p);
+        // SFX content_y=928 is outside viewport at offset=0; scroll enough to see it.
+        let offset = (rect[1] + 1.0 - 879.0).max(0.0);
+        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0 - offset];
+        let hit = modal_hit_test(ModalPage::Settings, p, offset);
         assert!(
             matches!(hit, ModalHit::ToggleMute(_)),
             "ch {i}: point inside mute label rect must classify as ToggleMute, got {hit:?}"

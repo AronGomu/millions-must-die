@@ -262,3 +262,16 @@ command below except what a browser or a human eye must judge.
 - [ ] Click VOICE label to mute, then click it again (unmute): confirm only the voice bus is affected; master, music, SFX are unaffected.
 - [ ] Open Settings, mute SFX, close Settings, relaunch `cargo run -- rts` with the same pref path: confirm sfx_muted persists in the settings file and SFX remains muted on relaunch.
 - [ ] Force a save failure (replace settings file with a directory) and click a mute label: confirm the flag rolls back (label stays idle), the old gains are restored, and a `SETTINGS NOT SAVED:` warning appears.
+
+## T6 scroll-and-clip-settings-body
+
+- [ ] Launch `cargo run -- rts`, open Settings: confirm the scrollbar track (right edge) and thumb are visible; thumb top is flush with the body viewport top at scroll=0.
+- [ ] Scroll mouse wheel down inside the settings body: confirm body content moves up (SFX rows come into view), thumb moves down; scroll back up to confirm return to offset=0 and thumb top returns to viewport top.
+- [ ] Wheel while pointer is in the scrollbar area (not the body): confirm the scroll still works (consumed silently, no world action).
+- [ ] Wheel on any other page (gameplay, pause menu): confirm no scroll change occurs.
+- [ ] Drag the scrollbar thumb from top to bottom: confirm it reaches exactly max offset (128 px) and no further; drag from bottom to top: confirm it returns to 0.
+- [ ] Click the scrollbar track above the thumb: confirm one-page-up scroll; click below: one-page-down.
+- [ ] At max scroll, confirm the Back button and any warning text are still visible and clickable (fixed footer, unaffected by scroll).
+- [ ] Scroll part-way, confirm the SFX slider and mute label respond to clicks at their displayed (scrolled) positions; confirm clicking at their content position (off-screen above) is consumed.
+- [ ] Confirm rendered body panels do not bleed outside the body viewport (no pixel spill above y=160 or below y=880).
+- [ ] Close Settings (Back), reopen: confirm scroll resets to 0 (or persists, depending on product decision — the exit line will show `settings_scroll_px=<rounded>` for verification).

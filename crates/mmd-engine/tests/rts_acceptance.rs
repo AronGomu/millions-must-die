@@ -792,7 +792,7 @@ fn the_script_coordinates_hit_what_they_name() {
             }
             ScriptPoint::Modal(expected) => {
                 assert_eq!(
-                    modal_hit_test(ModalPage::Settings, *screen),
+                    modal_hit_test(ModalPage::Settings, *screen, 0.0),
                     *expected,
                     "the script's {what} coordinate {screen:?} no longer hits {expected:?}"
                 );

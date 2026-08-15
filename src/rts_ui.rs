@@ -335,6 +335,8 @@ pub struct RtsUiState {
     /// Set by a failed [`commit_setting_change`]; cleared on the next
     /// successful commit or when the settings panel is closed.
     pub warning: Option<String>,
+    /// Current settings-body scroll offset in logical pixels (0 = top).
+    pub settings_scroll_px: f32,
 }
 
 impl Default for RtsUiState {
@@ -343,6 +345,7 @@ impl Default for RtsUiState {
             page: UiPage::Gameplay,
             pauses: PauseReasons::default(),
             warning: None,
+            settings_scroll_px: 0.0,
         }
     }
 }
@@ -424,8 +427,12 @@ pub fn owner_for_point(world: &RtsWorld, ui: &RtsUiState, point: [f32; 2]) -> Po
             Some(hit) => PointerOwner::Hud(hit),
             None => PointerOwner::World,
         },
-        UiPage::PauseMenu => PointerOwner::Modal(modal_hit_test(ModalPage::PauseMenu, point)),
-        UiPage::Settings => PointerOwner::Modal(modal_hit_test(ModalPage::Settings, point)),
+        UiPage::PauseMenu => PointerOwner::Modal(modal_hit_test(ModalPage::PauseMenu, point, 0.0)),
+        UiPage::Settings => PointerOwner::Modal(modal_hit_test(
+            ModalPage::Settings,
+            point,
+            ui.settings_scroll_px,
+        )),
     }
 }
 
@@ -557,6 +564,17 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
             begin_numeric_edit(session, id);
             None
         }
+        ModalHit::ScrollbarTrack(dir) => {
+            let viewport_h = mmd_engine::rts::HudLayout::SETTINGS_BODY_VIEWPORT[3];
+            let new_offset = session.ui.settings_scroll_px + dir as f32 * viewport_h;
+            session.ui.settings_scroll_px = mmd_engine::rts::clamp_settings_scroll(new_offset);
+            None
+        }
+        ModalHit::ScrollbarThumb => {
+            // Drag already handled via retained Move; bare click does nothing.
+            session.scroll_thumb_drag = None;
+            None
+        }
         ModalHit::Consumed => None,
     };
     if let Some(change) = change {
@@ -572,7 +590,11 @@ pub fn handle_modal_click(session: &mut RtsSession, hit: ModalHit) {
 /// live settings value plus [`RtsSession::pending_setting_change`]'s
 /// (unsaved-until-commit) candidate, so a slider that just moved never
 /// visually snaps back for one frame before its commit lands.
-fn modal_snapshot(settings: &RtsSettings, pending: Option<SettingsChange>) -> ModalSnapshot {
+fn modal_snapshot(
+    settings: &RtsSettings,
+    pending: Option<SettingsChange>,
+    scroll_offset: f32,
+) -> ModalSnapshot {
     let mut preview = settings.clone();
     if let Some(change) = pending {
         change.apply_to(&mut preview);
@@ -591,6 +613,7 @@ fn modal_snapshot(settings: &RtsSettings, pending: Option<SettingsChange>) -> Mo
         music_muted: preview.audio.music_muted,
         voice_muted: preview.audio.voice_muted,
         sfx_muted: preview.audio.sfx_muted,
+        scroll_offset,
     }
 }
 
@@ -625,7 +648,11 @@ pub fn pack_hud(world: &RtsWorld, session: &RtsSession, frame: &mut mmd_engine::
         UiPage::PauseMenu => ModalPage::PauseMenu,
         UiPage::Settings => ModalPage::Settings,
     };
-    let snapshot = modal_snapshot(&session.settings, session.pending_setting_change);
+    let snapshot = modal_snapshot(
+        &session.settings,
+        session.pending_setting_change,
+        session.ui.settings_scroll_px,
+    );
     let active_edit = session.numeric_edit.as_ref().map(|e| (e.id, e.display()));
     pack_modal_interactive(
         page,
@@ -1010,14 +1037,14 @@ mod tests {
         // Far outside the pause menu's own rect: still a Modal hit, never
         // Hud/World.
         let owner = match ui_pause.page {
-            UiPage::PauseMenu => modal_hit_test(ModalPage::PauseMenu, [10.0, 10.0]),
+            UiPage::PauseMenu => modal_hit_test(ModalPage::PauseMenu, [10.0, 10.0], 0.0),
             _ => unreachable!(),
         };
         assert_eq!(owner, ModalHit::Consumed);
 
         let mut ui_settings = ui_pause;
         ui_settings.open_settings();
-        let hit = modal_hit_test(ModalPage::Settings, [10.0, 10.0]);
+        let hit = modal_hit_test(ModalPage::Settings, [10.0, 10.0], 0.0);
         assert_eq!(
             hit,
             ModalHit::Consumed,
@@ -1028,11 +1055,11 @@ mod tests {
     #[test]
     fn settings_button_and_back_button_hit() {
         let btn = HudLayout::PAUSE_MENU_SETTINGS_BTN;
-        let hit = modal_hit_test(ModalPage::PauseMenu, [btn[0] + 1.0, btn[1] + 1.0]);
+        let hit = modal_hit_test(ModalPage::PauseMenu, [btn[0] + 1.0, btn[1] + 1.0], 0.0);
         assert_eq!(hit, ModalHit::OpenSettings);
 
         let back = HudLayout::SETTINGS_BACK_BTN;
-        let hit = modal_hit_test(ModalPage::Settings, [back[0] + 1.0, back[1] + 1.0]);
+        let hit = modal_hit_test(ModalPage::Settings, [back[0] + 1.0, back[1] + 1.0], 0.0);
         assert_eq!(hit, ModalHit::Back);
     }
 
@@ -1042,7 +1069,7 @@ mod tests {
         // A click roughly a third of the way along a 6..96 step-6 track
         // must land on a multiple of 6, not the raw fractional value.
         let x = TRACK[0] + TRACK[2] * 0.33;
-        let hit = modal_hit_test(ModalPage::Settings, [x, TRACK[1] + 1.0]);
+        let hit = modal_hit_test(ModalPage::Settings, [x, TRACK[1] + 1.0], 0.0);
         let ModalHit::KeyboardPan(v) = hit else {
             panic!("expected a KeyboardPan hit: {hit:?}")
         };
@@ -1050,7 +1077,7 @@ mod tests {
 
         use mmd_engine::rts::MASTER_TRACK;
         let x = MASTER_TRACK[0] + MASTER_TRACK[2] * 0.5;
-        let hit = modal_hit_test(ModalPage::Settings, [x, MASTER_TRACK[1] + 1.0]);
+        let hit = modal_hit_test(ModalPage::Settings, [x, MASTER_TRACK[1] + 1.0], 0.0);
         let ModalHit::Master(v) = hit else {
             panic!("expected a Master hit: {hit:?}")
         };
@@ -1982,7 +2009,13 @@ mod tests {
     fn offscreen_never_starts_text_input() {
         // Pure apply/pointer path focuses a field + accepts digits with no SDL.
         let (mut world, mut session, _) = session_open_settings();
-        click_field(&mut world, &mut session, NumericSettingId::Sfx);
+        // SFX field is at content_y=968, outside viewport at offset=0; scroll to max.
+        use mmd_engine::rts::settings_max_scroll;
+        let offset = settings_max_scroll();
+        session.ui.settings_scroll_px = offset;
+        let sf = NumericSettingId::Sfx.spec().value_field;
+        let p = [sf[0] + 1.0, sf[1] + 1.0 - offset];
+        apply(&mut world, &mut session, RtsCommand::LeftClick(p));
         assert!(session.numeric_edit.is_some());
         if let Some(edit) = session.numeric_edit.as_mut() {
             while edit.parsed().is_some() {
@@ -2058,7 +2091,12 @@ mod tests {
         session.settings.audio.sfx_muted = true;
         session.settings.audio.sfx = 60;
 
-        let p = mute_label_point(3); // SFX mute label
+        // SFX mute label is at content_y=928, outside viewport at offset=0; scroll to max.
+        use mmd_engine::rts::settings_max_scroll;
+        let offset = settings_max_scroll();
+        session.ui.settings_scroll_px = offset;
+        let rect = mmd_engine::rts::MUTE_LABEL_RECTS[3];
+        let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0 - offset];
         pointer_down(&mut world, &mut session, p);
         pointer_up(&mut world, &mut session, p, false);
         drain_pending_setting_change_memory(&mut world, &mut session);

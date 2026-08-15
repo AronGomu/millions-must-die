@@ -160,10 +160,32 @@ impl RtsScript {
                         RtsCommand::Drag([c[0], c[1]], [c[2], c[3]]),
                     )
                 }
+                "wheel" => {
+                    let parts: Vec<&str> = args.splitn(3, ',').collect();
+                    if parts.len() != 3 {
+                        return Err(format!(
+                            "--inject-input entry {entry:?}: wheel expects X,Y,DELTA"
+                        ));
+                    }
+                    let coords = parse_coords(entry, &format!("{},{}", parts[0], parts[1]), 2)?;
+                    let delta: i32 = parts[2].trim().parse().map_err(|_| {
+                        format!(
+                            "--inject-input entry {entry:?}: wheel delta {:?} is not an integer",
+                            parts[2]
+                        )
+                    })?;
+                    (
+                        "wheel".to_string(),
+                        RtsCommand::Wheel {
+                            point: [coords[0], coords[1]],
+                            delta,
+                        },
+                    )
+                }
                 other => {
                     return Err(format!(
                         "--inject-input entry {entry:?}: unknown kind {other:?} (valid: quit, \
-                         key, pan, panup, move, lclick, sclick, rclick, drag)"
+                         key, pan, panup, move, lclick, sclick, rclick, drag, wheel)"
                     ));
                 }
             };
@@ -335,6 +357,21 @@ mod tests {
     fn parse_file_text_rejects_a_script_with_no_entries() {
         let err = RtsScript::parse_file_text("# only a comment\n\n").unwrap_err();
         assert!(err.contains("no entries"), "{err}");
+    }
+
+    #[test]
+    fn wheel_script_parses_copyable_command() {
+        let script = RtsScript::parse("1:wheel:960,540,2").expect("valid wheel script");
+        assert_eq!(script.entries.len(), 1);
+        let cmd = script.entries[0].cmd;
+        let _copy = cmd; // verify Copy
+        match cmd {
+            RtsCommand::Wheel { point, delta } => {
+                assert_eq!(point, [960.0, 540.0]);
+                assert_eq!(delta, 2);
+            }
+            _ => panic!("expected Wheel, got {cmd:?}"),
+        }
     }
 
     /// The committed acceptance script is the one the merge gate runs; a typo

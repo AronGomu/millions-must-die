@@ -39,6 +39,12 @@ pub enum RtsCommand {
     Drag([f32; 2], [f32; 2]),
     /// Right click — the context order.
     RightClick([f32; 2]),
+    /// Mouse wheel scroll at logical `point` with `delta` notches (+up / -down).
+    /// `point` has already been mapped through `viewport.map_pointer`.
+    Wheel {
+        point: [f32; 2],
+        delta: i32,
+    },
 }
 
 /// Bound key, its SDL keycode, the `--inject-input` name, and the command.

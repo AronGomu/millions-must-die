@@ -127,6 +127,8 @@ pub(crate) struct RtsSession {
     pub(crate) keyboard_held: [f32; 2],
     /// Active typed numeric field, if any (`T4`).
     pub(crate) numeric_edit: Option<crate::rts_ui::NumericEdit>,
+    /// Scrollbar thumb drag anchor: `(pointer_y_at_press, scroll_offset_at_press)` (`T6`).
+    pub(crate) scroll_thumb_drag: Option<(f32, f32)>,
     /// The paused-menu FSM and every pause reason (`T13`) — the single
     /// source `RtsWorld::tick` is skipped from; there is no separate
     /// `paused: bool` anymore.
@@ -191,6 +193,7 @@ impl RtsSession {
             drag: None,
             keyboard_held: [0.0, 0.0],
             numeric_edit: None,
+            scroll_thumb_drag: None,
             ui: RtsUiState::default(),
             settings: RtsSettings::default(),
             pending_setting_change: None,
@@ -372,6 +375,10 @@ pub(crate) fn pointer_down(world: &RtsWorld, session: &mut RtsSession, p: [f32; 
             crate::rts_ui::stage_slider_at_pointer(session, control, p[0]);
         }
     }
+    // Thumb drag anchor: store press-y and current offset so Move can compute delta.
+    if session.press_control == Some(mmd_engine::rts::ControlId::ScrollbarThumb) {
+        session.scroll_thumb_drag = Some((p[1], session.ui.settings_scroll_px));
+    }
 }
 
 /// Whether release may activate given retained down identity (`T1`).
@@ -436,6 +443,7 @@ pub(crate) fn pointer_up(world: &mut RtsWorld, session: &mut RtsSession, p: [f32
     session.press_control = None;
     session.slider_cue_emitted = false;
     session.drag = None;
+    session.scroll_thumb_drag = None;
 
     if slider_drag {
         // Live steps already drained on down/motion; never re-activate as click
@@ -512,6 +520,26 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
             if let Some(control) = session.press_control {
                 crate::rts_ui::stage_slider_at_pointer(session, control, p[0]);
             }
+            // Scrollbar thumb drag: update scroll from y delta (`T6`).
+            if session.press_control == Some(mmd_engine::rts::ControlId::ScrollbarThumb) {
+                if let Some((anchor_y, start_offset)) = session.scroll_thumb_drag {
+                    use mmd_engine::rts::{
+                        HudLayout, SETTINGS_CONTENT_HEIGHT_PX, SETTINGS_SCROLLBAR_MIN_THUMB_PX,
+                        clamp_settings_scroll, settings_max_scroll,
+                    };
+                    let max_scroll = settings_max_scroll();
+                    if max_scroll > 0.0 {
+                        let viewport_h = HudLayout::SETTINGS_BODY_VIEWPORT[3];
+                        let thumb_len = (viewport_h * viewport_h / SETTINGS_CONTENT_HEIGHT_PX)
+                            .max(SETTINGS_SCROLLBAR_MIN_THUMB_PX);
+                        let travel = viewport_h - thumb_len;
+                        if travel > 0.0 {
+                            let new_offset = start_offset + (p[1] - anchor_y) / travel * max_scroll;
+                            session.ui.settings_scroll_px = clamp_settings_scroll(new_offset);
+                        }
+                    }
+                }
+            }
             let edge = edge_pan_dir(p, [VIEW_WIDTH as f32, VIEW_HEIGHT as f32]);
             world.set_edge_pan_dir(edge);
         }
@@ -535,9 +563,14 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
             let slider = session
                 .press_control
                 .is_some_and(|c| mmd_engine::rts::numeric_id_from_slider_control(c).is_some());
+            let scrollbar_thumb =
+                session.press_control == Some(mmd_engine::rts::ControlId::ScrollbarThumb);
             if slider {
                 apply(world, session, RtsCommand::Move(b));
                 pointer_up(world, session, b, false);
+            } else if scrollbar_thumb {
+                apply(world, session, RtsCommand::Move(b));
+                session.clear_press();
             } else {
                 selection_snapshot(world, session);
                 if matches!(session.press_owner, PointerOwner::World) {
@@ -572,7 +605,27 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
                 }
             }
         }
+        RtsCommand::Wheel { point, delta } => {
+            use mmd_engine::rts::{HudLayout, SETTINGS_SCROLL_STEP_PX, clamp_settings_scroll};
+            if session.ui.page == crate::rts_ui::UiPage::Settings
+                && point_in_rect(point, HudLayout::SETTINGS_BODY_VIEWPORT)
+            {
+                if session.numeric_edit.is_some() {
+                    crate::rts_ui::finalize_numeric_edit_on_focus_loss(session);
+                }
+                let new_offset =
+                    session.ui.settings_scroll_px - delta as f32 * SETTINGS_SCROLL_STEP_PX;
+                session.ui.settings_scroll_px = clamp_settings_scroll(new_offset);
+            }
+        }
     }
+}
+
+fn point_in_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
+    point[0] >= rect[0]
+        && point[0] < rect[0] + rect[2]
+        && point[1] >= rect[1]
+        && point[1] < rect[1] + rect[3]
 }
 
 /// Per-frame scratch bundled into one argument so `step_frame` /
@@ -1218,6 +1271,35 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         );
                     }
                 }
+                Event::MouseWheel {
+                    y,
+                    direction,
+                    mouse_x,
+                    mouse_y,
+                    ..
+                } => {
+                    use sdl3::mouse::MouseWheelDirection;
+                    let raw_y = if direction == MouseWheelDirection::Flipped {
+                        -y
+                    } else {
+                        y
+                    };
+                    let clamped = raw_y.clamp(-8.0, 8.0);
+                    let delta = clamped.trunc() as i32;
+                    if delta != 0 {
+                        let mapped = viewport.map_pointer([mouse_x, mouse_y]);
+                        if mapped.inside_content {
+                            apply(
+                                &mut world,
+                                &mut session,
+                                RtsCommand::Wheel {
+                                    point: mapped.logical,
+                                    delta,
+                                },
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -1555,7 +1637,7 @@ fn finish(
         "rts: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} \
          paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
          camera={},{} body_overlaps={} ui_page={} music_starts={} voice_select={} \
-         voice_order={} voice_reject={} sfx_ui={} keyboard_pan={}",
+         voice_order={} voice_reject={} sfx_ui={} keyboard_pan={} settings_scroll_px={}",
         world.tick_index(),
         state.frames,
         hex::encode(state.last_hash),
@@ -1579,6 +1661,7 @@ fn finish(
         counters.reject,
         counters.ui,
         session.settings.camera.keyboard_pan,
+        session.ui.settings_scroll_px.round() as u32,
     );
     Ok(())
 }
