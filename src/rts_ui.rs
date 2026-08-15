@@ -473,6 +473,22 @@ pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: Comma
     }
 }
 
+/// Execute the command in positional slot `slot` (0–8, row-major QWE/ASD/ZXC).
+///
+/// Returns `true` when an action actually dispatched. `slot >= 9` returns
+/// `false` without panicking. Keyboard callers must not emit a pointer SFX.
+pub fn execute_slot(world: &mut RtsWorld, session: &mut RtsSession, slot: u8) -> bool {
+    let slots = command_slots(world);
+    if let Some(s) = slots.get(slot as usize)
+        && s.enabled
+        && let Some(cmd) = s.command
+    {
+        execute_command(world, session, cmd);
+        return true;
+    }
+    false
+}
+
 /// Resolve one HUD click. Every variant is consumed here — none of them
 /// ever issues a world order or falls through to selection/placement logic.
 pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: HudHit, shift: bool) {
@@ -500,17 +516,10 @@ pub fn handle_hud_click(world: &mut RtsWorld, session: &mut RtsSession, hit: Hud
             }
         }
         HudHit::CommandSlot(idx) => {
-            let slots = command_slots(world);
-            if let Some(slot) = slots.get(idx as usize)
-                && slot.enabled
-                && let Some(cmd) = slot.command
-            {
-                execute_command(world, session, cmd);
+            if execute_slot(world, session, idx) {
                 session.emit_audio(AudioEvent::Ui(UiCue::CommandGrid));
             }
-            // Disabled/empty: consumed, no action, no cue — per T12's spec.
-            // The keyboard hotkey path never reaches here, so a hotkey never
-            // makes a pointer-click sound.
+            // Disabled/empty: consumed, no action, no cue.
         }
         HudHit::Background => {}
     }
@@ -1321,6 +1330,131 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    // --- execute_slot tests -----------------------------------------------
+
+    fn find_building(
+        world: &RtsWorld,
+        kind: mmd_engine::rts::BuildingKind,
+    ) -> Option<mmd_engine::rts::EntityId> {
+        let store = world.entities();
+        for slot in 0..store.slot_count() {
+            if let Some(id) = store.id_at(slot) {
+                if store.kind(slot) == mmd_engine::rts::EntityKind::Building(kind) {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    }
+
+    fn select_hq(world: &mut RtsWorld) {
+        let id =
+            find_building(world, mmd_engine::rts::BuildingKind::Hq).expect("no HQ in test world");
+        world.select_only(id);
+    }
+
+    fn select_barracks(world: &mut RtsWorld) {
+        let id = find_building(world, mmd_engine::rts::BuildingKind::Barracks)
+            .expect("no Barracks in test world");
+        world.select_only(id);
+    }
+
+    #[test]
+    fn out_of_range_slot_is_false_not_panic() {
+        let mut world = test_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        assert!(!execute_slot(&mut world, &mut session, 9));
+        assert!(!execute_slot(&mut world, &mut session, 255));
+    }
+
+    #[test]
+    fn hq_q_queues_worker() {
+        let mut world = test_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_hq(&mut world);
+        let crystal_before = world.resources().crystal;
+        let dispatched = execute_slot(&mut world, &mut session, 0); // Q → slot 0
+        assert!(dispatched, "HQ slot 0 must dispatch");
+        assert!(
+            world.resources().crystal < crystal_before,
+            "training worker must cost crystal"
+        );
+    }
+
+    #[test]
+    fn barracks_q_queues_soldier() {
+        let mut world = test_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        // Barracks may not exist in the default scenario; skip if absent.
+        let Some(id) = find_building(&world, mmd_engine::rts::BuildingKind::Barracks) else {
+            return;
+        };
+        world.select_only(id);
+        let crystal_before = world.resources().crystal;
+        let dispatched = execute_slot(&mut world, &mut session, 0); // Q → slot 0
+        assert!(dispatched, "Barracks slot 0 must dispatch");
+        assert!(
+            world.resources().crystal < crystal_before,
+            "training soldier must cost crystal"
+        );
+    }
+
+    #[test]
+    fn c_arms_rally() {
+        let mut world = test_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_hq(&mut world);
+        assert!(session.pending_rally.is_none(), "rally not armed before");
+        let dispatched = execute_slot(&mut world, &mut session, 8); // C → slot 8
+        assert!(dispatched, "HQ slot 8 (rally) must dispatch");
+        assert!(
+            session.pending_rally.is_some(),
+            "rally must be armed after C"
+        );
+    }
+
+    #[test]
+    fn disabled_slot_key_is_noop_without_sfx() {
+        let mut world = test_world();
+        let (mut session, handle) = RtsSession::for_test();
+        // No selection → all slots disabled/empty.
+        let dispatched = execute_slot(&mut world, &mut session, 0);
+        assert!(!dispatched);
+        assert!(
+            handle.sink().ui_cues().is_empty(),
+            "disabled slot must emit no cue"
+        );
+    }
+
+    #[test]
+    fn keyboard_and_pointer_share_execute_slot() {
+        // Keyboard path calls execute_slot; pointer path (handle_hud_click) calls
+        // execute_slot too. Verify they produce the same state.
+        let mut world_key = test_world();
+        let (mut session_key, _) = RtsSession::for_test();
+        select_hq(&mut world_key);
+        let crystal_key_before = world_key.resources().crystal;
+        execute_slot(&mut world_key, &mut session_key, 0);
+        let crystal_after_key = world_key.resources().crystal;
+
+        let mut world_ptr = test_world();
+        let (mut session_ptr, _) = RtsSession::for_test();
+        select_hq(&mut world_ptr);
+        handle_hud_click(
+            &mut world_ptr,
+            &mut session_ptr,
+            HudHit::CommandSlot(0),
+            false,
+        );
+        let crystal_after_ptr = world_ptr.resources().crystal;
+
+        assert_eq!(
+            crystal_key_before - crystal_after_key,
+            crystal_key_before - crystal_after_ptr,
+            "keyboard and pointer execute_slot must cost the same"
+        );
     }
 
     /// Not `testkit::RtsHarness` (feature-gated out of this binary crate,

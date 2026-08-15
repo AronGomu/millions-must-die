@@ -498,8 +498,9 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
         }
         RtsCommand::TogglePause => session.ui.toggle_manual_pause(),
         RtsCommand::ToggleOverlay => session.overlay_visible = !session.overlay_visible,
-        RtsCommand::CancelPlacement => world.cancel_placement(),
-        RtsCommand::Execute(id) => crate::rts_ui::execute_command(world, session, id),
+        RtsCommand::ExecuteSlot(slot) => {
+            crate::rts_ui::execute_slot(world, session, slot);
+        }
         RtsCommand::PanStart(d) => {
             session.keyboard_held = clamp_axes(add2(session.keyboard_held, d));
             world.set_keyboard_pan_dir(session.keyboard_held);

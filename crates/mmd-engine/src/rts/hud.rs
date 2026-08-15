@@ -10,7 +10,7 @@
 //! a HUD is entirely textured, so every push here lands in one of
 //! [`RtsFrame::ui`]'s five groups (worker, soldier, building, props, font).
 
-use crate::render::{DrawGroup, GLYPH_H_PX, SpriteInstance, frame_uv_rect, push_text};
+use crate::render::{DrawGroup, GLYPH_H_PX, GLYPH_W_PX, SpriteInstance, frame_uv_rect, push_text};
 
 use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
 use super::minimap::minimap_projection;
@@ -462,6 +462,8 @@ const OVERFLOW_TEXT_POS: [f32; 2] = [
 pub const COMMAND_GRID_COLS: usize = 3;
 pub const COMMAND_ICON_PX: f32 = 64.0;
 pub const COMMAND_ICON_GAP_PX: f32 = 8.0;
+/// Positional hotkey letters for the 9 command slots, row-major (Q W E / A S D / Z X C).
+pub const COMMAND_SLOT_KEYS: [u8; 9] = *b"QWEASDZXC";
 
 /// Panel tint, premultiplied. The sheet cell already carries the alpha; this
 /// keeps the tint neutral so the panel colour lives in exactly one place.
@@ -1185,6 +1187,7 @@ pub fn command_slot_rect(i: usize) -> [f32; 4] {
 fn push_command_card(
     world: &RtsWorld,
     props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
     interaction: &InteractionSnapshot,
 ) {
     push_panel(props, HudLayout::COMMAND_PANEL, PANEL_TINT);
@@ -1207,6 +1210,12 @@ fn push_command_card(
                 command_icon(cmd),
             );
         }
+        // Positional hotkey letter in bottom-right corner of the cell.
+        let key = &[COMMAND_SLOT_KEYS[i]];
+        let key_str = std::str::from_utf8(key).expect("ascii");
+        let kx = rect[0] + rect[2] - GLYPH_W_PX * PANEL_TEXT_SCALE;
+        let ky = rect[1] + rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE;
+        push_text(font, key_str, [kx, ky], PANEL_TEXT_SCALE, TEXT_TINT_HOTKEY);
     }
 }
 
@@ -1837,5 +1846,10 @@ pub fn pack_hud_interactive(
         &mut font.instances,
         interaction,
     );
-    push_command_card(world, &mut props.instances, interaction);
+    push_command_card(
+        world,
+        &mut props.instances,
+        &mut font.instances,
+        interaction,
+    );
 }

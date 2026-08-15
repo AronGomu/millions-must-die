@@ -856,11 +856,7 @@ mod tests {
         ];
         crate::rts_ui::handle_hud_click(&mut world, &mut session, HudHit::Minimap(corner), false);
         // The keyboard hotkey path never claims a pointer click.
-        apply(
-            &mut world,
-            &mut session,
-            RtsCommand::Execute(CommandId::BuildHq),
-        );
+        apply(&mut world, &mut session, RtsCommand::ExecuteSlot(0));
 
         assert_eq!(audio.sink().ui_cues(), Vec::<UiCue>::new());
     }

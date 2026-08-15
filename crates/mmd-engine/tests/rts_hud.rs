@@ -5,18 +5,18 @@
 //! `mmd_engine::rts::hud`. The two device cases live in `gpu_smoke.rs`.
 
 use mmd_engine::render::{
-    FONT_FIRST_CHAR, FONT_LAST_CHAR, GLYPH_TRACKING_PX, GLYPH_W_PX, SLOT_RTS_BUILDINGS,
+    FONT_FIRST_CHAR, FONT_LAST_CHAR, GLYPH_H_PX, GLYPH_TRACKING_PX, GLYPH_W_PX, SLOT_RTS_BUILDINGS,
     SLOT_RTS_PROPS, SLOT_RTS_SOLDIER, SLOT_RTS_WORKER, SLOT_UI_FONT, SpriteInstance, frame_uv_rect,
     glyph_uv_rect,
 };
 use mmd_engine::rts::{
-    BuildingKind, COMMAND_GRID_RECT, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y, EntityId, EntityKind,
-    HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT, MULTI_ICON_COLS,
-    MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX,
-    PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, ResourceKind, RtsFrame, TEXT_TINT,
-    TEXT_TINT_BLOCKED, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slots,
-    fmt_ratio, fmt_u32, hud_hit_test, kind_label, minimap_projection, node_uv, pack_frame,
-    pack_hud,
+    BuildingKind, COMMAND_GRID_RECT, COMMAND_SLOT_KEYS, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y,
+    EntityId, EntityKind, HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT,
+    MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER,
+    PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, ResourceKind, RtsFrame, TEXT_TINT,
+    TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv,
+    command_slot_rect, command_slots, fmt_ratio, fmt_u32, hud_hit_test, kind_label,
+    minimap_projection, node_uv, pack_frame, pack_hud,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -908,8 +908,8 @@ use mmd_engine::rts::{
     ModalHit, ModalPage, ModalSnapshot, NUMERIC_SETTING_SPECS, NumericSettingId, PAN_MAX, PAN_MIN,
     PAN_STEP, SFX_TRACK, SLIDER_THUMB_W_PX, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X,
     VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, clamp_snap,
-    command_slot_rect, control_id_from_modal_hit, control_tint, control_visual_state,
-    modal_hit_test, mute_label_rect, pack_modal, slider_thumb_rect, snap_track, value_field_rect,
+    control_id_from_modal_hit, control_tint, control_visual_state, modal_hit_test, mute_label_rect,
+    pack_modal, slider_thumb_rect, snap_track, value_field_rect,
 };
 
 fn default_snapshot() -> ModalSnapshot {
@@ -1617,4 +1617,32 @@ fn pack_modal_with_muted_flag_does_not_panic() {
     // The pack ran without panic; instance count is non-zero.
     let ui_len: usize = frame.ui.iter().map(|g| g.instances.len()).sum();
     assert!(ui_len > 0);
+}
+
+#[test]
+fn command_cells_show_positional_letters() {
+    // All 9 command cells must draw their QWE/ASD/ZXC letter in the
+    // bottom-right corner with TEXT_TINT_HOTKEY, even when the slot is empty.
+    let h = scene();
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+
+    for i in 0..9usize {
+        let rect = command_slot_rect(i);
+        let kx = rect[0] + rect[2] - GLYPH_W_PX * PANEL_TEXT_SCALE;
+        let ky = rect[1] + rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE;
+        let expected_char = COMMAND_SLOT_KEYS[i] as char;
+        let drawn = text_at(&frame, [kx, ky], PANEL_TEXT_SCALE, 1);
+        assert_eq!(
+            drawn,
+            expected_char.to_string(),
+            "slot {i}: expected hotkey letter '{expected_char}' at ({kx},{ky})"
+        );
+        let tint = tint_at(&frame, [kx, ky]);
+        assert_eq!(
+            tint,
+            Some(TEXT_TINT_HOTKEY),
+            "slot {i}: hotkey letter must use TEXT_TINT_HOTKEY"
+        );
+    }
 }

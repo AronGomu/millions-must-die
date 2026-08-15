@@ -275,3 +275,15 @@ command below except what a browser or a human eye must judge.
 - [ ] Scroll part-way, confirm the SFX slider and mute label respond to clicks at their displayed (scrolled) positions; confirm clicking at their content position (off-screen above) is consumed.
 - [ ] Confirm rendered body panels do not bleed outside the body viewport (no pixel spill above y=160 or below y=880).
 - [ ] Close Settings (Back), reopen: confirm scroll resets to 0 (or persists, depending on product decision — the exit line will show `settings_scroll_px=<rounded>` for verification).
+
+## T7 — Positional command keys (QWE/ASD/ZXC)
+
+- [ ] Q on selected Worker opens HQ ghost; W opens Depot ghost; E opens Barracks ghost
+- [ ] Q on selected Barracks queues Soldier; C arms rally
+- [ ] X on selected Worker with slot 7 empty/disabled: no cancel, no SFX
+- [ ] Right-click while ghost pending: ghost cancels, no build order placed
+- [ ] Hotkey letters Q/W/E/A/S/D/Z/X/C visible in bottom-right of each command cell
+- [ ] Disabled/empty cells still show their hotkey letter
+- [ ] R key: no effect in any context (unbound)
+- [ ] Banner text visible in OS window title: "QWE/ASD/ZXC card, right-click cancel"
+- [ ] Pointer clicks on command card still work as before (shared execute_slot path)

@@ -838,9 +838,11 @@ fn pan_stops_on_key_up() {
 
 #[test]
 fn w_opens_the_depot_ghost() {
+    let w = fmt_xy(worker_screen());
+    let script = format!("1:key:f1;1:move:{w};2:lclick:{w};3:key:w");
     let Some(cli) = or_skip(
         "w_opens_the_depot_ghost",
-        rts(&["--frames", "5", "--inject-input", "1:key:f1;1:key:w"]),
+        rts(&["--frames", "5", "--inject-input", &script]),
     ) else {
         return;
     };
@@ -853,35 +855,50 @@ fn w_opens_the_depot_ghost() {
     );
 }
 
+/// X (slot 7) no longer cancels placement; right-click is the only cancel.
 #[test]
-fn x_cancels_the_ghost() {
-    let Some(cli) = or_skip(
-        "x_cancels_the_ghost",
-        rts(&[
-            "--frames",
-            "5",
-            "--inject-input",
-            "1:key:f1;1:key:w;3:key:x",
-        ]),
+fn right_click_is_only_placement_cancel() {
+    let p = fmt_xy(clear_build_site_screen());
+    // Start W ghost, cancel via right-click — ghost must be gone.
+    let w = fmt_xy(worker_screen());
+    let cancel_script = format!("1:key:f1;1:move:{w};2:lclick:{w};3:key:w;5:rclick:{p}");
+    let Some(cancelled) = or_skip(
+        "right_click_is_only_placement_cancel",
+        rts(&["--frames", "7", "--inject-input", &cancel_script]),
     ) else {
         return;
     };
-    cli.assert_success();
-    let last_hud = cli
+    cancelled.assert_success();
+    assert_eq!(
+        cancelled.exit_field("buildings"),
+        "1",
+        "{cancelled}\nright-click must cancel without building"
+    );
+    // Start W ghost, press X (slot 7) — ghost must STILL be pending (no cancel).
+    let x_script = format!("1:key:f1;1:move:{w};2:lclick:{w};3:key:w;5:key:x");
+    let Some(x_still_ghost) = or_skip(
+        "right_click_is_only_placement_cancel",
+        rts(&["--frames", "7", "--inject-input", &x_script]),
+    ) else {
+        return;
+    };
+    x_still_ghost.assert_success();
+    let last_hud = x_still_ghost
         .stdout
         .lines()
         .rfind(|l| l.starts_with("rts: hud "))
-        .unwrap_or_else(|| panic!("{cli}\nno HUD lines"));
+        .unwrap_or_else(|| panic!("{x_still_ghost}\nno HUD lines"));
     assert!(
-        last_hud.contains("ghost=none"),
-        "{cli}\nlast HUD line does not report `ghost=none`: {last_hud}"
+        !last_hud.contains("ghost=none"),
+        "{x_still_ghost}\nX must not cancel the ghost; HUD: {last_hud}"
     );
 }
 
 #[test]
 fn a_left_click_places_the_ghost() {
     let p = fmt_xy(clear_build_site_screen());
-    let script = format!("1:key:w;2:move:{p};3:lclick:{p}");
+    let w = fmt_xy(worker_screen());
+    let script = format!("1:move:{w};2:lclick:{w};3:key:w;4:move:{p};5:lclick:{p}");
     let Some(cli) = or_skip(
         "a_left_click_places_the_ghost",
         rts(&["--frames", "2500", "--inject-input", &script]),
@@ -896,38 +913,26 @@ fn a_left_click_places_the_ghost() {
 #[test]
 fn a_right_click_cancels_the_ghost_without_ordering() {
     let p = fmt_xy(clear_build_site_screen());
-    let cancel_script = format!("1:key:w;3:rclick:{p}");
-    let x_script = "1:key:w;3:key:x";
+    let w = fmt_xy(worker_screen());
+    let cancel_script = format!("1:move:{w};2:lclick:{w};3:key:w;5:rclick:{p}");
     let Some(cancelled) = or_skip(
         "a_right_click_cancels_the_ghost_without_ordering",
-        rts(&["--frames", "5", "--inject-input", &cancel_script]),
-    ) else {
-        return;
-    };
-    let Some(x_baseline) = or_skip(
-        "a_right_click_cancels_the_ghost_without_ordering",
-        rts(&["--frames", "5", "--inject-input", x_script]),
+        rts(&["--frames", "7", "--inject-input", &cancel_script]),
     ) else {
         return;
     };
     cancelled.assert_success();
-    x_baseline.assert_success();
     assert_eq!(
         cancelled.exit_field("buildings"),
         "1",
         "{cancelled}\na right click while a ghost was pending must not have built anything"
-    );
-    assert_eq!(
-        cancelled.final_hash(),
-        x_baseline.final_hash(),
-        "{cancelled}\n{x_baseline}\ncancelling via right click must match cancelling via `x`"
     );
 }
 
 #[test]
 fn a_produces_a_worker_at_the_hq() {
     let p = fmt_xy(hq_click_screen());
-    let script = format!("1:move:{p};2:lclick:{p};3:key:a");
+    let script = format!("1:move:{p};2:lclick:{p};3:key:q");
     let Some(cli) = or_skip(
         "a_produces_a_worker_at_the_hq",
         rts(&["--frames", "400", "--inject-input", &script]),
@@ -1373,11 +1378,11 @@ fn hud_rally_arms_and_waits_for_the_next_world_click() {
     // exactly one tick (the paused frame the menu was open), so `via_gear`
     // gets one extra frame budget to reach the same tick count as `direct`.
     let via_gear =
-        format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:key:esc;6:lclick:{target}");
+        format!("1:move:{hq};2:lclick:{hq};3:key:c;4:lclick:{gear};5:key:esc;6:lclick:{target}");
     // Same, without the intervening HUD/menu detour.
-    let direct = format!("1:move:{hq};2:lclick:{hq};3:key:r;5:lclick:{target}");
+    let direct = format!("1:move:{hq};2:lclick:{hq};3:key:c;5:lclick:{target}");
     // Arm rally, detour through the menu, but no world click ever arrives.
-    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:key:esc");
+    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:c;4:lclick:{gear};5:key:esc");
 
     let Some(via_gear) = or_skip(
         "hud_rally_arms_and_waits_for_the_next_world_click",
