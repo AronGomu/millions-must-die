@@ -11,17 +11,15 @@
 //! placement ghost, the rally flags, the drag box — goes in `ui` instead, or it
 //! would sample the wrong sheet.
 
+use super::build::{Placement, PlacementCandidate, placement_candidate};
+use super::entity::{BuildingKind, EntityKind, MAX_ENTITIES, ResourceKind, UnitKind};
+use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
+use super::world::RtsWorld;
 use crate::render::{
     DrawGroup, FrameUniforms, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER,
     SLOT_RTS_WORKER, SLOT_UI_FONT, ScenePass, SpriteInstance, frame_uv_rect, quad_is_visible,
 };
 use crate::runtime::ring_quad_size_px;
-use crate::scenario::Cell;
-
-use super::build::{Placement, placement_valid};
-use super::entity::{BuildingKind, EntityKind, MAX_ENTITIES, ResourceKind, UnitKind};
-use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
-use super::world::RtsWorld;
 
 /// Columns of every RTS sheet — the grid [`frame_uv_rect`] addresses.
 const SHEET_COLS: u32 = 4;
@@ -91,19 +89,6 @@ pub fn unit_slot(kind: UnitKind) -> u32 {
     match kind {
         UnitKind::Worker => SLOT_RTS_WORKER,
         UnitKind::Soldier => SLOT_RTS_SOLDIER,
-    }
-}
-
-/// The minimum corner of a footprint of `edge` cells centred on `cell`.
-///
-/// `cell - edge/2`, saturating at zero. The ghost follows the cursor's cell as
-/// its **centre**, which is what every RTS does; anchoring the min corner to the
-/// cursor makes a 12-cell building appear down-right of the pointer.
-pub fn ghost_min_corner(cell: Cell, edge: u32) -> Cell {
-    let half = edge / 2;
-    Cell {
-        x: cell.x.saturating_sub(half),
-        y: cell.y.saturating_sub(half),
     }
 }
 
@@ -381,10 +366,9 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
         let width = world.scenario().width();
         let height = world.scenario().height();
         if let Some(cell) = iso.cell_at(cursor[0], cursor[1], width, height) {
+            let PlacementCandidate { min, valid } = placement_candidate(world, kind, cell);
             let edge = kind.footprint_cells();
-            let min = ghost_min_corner(cell, edge);
-            let ok = placement_valid(world, kind, min).is_ok();
-            let uv = prop_uv(if ok {
+            let uv = prop_uv(if valid {
                 Prop::PlacementOk
             } else {
                 Prop::PlacementBad

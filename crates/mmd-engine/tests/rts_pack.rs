@@ -12,7 +12,7 @@ use mmd_engine::render::{
 use mmd_engine::rts::{
     BuildingKind, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind,
     MAX_ENTITIES, OWNER_PLAYER, Prop, ResourceKind, RtsFrame, UnitKind, building_quad_px,
-    building_uv, ghost_min_corner, node_uv, pack_frame, prop_uv, unit_slot,
+    building_uv, ghost_min_corner, node_uv, pack_frame, placement_candidate, prop_uv, unit_slot,
 };
 use mmd_engine::runtime::ring_quad_size_px;
 use mmd_engine::scenario::Cell;
@@ -933,5 +933,74 @@ fn depth_uniforms_follow_the_panned_camera() {
     assert_ne!(
         before.depth_bias, after.depth_bias,
         "a pan must move the packed depth bias, or the renderer draws stale depth"
+    );
+}
+
+// --- T10: ghost and click use the same candidate ------------------------------
+
+#[test]
+fn green_preview_commits_exact_displayed_min() {
+    let mut h = scene();
+    let w0 = workers(&h)[0];
+
+    // Block DEPOT_CORNER so snap activates.
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    assert!(h.world_mut().confirm_placement(DEPOT_CORNER, w0).is_ok());
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+
+    // Cursor giving raw = DEPOT_CORNER (blocked); snap finds a nearby cell.
+    let iso = h.world().iso_view();
+    // Cell (184, 180) → ghost_min_corner = (180, 176) = DEPOT_CORNER.
+    let cursor = iso.project(184.5, 180.5);
+    let cursor_cell = h
+        .world()
+        .iso_view()
+        .cell_at(
+            cursor[0],
+            cursor[1],
+            h.world().scenario().width(),
+            h.world().scenario().height(),
+        )
+        .expect("cursor in bounds");
+
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor_cell);
+    assert!(
+        cand.valid,
+        "snap must succeed for this test to be meaningful"
+    );
+    assert_ne!(cand.min, DEPOT_CORNER, "raw is blocked; snap expected");
+
+    // Pack a frame and verify the ghost is drawn at cand.min.
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), cursor, None, &mut frame);
+    let tiles = props(&frame);
+    assert_eq!(tiles.len(), 65, "64 tiles + 1 silhouette");
+
+    // The first ghost tile is at the footprint's (min.x, min.y) cell centre.
+    let expected_ground = iso.project(cand.min.x as f32 + 0.5, cand.min.y as f32 + 0.5);
+    let tile_size = [iso.tile_w, iso.tile_h * 2.0];
+    let expected_pos = [
+        expected_ground[0] - tile_size[0] * 0.5,
+        expected_ground[1] - tile_size[1] * 0.5,
+    ];
+    assert_eq!(
+        tiles[0].pos, expected_pos,
+        "ghost tile (0,0) must be at placement_candidate.min, not raw min"
+    );
+
+    // Confirm at cand.min → site lands exactly where the ghost was drawn.
+    let w1 = workers(&h)[1];
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(cand.min, w1)
+        .expect("confirm at snapped min");
+    let slot = h.world().entities().slot(site).expect("live site");
+    let pos = h.world().entities().position(slot);
+    use mmd_engine::rts::footprint_min;
+    let site_min = footprint_min(pos, BuildingKind::Depot.footprint_cells());
+    assert_eq!(
+        site_min, cand.min,
+        "committed site min must equal the displayed ghost min"
     );
 }

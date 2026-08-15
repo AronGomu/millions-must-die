@@ -17,8 +17,8 @@ mod world;
 pub use build::{
     BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, DEPOT_BUILD_TICKS, DEPOT_COST,
     DEPOT_SUPPLY_GRANT, EXTRA_BUILDERS_SPEED_UP, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
-    Placement, PlacementError, build_ticks, building_cost, footprint_cells, placement_valid,
-    supply_grant,
+    Placement, PlacementCandidate, PlacementError, build_ticks, building_cost, footprint_cells,
+    ghost_min_corner, placement_candidate, placement_valid, supply_grant,
 };
 pub use collision::{moving_circle_hits_point, units_overlap};
 pub use economy::{
@@ -66,8 +66,8 @@ pub use orders::{
 };
 pub use pack::{
     DRAG_BOX_THICKNESS_PX, DRAG_BOX_TINT, DragBox, GHOST_TINT, Prop, RtsFrame,
-    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, ghost_min_corner,
-    node_uv, pack_frame, prop_uv, unit_slot,
+    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, node_uv, pack_frame,
+    prop_uv, unit_slot,
 };
 pub use production::{
     PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,

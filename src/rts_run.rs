@@ -69,7 +69,7 @@ use mmd_engine::render::{
 };
 use mmd_engine::rts::{
     DragBox, EntityId, EntityKind, MAX_SELECTION, OWNER_PLAYER, OrderReceiptBuffer, Placement,
-    RtsFrame, RtsWorld, RtsWorldError, UnitKind, ghost_min_corner, is_drag, pack_frame,
+    RtsFrame, RtsWorld, RtsWorldError, UnitKind, is_drag, pack_frame, placement_candidate,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::{Event, WindowEvent};
@@ -415,9 +415,11 @@ fn activate_world_left(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 
         let width = world.scenario().width();
         let height = world.scenario().height();
         if let Some(cell) = view.cell_at(p[0], p[1], width, height) {
-            let min = ghost_min_corner(cell, kind.footprint_cells());
-            if let Some(builder) = find_builder(world) {
-                let _ = world.confirm_placement(min, builder);
+            let cand = placement_candidate(world, kind, cell);
+            if cand.valid {
+                if let Some(builder) = find_builder(world) {
+                    let _ = world.confirm_placement(cand.min, builder);
+                }
             }
         }
     } else {

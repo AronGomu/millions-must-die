@@ -302,3 +302,19 @@ command below except what a browser or a human eye must judge.
 - [ ] Manual: rally flag set — confirm RALLY x,y on line 6
 - [ ] Manual: select Barracks — confirm SUPPLY +0 on line 3
 - [ ] Manual: select an under-construction site — confirm BUILDING N% on line 2, remaining lines explicit
+
+## T10 — Assisted placement (snap to nearest valid footprint)
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --test rts_build --locked` exits 0 (50 tests)
+- [x] `cargo test -p mmd-engine --test rts_pack --locked` exits 0 (41 tests)
+- [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (27 tests)
+- [x] `cargo test --locked --test rts_cli_contract` exits 0 (59 tests)
+- [ ] Manual: move the ghost cursor to a position just outside an obstacle — confirm ghost visibly snaps to green
+- [ ] Manual: click the snapped green ghost — confirm the site appears at the snapped footprint, not the raw cursor position
+- [ ] Manual: move the ghost cursor over the HQ centre — confirm ghost stays red (no snap within radius)
+- [ ] Manual: click the red ghost over the HQ — confirm no building placed, ghost remains pending
+- [ ] Manual: right-click still cancels placement (regression)
+- [ ] Manual: units still do not block placement (regression)
+- [ ] Manual: costs/orders unchanged on successful snap-click

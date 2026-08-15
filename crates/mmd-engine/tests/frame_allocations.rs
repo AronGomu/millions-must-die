@@ -16,7 +16,7 @@ use mmd_engine::rts::{
     BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, InteractionSnapshot,
     ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER, Order, OrderReceiptBuffer,
     ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots, hud_hit_test,
-    minimap_projection, pack_frame, pack_hud, pack_modal_interactive,
+    minimap_projection, pack_frame, pack_hud, pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -1326,4 +1326,37 @@ fn full_building_detail_pack_allocates_nothing() {
         packed,
         "re-packing changed the frame"
     );
+}
+
+/// `placement_candidate` searches a bounded stack loop: no Vec, no alloc.
+/// Verified with a blocked raw position so the search path activates.
+#[test]
+fn placement_search_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = h.ids_of_kind(mmd_engine::rts::EntityKind::Unit(
+        mmd_engine::rts::UnitKind::Worker,
+    ))[0];
+
+    // Block CLEAR_CORNER so the snap search activates.
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    assert!(
+        h.world_mut()
+            .confirm_placement(Cell { x: 180, y: 176 }, w0)
+            .is_ok()
+    );
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+
+    // Warm-up outside the measure scope.
+    let cursor = Cell { x: 184, y: 180 };
+    let _ = placement_candidate(h.world(), BuildingKind::Depot, cursor);
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        std::hint::black_box(placement_candidate(h.world(), BuildingKind::Depot, cursor));
+    }
+    assert_eq!(guard.allocations(), 0, "placement_candidate allocated");
+    guard.assert_zero();
 }

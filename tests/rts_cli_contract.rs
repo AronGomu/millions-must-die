@@ -1968,3 +1968,29 @@ fn audio_offscreen_survives_invalid_audio_driver() {
         "{cli}\nan offscreen run must still report the (fake-sink) audio trace"
     );
 }
+
+/// A left click while the ghost cursor covers the HQ (no valid snap within one
+/// footprint width) is a no-op: the ghost stays pending and no building appears.
+#[test]
+fn a_red_click_with_no_snap_is_a_noop() {
+    // Select the worker, open the Depot ghost (W key), then click at the HQ
+    // footprint centre (cell 166,166). ghost_min_corner → (162,162); every
+    // Depot candidate within radius 8 still overlaps the 12x12 HQ footprint,
+    // so no snap is found and the click is a no-op.
+    let w = fmt_xy(worker_screen());
+    // HQ footprint min=(160,160), edge=12, centre=(166,166).
+    let hq_centre = fmt_xy(screen_of(166.5, 166.5));
+    let script = format!("1:move:{w};2:lclick:{w};3:key:w;4:move:{hq_centre};5:lclick:{hq_centre}");
+    let Some(cli) = or_skip(
+        "a_red_click_with_no_snap_is_a_noop",
+        rts(&["--frames", "7", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("buildings"),
+        "1",
+        "{cli}\na red click with no valid snap must not place a building"
+    );
+}
