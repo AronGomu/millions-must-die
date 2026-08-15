@@ -601,6 +601,29 @@ Pre-existing red gates — **still red**, out of this ticket's Requirements:
 - [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 3
       `too_many_arguments` before, 3 after, all in `crates/mmd-engine/src/rts/hud.rs`.
 
+Rest of the merge gate, run in order on this diff:
+
+- [x] `nix flake check` — "all checks passed!"
+- [x] `cargo run -p xtask -- bootstrap --check`, `shaders --check`, `atlases --check`,
+      `audio --check` — all exit 0
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0,
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` (unchanged);
+      `collision_mid_v1` → `3df604770021490eb416b38bcd9bc4a25bb417638010c458d5563a17578d268a`,
+      `collision_sprite_v1` → `5561f201e8040451c8c1692849643e7c9ca8c48ffd89e949883a13c2db97cce4`
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
+      — exit 0, `hash=565369dbcf2f49e74a5cdd15acf2b154a646e012706c6b10ddb2fdc6dd71f941`,
+      `body_overlaps=0 ui_page=gameplay sfx_ui=8 keyboard_pan=78 settings_scroll_px=0 show_grid=true`
+- [x] Host GPU flake seen again in the joined `cargo test --workspace` run
+      (`VK_ERROR_DEVICE_LOST` in `the_acceptance_run_is_deterministic`,
+      `phase1_1_run_is_cross_process_deterministic`, `a_left_click_places_the_ghost`,
+      `a_right_click_moves_the_selection`). All pass standalone on a rested device:
+      `--test rts_acceptance` 21/21, `--test rts_cli_contract` 60/60, `gpu_smoke` 13/13.
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` — no device-lost this pass; fails on
+      the same 3 `rts_economy` tests plus `dummy_driver_run_does_not_touch_settings` and
+      `no_rts_run_creates_the_real_user_config`, which force `SDL_VIDEODRIVER=dummy` and so have
+      no GPU device: `MMD_REQUIRE_GPU=1` turns their legitimate skip into a failure. Environment
+      interaction in tests this ticket does not touch.
+
 ### Manual pass — every flow no offscreen test can prove
 
 Run `cargo run -- rts` on the development host, with sound on and a real pointer.
