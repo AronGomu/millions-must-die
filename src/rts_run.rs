@@ -2377,6 +2377,61 @@ mod tests {
         );
     }
 
+    // --- audit #4: settings rollback fatality ---------------------------------
+
+    /// A scripted settings commit whose compensation failed is fatal, and it
+    /// must not overwrite an audio failure the session had already latched:
+    /// two dead subsystems are two facts, not one.
+    #[test]
+    fn scripted_fatal_setting_commit_composes_pre_latched_audio_error() {
+        let mut world = tracked_world();
+        let (mut session, handle) = RtsSession::for_test();
+        // Both the forward push and its compensation fail → fatal.
+        handle.set_fail_set_gains_on_calls(&[1, 2]);
+        session.pending_setting_change = Some(SettingsChange::Master(50));
+        session.audio_fatal = Some(AudioError("pre-latched UI cue failure".into()));
+        session.ui.warning = Some("stale".into());
+
+        commit_scripted_setting_change(&mut world, &mut session);
+
+        assert!(
+            session.ui.warning.is_none(),
+            "a fatal commit is not a banner: {:?}",
+            session.ui.warning
+        );
+        assert_eq!(handle.sink().gain_calls(), 2, "both pushes were attempted");
+        assert_eq!(
+            session.settings.audio.master,
+            RtsSettings::default().audio.master,
+            "a fatal commit must not publish"
+        );
+        let fatal = session
+            .take_audio_fatal()
+            .expect("a fatal settings commit must end the run")
+            .to_string();
+        assert!(
+            fatal.contains("pre-latched UI cue failure"),
+            "the already-latched audio failure must survive: {fatal}"
+        );
+        assert!(
+            fatal.contains("settings transaction fatal:"),
+            "the settings failure must be named: {fatal}"
+        );
+        assert!(
+            fatal.contains("injected set_gains failure on call 1")
+                && fatal.contains("audio gain rollback failed:"),
+            "both the primary and the failed compensation must survive: {fatal}"
+        );
+        assert!(
+            fatal.contains("indeterminate") && fatal.contains("restart the app"),
+            "{fatal}"
+        );
+        assert!(
+            session.take_audio_fatal().is_none(),
+            "the fatal is taken exactly once"
+        );
+    }
+
     // --- audit #6: endpoint hash scheduling -----------------------------------
 
     fn test_scratch() -> Scratch {

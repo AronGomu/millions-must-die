@@ -701,6 +701,13 @@ pub fn pack_hud(world: &RtsWorld, session: &RtsSession, frame: &mut mmd_engine::
 /// rollback, confinement is re-applied directly, gains are re-pushed at the
 /// old value) and returns the failure reason — `*settings` is left untouched,
 /// and the caller is expected to show `SETTINGS NOT SAVED: <reason>`.
+///
+/// That warning is only honest while the restore *worked*. A compensation
+/// that fails leaves the mixer or the window on values no config describes,
+/// which no later commit can reason about — so it comes back as
+/// [`SettingsCommitError::Fatal`], carrying the primary failure and every
+/// compensation that failed, and the session ends rather than continuing on
+/// an unknown runtime.
 pub fn commit_setting_change<W: WindowOps>(
     world: &mut RtsWorld,
     mut window: Option<&mut W>,
@@ -708,19 +715,55 @@ pub fn commit_setting_change<W: WindowOps>(
     settings: &mut RtsSettings,
     audio: &mut dyn AudioSink,
     change: SettingsChange,
-) -> Result<(), String> {
+) -> Result<(), SettingsCommitError> {
     let old = settings.clone();
     let mut candidate = settings.clone();
     change.apply_to(&mut candidate);
+    // Refused before anything is touched: no runtime, no gains, no disk.
     candidate
         .validate()
-        .map_err(|e| format!("refusing to apply invalid settings: {e}"))?;
+        .map_err(|e| SettingsCommitError::Recoverable {
+            primary: format!("refusing to apply invalid settings: {e}"),
+        })?;
 
-    apply_runtime(window.as_deref_mut(), &old, &candidate, change)?;
+    match apply_runtime(window.as_deref_mut(), &old, &candidate, change) {
+        Ok(()) => {}
+        // The mode transition already restored the old mode: recoverable,
+        // and a second restore attempt would only be a second chance to fail.
+        Err(RuntimeApplyError::RolledBack(primary)) => {
+            return Err(SettingsCommitError::Recoverable { primary });
+        }
+        Err(RuntimeApplyError::Fatal {
+            primary,
+            compensation_failures,
+        }) => {
+            return Err(SettingsCommitError::Fatal {
+                primary,
+                compensation_failures,
+            });
+        }
+        // A partially-applied confinement: reapply the old value, and let
+        // that attempt decide whether this is recoverable.
+        Err(RuntimeApplyError::Primary(primary)) => {
+            return Err(compensate_setting_change(
+                window, &old, &candidate, audio, change, primary, false, true,
+            ));
+        }
+    }
 
     if let Err(e) = audio.set_gains(effective_gains(&candidate.audio)) {
-        let _ = apply_runtime(window, &candidate, &old, change);
-        return Err(format!("audio gain failed: {e}"));
+        // `AudioEngine::set_gains` mutates stored gains before it can fail,
+        // so the mixer may already be part-way to the candidate.
+        return Err(compensate_setting_change(
+            window,
+            &old,
+            &candidate,
+            audio,
+            change,
+            format!("audio gain failed: {e}"),
+            true,
+            true,
+        ));
     }
 
     if let Some(store) = store
@@ -730,9 +773,16 @@ pub fn commit_setting_change<W: WindowOps>(
         // the old ones before reporting the failure, so a failed save never
         // leaves the window (or the mixer) in a state the (unsaved) config
         // disagrees with.
-        let _ = audio.set_gains(effective_gains(&old.audio));
-        let _ = apply_runtime(window, &candidate, &old, change);
-        return Err(format!("save failed: {e}"));
+        return Err(compensate_setting_change(
+            window,
+            &old,
+            &candidate,
+            audio,
+            change,
+            format!("save failed: {e}"),
+            true,
+            true,
+        ));
     }
 
     world.set_camera_speeds(
@@ -741,6 +791,92 @@ pub fn commit_setting_change<W: WindowOps>(
     );
     *settings = candidate;
     Ok(())
+}
+
+/// Why a settings commit did not happen, and whether the session may go on.
+///
+/// `Recoverable` is the honest "SETTINGS NOT SAVED" case: the change was
+/// refused *and* the old runtime is provably back. `Fatal` means a
+/// compensation itself failed, so the mixer/window no longer match any
+/// config — the run cannot keep pretending otherwise.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SettingsCommitError {
+    Recoverable {
+        primary: String,
+    },
+    Fatal {
+        primary: String,
+        compensation_failures: Vec<String>,
+    },
+}
+
+impl std::fmt::Display for SettingsCommitError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Recoverable { primary } => write!(f, "{primary}"),
+            Self::Fatal {
+                primary,
+                compensation_failures,
+            } => write!(
+                f,
+                "settings change failed ({primary}); compensation failed ({}) — runtime \
+                 state is indeterminate, restart the app",
+                compensation_failures.join("; ")
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SettingsCommitError {}
+
+/// Undo as much of a half-applied transaction as the failure left standing.
+///
+/// Every enabled stage is attempted — a failed gain restore must not stop the
+/// runtime restore, or one broken device would strand the other. Order is the
+/// reverse of the forward path: gains first, then runtime.
+#[allow(clippy::too_many_arguments)]
+fn compensate_setting_change<W: WindowOps>(
+    window: Option<&mut W>,
+    old: &RtsSettings,
+    candidate: &RtsSettings,
+    audio: &mut dyn AudioSink,
+    change: SettingsChange,
+    primary: String,
+    restore_audio: bool,
+    restore_runtime: bool,
+) -> SettingsCommitError {
+    let mut failures = Vec::new();
+
+    if restore_audio && let Err(e) = audio.set_gains(effective_gains(&old.audio)) {
+        failures.push(format!("audio gain rollback failed: {e}"));
+    }
+
+    if restore_runtime {
+        match apply_runtime(window, candidate, old, change) {
+            Ok(()) => {}
+            Err(RuntimeApplyError::Primary(e)) | Err(RuntimeApplyError::RolledBack(e)) => {
+                failures.push(format!("runtime rollback failed: {e}"));
+            }
+            Err(RuntimeApplyError::Fatal {
+                primary,
+                compensation_failures,
+            }) => {
+                failures.push(format!("runtime rollback failed: {primary}"));
+                for nested in compensation_failures {
+                    failures.push(format!("runtime rollback compensation failed: {nested}"));
+                }
+            }
+        }
+    }
+
+    if failures.is_empty() {
+        SettingsCommitError::Recoverable { primary }
+    } else {
+        SettingsCommitError::Fatal {
+            primary,
+            compensation_failures: failures,
+        }
+    }
 }
 
 /// What a live commit produced beyond the transaction's own answer.
@@ -782,23 +918,63 @@ pub fn commit_setting_change_live<W: ClaimedWindow>(
     let mode_change = matches!(change, SettingsChange::WindowMode(_));
     if !mode_change {
         return Ok(LiveCommit {
-            result: commit_setting_change(world, Some(window), store, settings, audio, change),
+            result: soft_live_result(commit_setting_change(
+                world,
+                Some(window),
+                store,
+                settings,
+                audio,
+                change,
+            ))?,
             viewport: None,
         });
     }
 
     window.release_claim();
     let result = commit_setting_change(world, Some(window), store, settings, audio, change);
-    window
-        .reclaim()
-        .map_err(|e| format!("window reclaim after a mode change failed: {e}"))?;
-    let viewport = window
-        .viewport()
-        .map_err(|e| format!("viewport refresh after a mode change failed: {e}"))?;
-    Ok(LiveCommit {
-        result,
-        viewport: Some(viewport),
-    })
+    // The reclaim runs whatever the transaction answered — including a fatal
+    // one: leaving the device without its window would strand the teardown
+    // path itself.
+    let reclaimed = window.reclaim();
+    let soft = soft_live_result(result);
+    match (soft, reclaimed) {
+        // Both halves are kept: a fatal transaction whose reclaim also failed
+        // must not report only the reclaim.
+        (Err(txn), Err(reclaim)) => Err(format!(
+            "{txn}; window reclaim after a mode change also failed: {reclaim}"
+        )),
+        (Ok(_), Err(reclaim)) => Err(format!(
+            "window reclaim after a mode change failed: {reclaim}"
+        )),
+        // A fatal transaction skips the viewport: there is nothing left to
+        // map pointers through.
+        (Err(txn), Ok(())) => Err(txn),
+        (Ok(result), Ok(())) => match window.viewport() {
+            Ok(viewport) => Ok(LiveCommit {
+                result,
+                viewport: Some(viewport),
+            }),
+            Err(viewport) => Err(match result {
+                Err(primary) => format!(
+                    "{primary}; viewport refresh after a rolled-back mode change also \
+                     failed: {viewport}"
+                ),
+                Ok(()) => format!("viewport refresh after a mode change failed: {viewport}"),
+            }),
+        },
+    }
+}
+
+/// Split a transaction's answer into what the session may survive and what
+/// it may not: a verified rollback becomes the inner soft warning, a failed
+/// compensation becomes the outer fatal error. A fatal one is never flattened
+/// into [`LiveCommit::result`].
+fn soft_live_result(result: Result<(), SettingsCommitError>) -> Result<Result<(), String>, String> {
+    match result {
+        Ok(()) => Ok(Ok(())),
+        Err(SettingsCommitError::Recoverable { primary }) => Ok(Err(primary)),
+        Err(error @ SettingsCommitError::Fatal { .. }) => Err(error.to_string()),
+    }
 }
 
 /// Drain one pending change through the memory-only transaction.
@@ -818,7 +994,22 @@ fn drain_one_setting_change_memory(
     );
     match outcome {
         Ok(()) => session.ui.warning = None,
-        Err(reason) => session.ui.warning = Some(format!("SETTINGS NOT SAVED: {reason}")),
+        Err(SettingsCommitError::Recoverable { primary }) => {
+            session.ui.warning = Some(format!("SETTINGS NOT SAVED: {primary}"))
+        }
+        // A failed compensation is not a banner: the runtime no longer
+        // matches any config, so the run ends. `audio_fatal` is the scripted
+        // path's existing fatal transport, and both contexts are kept — an
+        // audio device that already died is not made irrelevant by this.
+        Err(error @ SettingsCommitError::Fatal { .. }) => {
+            session.ui.warning = None;
+            let settings_error = error.to_string();
+            let composed = match session.take_audio_fatal() {
+                Some(prior) => format!("{prior}; settings transaction fatal: {settings_error}"),
+                None => format!("settings transaction fatal: {settings_error}"),
+            };
+            session.audio_fatal = Some(crate::rts_feedback::AudioError(composed));
+        }
     }
 }
 
@@ -903,7 +1094,7 @@ fn apply_runtime<W: WindowOps>(
     from: &RtsSettings,
     to: &RtsSettings,
     change: SettingsChange,
-) -> Result<(), String> {
+) -> Result<(), RuntimeApplyError> {
     let Some(window) = window else {
         return Ok(());
     };
@@ -911,15 +1102,38 @@ fn apply_runtime<W: WindowOps>(
         SettingsChange::WindowMode(_) => {
             match rts_window::transition_window_mode(window, from.display.mode, to.display.mode) {
                 Ok(ModeChangeOutcome::Applied) => Ok(()),
-                Ok(ModeChangeOutcome::RolledBack(reason)) => Err(reason),
-                Err(e) => Err(e.to_string()),
+                // The transition restored the old mode itself, so the runtime
+                // is known-good and the caller owes no compensation for it.
+                Ok(ModeChangeOutcome::RolledBack(reason)) => {
+                    Err(RuntimeApplyError::RolledBack(reason))
+                }
+                Err(e) => Err(RuntimeApplyError::Fatal {
+                    primary: e.primary,
+                    compensation_failures: vec![e.rollback],
+                }),
             }
         }
+        // A native grab call can mutate before it fails, so this is only the
+        // primary: reapplying the old value is the transaction's job.
         SettingsChange::Confine(_) => window
             .set_mouse_grab(to.display.confine_pointer)
-            .map_err(|e| format!("pointer grab failed: {e}")),
+            .map_err(|e| RuntimeApplyError::Primary(format!("pointer grab failed: {e}"))),
         _ => Ok(()),
     }
+}
+
+/// What one runtime step answered. The three failures differ only in what
+/// the caller still owes: nothing (`RolledBack` — the old runtime is already
+/// back), a compensation attempt (`Primary`), or nothing that can help
+/// (`Fatal` — compensation was already tried and failed).
+#[derive(Debug, PartialEq, Eq)]
+enum RuntimeApplyError {
+    Primary(String),
+    RolledBack(String),
+    Fatal {
+        primary: String,
+        compensation_failures: Vec<String>,
+    },
 }
 
 impl NumericEdit {
@@ -1113,7 +1327,12 @@ mod tests {
     struct FakeWindow {
         log: Vec<String>,
         grabbed: bool,
-        fail: Option<&'static str>,
+        /// `(step, 1-based occurrence)` pairs that fail. An occurrence rather
+        /// than a flag: the rollback runs the same steps a second time, and a
+        /// test has to be able to fail the forward call, the rollback call,
+        /// or both.
+        failures: Vec<(&'static str, u32)>,
+        viewport_calls: std::cell::Cell<u32>,
         /// Logical size the fake reports back after a mode change, so a test
         /// can tell a refreshed viewport from the one the caller already had.
         size: Option<[u32; 2]>,
@@ -1127,8 +1346,12 @@ mod tests {
             self.record("reclaim")
         }
         fn viewport(&self) -> Result<DisplayViewport, String> {
-            if self.fail == Some("viewport") {
-                return Err("viewport failed (injected)".to_string());
+            let occurrence = self.viewport_calls.get() + 1;
+            self.viewport_calls.set(occurrence);
+            if self.failures.contains(&("viewport", occurrence)) {
+                return Err(format!(
+                    "viewport failed (injected on occurrence {occurrence})"
+                ));
             }
             let size = self.size.unwrap_or([1920, 1080]);
             DisplayViewport::new(size, size).ok_or_else(|| "degenerate size".to_string())
@@ -1176,9 +1399,11 @@ mod tests {
             self.record("sync")
         }
         fn set_mouse_grab(&mut self, grabbed: bool) -> Result<(), String> {
-            self.record("set_mouse_grab")?;
+            // The native call mutates before it can fail, so the fake does
+            // too: a partially-applied grab is exactly what the transaction
+            // has to compensate for.
             self.grabbed = grabbed;
-            Ok(())
+            self.record("set_mouse_grab")
         }
     }
 
@@ -1278,10 +1503,7 @@ mod tests {
         let mut world = test_world();
         let mut settings = RtsSettings::default();
         let mut audio = FakeAudioSink::new();
-        let mut window = FakeWindow {
-            fail: Some("set_size"),
-            ..Default::default()
-        };
+        let mut window = FakeWindow::default().failing_on("set_size", 1);
 
         let live = commit_setting_change_live(
             &mut world,
@@ -1310,6 +1532,135 @@ mod tests {
         );
     }
 
+    /// A mode change whose *internal* rollback also failed leaves the window
+    /// straddling two mode sequences. The claim is still retaken — the
+    /// teardown path needs it — but the run ends, and no viewport is read
+    /// off a window nobody can describe.
+    #[test]
+    fn a_mode_change_with_failed_internal_rollback_is_fatal_after_reclaim() {
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow::default()
+            .failing_on("sync", 1)
+            .failing_on("sync", 2);
+
+        let error = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::WindowMode(WindowMode::Windowed1280x720),
+        )
+        .expect_err("a failed internal rollback must be outer fatal");
+
+        assert!(
+            error.contains("Windowed1280x720") && error.contains("BorderlessDesktop"),
+            "both the refused mode and the one that could not be restored must survive: {error}"
+        );
+        assert!(
+            error.contains("indeterminate") && error.contains("restart the app"),
+            "{error}"
+        );
+        assert_eq!(
+            window.call_count("reclaim"),
+            1,
+            "the claim is still retaken"
+        );
+        assert_eq!(
+            window.call_count("viewport"),
+            0,
+            "a fatal transaction reads no viewport"
+        );
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+    }
+
+    /// Going forward, a `RolledBack` outcome is good news — the old mode is
+    /// back. Going *backward*, it is the opposite: the compensation could not
+    /// reach the old mode and restored the candidate instead, so the window
+    /// is on a mode the config does not describe.
+    #[test]
+    fn a_candidate_to_old_mode_rolled_back_to_candidate_is_fatal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings-v1.json");
+        std::fs::create_dir(&path).expect("seed a directory in place of the file");
+        let store = SettingsStore::at(path);
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        // Forward mode applies (sync #1); the compensation back to the old
+        // mode fails (sync #2) and restores the candidate instead (sync #3).
+        let mut window = FakeWindow::default().failing_on("sync", 2);
+
+        let error = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::WindowMode(WindowMode::Windowed1280x720),
+        )
+        .expect_err("a candidate-to-old rollback that did not reach the old mode is fatal");
+
+        assert!(error.contains("save failed:"), "{error}");
+        assert!(error.contains("runtime rollback failed:"), "{error}");
+        assert!(
+            error.contains("indeterminate") && error.contains("restart the app"),
+            "{error}"
+        );
+        assert_eq!(window.call_count("reclaim"), 1, "reclaimed exactly once");
+        assert_eq!(
+            window.call_count("viewport"),
+            0,
+            "no viewport after a fatal"
+        );
+        assert_eq!(
+            audio.gain_calls(),
+            2,
+            "the gains were pushed forward and restored"
+        );
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+    }
+
+    /// A transaction fatal *and* a failed reclaim must both be reported: the
+    /// reclaim is the last thing that happened, not the reason the run ended.
+    #[test]
+    fn a_mode_transaction_fatal_and_reclaim_fatal_preserve_both_contexts() {
+        let mut world = test_world();
+        let mut settings = RtsSettings::default();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow::default()
+            .failing_on("sync", 1)
+            .failing_on("sync", 2)
+            .failing_on("reclaim", 1);
+
+        let error = commit_setting_change_live(
+            &mut world,
+            &mut window,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::WindowMode(WindowMode::Windowed1280x720),
+        )
+        .expect_err("a fatal transaction with a failed reclaim is still fatal");
+
+        assert!(
+            error.contains("Windowed1280x720"),
+            "missing primary mode failure: {error}"
+        );
+        assert!(
+            error.contains("window reclaim after a mode change also failed:"),
+            "missing the reclaim context: {error}"
+        );
+        assert_eq!(window.call_count("reclaim"), 1, "reclaimed exactly once");
+        assert_eq!(
+            window.call_count("viewport"),
+            0,
+            "no viewport after a fatal"
+        );
+    }
+
     /// A reclaim that fails leaves the run with no presentable window. That is
     /// fatal for the session, not a "SETTINGS NOT SAVED" warning, so it comes
     /// back as the outer `Err`.
@@ -1318,10 +1669,7 @@ mod tests {
         let mut world = test_world();
         let mut settings = RtsSettings::default();
         let mut audio = FakeAudioSink::new();
-        let mut window = FakeWindow {
-            fail: Some("reclaim"),
-            ..Default::default()
-        };
+        let mut window = FakeWindow::default().failing_on("reclaim", 1);
 
         let err = commit_setting_change_live(
             &mut world,
@@ -1336,10 +1684,31 @@ mod tests {
     }
 
     impl FakeWindow {
+        /// Fail `step` on its `occurrence`-th call (1-based).
+        fn failing_on(mut self, step: &'static str, occurrence: u32) -> Self {
+            self.failures.push((step, occurrence));
+            self
+        }
+
+        /// How many times `step` has been called.
+        fn call_count(&self, step: &str) -> u32 {
+            if step == "viewport" {
+                return self.viewport_calls.get();
+            }
+            self.log.iter().filter(|s| s.as_str() == step).count() as u32
+        }
+
         fn record(&mut self, step: &str) -> Result<(), String> {
             self.log.push(step.to_string());
-            if self.fail == Some(step) {
-                Err(format!("{step} failed (injected)"))
+            let occurrence = self.call_count(step);
+            if self
+                .failures
+                .iter()
+                .any(|f| f.0 == step && f.1 == occurrence)
+            {
+                Err(format!(
+                    "{step} failed (injected on occurrence {occurrence})"
+                ))
             } else {
                 Ok(())
             }
@@ -1698,16 +2067,22 @@ mod tests {
         assert_eq!(audio.gains().music_basis_points, 50 * 35);
     }
 
+    /// A gain push can mutate the mixer before it fails, so the transaction
+    /// re-pushes the old gains. While that restore works, the session may go
+    /// on with a warning.
     #[test]
-    fn a_failed_gain_push_rolls_back_like_a_failed_save() {
+    fn an_audio_failure_with_successful_compensation_stays_recoverable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("settings-v1.json");
         let store = SettingsStore::at(path.clone());
         let mut settings = RtsSettings::default();
         let mut world = test_world();
-        let mut window = FakeWindow::default();
+        let mut window = FakeWindow {
+            grabbed: true,
+            ..Default::default()
+        };
         let mut audio = FakeAudioSink::new();
-        audio.set_fail_set_gains(true);
+        audio.set_fail_set_gains_on_calls(&[1]);
 
         let result = commit_setting_change(
             &mut world,
@@ -1718,11 +2093,216 @@ mod tests {
             SettingsChange::Confine(false),
         );
 
-        let reason = result.expect_err("a failing gain push must fail the commit");
-        assert!(reason.contains("audio gain failed"), "{reason}");
+        let error = result.expect_err("a failing gain push must fail the commit");
+        assert_eq!(
+            error,
+            SettingsCommitError::Recoverable {
+                primary: "audio gain failed: injected set_gains failure on call 1".to_string(),
+            },
+            "a verified rollback is a warning, not a fatal"
+        );
+        assert_eq!(
+            audio.gain_calls(),
+            2,
+            "the possibly-partial gains must be pushed back at the old value"
+        );
         assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
         assert!(window.grabbed, "runtime must roll back to the old value");
+        assert_eq!(
+            window.call_count("set_mouse_grab"),
+            2,
+            "the confinement must be reapplied at its old value"
+        );
         assert!(!path.exists(), "a failed gain push must never reach disk");
+    }
+
+    /// When the restore itself fails the mixer is on gains no config
+    /// describes: that is fatal, and it must name both halves.
+    #[test]
+    fn an_audio_failure_with_failed_audio_compensation_is_fatal() {
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        audio.set_fail_set_gains_on_calls(&[1, 2]);
+
+        let error = commit_setting_change::<FakeWindow>(
+            &mut world,
+            None,
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::Master(50),
+        )
+        .expect_err("a failed gain compensation must fail the commit");
+
+        let SettingsCommitError::Fatal {
+            primary,
+            compensation_failures,
+        } = &error
+        else {
+            panic!("failed gain compensation must be fatal, got {error:?}");
+        };
+        assert!(
+            primary.contains("injected set_gains failure on call 1"),
+            "the primary failure must survive: {primary}"
+        );
+        assert_eq!(
+            compensation_failures,
+            &vec!["audio gain rollback failed: injected set_gains failure on call 2".to_string()],
+            "the failed rollback must be reported, not discarded"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("indeterminate") && message.contains("restart the app"),
+            "{message}"
+        );
+        assert_eq!(audio.gain_calls(), 2, "both pushes were attempted");
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+    }
+
+    /// A grab call can mutate before it fails. Reapplying the old value is
+    /// what makes the refusal recoverable — and its own failure is what makes
+    /// it fatal.
+    #[test]
+    fn an_initial_confinement_failure_reapplies_old_and_stays_recoverable() {
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow {
+            grabbed: true,
+            ..Default::default()
+        }
+        .failing_on("set_mouse_grab", 1);
+
+        let error = commit_setting_change(
+            &mut world,
+            Some(&mut window),
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::Confine(false),
+        )
+        .expect_err("a failing grab must fail the commit");
+
+        assert!(
+            matches!(error, SettingsCommitError::Recoverable { .. }),
+            "a reapplied old value keeps this recoverable, got {error:?}"
+        );
+        assert_eq!(
+            window.call_count("set_mouse_grab"),
+            2,
+            "the old confinement must be reapplied after a partial failure"
+        );
+        assert!(window.grabbed, "the old value must be back");
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+        assert_eq!(
+            audio.gain_calls(),
+            0,
+            "a refused runtime never pushes gains"
+        );
+    }
+
+    #[test]
+    fn an_initial_confinement_failure_with_failed_reapply_is_fatal() {
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        let mut window = FakeWindow {
+            grabbed: true,
+            ..Default::default()
+        }
+        .failing_on("set_mouse_grab", 1)
+        .failing_on("set_mouse_grab", 2);
+
+        let error = commit_setting_change(
+            &mut world,
+            Some(&mut window),
+            None,
+            &mut settings,
+            &mut audio,
+            SettingsChange::Confine(false),
+        )
+        .expect_err("a failing grab must fail the commit");
+
+        let SettingsCommitError::Fatal {
+            primary,
+            compensation_failures,
+        } = &error
+        else {
+            panic!("a failed confinement reapply must be fatal, got {error:?}");
+        };
+        assert!(primary.contains("pointer grab failed"), "{primary}");
+        assert_eq!(compensation_failures.len(), 1, "{compensation_failures:?}");
+        assert!(
+            compensation_failures[0].starts_with("runtime rollback failed:"),
+            "{compensation_failures:?}"
+        );
+        assert_eq!(
+            window.call_count("set_mouse_grab"),
+            2,
+            "the reapply must still be attempted"
+        );
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
+    }
+
+    /// A failed save owes *every* compensation: the gain restore must not
+    /// stop the runtime restore, and either one failing is fatal.
+    #[test]
+    fn a_save_failure_attempts_every_compensation_and_any_failure_is_fatal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("settings-v1.json");
+        // A directory in place of the target file makes the save fail.
+        std::fs::create_dir(&path).expect("seed a directory in place of the file");
+        let store = SettingsStore::at(path);
+        let mut settings = RtsSettings::default();
+        let mut world = test_world();
+        let mut audio = FakeAudioSink::new();
+        // The forward push succeeds; both compensations fail.
+        audio.set_fail_set_gains_on_calls(&[2]);
+        let mut window = FakeWindow {
+            grabbed: true,
+            ..Default::default()
+        }
+        .failing_on("set_mouse_grab", 2);
+
+        let error = commit_setting_change(
+            &mut world,
+            Some(&mut window),
+            Some(&store),
+            &mut settings,
+            &mut audio,
+            SettingsChange::Confine(false),
+        )
+        .expect_err("a failing save must fail the commit");
+
+        let SettingsCommitError::Fatal {
+            primary,
+            compensation_failures,
+        } = &error
+        else {
+            panic!("a failed save compensation must be fatal, got {error:?}");
+        };
+        assert!(primary.starts_with("save failed:"), "{primary}");
+        assert_eq!(
+            compensation_failures.len(),
+            2,
+            "both compensations must be attempted and reported: {compensation_failures:?}"
+        );
+        assert!(
+            compensation_failures[0].starts_with("audio gain rollback failed:"),
+            "{compensation_failures:?}"
+        );
+        assert!(
+            compensation_failures[1].starts_with("runtime rollback failed:"),
+            "{compensation_failures:?}"
+        );
+        assert_eq!(audio.gain_calls(), 2, "the gain restore was attempted");
+        assert_eq!(
+            window.call_count("set_mouse_grab"),
+            2,
+            "a failed gain restore must not skip the runtime restore"
+        );
+        assert_eq!(settings, RtsSettings::default(), "cfg must be untouched");
     }
 
     #[test]
@@ -1891,7 +2471,7 @@ mod tests {
     #[test]
     fn failed_slider_commit_rolls_back_runtime_and_value() {
         let (mut world, mut session, handle) = session_open_settings();
-        handle.set_fail_set_gains(true);
+        handle.set_fail_set_gains_on_calls(&[1]);
         let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
         let old = session.settings.camera.keyboard_pan;
         let old_speed = world.camera_speeds();
@@ -1906,7 +2486,7 @@ mod tests {
             Some(ControlId::KeyboardPanSlider)
         );
         // Later legal motion after the fault clears still commits.
-        handle.set_fail_set_gains(false);
+        handle.set_fail_set_gains_on_calls(&[]);
         session.ui.warning = None;
         let p72 = track_point(KEYBOARD_PAN_TRACK, 72, PAN_MIN, PAN_MAX);
         apply(&mut world, &mut session, RtsCommand::Move(p72));
@@ -2281,7 +2861,9 @@ mod tests {
         let mut settings = RtsSettings::default();
         let mut world = test_world();
         let mut audio = FakeAudioSink::new();
-        audio.set_fail_set_gains(true);
+        // Only the forward push fails: the rollback push restores the old
+        // gains, so this stays a recoverable refusal.
+        audio.set_fail_set_gains_on_calls(&[1]);
 
         let result = commit_setting_change::<FakeWindow>(
             &mut world,
