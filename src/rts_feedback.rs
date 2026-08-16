@@ -287,7 +287,10 @@ pub struct FakeAudioSink {
     gains: EffectiveGains,
     gain_calls: u32,
     dropped: u32,
-    fail_set_gains: bool,
+    /// 1-based `set_gains` calls that fail. A schedule rather than a flag:
+    /// the rollback path pushes gains a *second* time, and a test has to be
+    /// able to fail only the first push (recoverable) or both (fatal).
+    fail_set_gains_on_calls: Vec<u32>,
 }
 
 impl Default for FakeAudioSink {
@@ -308,7 +311,7 @@ impl FakeAudioSink {
             },
             gain_calls: 0,
             dropped: 0,
-            fail_set_gains: false,
+            fail_set_gains_on_calls: Vec::new(),
         }
     }
 }
@@ -342,9 +345,10 @@ impl FakeAudioSink {
         self.trace.capacity()
     }
 
-    /// Fault injection for the T13 settings rollback path.
-    pub fn set_fail_set_gains(&mut self, fail: bool) {
-        self.fail_set_gains = fail;
+    /// Fault injection for the T13 settings rollback path: replaces the
+    /// schedule of 1-based `set_gains` calls that fail.
+    pub fn set_fail_set_gains_on_calls(&mut self, calls: &[u32]) {
+        self.fail_set_gains_on_calls = calls.to_vec();
     }
 
     /// Every `Ui` cue in trace order.
@@ -362,8 +366,11 @@ impl FakeAudioSink {
 impl AudioSink for FakeAudioSink {
     fn set_gains(&mut self, gains: EffectiveGains) -> Result<(), AudioError> {
         self.gain_calls += 1;
-        if self.fail_set_gains {
-            return Err(AudioError("injected set_gains failure".to_string()));
+        if self.fail_set_gains_on_calls.contains(&self.gain_calls) {
+            return Err(AudioError(format!(
+                "injected set_gains failure on call {}",
+                self.gain_calls
+            )));
         }
         self.gains = gains;
         Ok(())
@@ -404,8 +411,8 @@ impl FakeSinkHandle {
     }
 
     /// Fault-inject `set_gains` failures through the shared sink (`T3`).
-    pub fn set_fail_set_gains(&self, fail: bool) {
-        self.0.borrow_mut().set_fail_set_gains(fail);
+    pub fn set_fail_set_gains_on_calls(&self, calls: &[u32]) {
+        self.0.borrow_mut().set_fail_set_gains_on_calls(calls);
     }
 
     /// Another handle on the same sink, as a boxed [`AudioSink`].

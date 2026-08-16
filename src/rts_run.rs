@@ -58,6 +58,14 @@
 //! The `frame0` and `clean exit` lines are strictly `key=value` separated by
 //! single spaces, with no spaces inside a value.
 //!
+//! Those two lines carry the only digests a run takes ([`EndpointHashes`]):
+//! `frame0`'s is the world immediately after the first successful draw, and
+//! the clean exit's is the world the *last successfully drawn* frame left —
+//! the loaded world when nothing was ever drawn, and never the state a live
+//! click applied after that last draw. A run that quits before frame 1
+//! prints no `frame0` at all. Both are same-host bytes: a state digest is
+//! never claimed to be portable across machines or backends.
+//!
 //! # exit codes
 //!
 //! Reuses `crate::run::{RunError, EXIT_ERROR, EXIT_NO_GPU}` — one exit-code
@@ -69,7 +77,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use mmd_engine::render::{
-    DisplayViewport, RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT, VIEW_WIDTH, edge_pan_dir,
+    DisplayViewport, MappedPointer, RenderError, ScenePass, SpriteRenderer, VIEW_HEIGHT,
+    VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
     DragBox, EntityId, EntityKind, FramePackOptions, MAX_SELECTION, OWNER_PLAYER,
@@ -123,6 +132,10 @@ pub(crate) struct RtsSession {
     cursor: [f32; 2],
     /// Left button pressed at this position, if it is down.
     press: Option<[f32; 2]>,
+    /// Right button pressed inside the content rect, if it is down. A press
+    /// that starts in a letterbox/pillarbox bar leaves this false, so the
+    /// release cannot issue a world order.
+    right_press: bool,
     /// Owner classified at pointer-down — retained until release (`T1`).
     press_owner: PointerOwner,
     /// Stable control identity at pointer-down, when the owner named one.
@@ -194,6 +207,7 @@ impl RtsSession {
         Self {
             cursor: [0.0, 0.0],
             press: None,
+            right_press: false,
             press_owner: PointerOwner::None,
             press_control: None,
             slider_cue_emitted: false,
@@ -226,6 +240,12 @@ impl RtsSession {
     /// Control currently held under the left button, if any.
     pub(crate) fn pressed_control(&self) -> Option<mmd_engine::rts::ControlId> {
         self.press_control
+    }
+
+    /// Disarm a held right button (focus loss). Separate from
+    /// [`Self::clear_press`] so releasing one button never disarms the other.
+    pub(crate) fn clear_right_press(&mut self) {
+        self.right_press = false;
     }
 
     /// Clear retained pointer-down state (focus loss, content-bar cancel).
@@ -491,6 +511,77 @@ pub(crate) fn pointer_up(world: &mut RtsWorld, session: &mut RtsSession, p: [f32
     emit_selection_cues(world, session);
 }
 
+/// Live left press. Only a press that lands inside the aspect-fit content
+/// rect arms a gesture; one that starts in a letterbox/pillarbox bar cancels
+/// any retained origin instead, so a later release cannot read it as a
+/// drag/click origin. Returns whether a staged setting change needs draining.
+pub(crate) fn live_left_press(
+    world: &RtsWorld,
+    session: &mut RtsSession,
+    mapped: MappedPointer,
+) -> bool {
+    if mapped.inside_content {
+        pointer_down(world, session, mapped.logical);
+        true
+    } else {
+        session.clear_press();
+        false
+    }
+}
+
+/// Live left release. Consumes the retained origin: a bar-origin gesture, a
+/// release over a bar and a stale second release all activate nothing. A
+/// world-origin drag becomes a box select; anything else routes to
+/// [`pointer_up`]. Returns whether a staged setting change needs draining.
+pub(crate) fn live_left_release(
+    world: &mut RtsWorld,
+    session: &mut RtsSession,
+    mapped: MappedPointer,
+    shift: bool,
+) -> bool {
+    if !mapped.inside_content || session.press.is_none() {
+        session.clear_press();
+        return false;
+    }
+    let end = mapped.logical;
+    // World-origin drag becomes a box select; otherwise matching down/up
+    // control activates (`T1`).
+    if !shift
+        && matches!(session.press_owner, PointerOwner::World)
+        && session.press.is_some_and(|a| is_drag(a, end))
+    {
+        let start = session.press.unwrap();
+        selection_snapshot(world, session);
+        let view = world.iso_view();
+        world.box_select_into_selection(&view, start, end);
+        session.clear_press();
+        emit_selection_cues(world, session);
+    } else {
+        pointer_up(world, session, end, shift);
+    }
+    true
+}
+
+/// Live right press: arms an order only from inside the content rect. Every
+/// press overwrites the previous ownership, so a bar press disarms a stale
+/// in-content one. Independent of the left button's own state.
+pub(crate) fn live_right_press(session: &mut RtsSession, mapped: MappedPointer) {
+    session.right_press = mapped.inside_content;
+}
+
+/// Live right release: consumes ownership first, then issues the order only
+/// when press *and* release both happened inside the content rect.
+pub(crate) fn live_right_release(
+    world: &mut RtsWorld,
+    session: &mut RtsSession,
+    mapped: MappedPointer,
+) {
+    let armed = std::mem::take(&mut session.right_press);
+    if armed && mapped.inside_content {
+        apply(world, session, RtsCommand::RightClick(mapped.logical));
+    }
+}
+
 /// Apply one [`RtsCommand`] to `world`/`session`. Shared by the live SDL path
 /// and the scripted path, so the two cannot drift — including the audio
 /// events derived from each command's own receipts (`T15`).
@@ -646,12 +737,151 @@ struct Scratch {
 }
 
 /// Everything the exit line reports, accumulated as the run proceeds.
+/// The only digests a run ever takes. `RtsWorld::state_hash` walks the whole
+/// world and allocates, and stdout only ever shows two of them — the state
+/// frame 1 produced and the state the run ended on — so every intermediate
+/// frame's digest was work nothing observed.
+///
+/// Clean-exit semantics are *last successfully rendered world*, which is why
+/// a terminal batch captures before it runs: live input in the batch that
+/// quits (a click, an order) mutates the world after that last render, and
+/// the printed hash must not include it.
+struct EndpointHashes {
+    initial: [u8; 32],
+    first_rendered: Option<[u8; 32]>,
+    /// Pre-batch snapshot taken when this batch is known to end the run.
+    live_quit: Option<[u8; 32]>,
+    #[cfg(test)]
+    hash_calls: u64,
+}
+
+impl EndpointHashes {
+    fn new(world: &RtsWorld) -> Self {
+        let mut hashes = Self {
+            initial: [0; 32],
+            first_rendered: None,
+            live_quit: None,
+            #[cfg(test)]
+            hash_calls: 0,
+        };
+        hashes.initial = hashes.compute(world);
+        hashes
+    }
+
+    /// The one place a run digests the world.
+    fn compute(&mut self, world: &RtsWorld) -> [u8; 32] {
+        #[cfg(test)]
+        {
+            self.hash_calls += 1;
+        }
+        world.state_hash()
+    }
+
+    /// Frame 1 is printed on the `rts: frame0` line; no later frame's digest
+    /// is ever read on its own frame.
+    fn record_rendered(&mut self, frame: u64, world: &RtsWorld) {
+        if frame == 1 {
+            self.first_rendered = Some(self.compute(world));
+        }
+    }
+
+    /// Preserve the last-rendered world before a batch that ends the run.
+    /// Never overwrites an earlier capture — the first terminal batch wins.
+    fn capture_live_quit(&mut self, rendered_frames: u64, world: &RtsWorld) {
+        if self.live_quit.is_some() {
+            return;
+        }
+        self.live_quit = Some(match rendered_frames {
+            0 => self.initial,
+            1 => self
+                .first_rendered
+                .expect("frame 1 rendered, so its digest exists"),
+            _ => self.compute(world),
+        });
+    }
+
+    /// The clean-exit digest: a pre-batch capture when one was taken, else
+    /// the current world — which is the last rendered one on every path that
+    /// reaches here without live mutation.
+    fn final_hash(&mut self, rendered_frames: u64, world: &RtsWorld) -> [u8; 32] {
+        if let Some(hash) = self.live_quit {
+            return hash;
+        }
+        match rendered_frames {
+            0 => self.initial,
+            1 => self
+                .first_rendered
+                .expect("frame 1 rendered, so its digest exists"),
+            _ => self.compute(world),
+        }
+    }
+
+    #[cfg(test)]
+    fn call_count(&self) -> u64 {
+        self.hash_calls
+    }
+}
+
+/// What the post-event spine decided this batch means for the run.
+#[derive(Debug)]
+enum LivePostEvents {
+    Continue,
+    Quit,
+}
+
+/// Whether a key event is the run's terminal command. `KEY_BINDINGS` binds no
+/// key to `Quit` today; the classifier is what keeps that true by accident
+/// rather than by silence.
+fn key_command_requests_quit(command: Option<RtsCommand>, repeat: bool) -> bool {
+    !repeat && command == Some(RtsCommand::Quit)
+}
+
+/// Whether this live event ends the run: the window's own close, or a key
+/// bound to `Quit`. Never a key repeat, Escape, a pointer or a focus change.
+fn live_event_requests_quit(event: &Event) -> bool {
+    match event {
+        Event::Quit { .. } => true,
+        Event::KeyDown {
+            keycode: Some(kc),
+            repeat,
+            ..
+        } => key_command_requests_quit(rts_input::command_from_keycode(*kc), *repeat),
+        _ => false,
+    }
+}
+
+/// Snapshot the last-rendered world before a batch that is known to end the
+/// run — from a live close/quit key, or from the script's own next frame.
+fn preserve_endpoint_before_live_batch(
+    events: &[Event],
+    script: &RtsScript,
+    next_frame: u64,
+    state: &mut RunState,
+    world: &RtsWorld,
+) {
+    if script.requests_quit_on_frame(next_frame) || events.iter().any(live_event_requests_quit) {
+        state.hashes.capture_live_quit(state.frames, world);
+    }
+}
+
+/// The post-batch spine: a fatal sink error beats a quit, so a run that both
+/// quit and lost its audio device exits 1 instead of printing a clean exit.
+fn live_post_events(session: &mut RtsSession) -> Result<LivePostEvents, RunError> {
+    if let Some(e) = session.take_audio_fatal() {
+        return Err(RunError::Failed(format!("interactive audio failure: {e}")));
+    }
+    if session.quit {
+        Ok(LivePostEvents::Quit)
+    } else {
+        Ok(LivePostEvents::Continue)
+    }
+}
+
 struct RunState {
     frames: u64,
     quit: bool,
     expected_ticks: u64,
-    first_hash: [u8; 32],
-    last_hash: [u8; 32],
+    hashes: EndpointHashes,
 }
 
 /// What one rendered frame reported.
@@ -863,13 +1093,11 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         cmd_buf: Vec::with_capacity(8),
     };
 
-    let initial_hash = world.state_hash();
     let mut state = RunState {
         frames: 0,
         quit: false,
         expected_ticks: 0,
-        first_hash: initial_hash,
-        last_hash: initial_hash,
+        hashes: EndpointHashes::new(&world),
     };
 
     let frame0 = step_frame(
@@ -884,12 +1112,24 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
 
     let Some(frame0) = frame0 else {
         // A quit scheduled for frame 1: nothing rendered, nothing claimed.
-        return finish(&mut script, &state, &session, &world, &backend, "offscreen");
+        return finish(
+            &mut script,
+            &mut state,
+            &session,
+            &world,
+            &backend,
+            "offscreen",
+        );
     };
     println!(
         "rts: frame0 tick={} hash={} world={} overlay={} ui={}",
         frame0.tick,
-        hex::encode(state.first_hash),
+        hex::encode(
+            state
+                .hashes
+                .first_rendered
+                .expect("frame 1 rendered, so its digest exists")
+        ),
         fmt_counts(&frame0.world_lens),
         frame0.overlay_len,
         fmt_counts(&frame0.ui_lens),
@@ -942,7 +1182,14 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
             &mut state,
             auto_frames,
         )?;
-        return finish(&mut script, &state, &session, &world, &backend, "offscreen");
+        return finish(
+            &mut script,
+            &mut state,
+            &session,
+            &world,
+            &backend,
+            "offscreen",
+        );
     };
 
     println!(
@@ -1002,7 +1249,14 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
             &mut state,
             auto_frames,
         )?;
-        return finish(&mut script, &state, &session, &world, &backend, "offscreen");
+        return finish(
+            &mut script,
+            &mut state,
+            &session,
+            &world,
+            &backend,
+            "offscreen",
+        );
     }
 
     let mut present_error: Option<RenderError> = None;
@@ -1029,12 +1283,17 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         // needs an immutable borrow of `pump`, which cannot coexist with the
         // mutable borrow `pump.poll_iter()` holds for the loop's duration.
         let events: Vec<Event> = pump.poll_iter().collect();
+        // Before the batch runs: a batch that ends the run must not fold its
+        // own live mutations into the clean-exit digest.
+        preserve_endpoint_before_live_batch(&events, &script, state.frames + 1, &mut state, &world);
         for event in events {
             match event {
                 Event::Quit { .. } => {
                     session.quit = true;
                     state.quit = true;
-                    break 'running;
+                    // Inner break only: the post-event spine below still owes
+                    // this batch its fatal-audio check.
+                    break;
                 }
                 Event::Window { win_event, .. } => match win_event {
                     WindowEvent::FocusGained => {
@@ -1149,7 +1408,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         apply(&mut world, &mut session, cmd);
                         if session.quit {
                             state.quit = true;
-                            break 'running;
+                            break;
                         }
                     } else if let Some(dir) = rts_input::pan_from_keycode(kc) {
                         apply(&mut world, &mut session, RtsCommand::PanStart(dir));
@@ -1195,11 +1454,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     ..
                 } => {
                     let mapped = viewport.map_pointer([x, y]);
-                    // A press that starts in a bar leaves `press` unset, so a
-                    // release anywhere cannot read it as a drag/click origin
-                    // — the bar press did nothing, per contract.
-                    if mapped.inside_content {
-                        pointer_down(&world, &mut session, mapped.logical);
+                    if live_left_press(&world, &mut session, mapped) {
                         // Slider down commits the first snapped step live.
                         if let Err(e) = drain_live_setting_change(
                             &mut world,
@@ -1213,9 +1468,16 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                             release_window(&renderer, window);
                             return Err(e);
                         }
-                    } else {
-                        session.clear_press();
                     }
+                }
+                Event::MouseButtonDown {
+                    mouse_btn: MouseButton::Right,
+                    x,
+                    y,
+                    ..
+                } => {
+                    let mapped = viewport.map_pointer([x, y]);
+                    live_right_press(&mut session, mapped);
                 }
                 Event::MouseButtonUp {
                     mouse_btn: MouseButton::Left,
@@ -1224,28 +1486,12 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     ..
                 } => {
                     let mapped = viewport.map_pointer([x, y]);
-                    if mapped.inside_content && session.press.is_some() {
-                        let end = mapped.logical;
-                        let shift = {
-                            let ks = pump.keyboard_state();
-                            ks.is_scancode_pressed(Scancode::LShift)
-                                || ks.is_scancode_pressed(Scancode::RShift)
-                        };
-                        // World-origin drag becomes a box select; otherwise
-                        // matching down/up control activates (`T1`).
-                        if !shift
-                            && matches!(session.press_owner, PointerOwner::World)
-                            && session.press.is_some_and(|a| is_drag(a, end))
-                        {
-                            let start = session.press.unwrap();
-                            selection_snapshot(&world, &mut session);
-                            let view = world.iso_view();
-                            world.box_select_into_selection(&view, start, end);
-                            session.clear_press();
-                            emit_selection_cues(&world, &mut session);
-                        } else {
-                            pointer_up(&mut world, &mut session, end, shift);
-                        }
+                    let shift = {
+                        let ks = pump.keyboard_state();
+                        ks.is_scancode_pressed(Scancode::LShift)
+                            || ks.is_scancode_pressed(Scancode::RShift)
+                    };
+                    if live_left_release(&mut world, &mut session, mapped, shift) {
                         // Non-slider modal clicks still stage on up; sliders
                         // already drained on down/motion.
                         if let Err(e) = drain_live_setting_change(
@@ -1260,9 +1506,6 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                             release_window(&renderer, window);
                             return Err(e);
                         }
-                    } else {
-                        // Release in a bar: no click/drag/order, per contract.
-                        session.clear_press();
                     }
                 }
                 Event::MouseButtonUp {
@@ -1272,13 +1515,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     ..
                 } => {
                     let mapped = viewport.map_pointer([x, y]);
-                    if mapped.inside_content {
-                        apply(
-                            &mut world,
-                            &mut session,
-                            RtsCommand::RightClick(mapped.logical),
-                        );
-                    }
+                    live_right_release(&mut world, &mut session, mapped);
                 }
                 Event::MouseWheel {
                     y,
@@ -1326,10 +1563,15 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         // A live `SdlAudioSink` call inside the event handling above (e.g.
         // a UI click's cue) can fail; that is a fatal interactive error
         // (T16) — release the window and exit 1 with the sink's own
-        // operation/asset context.
-        if let Some(e) = session.take_audio_fatal() {
-            release_window(&renderer, window);
-            return Err(RunError::Failed(format!("interactive audio failure: {e}")));
+        // operation/asset context. Checked before the quit so a batch that
+        // did both exits 1 instead of printing a clean exit.
+        match live_post_events(&mut session) {
+            Err(e) => {
+                release_window(&renderer, window);
+                return Err(e);
+            }
+            Ok(LivePostEvents::Quit) => break 'running,
+            Ok(LivePostEvents::Continue) => {}
         }
 
         let frame_start = Instant::now();
@@ -1370,7 +1612,14 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
         return Err(from_render(e));
     }
 
-    finish(&mut script, &state, &session, &world, &backend, "window")
+    finish(
+        &mut script,
+        &mut state,
+        &session,
+        &world,
+        &backend,
+        "window",
+    )
 }
 
 /// Tick to the frame budget with no window: same frame body, offscreen draws.
@@ -1452,12 +1701,8 @@ where
     // so it cannot change what a run heard.
     session.maintain_audio();
 
-    let hash = world.state_hash();
-    if frame == 1 {
-        state.first_hash = hash;
-    }
+    state.hashes.record_rendered(frame, world);
     state.frames = frame;
-    state.last_hash = hash;
     // Counted per frame rather than latched: a run that pauses and then
     // unpauses must go back to owing one tick per frame.
     if !session.ui.sim_paused() {
@@ -1602,7 +1847,7 @@ fn release_window(renderer: &SpriteRenderer, window: sdl3::video::Window) {
 /// Final checks, then the exit line.
 fn finish(
     script: &mut RtsScript,
-    state: &RunState,
+    state: &mut RunState,
     session: &RtsSession,
     world: &RtsWorld,
     backend: &str,
@@ -1642,6 +1887,10 @@ fn finish(
         gains.for_bus(AudioBus::Sfx),
     );
 
+    // After the two checks above: a run that failed one of them prints no
+    // clean exit, so it owes no digest.
+    let final_hash = state.hashes.final_hash(state.frames, world);
+
     let res = world.resources();
     let supply = world.supply();
     let (units, buildings, nodes) = count_entities(world);
@@ -1658,7 +1907,7 @@ fn finish(
          show_grid={}",
         world.tick_index(),
         state.frames,
-        hex::encode(state.last_hash),
+        hex::encode(final_hash),
         state.quit,
         session.ui.sim_paused(),
         res.crystal,
@@ -1852,6 +2101,761 @@ mod tests {
         assert!(session.numeric_edit.is_none());
         // Point is only used to document the scripted click coordinate space.
         let _ = p;
+    }
+
+    // --- audit #1: bar-origin pointer gestures --------------------------------
+
+    /// One live pointer event, in the shape the SDL event arms hand to the
+    /// production seams.
+    #[derive(Clone, Copy)]
+    enum LivePointer {
+        Motion(MappedPointer),
+        LeftDown(MappedPointer),
+        LeftUp { pointer: MappedPointer, shift: bool },
+        RightDown(MappedPointer),
+        RightUp(MappedPointer),
+    }
+
+    /// Drive the same seams the live event arms call — never a parallel
+    /// routing copy.
+    fn route(
+        world: &mut RtsWorld,
+        session: &mut RtsSession,
+        events: impl IntoIterator<Item = LivePointer>,
+    ) {
+        for event in events {
+            match event {
+                LivePointer::Motion(m) => apply(world, session, RtsCommand::Move(m.logical)),
+                LivePointer::LeftDown(m) => {
+                    live_left_press(world, session, m);
+                }
+                LivePointer::LeftUp { pointer, shift } => {
+                    live_left_release(world, session, pointer, shift);
+                }
+                LivePointer::RightDown(m) => live_right_press(session, m),
+                LivePointer::RightUp(m) => live_right_release(world, session, m),
+            }
+        }
+    }
+
+    fn tracked_world() -> RtsWorld {
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/scenarios/rts_prototype_v1.ron");
+        RtsWorld::load(&path).expect("tracked RTS scenario must load for pointer regressions")
+    }
+
+    /// Select one player unit so a right click has something to order.
+    fn select_a_unit(world: &mut RtsWorld) {
+        let store = world.entities();
+        let mut found = None;
+        for slot in 0..store.slot_count() {
+            if let Some(id) = store.id_at(slot)
+                && matches!(store.kind(slot), EntityKind::Unit(_))
+                && store.owner(slot) == OWNER_PLAYER
+            {
+                found = Some(id);
+                break;
+            }
+        }
+        let id = found.expect("tracked scene must own at least one player unit");
+        assert!(world.select_only(id), "the unit must select");
+    }
+
+    const BAR: MappedPointer = MappedPointer {
+        logical: [960.0, 0.0],
+        inside_content: false,
+    };
+    const INSIDE: MappedPointer = MappedPointer {
+        logical: [960.0, 540.0],
+        inside_content: true,
+    };
+    const DRAG_START: MappedPointer = MappedPointer {
+        logical: [800.0, 400.0],
+        inside_content: true,
+    };
+
+    /// F1: a gesture whose button-down happened in a letterbox/pillarbox bar
+    /// must not act when it is released over the content, on either button.
+    #[test]
+    fn bar_origin_cancels_left_and_right_gestures() {
+        // Left: a bar origin arms nothing, so the release cannot select.
+        for shift in [false, true] {
+            let mut world = tracked_world();
+            let (mut session, _handle) = RtsSession::for_test();
+            let before = world.selection().ids().to_vec();
+            route(
+                &mut world,
+                &mut session,
+                [
+                    LivePointer::LeftDown(BAR),
+                    LivePointer::Motion(INSIDE),
+                    LivePointer::LeftUp {
+                        pointer: INSIDE,
+                        shift,
+                    },
+                ],
+            );
+            assert_eq!(
+                world.selection().ids(),
+                before.as_slice(),
+                "left bar origin must not select (shift={shift})"
+            );
+            assert_eq!(
+                session.cursor, INSIDE.logical,
+                "bar-origin motion must still move the cursor (shift={shift})"
+            );
+        }
+
+        // Right: a bar origin arms no order.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_a_unit(&mut world);
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::RightDown(BAR),
+                LivePointer::Motion(INSIDE),
+                LivePointer::RightUp(INSIDE),
+            ],
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 0,
+            "right bar origin must issue no order"
+        );
+
+        // A release over a bar consumes ownership: the stale second release
+        // that follows must stay inert on both buttons.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_a_unit(&mut world);
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::RightDown(INSIDE),
+                LivePointer::RightUp(BAR),
+                LivePointer::RightUp(INSIDE),
+            ],
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 0,
+            "a right release over a bar must consume ownership and block the stale second release"
+        );
+
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let before = world.selection().ids().to_vec();
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::LeftDown(INSIDE),
+                LivePointer::LeftUp {
+                    pointer: BAR,
+                    shift: false,
+                },
+                LivePointer::LeftUp {
+                    pointer: INSIDE,
+                    shift: false,
+                },
+            ],
+        );
+        assert_eq!(
+            world.selection().ids(),
+            before.as_slice(),
+            "a left release over a bar must consume the origin and block the stale second release"
+        );
+
+        // An invalid down overwrites a stale valid one, on both buttons.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_a_unit(&mut world);
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::RightDown(INSIDE),
+                LivePointer::RightDown(BAR),
+                LivePointer::RightUp(INSIDE),
+            ],
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 0,
+            "an invalid right down must overwrite the stale armed origin"
+        );
+    }
+
+    /// The same seams still route every valid in-content gesture, and one
+    /// button's release never disarms the other's.
+    #[test]
+    fn in_content_gestures_still_act_and_the_buttons_stay_independent() {
+        // A valid right gesture orders the selection.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_a_unit(&mut world);
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::RightDown(INSIDE),
+                LivePointer::Motion(INSIDE),
+                LivePointer::RightUp(INSIDE),
+            ],
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 1,
+            "a valid in-content right gesture must still order the selection"
+        );
+
+        // A left drag from the world still box-selects.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::LeftDown(DRAG_START),
+                LivePointer::Motion(INSIDE),
+                LivePointer::LeftUp {
+                    pointer: INSIDE,
+                    shift: false,
+                },
+            ],
+        );
+        assert!(
+            session.press.is_none(),
+            "a completed drag must release the retained origin"
+        );
+
+        // Interleaved buttons: the left release must leave the armed right
+        // gesture alone, and vice versa.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::LeftDown(DRAG_START),
+                LivePointer::RightDown(INSIDE),
+                LivePointer::Motion(INSIDE),
+                LivePointer::LeftUp {
+                    pointer: INSIDE,
+                    shift: false,
+                },
+            ],
+        );
+        assert!(
+            session.right_press,
+            "a left release must not disarm the interleaved right gesture"
+        );
+        // The drag left nothing selected; re-select so the surviving right
+        // ownership has something to order.
+        select_a_unit(&mut world);
+        route(&mut world, &mut session, [LivePointer::RightUp(INSIDE)]);
+        assert_eq!(
+            session.audio_counters.order_cues, 1,
+            "the right gesture armed before the left release must still order"
+        );
+
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_a_unit(&mut world);
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::RightDown(INSIDE),
+                LivePointer::LeftDown(DRAG_START),
+                LivePointer::Motion(INSIDE),
+                LivePointer::RightUp(INSIDE),
+            ],
+        );
+        assert!(
+            session.press.is_some(),
+            "a right release must not disarm the interleaved left gesture"
+        );
+    }
+
+    // --- audit #4: settings rollback fatality ---------------------------------
+
+    /// A scripted settings commit whose compensation failed is fatal, and it
+    /// must not overwrite an audio failure the session had already latched:
+    /// two dead subsystems are two facts, not one.
+    #[test]
+    fn scripted_fatal_setting_commit_composes_pre_latched_audio_error() {
+        let mut world = tracked_world();
+        let (mut session, handle) = RtsSession::for_test();
+        // Both the forward push and its compensation fail → fatal.
+        handle.set_fail_set_gains_on_calls(&[1, 2]);
+        session.pending_setting_change = Some(SettingsChange::Master(50));
+        session.audio_fatal = Some(AudioError("pre-latched UI cue failure".into()));
+        session.ui.warning = Some("stale".into());
+
+        commit_scripted_setting_change(&mut world, &mut session);
+
+        assert!(
+            session.ui.warning.is_none(),
+            "a fatal commit is not a banner: {:?}",
+            session.ui.warning
+        );
+        assert_eq!(handle.sink().gain_calls(), 2, "both pushes were attempted");
+        assert_eq!(
+            session.settings.audio.master,
+            RtsSettings::default().audio.master,
+            "a fatal commit must not publish"
+        );
+        let fatal = session
+            .take_audio_fatal()
+            .expect("a fatal settings commit must end the run")
+            .to_string();
+        assert!(
+            fatal.contains("pre-latched UI cue failure"),
+            "the already-latched audio failure must survive: {fatal}"
+        );
+        assert!(
+            fatal.contains("settings transaction fatal:"),
+            "the settings failure must be named: {fatal}"
+        );
+        assert!(
+            fatal.contains("injected set_gains failure on call 1")
+                && fatal.contains("audio gain rollback failed:"),
+            "both the primary and the failed compensation must survive: {fatal}"
+        );
+        assert!(
+            fatal.contains("indeterminate") && fatal.contains("restart the app"),
+            "{fatal}"
+        );
+        assert!(
+            session.take_audio_fatal().is_none(),
+            "the fatal is taken exactly once"
+        );
+    }
+
+    // --- audit #6: endpoint hash scheduling -----------------------------------
+
+    fn test_scratch() -> Scratch {
+        Scratch {
+            frame_buf: RtsFrame::new(),
+            cmd_buf: Vec::with_capacity(8),
+        }
+    }
+
+    fn fresh_state(world: &RtsWorld) -> RunState {
+        RunState {
+            frames: 0,
+            quit: false,
+            expected_ticks: 0,
+            hashes: EndpointHashes::new(world),
+        }
+    }
+
+    fn ok_draw() -> impl FnMut(ScenePass<'_>) -> Result<(), RenderError> {
+        |_| Ok(())
+    }
+
+    /// The digest the tracked scene has after `ticks` ticks, read off a world
+    /// of its own — never a hash literal pasted from this host.
+    fn oracle_hash_after_ticks(ticks: u64) -> [u8; 32] {
+        let mut world = tracked_world();
+        for _ in 0..ticks {
+            world.tick();
+        }
+        world.state_hash()
+    }
+
+    fn step_ok(
+        world: &mut RtsWorld,
+        script: &mut RtsScript,
+        session: &mut RtsSession,
+        scratch: &mut Scratch,
+        state: &mut RunState,
+    ) -> Option<FrameReport> {
+        step_frame(world, script, session, scratch, state, ok_draw()).expect("draw must succeed")
+    }
+
+    /// F7: a run observes exactly two digests, so it may take exactly the
+    /// digests those two need — one more only when a terminal batch has to
+    /// preserve the last-rendered world before live input mutates it.
+    #[test]
+    fn endpoint_call_counts_via_step_frame_and_finish() {
+        // A quit on frame 1: nothing rendered, so the initial digest is the
+        // clean-exit one and no other is taken.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::parse("1:quit").expect("valid script");
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        assert!(
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state
+            )
+            .is_none(),
+            "frame1 script quit renders nothing"
+        );
+        assert_eq!(
+            state.hashes.final_hash(state.frames, &world),
+            oracle_hash_after_ticks(0),
+            "frame1 script quit uses initial only"
+        );
+        assert_eq!(
+            state.hashes.call_count(),
+            1,
+            "frame1 script quit uses initial only"
+        );
+
+        // One rendered frame: the frame-1 digest is both endpoints.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::default();
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        step_ok(
+            &mut world,
+            &mut script,
+            &mut session,
+            &mut scratch,
+            &mut state,
+        );
+        assert_eq!(
+            state.hashes.final_hash(state.frames, &world),
+            oracle_hash_after_ticks(1),
+            "one frame budget"
+        );
+        assert_eq!(state.hashes.call_count(), 2, "one frame budget");
+
+        // Five rendered frames: initial, frame 1, and the final one.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::default();
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        for _ in 0..5 {
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state,
+            );
+        }
+        assert_eq!(
+            state.hashes.final_hash(state.frames, &world),
+            oracle_hash_after_ticks(5),
+            "five frame budget"
+        );
+        assert_eq!(state.hashes.call_count(), 3, "five frame budget");
+
+        // A scripted quit stops frame 3: the clean exit is the frame-2 world.
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::parse("3:quit").expect("valid script");
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        for _ in 0..2 {
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state,
+            );
+        }
+        assert!(
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state
+            )
+            .is_none(),
+            "the scripted quit renders no third frame"
+        );
+        assert_eq!(
+            state.hashes.final_hash(state.frames, &world),
+            oracle_hash_after_ticks(2),
+            "script quit before frame 3"
+        );
+        assert_eq!(state.hashes.call_count(), 3, "script quit before frame 3");
+    }
+
+    /// The clean-exit digest is the last *rendered* world: live input applied
+    /// after that render, in the batch that quits, must not reach it.
+    #[test]
+    fn scripted_quit_after_live_mutation_keeps_pre_mutation_hash() {
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::parse("3:quit").expect("valid script");
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        for _ in 0..2 {
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state,
+            );
+        }
+        // The live batch that will run the scripted quit: preflight first,
+        // then the click that mutates the world after the last render.
+        preserve_endpoint_before_live_batch(&[], &script, state.frames + 1, &mut state, &world);
+        apply(
+            &mut world,
+            &mut session,
+            RtsCommand::LeftClick([960.0, 518.0]),
+        );
+        let mutated = world.state_hash();
+        assert!(
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state
+            )
+            .is_none(),
+            "the scripted quit renders nothing"
+        );
+
+        let final_hash = state.hashes.final_hash(state.frames, &world);
+        assert_eq!(
+            final_hash,
+            oracle_hash_after_ticks(2),
+            "the clean exit must digest the last rendered world"
+        );
+        assert_ne!(
+            final_hash, mutated,
+            "the click applied after the last render must not reach the exit digest"
+        );
+        assert_eq!(
+            state.hashes.call_count(),
+            3,
+            "initial, frame 1 and the pre-batch capture — nothing else"
+        );
+    }
+
+    /// The same preservation for a live window close.
+    #[test]
+    fn live_event_quit_keeps_last_rendered_hash() {
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::default();
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        for _ in 0..2 {
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state,
+            );
+        }
+        let events = vec![Event::Quit { timestamp: 0 }];
+        preserve_endpoint_before_live_batch(&events, &script, state.frames + 1, &mut state, &world);
+        apply(
+            &mut world,
+            &mut session,
+            RtsCommand::LeftClick([960.0, 518.0]),
+        );
+        session.quit = true;
+        state.quit = true;
+
+        assert_eq!(
+            state.hashes.final_hash(state.frames, &world),
+            oracle_hash_after_ticks(2),
+            "a live quit must report the world its last frame rendered"
+        );
+        assert_eq!(state.hashes.call_count(), 3, "initial, frame 1, capture");
+    }
+
+    /// A batch that both quit and lost the audio device exits 1: the fatal
+    /// error must not be swallowed by the quit's clean exit.
+    #[test]
+    fn live_quit_does_not_mask_audio_fatal() {
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::default();
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        for _ in 0..2 {
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state,
+            );
+        }
+        let events = vec![Event::Quit { timestamp: 0 }];
+        preserve_endpoint_before_live_batch(&events, &script, state.frames + 1, &mut state, &world);
+        session.audio_fatal = Some(AudioError("injected".into()));
+        session.quit = true;
+
+        let err =
+            live_post_events(&mut session).expect_err("a fatal sink error must beat the quit");
+        let RunError::Failed(message) = err else {
+            panic!("the fatal audio error must be a failure exit");
+        };
+        assert!(
+            message.contains("interactive audio failure:") && message.contains("injected"),
+            "the exit must name the sink's own context, got {message:?}"
+        );
+        assert_eq!(
+            state.hashes.call_count(),
+            3,
+            "a terminal batch may still take its one capture before the fatal is known"
+        );
+    }
+
+    /// A fatal sink error with no quit ends the run the same way, and owes
+    /// no final digest at all.
+    #[test]
+    fn ordinary_audio_fatal_skips_finish() {
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::default();
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        for _ in 0..2 {
+            step_ok(
+                &mut world,
+                &mut script,
+                &mut session,
+                &mut scratch,
+                &mut state,
+            );
+        }
+        session.audio_fatal = Some(AudioError("injected".into()));
+        assert!(
+            live_post_events(&mut session).is_err(),
+            "a fatal sink error ends the run"
+        );
+        assert_eq!(
+            state.hashes.call_count(),
+            2,
+            "an ordinary fatal takes no capture: initial and frame 1 only"
+        );
+    }
+
+    /// A failed draw is not a clean stop: no frame is counted, and no final
+    /// digest is taken.
+    #[test]
+    fn render_error_skips_finish_and_final_hash() {
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let mut script = RtsScript::default();
+        let mut scratch = test_scratch();
+        let mut state = fresh_state(&world);
+        step_ok(
+            &mut world,
+            &mut script,
+            &mut session,
+            &mut scratch,
+            &mut state,
+        );
+        let result = step_frame(
+            &mut world,
+            &mut script,
+            &mut session,
+            &mut scratch,
+            &mut state,
+            |_| Err(RenderError::Sdl("injected draw".into())),
+        );
+        assert!(result.is_err(), "the injected draw failure must propagate");
+        assert_eq!(state.frames, 1, "a failed draw renders no frame");
+        assert_eq!(
+            state.hashes.call_count(),
+            2,
+            "initial and frame 1 — the failed frame digests nothing"
+        );
+    }
+
+    /// Which live events end a run, and which only look like they do.
+    #[test]
+    fn event_and_key_quit_sources_are_classified() {
+        assert!(
+            live_event_requests_quit(&Event::Quit { timestamp: 0 }),
+            "the window's own close ends the run"
+        );
+        assert!(
+            key_command_requests_quit(Some(RtsCommand::Quit), false),
+            "a key bound to Quit ends the run"
+        );
+        assert!(
+            !key_command_requests_quit(Some(RtsCommand::Quit), true),
+            "a key repeat is not a second quit"
+        );
+        assert!(
+            !key_command_requests_quit(Some(RtsCommand::Escape), false),
+            "Escape drives the pause menu, not the run's exit"
+        );
+        assert!(
+            !key_command_requests_quit(None, false),
+            "an unbound key ends nothing"
+        );
+    }
+
+    /// Focus loss disarms both buttons: the release that arrives afterwards
+    /// is a stale gesture and must do nothing.
+    #[test]
+    fn focus_loss_cancels_pending_left_and_right_gestures() {
+        let mut world = tracked_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        select_a_unit(&mut world);
+        let before = world.selection().ids().to_vec();
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::LeftDown(DRAG_START),
+                LivePointer::RightDown(INSIDE),
+                LivePointer::Motion(INSIDE),
+            ],
+        );
+        apply(&mut world, &mut session, RtsCommand::PanStart([1.0, 0.0]));
+        assert!(session.drag.is_some(), "the drag preview must exist first");
+
+        // The seam the live FocusLost arm runs.
+        crate::rts_ui::finalize_numeric_edit_on_focus_loss(&mut session);
+        world.set_keyboard_pan_dir([0.0, 0.0]);
+        world.set_edge_pan_dir([0.0, 0.0]);
+
+        route(
+            &mut world,
+            &mut session,
+            [
+                LivePointer::LeftUp {
+                    pointer: INSIDE,
+                    shift: false,
+                },
+                LivePointer::RightUp(INSIDE),
+            ],
+        );
+        assert_eq!(
+            world.selection().ids(),
+            before.as_slice(),
+            "focus clear must disarm the pending left gesture"
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 0,
+            "focus clear must disarm the pending right gesture"
+        );
+        assert_eq!(
+            session.keyboard_held,
+            [0.0, 0.0],
+            "focus clear must reset held keyboard pan"
+        );
+        assert!(
+            session.drag.is_none(),
+            "focus clear must remove the drag preview"
+        );
     }
 }
 

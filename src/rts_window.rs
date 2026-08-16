@@ -115,6 +115,27 @@ pub enum ModeChangeOutcome {
     RolledBack(#[allow(dead_code)] String), // T13 surfaces this in a warning banner
 }
 
+/// A mode change that failed *and* could not be undone: the window is left
+/// straddling two mode sequences, which no later commit can reason about.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ModeTransitionError {
+    pub primary: String,
+    pub rollback: String,
+}
+
+impl std::fmt::Display for ModeTransitionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "window mode change failed ({}); rollback also failed ({}) — window state is \
+             indeterminate, restart the app",
+            self.primary, self.rollback
+        )
+    }
+}
+
+impl std::error::Error for ModeTransitionError {}
+
 fn step_err(mode: WindowMode, step: &str) -> impl FnOnce(String) -> RunError {
     move |e| RunError::Failed(format!("window mode {mode:?} step {step} failed: {e}"))
 }
@@ -217,16 +238,17 @@ pub fn transition_window_mode<W: WindowOps>(
     window: &mut W,
     current: WindowMode,
     requested: WindowMode,
-) -> Result<ModeChangeOutcome, RunError> {
+) -> Result<ModeChangeOutcome, ModeTransitionError> {
     match apply_window_mode(window, requested) {
         Ok(()) => Ok(ModeChangeOutcome::Applied),
         Err(primary) => match apply_window_mode(window, current) {
             Ok(()) => Ok(ModeChangeOutcome::RolledBack(primary.to_string())),
-            Err(rollback) => Err(RunError::Failed(format!(
-                "window mode change to {requested:?} failed ({primary}); rollback to \
-                 {current:?} also failed ({rollback}) — window state is indeterminate, \
-                 restart the app"
-            ))),
+            // Both halves are kept whole: the caller composes them with its
+            // own transaction context rather than re-parsing one string.
+            Err(rollback) => Err(ModeTransitionError {
+                primary: format!("window mode change to {requested:?} failed: {primary}"),
+                rollback: format!("rollback to {current:?} failed: {rollback}"),
+            }),
         },
     }
 }
@@ -626,6 +648,14 @@ mod tests {
             WindowMode::Windowed1280x720,
         )
         .expect_err("both the requested mode and the rollback fail");
+        assert!(
+            err.primary.contains("Windowed1280x720"),
+            "the primary half must name the mode that was refused: {err:?}"
+        );
+        assert!(
+            err.rollback.contains("BorderlessDesktop"),
+            "the rollback half must name the mode that could not be restored: {err:?}"
+        );
         let msg = err.to_string();
         assert!(msg.contains("indeterminate"), "{msg}");
         assert!(msg.contains("restart the app"), "{msg}");

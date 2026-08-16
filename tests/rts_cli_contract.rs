@@ -663,6 +663,60 @@ fn a_quit_on_frame_one_renders_nothing() {
         !cli.stdout.contains("rts: frame0"),
         "{cli}\na run that quit before frame 1 must not report a first frame"
     );
+    // The digest it does report is the loaded world's: the run took exactly
+    // one, and printed it as the clean exit.
+    cli.final_hash();
+}
+
+/// The run digests only its endpoints, so those endpoints must still line up
+/// across budgets and stop reasons: relative equality on this host, never a
+/// pasted hash literal that would claim a cross-host contract.
+#[test]
+fn budget_and_scripted_quit_endpoints_match_same_host() {
+    let case = "budget_and_scripted_quit_endpoints_match_same_host";
+    let Some(one) = or_skip(case, rts(&["--frames", "1"])) else {
+        return;
+    };
+    let Some(two) = or_skip(case, rts(&["--frames", "2"])) else {
+        return;
+    };
+    let Some(quit) = or_skip(case, rts(&["--frames", "9", "--inject-input", "3:quit"])) else {
+        return;
+    };
+    for cli in [&one, &two, &quit] {
+        cli.assert_success();
+    }
+
+    let frame0 = |cli: &Cli| cli.field(cli.frame0_line(), "hash").to_string();
+    assert_eq!(
+        frame0(&one),
+        frame0(&two),
+        "{one}\n{two}\nframe0 is the state frame 1 produced, whatever the budget is"
+    );
+    assert_eq!(
+        frame0(&one),
+        frame0(&quit),
+        "{one}\n{quit}\na scripted quit must not move the frame0 digest"
+    );
+    assert_eq!(
+        one.final_hash(),
+        frame0(&one),
+        "{one}\na one-frame run's clean exit is the frame it rendered"
+    );
+    assert_eq!(
+        two.final_hash(),
+        quit.final_hash(),
+        "{two}\n{quit}\na quit on frame 3 exits on the world frame 2 rendered"
+    );
+    assert_ne!(
+        two.final_hash(),
+        frame0(&two),
+        "{two}\ntwo rendered frames must not end on the world frame 1 produced"
+    );
+    assert_eq!(two.exit_field("quit"), "false", "{two}");
+    assert_eq!(quit.exit_field("quit"), "true", "{quit}");
+    assert_eq!(quit.exit_field("frames"), "2", "{quit}");
+    assert_eq!(quit.exit_field("tick"), "2", "{quit}");
 }
 
 #[test]
