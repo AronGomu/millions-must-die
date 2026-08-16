@@ -1075,6 +1075,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
 }
 
 /// Single selection: a framed 128x128 portrait plus the full detail text.
+#[allow(clippy::too_many_arguments)]
 fn push_single_selection(
     world: &RtsWorld,
     id: EntityId,
@@ -1115,6 +1116,7 @@ fn push_single_selection(
 /// skipped; a selection over 24 draws a "+N" marker for the remainder.
 ///
 /// `ids` is already ascending by slot ([`super::selection::Selection::ids`]).
+#[allow(clippy::too_many_arguments)]
 fn push_multi_selection(
     world: &RtsWorld,
     ids: &[EntityId],
@@ -1634,6 +1636,7 @@ fn push_modal_track(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 fn push_modal_checkbox(
     props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,

@@ -921,6 +921,14 @@ fn apply_runtime<W: WindowOps>(
     }
 }
 
+impl NumericEdit {
+    /// Test-only length accessor (field is private).
+    #[cfg(test)]
+    fn len_for_test(&self) -> u8 {
+        self.len
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1345,10 +1353,10 @@ mod tests {
     ) -> Option<mmd_engine::rts::EntityId> {
         let store = world.entities();
         for slot in 0..store.slot_count() {
-            if let Some(id) = store.id_at(slot) {
-                if store.kind(slot) == mmd_engine::rts::EntityKind::Building(kind) {
-                    return Some(id);
-                }
+            if let Some(id) = store.id_at(slot)
+                && store.kind(slot) == mmd_engine::rts::EntityKind::Building(kind)
+            {
+                return Some(id);
             }
         }
         None
@@ -1357,12 +1365,6 @@ mod tests {
     fn select_hq(world: &mut RtsWorld) {
         let id =
             find_building(world, mmd_engine::rts::BuildingKind::Hq).expect("no HQ in test world");
-        world.select_only(id);
-    }
-
-    fn select_barracks(world: &mut RtsWorld) {
-        let id = find_building(world, mmd_engine::rts::BuildingKind::Barracks)
-            .expect("no Barracks in test world");
         world.select_only(id);
     }
 
@@ -1814,7 +1816,7 @@ mod tests {
     fn slider_drag_retains_stable_control() {
         let (mut world, mut session, _) = session_open_settings();
         let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
-        pointer_down(&mut world, &mut session, start);
+        pointer_down(&world, &mut session, start);
         assert_eq!(
             session.pressed_control(),
             Some(ControlId::KeyboardPanSlider)
@@ -1836,7 +1838,7 @@ mod tests {
         let (mut world, mut session, audio) = session_open_settings();
         let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
         // Default keyboard_pan is 48 — down at 48 stages nothing.
-        pointer_down(&mut world, &mut session, start);
+        pointer_down(&world, &mut session, start);
         drain_pending_setting_change_memory(&mut world, &mut session);
         let gains_before = audio.sink().gain_calls();
 
@@ -1867,7 +1869,7 @@ mod tests {
         let (mut world, mut session, audio) = session_open_settings();
         // Camera: 48 → 60.
         let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
-        pointer_down(&mut world, &mut session, p60);
+        pointer_down(&world, &mut session, p60);
         drain_pending_setting_change_memory(&mut world, &mut session);
         assert_eq!(session.settings.camera.keyboard_pan, 60);
         assert_eq!(world.camera_speeds().0, 60.0);
@@ -1875,7 +1877,7 @@ mod tests {
 
         // Audio: master default 80 → 50 via a fresh drag.
         let p50 = track_point(MASTER_TRACK, 50, 0, 100);
-        pointer_down(&mut world, &mut session, p50);
+        pointer_down(&world, &mut session, p50);
         drain_pending_setting_change_memory(&mut world, &mut session);
         assert_eq!(session.settings.audio.master, 50);
         assert_eq!(
@@ -1892,7 +1894,7 @@ mod tests {
         let p60 = track_point(KEYBOARD_PAN_TRACK, 60, PAN_MIN, PAN_MAX);
         let old = session.settings.camera.keyboard_pan;
         let old_speed = world.camera_speeds();
-        pointer_down(&mut world, &mut session, p60);
+        pointer_down(&world, &mut session, p60);
         drain_pending_setting_change_memory(&mut world, &mut session);
         assert_eq!(session.settings.camera.keyboard_pan, old);
         assert_eq!(world.camera_speeds(), old_speed);
@@ -1918,7 +1920,7 @@ mod tests {
         let (mut world, mut session, _) = session_open_settings();
         let before = world.selection().ids().to_vec();
         let start = track_point(KEYBOARD_PAN_TRACK, 48, PAN_MIN, PAN_MAX);
-        pointer_down(&mut world, &mut session, start);
+        pointer_down(&world, &mut session, start);
         // Drag out into the world and release.
         apply(&mut world, &mut session, RtsCommand::Move([960.0, 400.0]));
         pointer_up(&mut world, &mut session, [960.0, 400.0], false);
@@ -2127,11 +2129,7 @@ mod tests {
         }
         // Simulate a held key + press before focus loss.
         session.keyboard_held = [1.0, 0.0];
-        pointer_down(
-            &mut world,
-            &mut session,
-            field_point(NumericSettingId::Master),
-        );
+        pointer_down(&world, &mut session, field_point(NumericSettingId::Master));
         finalize_numeric_edit_on_focus_loss(&mut session);
         drain_pending_setting_change_memory(&mut world, &mut session);
         // Live path only calls focus_lost when pause-on-focus-loss is on.
@@ -2186,7 +2184,7 @@ mod tests {
         assert!(!session.settings.audio.master_muted);
 
         let p = mute_label_point(0);
-        pointer_down(&mut world, &mut session, p);
+        pointer_down(&world, &mut session, p);
         pointer_up(&mut world, &mut session, p, false);
         drain_pending_setting_change_memory(&mut world, &mut session);
 
@@ -2208,7 +2206,7 @@ mod tests {
         assert!(orig_music_level > 0);
 
         let p = mute_label_point(1); // Music mute label
-        pointer_down(&mut world, &mut session, p);
+        pointer_down(&world, &mut session, p);
         pointer_up(&mut world, &mut session, p, false);
         drain_pending_setting_change_memory(&mut world, &mut session);
 
@@ -2236,7 +2234,7 @@ mod tests {
         session.ui.settings_scroll_px = offset;
         let rect = mmd_engine::rts::MUTE_LABEL_RECTS[3];
         let p = [rect[0] + rect[2] - 1.0, rect[1] + 1.0 - offset];
-        pointer_down(&mut world, &mut session, p);
+        pointer_down(&world, &mut session, p);
         pointer_up(&mut world, &mut session, p, false);
         drain_pending_setting_change_memory(&mut world, &mut session);
 
@@ -2359,13 +2357,5 @@ mod tests {
             session.settings.gameplay.show_grid,
             "second toggle must restore show_grid=true"
         );
-    }
-}
-
-impl NumericEdit {
-    /// Test-only length accessor (field is private).
-    #[cfg(test)]
-    fn len_for_test(&self) -> u8 {
-        self.len
     }
 }

@@ -282,10 +282,12 @@ fn the_menu_control_appears_in_the_top_bar() {
         ),
         "the MENU control sits inside the top bar"
     );
-    assert!(
-        MENU_RECT[0] + MENU_RECT[2] <= 1920.0,
-        "MENU frame must stay inside the 1920 logical edge"
-    );
+    const {
+        assert!(
+            MENU_RECT[0] + MENU_RECT[2] <= 1920.0,
+            "MENU frame must stay inside the 1920 logical edge"
+        )
+    };
 }
 
 // --- the layout regions --------------------------------------------------------
@@ -1191,7 +1193,7 @@ fn menu_is_framed_text_control_at_existing_hit_coordinate() {
         "MENU frame must be present at idle tint"
     );
     assert_eq!(text_at(&frame, MENU_TEXT_POS, PANEL_TEXT_SCALE, 4), "MENU");
-    assert!(MENU_RECT[0] + MENU_RECT[2] <= 1920.0);
+    const { assert!(MENU_RECT[0] + MENU_RECT[2] <= 1920.0) };
 }
 
 #[test]
@@ -1628,11 +1630,11 @@ fn command_cells_show_positional_letters() {
     let mut frame = RtsFrame::new();
     pack_hud(h.world(), &mut frame);
 
-    for i in 0..9usize {
+    for (i, key) in COMMAND_SLOT_KEYS.iter().enumerate() {
         let rect = command_slot_rect(i);
         let kx = rect[0] + rect[2] - GLYPH_W_PX * PANEL_TEXT_SCALE;
         let ky = rect[1] + rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE;
-        let expected_char = COMMAND_SLOT_KEYS[i] as char;
+        let expected_char = *key as char;
         let drawn = text_at(&frame, [kx, ky], PANEL_TEXT_SCALE, 1);
         assert_eq!(
             drawn,
@@ -1650,10 +1652,7 @@ fn command_cells_show_positional_letters() {
 
 // --- building detail: six-line contract ---------------------------------------
 
-use mmd_engine::rts::{
-    BARRACKS_SUPPLY_GRANT, HQ_SUPPLY_GRANT, UnitKind as Uk, WORKER_COST, WORKER_PRODUCE_TICKS,
-    produce_ticks,
-};
+use mmd_engine::rts::{HQ_SUPPLY_GRANT, WORKER_PRODUCE_TICKS, produce_ticks};
 
 #[test]
 fn building_details_use_exact_six_line_contract() {

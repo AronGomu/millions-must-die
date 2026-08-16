@@ -398,14 +398,14 @@ fn activation_matches(world: &RtsWorld, session: &RtsSession, up_owner: PointerO
         },
         // No discrete control on down: only world/minimap-style owners activate
         // when the release stays on the same owner kind (never modal/HUD leak).
-        None => match (session.press_owner, up_owner) {
-            (PointerOwner::World, PointerOwner::World) => true,
-            (
-                PointerOwner::Hud(mmd_engine::rts::HudHit::Minimap(_)),
-                PointerOwner::Hud(mmd_engine::rts::HudHit::Minimap(_)),
-            ) => true,
-            _ => false,
-        },
+        None => matches!(
+            (session.press_owner, up_owner),
+            (PointerOwner::World, PointerOwner::World)
+                | (
+                    PointerOwner::Hud(mmd_engine::rts::HudHit::Minimap(_)),
+                    PointerOwner::Hud(mmd_engine::rts::HudHit::Minimap(_)),
+                )
+        ),
     }
 }
 
@@ -423,10 +423,10 @@ fn activate_world_left(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 
         let height = world.scenario().height();
         if let Some(cell) = view.cell_at(p[0], p[1], width, height) {
             let cand = placement_candidate(world, kind, cell);
-            if cand.valid {
-                if let Some(builder) = find_builder(world) {
-                    let _ = world.confirm_placement(cand.min, builder);
-                }
+            if cand.valid
+                && let Some(builder) = find_builder(world)
+            {
+                let _ = world.confirm_placement(cand.min, builder);
             }
         }
     } else {
@@ -531,22 +531,22 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
                 crate::rts_ui::stage_slider_at_pointer(session, control, p[0]);
             }
             // Scrollbar thumb drag: update scroll from y delta (`T6`).
-            if session.press_control == Some(mmd_engine::rts::ControlId::ScrollbarThumb) {
-                if let Some((anchor_y, start_offset)) = session.scroll_thumb_drag {
-                    use mmd_engine::rts::{
-                        HudLayout, SETTINGS_CONTENT_HEIGHT_PX, SETTINGS_SCROLLBAR_MIN_THUMB_PX,
-                        clamp_settings_scroll, settings_max_scroll,
-                    };
-                    let max_scroll = settings_max_scroll();
-                    if max_scroll > 0.0 {
-                        let viewport_h = HudLayout::SETTINGS_BODY_VIEWPORT[3];
-                        let thumb_len = (viewport_h * viewport_h / SETTINGS_CONTENT_HEIGHT_PX)
-                            .max(SETTINGS_SCROLLBAR_MIN_THUMB_PX);
-                        let travel = viewport_h - thumb_len;
-                        if travel > 0.0 {
-                            let new_offset = start_offset + (p[1] - anchor_y) / travel * max_scroll;
-                            session.ui.settings_scroll_px = clamp_settings_scroll(new_offset);
-                        }
+            if session.press_control == Some(mmd_engine::rts::ControlId::ScrollbarThumb)
+                && let Some((anchor_y, start_offset)) = session.scroll_thumb_drag
+            {
+                use mmd_engine::rts::{
+                    HudLayout, SETTINGS_CONTENT_HEIGHT_PX, SETTINGS_SCROLLBAR_MIN_THUMB_PX,
+                    clamp_settings_scroll, settings_max_scroll,
+                };
+                let max_scroll = settings_max_scroll();
+                if max_scroll > 0.0 {
+                    let viewport_h = HudLayout::SETTINGS_BODY_VIEWPORT[3];
+                    let thumb_len = (viewport_h * viewport_h / SETTINGS_CONTENT_HEIGHT_PX)
+                        .max(SETTINGS_SCROLLBAR_MIN_THUMB_PX);
+                    let travel = viewport_h - thumb_len;
+                    if travel > 0.0 {
+                        let new_offset = start_offset + (p[1] - anchor_y) / travel * max_scroll;
+                        session.ui.settings_scroll_px = clamp_settings_scroll(new_offset);
                     }
                 }
             }
@@ -1155,10 +1155,8 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                         apply(&mut world, &mut session, RtsCommand::PanStart(dir));
                     }
                 }
-                Event::TextInput { text, .. } => {
-                    if session.numeric_edit.is_some() {
-                        crate::rts_ui::numeric_edit_text_input(&mut session, &text);
-                    }
+                Event::TextInput { text, .. } if session.numeric_edit.is_some() => {
+                    crate::rts_ui::numeric_edit_text_input(&mut session, &text);
                 }
                 Event::KeyUp {
                     keycode: Some(kc),
@@ -1201,7 +1199,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
                     // release anywhere cannot read it as a drag/click origin
                     // — the bar press did nothing, per contract.
                     if mapped.inside_content {
-                        pointer_down(&mut world, &mut session, mapped.logical);
+                        pointer_down(&world, &mut session, mapped.logical);
                         // Slider down commits the first snapped step live.
                         if let Err(e) = drain_live_setting_change(
                             &mut world,
@@ -1859,7 +1857,6 @@ mod tests {
 
 #[cfg(test)]
 mod exit_line_tests {
-    use super::*;
 
     #[test]
     fn exit_line_reports_live_show_grid() {

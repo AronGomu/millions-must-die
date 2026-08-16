@@ -3314,14 +3314,18 @@ fn ring_and_line_sentinels_are_disjoint() {
     assert!(!sprite.is_diagonal_line());
 
     // Sentinel ordering: line < threshold < ring < 0 <= sprite
-    assert!(
-        DIAGONAL_LINE_SENTINEL < -1.5,
-        "line sentinel must be below -1.5"
-    );
-    assert!(
-        RING_SENTINEL >= -1.5 && RING_SENTINEL < 0.0,
-        "ring sentinel must be in [-1.5, 0)"
-    );
+    const {
+        assert!(
+            DIAGONAL_LINE_SENTINEL < -1.5,
+            "line sentinel must be below -1.5"
+        )
+    };
+    const {
+        assert!(
+            RING_SENTINEL >= -1.5 && RING_SENTINEL < 0.0,
+            "ring sentinel must be in [-1.5, 0)"
+        )
+    };
 }
 
 /// Rising and falling diagonal lines rasterise pixels only along their
