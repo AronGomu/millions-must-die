@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lock RTS feedback behavior</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 1 · UX and gameplay contracts</span>
+    <h1>Lock RTS feedback behavior</h1>
+    <p class="lede">Code already has click tracks, basic building selection/details, Barracks→Soldier production, and a green four-edge drag box. Choose intended final behavior so plan fixes real gaps instead of duplicating code.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><span class="node"><b>Feedback goal</b></span><span class="arrow">→</span><span class="node active">Menu</span><span class="node active">Settings</span><span class="node active">Grid</span><span class="node active">Placement</span><span class="node active">Buildings</span><span class="node active">Selection</span><span class="node active">Gather collision</span><span class="arrow">→</span><span class="node">Transition rules</span><span class="node">Tickets</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>Decision frontier</b>Twelve independent product choices now. Collision transition rules wait for pair eligibility.</figcaption>
+      <svg viewBox="0 0 420 260" role="img" aria-labelledby="tree-title tree-desc">
+        <title id="tree-title">RTS feedback design decision graph</title><desc id="tree-desc">Feedback goal branches into active menu, settings, rendering, interaction, and collision decisions. Collision eligibility leads to a blocked transition-policy decision.</desc>
+        <defs><marker id="arrowhead" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node" x="10" y="100" width="82" height="48" rx="10"/><text class="svg-label" x="51" y="120" text-anchor="middle">Feedback</text><text class="svg-note" x="51" y="136" text-anchor="middle">goal</text>
+        <path class="svg-line" d="M92 124H120M120 124V35H150M120 124V92H150M120 124V149H150M120 124V206H150"/>
+        <rect class="svg-node active" x="150" y="15" width="105" height="40" rx="10"/><text class="svg-label" x="202" y="39" text-anchor="middle">Menu + HUD</text>
+        <rect class="svg-node active" x="150" y="72" width="105" height="40" rx="10"/><text class="svg-label" x="202" y="96" text-anchor="middle">Settings UX</text>
+        <rect class="svg-node active" x="150" y="129" width="105" height="40" rx="10"/><text class="svg-label" x="202" y="153" text-anchor="middle">World UX</text>
+        <rect class="svg-node active" x="150" y="186" width="105" height="40" rx="10"/><text class="svg-label" x="202" y="210" text-anchor="middle">Pair policy</text>
+        <path class="svg-line" marker-end="url(#arrowhead)" d="M255 206H305"/>
+        <rect class="svg-node" x="312" y="181" width="98" height="50" rx="10"/><text class="svg-label" x="361" y="202" text-anchor="middle">Overlap exit</text><text class="svg-note" x="361" y="218" text-anchor="middle">next round</text>
+        <circle class="svg-accent" cx="263" cy="35" r="4"/><circle class="svg-accent" cx="263" cy="92" r="4"/><circle class="svg-accent" cx="263" cy="149" r="4"/><circle class="svg-accent" cx="263" cy="206" r="4"/>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Current input/render seams</b>Changes must keep shared mouse/hotkey execution, transactional settings, deterministic sim, and zero-allocation frames.</figcaption>
+      <svg viewBox="0 0 420 260" role="img" aria-labelledby="flow-title flow-desc">
+        <title id="flow-title">Current RTS UI and simulation flow</title><desc id="flow-desc">SDL and scripted input feed shared commands, UI state and settings, then HUD rendering or deterministic world behavior. Persisted settings affect runtime adapters; gather orders feed conditional collision policy.</desc>
+        <defs><marker id="flow-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node" x="12" y="22" width="82" height="44" rx="9"/><text class="svg-label" x="53" y="48" text-anchor="middle">SDL input</text>
+        <rect class="svg-node" x="12" y="92" width="82" height="44" rx="9"/><text class="svg-label" x="53" y="118" text-anchor="middle">Script</text>
+        <rect class="svg-node active" x="138" y="57" width="108" height="56" rx="10"/><text class="svg-label" x="192" y="80" text-anchor="middle">RtsCommand</text><text class="svg-note" x="192" y="97" text-anchor="middle">shared exec</text>
+        <path class="svg-line" marker-end="url(#flow-arrow)" d="M94 44L131 70M94 114L131 99"/>
+        <rect class="svg-node active" x="294" y="15" width="112" height="52" rx="10"/><text class="svg-label" x="350" y="38" text-anchor="middle">UI + settings</text><text class="svg-note" x="350" y="54" text-anchor="middle">persist / apply</text>
+        <rect class="svg-node active" x="294" y="91" width="112" height="52" rx="10"/><text class="svg-label" x="350" y="114" text-anchor="middle">HUD pack</text><text class="svg-note" x="350" y="130" text-anchor="middle">0 alloc/frame</text>
+        <rect class="svg-node active" x="138" y="178" width="108" height="52" rx="10"/><text class="svg-label" x="192" y="201" text-anchor="middle">GatherPhase</text><text class="svg-note" x="192" y="217" text-anchor="middle">hashed state</text>
+        <rect class="svg-node" x="294" y="178" width="112" height="52" rx="10"/><text class="svg-label" x="350" y="201" text-anchor="middle">Pair collision</text><text class="svg-note" x="350" y="217" text-anchor="middle">ADR 017 change</text>
+        <path class="svg-line" marker-end="url(#flow-arrow)" d="M246 75L287 50M246 95L287 110M246 204H287"/>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="What visual contract should every interactive control use?">
+      <legend>1. What visual contract should every interactive control use?</legend>
+      <p class="why">Current modal rectangles have no hover/pressed state, while HUD menu remains an icon; exact scope controls UI state and render work.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Framed controls with idle, hover, pressed, selected, and disabled states"><span><b>Framed controls with idle, hover, pressed, selected, and disabled states</b><span class="rank">Recommended</span><span class="detail">Apply to discrete buttons, commandcard cells, checkbox labels, mute labels; sliders retain slider shape.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Frame textual menu buttons only"><span><b>Frame textual menu buttons only</b><span class="rank">Second</span><span class="detail">Smallest change; commandcard and labels remain less discoverable.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Frame every clickable region including minimap and portraits"><span><b>Frame every clickable region including minimap and portraits</b><span class="rank">Third</span><span class="detail">Strong affordance; risks noisy HUD and misleading map chrome.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Border weight, colors, hover style, controls to exclude…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Should Close Menu preserve a separate manual pause?">
+      <legend>2. Should Close Menu preserve a separate manual pause?</legend>
+      <p class="why">Current pause reasons are independent; “continue game” could mean remove menu pause only or force all pauses off.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Close menu and clear menu/focus pause only"><span><b>Close menu; clear menu/focus pause only</b><span class="rank">Recommended</span><span class="detail">Gameplay resumes normally; a prior Space/manual pause remains intentional.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Close menu and clear every pause reason"><span><b>Close menu; clear every pause reason</b><span class="rank">Second</span><span class="detail">Literal forced resume; overrides player’s prior manual pause.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="State exact pause behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should F10 behave from each menu page?">
+      <legend>3. How should F10 behave from each menu page?</legend>
+      <p class="why">Escape navigates one level; “toggle” needs a distinct rule while Settings is open.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Gameplay opens Pause Menu; Pause Menu or Settings closes to gameplay"><span><b>Gameplay opens Pause Menu; any open page closes to gameplay</b><span class="rank">Recommended</span><span class="detail">True global toggle; Escape keeps one-level Back behavior.</span></span></label>
+        <label class="choice"><input type="checkbox" value="F10 mirrors Escape one level at a time"><span><b>F10 mirrors Escape one level at a time</b><span class="rank">Second</span><span class="detail">Simpler FSM; not a strict open/close toggle from Settings.</span></span></label>
+        <label class="choice"><input type="checkbox" value="F10 opens Settings directly and closes it to gameplay"><span><b>F10 opens Settings directly; closes to gameplay</b><span class="rank">Third</span><span class="detail">Fast config access; bypasses requested pause-menu landing page.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Gameplay, Pause Menu, Settings behavior…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should typed numeric edits validate and commit?">
+      <legend>4. How should typed numeric edits validate and commit?</legend>
+      <p class="why">Persisted pan and volume values currently allow fixed steps only; hand input needs deterministic commit and error rules.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Enter or focus loss commits; clamp and snap to nearest legal step; Escape cancels"><span><b>Enter/focus loss commits; clamp + snap; Escape cancels</b><span class="rank">Recommended</span><span class="detail">Typed input always becomes valid; sliders drag live using same step rules.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Enter commits only exact legal values; invalid text stays with error"><span><b>Enter commits exact legal values; invalid text shows error</b><span class="rank">Second</span><span class="detail">No silent adjustment; more friction.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Allow every whole number in range and remove step restriction"><span><b>Allow every whole number in range</b><span class="rank">Third</span><span class="detail">Natural typing; changes schema and existing 6/5-step contract.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Commit key, focus-loss behavior, range/step policy…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What should clicking an audio channel label do?">
+      <legend>5. What should clicking an audio channel label do?</legend>
+      <p class="why">Current volume 0 mutes but loses prior level; separate mute state changes persisted schema and gain calculation.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Persist a mute flag per channel and preserve slider value"><span><b>Persist mute flag; preserve slider value</b><span class="rank">Recommended</span><span class="detail">Click MASTER/MUSIC/VOICE/SFX toggle labels; unmute restores exact prior level; label shows MUTED.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Set volume to zero and restore channel default on unmute"><span><b>Set volume 0; restore default on unmute</b><span class="rank">Second</span><span class="detail">No mute field; user’s prior custom level is lost.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Mute flags last only for current session"><span><b>Session-only mute flags</b><span class="rank">Third</span><span class="detail">Preserves level; relaunch unexpectedly unmutes.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Persistence, restore behavior, visual indicator…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which settings scrolling controls are required?">
+      <legend>6. Which settings scrolling controls are required?</legend>
+      <p class="why">Current fixed panel has no wheel event, clipping window, scrollbar, or scroll offset.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Mouse wheel plus visible draggable scrollbar; Back stays fixed"><span><b>Mouse wheel + visible draggable scrollbar; Back stays fixed</b><span class="rank">Recommended</span><span class="detail">Discoverable mouse UX; settings rows clip/scroll inside panel body.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Mouse wheel only; Back stays fixed"><span><b>Mouse wheel only; Back stays fixed</b><span class="rank">Second</span><span class="detail">Less code; no visual cue that more rows exist.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Wheel, scrollbar, PageUp/PageDown, Home/End"><span><b>Wheel + scrollbar + paging keys</b><span class="rank">Third</span><span class="detail">Best keyboard reach; larger input scope than requested.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Wheel speed, sticky controls, keyboard support…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Where should the world grid appear and what is its default?">
+      <legend>7. Where should the world grid appear and what is its default?</legend>
+      <p class="why">No grid render exists; scope decides renderer cost, visual density, and persisted setting default.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Thin subdued isometric cell grid across playable map; persisted default on"><span><b>Full playable-map cell grid; persisted default ON</b><span class="rank">Recommended</span><span class="detail">Matches “Show grid”; low-alpha lines remain behind entities.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Full playable-map grid; persisted default off"><span><b>Full playable-map grid; persisted default OFF</b><span class="rank">Second</span><span class="detail">Cleaner initial scene; user must discover toggle.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Show grid only during building placement"><span><b>Grid only during building placement</b><span class="rank">Third</span><span class="detail">Targets placement pain; does not satisfy always-visible reading.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Show local grid near cursor only"><span><b>Local cursor grid</b><span class="rank">Fourth</span><span class="detail">Lowest clutter; weaker map-scale orientation.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Default, extent, color, opacity, line thickness…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What exact behavior makes building placement easier?">
+      <legend>8. What exact behavior makes building placement easier?</legend>
+      <p class="why">Exact green candidates already validate and commit; only invalid-near-valid behavior lacks a contract.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Green ghost always commits; red cursor snaps to nearest valid footprint within one footprint width"><span><b>Green always commits; nearby invalid snaps within 1 footprint width</b><span class="rank">Recommended</span><span class="detail">Displayed ghost remains truth; bounded deterministic assist finds nearby free space.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Green ghost always commits exactly; never auto-snap"><span><b>Guarantee green commit only; no auto-snap</b><span class="rank">Second</span><span class="detail">Predictable exact placement; improved diagnostics must solve difficulty.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Search entire connected map for nearest valid footprint"><span><b>Search whole connected map</b><span class="rank">Third</span><span class="detail">Almost always builds; may jump far from cursor and surprise player.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Snap radius, exact/manual placement, invalid reason display…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which building click shape and stats should ship?">
+      <legend>9. Which building click shape and stats should ship?</legend>
+      <p class="why">Buildings currently click through ground footprint only and show kind, READY/build %, rally; upper sprite pixels and queue details are gaps.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Click rendered sprite union footprint; show construction, queue progress and entries, rally, supply grant"><span><b>Sprite ∪ footprint click; operational stats</b><span class="rank">Recommended</span><span class="detail">Matches unit-like visible picking; adds only real model state, no fake combat stats.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Click rendered sprite union footprint; keep current basic details"><span><b>Sprite ∪ footprint click; current basic details</b><span class="rank">Second</span><span class="detail">Fixes likely manual miss with smallest HUD change.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keep footprint click; add operational stats"><span><b>Keep footprint click; add operational stats</b><span class="rank">Third</span><span class="detail">More data; upper building sprite remains non-clickable.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Add HP and armor now"><span><b>Add HP/armor stats now</b><span class="rank">Fourth</span><span class="detail">Requires new combat-state design beyond current prototype.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Exact click shape and stat fields…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What does normal command-grid keybinds mean?">
+      <legend>10. What does “normal command-grid keybinds” mean?</legend>
+      <p class="why">Barracks→Soldier button already exists at slot 0, but key S is semantic, not slot-positional; full 3×3 mapping conflicts with X cancel.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Strict positional QWE ASD ZXC for slots 0 through 8; right-click remains placement cancel"><span><b>Strict positional QWE / ASD / ZXC</b><span class="rank">Recommended</span><span class="detail">Any command uses its slot key; Barracks slot 0 becomes Q; X stops being dedicated cancel.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keep semantic QWE build, A worker, S soldier, R rally; draw labels"><span><b>Keep semantic keys; draw labels</b><span class="rank">Second</span><span class="detail">No rebinding regression; grid position and key position still differ.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Use positional keys only for production buildings"><span><b>Positional keys only for production buildings</b><span class="rank">Third</span><span class="detail">Barracks/HQ feel normal; two binding systems remain.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Grid layout, cancel key, visible labels…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How should the area-selection border differ from current green border?">
+      <legend>11. How should area-selection border differ from current green border?</legend>
+      <p class="why">Current code already draws four 2px green edges with no fill; visual acceptance needs exact intended delta.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Use bright opaque pure-green 2px border; no fill"><span><b>Bright opaque pure-green 2px border; no fill</b><span class="rank">Recommended</span><span class="detail">Makes existing border unmistakable while preserving geometry.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keep current muted green 2px border and treat item as verification only"><span><b>Keep current green border; verification only</b><span class="rank">Second</span><span class="detail">Literal behavior already exists; no implementation ticket beyond acceptance proof.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Use another green style"><span><b>Custom green style</b><span class="rank">Third</span><span class="detail">Specify RGBA, thickness, or animation below.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="RGBA, opacity, thickness…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which worker-worker pairs should ignore collision during gathering?">
+      <legend>12. Which worker-worker pairs should ignore collision during gathering?</legend>
+      <p class="why">Gather has ToNode, Mining, Returning phases; exact pair rule changes ADR 017’s unconditional no-overlap invariant.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Both units are workers with any Gather phase"><span><b>Both workers have any Gather phase</b><span class="rank">Recommended</span><span class="detail">Gatherers pass/stack only with gatherers across outbound, mining, and return trip.</span></span></label>
+        <label class="choice"><input type="checkbox" value="At least one worker has any Gather phase; other unit must be worker"><span><b>At least one gathers; other is any worker</b><span class="rank">Second</span><span class="detail">Gatherer ignores idle/building workers too; broader exemption.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Both workers are in transit ToNode or Returning"><span><b>Both gather workers are in transit</b><span class="rank">Third</span><span class="detail">Relieves path congestion; mining workers become solid at node.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Both workers are Mining only"><span><b>Both workers are Mining only</b><span class="rank">Fourth</span><span class="detail">Allows node stacking but leaves route congestion unchanged.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Owners, gather phases, one-vs-both gatherer rule…"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 1 · UX and gameplay contracts — Lock RTS feedback behavior\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bound gatherer separation</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 3 · Separation fallback</span>
+    <h1>Bound gatherer separation</h1>
+    <p class="lede">Final open decision. Worker speed is 0.5 cell/tick; body contact distance is 6 cells. Twelve ticks lets one unconstrained worker clear a full diameter. Crowds or walls can still block that motion, so bounded separation needs a fallback.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><span class="node"><b>Feedback goal</b></span><span class="arrow">→</span><span class="node">Rounds 1–2 settled</span><span class="arrow">→</span><span class="node active">Separation bound</span><span class="node active">Failure fallback</span><span class="arrow">→</span><span class="node">Shared understanding</span><span class="node">Plan</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>Derived minimum window</b>At 30 cells/s and 60 ticks/s, one worker moves 0.5 cell/tick; 12 ticks covers one 6-cell diameter.</figcaption>
+      <svg viewBox="0 0 420 210" role="img" aria-labelledby="timeline-title timeline-desc">
+        <title id="timeline-title">Twelve-tick worker separation timeline</title><desc id="timeline-desc">A worker pair starts overlapped. Across twelve ticks one worker may move six cells, reaching legal body contact if static geometry and other units permit.</desc>
+        <path class="svg-line" d="M40 115H380"/>
+        <circle class="svg-accent" cx="55" cy="115" r="25"/><circle class="svg-accent" cx="70" cy="115" r="25"/>
+        <circle class="svg-node" cx="335" cy="115" r="25"/><circle class="svg-node" cx="385" cy="115" r="25"/>
+        <path class="svg-line" d="M105 70H330"/>
+        <text class="svg-label" x="217" y="59" text-anchor="middle">12 ticks × 0.5 cell = 6 cells</text>
+        <text class="svg-note" x="62" y="165" text-anchor="middle">transition starts</text>
+        <text class="svg-note" x="360" y="165" text-anchor="middle">legal contact</text>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Blocked path</b>Static clearance and hard third-party bodies may prevent gradual separation. Fallback must preserve deterministic sim.</figcaption>
+      <svg viewBox="0 0 420 210" role="img" aria-labelledby="fallback-title fallback-desc">
+        <title id="fallback-title">Blocked gatherer separation fallback</title><desc id="fallback-desc">Two transitional workers are between a wall and another hard body. Gradual movement is blocked, leading to a fallback decision at tick twelve.</desc>
+        <rect class="svg-node" x="20" y="28" width="50" height="150" rx="5"/><text class="svg-label" x="45" y="108" text-anchor="middle" transform="rotate(-90 45 108)">STATIC WALL</text>
+        <circle class="svg-accent" cx="145" cy="103" r="35"/><circle class="svg-accent" cx="172" cy="103" r="35"/>
+        <circle class="svg-node" cx="278" cy="103" r="35"/><text class="svg-note" x="278" y="107" text-anchor="middle">hard body</text>
+        <path class="svg-line" d="M207 103H236"/>
+        <rect class="svg-node active" x="326" y="73" width="78" height="60" rx="10"/><text class="svg-label" x="365" y="97" text-anchor="middle">Tick 12</text><text class="svg-note" x="365" y="115" text-anchor="middle">fallback?</text>
+        <path class="svg-line" d="M313 103H319"/>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="What bound and fallback should gradual separation use?">
+      <legend>1. What bound and fallback should gradual separation use?</legend>
+      <p class="why">Without fallback, “bounded” is false; with relocation, rare blocked cases may visibly pop but simulation recovers.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Try gradual separation for 12 ticks; then relocate one worker to nearest legal free center in its connected region"><span><b>12 ticks, then deterministic relocation</b><span class="rank">Recommended</span><span class="detail">0.2s smooth window; blocked pair recovers using rotated priority + nearest legal connected center.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Try gradual separation for 30 ticks; then relocate one worker to nearest legal free center in its connected region"><span><b>30 ticks, then deterministic relocation</b><span class="rank">Second</span><span class="detail">0.5s smooth window; longer legal overlap before rare fallback pop.</span></span></label>
+        <label class="choice"><input type="checkbox" value="After 12 ticks keep transitional overlap until a path opens"><span><b>12 ticks, then wait indefinitely</b><span class="rank">Third</span><span class="detail">No teleport; violates bounded requirement and can leave permanent merged workers.</span></span></label>
+        <label class="choice"><input type="checkbox" value="After 12 ticks report TickError and stop movement"><span><b>12 ticks, then `TickError`</b><span class="rank">Fourth</span><span class="detail">Surfaces impossible separation; one crowded pair can freeze movement.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Tick bound, fallback, relocation limits…"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 3 · Separation fallback — Bound gatherer separation\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>

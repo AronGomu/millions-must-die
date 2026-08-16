@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Close remaining interaction rules</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 2 · Navigation and overlap exit</span>
+    <h1>Close remaining interaction rules</h1>
+    <p class="lede">Yes: Escape already opens Pause Menu from gameplay, closes it from Pause Menu, and backs Settings to Pause Menu. Decide F10’s Settings behavior, selection-fill alpha, collision ownership, and how overlapped gatherers become solid again.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><span class="node"><b>Feedback goal</b></span><span class="arrow">→</span><span class="node">Round 1 settled</span><span class="arrow">→</span><span class="node active">F10</span><span class="node active">Selection fill</span><span class="node active">Worker ownership</span><span class="node active">Overlap exit</span><span class="arrow">→</span><span class="node">Shared understanding</span><span class="node">Plan</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>Menu keys today</b>Escape owns nested navigation. F10 can duplicate that path or become a strict global toggle.</figcaption>
+      <svg viewBox="0 0 420 230" role="img" aria-labelledby="menu-title menu-desc">
+        <title id="menu-title">Existing Escape menu state transitions</title><desc id="menu-desc">Escape opens Pause Menu from gameplay, closes Pause Menu to gameplay, and backs Settings to Pause Menu. F10 semantics remain open.</desc>
+        <defs><marker id="menu-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node" x="20" y="82" width="105" height="55" rx="10"/><text class="svg-label" x="72" y="106" text-anchor="middle">Gameplay</text><text class="svg-note" x="72" y="123" text-anchor="middle">running</text>
+        <rect class="svg-node active" x="158" y="82" width="105" height="55" rx="10"/><text class="svg-label" x="210" y="106" text-anchor="middle">Pause Menu</text><text class="svg-note" x="210" y="123" text-anchor="middle">menu pause</text>
+        <rect class="svg-node" x="296" y="82" width="105" height="55" rx="10"/><text class="svg-label" x="348" y="106" text-anchor="middle">Settings</text><text class="svg-note" x="348" y="123" text-anchor="middle">nested</text>
+        <path class="svg-line" marker-end="url(#menu-arrow)" d="M125 95H151"/><path class="svg-line" marker-end="url(#menu-arrow)" d="M158 128H132"/><path class="svg-line" marker-end="url(#menu-arrow)" d="M263 95H289"/><path class="svg-line" marker-end="url(#menu-arrow)" d="M296 128H270"/>
+        <text class="svg-note" x="141" y="84" text-anchor="middle">Esc</text><text class="svg-note" x="141" y="150" text-anchor="middle">Esc</text><text class="svg-note" x="279" y="84" text-anchor="middle">Settings</text><text class="svg-note" x="279" y="150" text-anchor="middle">Esc</text>
+        <text class="svg-accent" x="210" y="200" text-anchor="middle">F10 from Settings = open decision</text>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Gather collision transition</b>Two gatherers may overlap. When one leaves Gather, hard collision needs an explicit re-entry rule.</figcaption>
+      <svg viewBox="0 0 420 230" role="img" aria-labelledby="collision-title collision-desc">
+        <title id="collision-title">Worker collision exemption lifecycle</title><desc id="collision-desc">Two gathering workers may overlap while exempt. Leaving gather moves the pair into a transition before normal hard collision resumes.</desc>
+        <defs><marker id="collision-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path class="svg-arrow" d="M0 0L8 4L0 8Z"/></marker></defs>
+        <rect class="svg-node active" x="15" y="80" width="110" height="62" rx="10"/><text class="svg-label" x="70" y="104" text-anchor="middle">Both Gather</text><text class="svg-note" x="70" y="122" text-anchor="middle">pair exempt</text>
+        <rect class="svg-node active" x="155" y="80" width="110" height="62" rx="10"/><text class="svg-label" x="210" y="104" text-anchor="middle">Exit overlap</text><text class="svg-note" x="210" y="122" text-anchor="middle">open policy</text>
+        <rect class="svg-node" x="295" y="80" width="110" height="62" rx="10"/><text class="svg-label" x="350" y="104" text-anchor="middle">Hard bodies</text><text class="svg-note" x="350" y="122" text-anchor="middle">pair blocks</text>
+        <path class="svg-line" marker-end="url(#collision-arrow)" d="M125 111H148M265 111H288"/>
+        <circle class="svg-accent" cx="56" cy="181" r="18"/><circle class="svg-accent" cx="73" cy="181" r="18"/><text class="svg-note" x="65" y="215" text-anchor="middle">legal overlap</text>
+        <circle class="svg-node" cx="331" cy="181" r="18"/><circle class="svg-node" cx="373" cy="181" r="18"/><text class="svg-note" x="352" y="215" text-anchor="middle">separate</text>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="Given current Escape behavior, what should F10 add?">
+      <legend>1. Given current Escape behavior, what should F10 add?</legend>
+      <p class="why">Only Settings differs: Escape backs one level, while a true toggle would close all menu pages.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="F10 is a strict global toggle: gameplay opens Pause Menu; Pause Menu or Settings closes to gameplay"><span><b>Strict global toggle</b><span class="rank">Recommended</span><span class="detail">Gameplay opens Pause Menu; Pause Menu or Settings closes to gameplay. Escape keeps nested Back.</span></span></label>
+        <label class="choice"><input type="checkbox" value="F10 mirrors Escape exactly"><span><b>Mirror Escape exactly</b><span class="rank">Second</span><span class="detail">Both keys use one-level navigation; F10 from Settings goes to Pause Menu.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Do not add F10; Escape is sufficient"><span><b>No F10; Escape is enough</b><span class="rank">Third</span><span class="detail">Smallest scope; contradicts original explicit F10 request.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Choose F10 behavior now that Escape behavior is known…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How opaque should the green area-selection fill be?">
+      <legend>2. How opaque should the green area-selection fill be?</legend>
+      <p class="why">Border is settled at bright opaque pure green, 2px; fill alpha controls readability versus world occlusion.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Pure-green fill at 10 percent opacity"><span><b>10% green fill</b><span class="rank">Recommended</span><span class="detail">Visible selection area; units and terrain remain clear.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Pure-green fill at 20 percent opacity"><span><b>20% green fill</b><span class="rank">Second</span><span class="detail">Stronger cue; modest world tint.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Pure-green fill at 30 percent opacity"><span><b>30% green fill</b><span class="rank">Third</span><span class="detail">Very obvious; can obscure sprites beneath drag.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Exact alpha or alternate fill color…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Should gathering-worker collision exemption cross ownership boundaries?">
+      <legend>3. Should gathering-worker collision exemption cross ownership boundaries?</legend>
+      <p class="why">Current collision covers all owners; pair policy must say whether enemy/neutral workers can pass through player gatherers later.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Any ownership: two workers with any Gather phase are exempt"><span><b>Any ownership</b><span class="rank">Recommended</span><span class="detail">Simple kind/order rule; same behavior for future factions.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Same owner only"><span><b>Same owner only</b><span class="rank">Second</span><span class="detail">Friendly gatherers pass; opposing workers remain hard obstacles.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Player-owned workers only"><span><b>Player-owned workers only</b><span class="rank">Third</span><span class="detail">Narrow current feature; future factions get asymmetric behavior.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Faction/owner restrictions…"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What happens when overlapping gatherers stop qualifying for exemption?">
+      <legend>4. What happens when overlapping gatherers stop qualifying for exemption?</legend>
+      <p class="why">Hard collision cannot resume while circles remain merged; choice trades immediate invariant recovery against visual smoothness.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Immediately relocate one worker to nearest legal free center using deterministic rotated priority"><span><b>Immediate deterministic relocation</b><span class="rank">Recommended</span><span class="detail">Restores hard-body invariant in same tick; rare visible position pop is possible.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Push workers apart over bounded ticks; transitional overlaps remain legal"><span><b>Bounded gradual separation</b><span class="rank">Second</span><span class="detail">Smoother picture; adds transition state and temporarily weakens no-overlap rule.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keep pair exempt until natural movement separates it"><span><b>Grace until naturally separate</b><span class="rank">Third</span><span class="detail">Least visual disruption; idle overlapped workers may never become solid again.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="Teleport tolerance, separation duration, cancellation behavior…"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 2 · Navigation and overlap exit — Close remaining interaction rules\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>
