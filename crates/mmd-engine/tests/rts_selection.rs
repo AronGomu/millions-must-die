@@ -266,7 +266,7 @@ fn clicking_a_node_selects_it() {
 }
 
 #[test]
-fn clicking_a_node_one_cell_off_misses_it() {
+fn clicking_a_node_one_cell_off_misses_the_node() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
     let screen = view().project(141.5, 150.5);
     // One cell east of the node's centre is [948, 448]: past the bottom edge
