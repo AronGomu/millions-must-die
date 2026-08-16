@@ -151,7 +151,7 @@ impl VoiceBatch {
 /// Which UI surface a click SFX came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiCue {
-    /// Gear icon, and every pause-menu navigation button.
+    /// Menu control, and every pause-menu navigation button.
     Menu,
     /// A settings control that accepted a new value.
     Settings,
@@ -189,15 +189,33 @@ impl EffectiveGains {
     }
 }
 
-/// `master% * bus%` in basis points. Both factors are already validated to
-/// `0..=100` by [`crate::rts_settings::RtsSettings::validate`], so the
-/// product never leaves `u16`.
+/// One bus product in basis points. Mute flags zero gain without touching
+/// stored volume levels; unmuted path keeps integer `master * bus`.
+fn bus_level(master: u32, bus: u32, master_muted: bool, bus_muted: bool) -> u16 {
+    if master_muted || bus_muted {
+        0
+    } else {
+        (master.min(100) * bus.min(100)) as u16
+    }
+}
+
+/// `master% * bus%` in basis points, then mute mask. Levels already
+/// validated to `0..=100` by [`crate::rts_settings::RtsSettings::validate`].
 pub fn effective_gains(audio: &AudioSettings) -> EffectiveGains {
-    let scale = |bus: u32| (audio.master.min(100) * bus.min(100)) as u16;
     EffectiveGains {
-        music_basis_points: scale(audio.music),
-        voice_basis_points: scale(audio.voice),
-        sfx_basis_points: scale(audio.sfx),
+        music_basis_points: bus_level(
+            audio.master,
+            audio.music,
+            audio.master_muted,
+            audio.music_muted,
+        ),
+        voice_basis_points: bus_level(
+            audio.master,
+            audio.voice,
+            audio.master_muted,
+            audio.voice_muted,
+        ),
+        sfx_basis_points: bus_level(audio.master, audio.sfx, audio.master_muted, audio.sfx_muted),
     }
 }
 
@@ -383,6 +401,11 @@ impl FakeSinkHandle {
     /// The sink itself, for assertions.
     pub fn sink(&self) -> std::cell::Ref<'_, FakeAudioSink> {
         self.0.borrow()
+    }
+
+    /// Fault-inject `set_gains` failures through the shared sink (`T3`).
+    pub fn set_fail_set_gains(&self, fail: bool) {
+        self.0.borrow_mut().set_fail_set_gains(fail);
     }
 
     /// Another handle on the same sink, as a boxed [`AudioSink`].
@@ -577,6 +600,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn master_mute_zeroes_all_buses_without_changing_levels() {
+        let mut audio = AudioSettings {
+            master: 80,
+            music: 35,
+            voice: 70,
+            sfx: 60,
+            ..AudioSettings::default()
+        };
+        audio.master_muted = true;
+
+        let gains = effective_gains(&audio);
+        assert_eq!(
+            (
+                gains.music_basis_points,
+                gains.voice_basis_points,
+                gains.sfx_basis_points
+            ),
+            (0, 0, 0)
+        );
+        assert_eq!(
+            (audio.master, audio.music, audio.voice, audio.sfx),
+            (80, 35, 70, 60)
+        );
+
+        audio.master_muted = false;
+        let restored = effective_gains(&audio);
+        assert_eq!(
+            (
+                restored.music_basis_points,
+                restored.voice_basis_points,
+                restored.sfx_basis_points
+            ),
+            (2800, 5600, 4800)
+        );
+    }
+
+    #[test]
+    fn bus_mute_zeroes_only_its_bus() {
+        let mut audio = AudioSettings {
+            master: 80,
+            music: 35,
+            voice: 70,
+            sfx: 60,
+            ..AudioSettings::default()
+        };
+        audio.music_muted = true;
+
+        let gains = effective_gains(&audio);
+        assert_eq!(gains.music_basis_points, 0);
+        assert_eq!(gains.voice_basis_points, 5600);
+        assert_eq!(gains.sfx_basis_points, 4800);
+        assert_eq!(audio.music, 35, "level stays while muted");
+
+        audio.music_muted = false;
+        assert_eq!(effective_gains(&audio).music_basis_points, 2800);
+    }
+
     // -- Selection delta -------------------------------------------------
 
     #[test]
@@ -713,8 +794,8 @@ mod tests {
         let worker = player_units(&world, UnitKind::Worker)[0];
         world.select_only(worker);
 
-        // 1. Gear -> Menu.
-        crate::rts_ui::handle_hud_click(&mut world, &mut session, HudHit::Gear, false);
+        // 1. Menu control -> Menu cue.
+        crate::rts_ui::handle_hud_click(&mut world, &mut session, HudHit::Menu, false);
         // 2. Pause menu's Settings button -> Menu, then a settings edit ->
         //    Settings.
         crate::rts_ui::handle_modal_click(&mut session, ModalHit::OpenSettings);
@@ -775,13 +856,48 @@ mod tests {
         ];
         crate::rts_ui::handle_hud_click(&mut world, &mut session, HudHit::Minimap(corner), false);
         // The keyboard hotkey path never claims a pointer click.
-        apply(
-            &mut world,
-            &mut session,
-            RtsCommand::Execute(CommandId::BuildHq),
-        );
+        apply(&mut world, &mut session, RtsCommand::ExecuteSlot(0));
 
         assert_eq!(audio.sink().ui_cues(), Vec::<UiCue>::new());
+    }
+
+    #[test]
+    fn activation_requires_matching_down_and_up_control() {
+        let (mut world, mut session, audio) = session_with_world();
+        session.ui.open_menu();
+        let settings = [
+            HudLayout::PAUSE_MENU_SETTINGS_BTN[0] + 10.0,
+            HudLayout::PAUSE_MENU_SETTINGS_BTN[1] + 10.0,
+        ];
+        let close = [
+            HudLayout::PAUSE_MENU_CLOSE_BTN[0] + 10.0,
+            HudLayout::PAUSE_MENU_CLOSE_BTN[1] + 10.0,
+        ];
+        // Down Settings, up Close → no activation / no cue.
+        crate::rts_run::pointer_down(&mut world, &mut session, settings);
+        crate::rts_run::pointer_up(&mut world, &mut session, close, false);
+        assert_eq!(session.ui.page, crate::rts_ui::UiPage::PauseMenu);
+        assert!(audio.sink().ui_cues().is_empty());
+
+        // Matching down/up on Settings still opens.
+        crate::rts_run::pointer_down(&mut world, &mut session, settings);
+        crate::rts_run::pointer_up(&mut world, &mut session, settings, false);
+        assert_eq!(session.ui.page, crate::rts_ui::UiPage::Settings);
+        assert_eq!(audio.sink().ui_cues(), vec![UiCue::Menu]);
+    }
+
+    #[test]
+    fn modal_press_never_leaks_to_world() {
+        let (mut world, mut session, _audio) = session_with_world();
+        let before = world.selection().ids().to_vec();
+        session.ui.open_menu();
+        let modal_gap = [10.0, 10.0];
+        let world_pt = [960.0, 400.0];
+        // Down on modal, move to world, up — no select/order.
+        crate::rts_run::pointer_down(&mut world, &mut session, modal_gap);
+        crate::rts_run::pointer_up(&mut world, &mut session, world_pt, false);
+        assert_eq!(world.selection().ids(), before.as_slice());
+        assert_eq!(session.ui.page, crate::rts_ui::UiPage::PauseMenu);
     }
 
     // -- Music -----------------------------------------------------------

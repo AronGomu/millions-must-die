@@ -19,15 +19,18 @@
 use std::path::PathBuf;
 
 use mmd_engine::rts::{
-    BuildingKind, EntityId, EntityKind, HudHit, HudLayout, ModalHit, ModalPage, Order, Pick,
-    ProduceError, ResourceKind, UnitKind, footprint_cells, hud_hit_test, minimap_projection,
-    modal_hit_test, pick_at, sprite_screen_rect,
+    BuildingKind, EntityId, EntityKind, FramePackOptions, HudHit, HudLayout, ModalHit, ModalPage,
+    Order, PAN_MIN, Pick, ProduceError, ResourceKind, RtsFrame, SETTINGS_SCROLL_STEP_PX, UnitKind,
+    footprint_cells, hud_hit_test, minimap_projection, modal_hit_test, pack_frame_with_options,
+    pick_at, sprite_screen_rect,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
 
 /// The tracked acceptance script, also driven by the app-crate CLI test.
 const SCRIPT_REL: &str = "assets/scenarios/rts_acceptance_v1.script";
+/// The focused feedback-polish script (`T15`), driven by the same CLI test.
+const FOCUSED_SCRIPT_REL: &str = "assets/scenarios/rts_feedback_polish_v1.script";
 
 /// The scene is 320 x 320 cells.
 const GRID: u32 = 320;
@@ -102,6 +105,9 @@ enum ScriptPoint {
     Hud(HudHit),
     /// Owned by an open settings modal.
     Modal(ModalHit),
+    /// A world click that resolves to the building whose footprint centre
+    /// stands on this cell — not merely "projects onto a cell inside it".
+    Building(Cell),
 }
 
 /// Every screen coordinate the tracked script names, with what it claims.
@@ -115,7 +121,12 @@ const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
     (
         [960.0, 540.0],
         ScriptPoint::Cell(Cell { x: 166, y: 166 }),
-        "HQ centre (and, with the menu open, the SETTINGS button)",
+        "the SETTINGS button with the menu open (a world click on HQ centre otherwise)",
+    ),
+    (
+        [960.0, 518.0],
+        ScriptPoint::Building(Cell { x: 166, y: 166 }),
+        "the HQ's own footprint corner (160.5, 160.5), which picks the HQ",
     ),
     (
         [850.0, 520.0],
@@ -189,8 +200,8 @@ const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
     ),
     (
         [1888.0, 24.0],
-        ScriptPoint::Hud(HudHit::Gear),
-        "settings gear centre",
+        ScriptPoint::Hud(HudHit::Menu),
+        "settings menu centre",
     ),
     (
         [1170.0, 288.0],
@@ -235,11 +246,12 @@ struct Run {
     supply_cap_end: u32,
     ticks_stepped: u64,
     tick_index_end: u64,
-    /// Body-penetration scans, `(milestone, penetrating live-unit pairs)`,
+    /// Body-penetration scans, `(milestone, policy violations, raw pairs)`,
     /// taken before the first order and after every order/build/produce
-    /// phase. Every entry must read 0 — see
-    /// `acceptance_never_has_body_penetration`.
-    body_scans: Vec<(&'static str, u32)>,
+    /// phase. Every policy entry must read 0 — see
+    /// `acceptance_never_has_body_penetration` — while the raw column is what
+    /// makes those zeros mean something (`canonical_gather_overlap_is_non_vacuous`).
+    body_scans: Vec<(&'static str, u32, u32)>,
     state_hash: String,
 }
 
@@ -251,10 +263,14 @@ struct Run {
 fn drive() -> Run {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let mut ticks = 0u64;
-    let mut body_scans: Vec<(&'static str, u32)> = Vec::new();
+    let mut body_scans: Vec<(&'static str, u32, u32)> = Vec::new();
     macro_rules! scan {
         ($h:expr, $what:literal) => {
-            body_scans.push(($what, $h.world().body_overlap_count()))
+            body_scans.push((
+                $what,
+                $h.world().body_overlap_count(),
+                $h.world().raw_body_overlap_count(),
+            ))
         };
     }
     scan!(h, "initial spawn");
@@ -591,10 +607,38 @@ fn acceptance_never_has_body_penetration() {
         "the run must scan for penetration at every milestone, not once: {:?}",
         r.body_scans
     );
-    for (milestone, overlaps) in &r.body_scans {
+    for (milestone, overlaps, _raw) in &r.body_scans {
         assert_eq!(
             *overlaps, 0,
             "{milestone}: {overlaps} pair(s) of live units penetrate each other"
+        );
+    }
+}
+
+/// Anti-vacuity for the run above, at run scale rather than in a two-body
+/// fixture: T13 lets an *active gather pair* pass through its partner, so
+/// somewhere in the acceptance run bodies really do interpenetrate. The
+/// policy oracle reading 0 at every milestone only means "no violation"
+/// because the raw oracle reads more than 0 at some of them; if gathering
+/// ever stopped producing geometric overlap, `acceptance_never_has_body_
+/// penetration` would be proving nothing and this fails first.
+#[test]
+fn canonical_gather_overlap_is_non_vacuous() {
+    let r = drive();
+    let raw_total: u32 = r.body_scans.iter().map(|(_, _, raw)| *raw).sum();
+    assert!(
+        raw_total > 0,
+        "no milestone of the acceptance run has a single geometrically overlapping \
+         pair, so the policy oracle's zeros are vacuous: {:?}",
+        r.body_scans
+    );
+    // ...and every one of those raw overlaps was an exempt pair, never a
+    // violation: the two oracles differ only by the exemption.
+    for (milestone, policy, raw) in &r.body_scans {
+        assert!(
+            *policy <= *raw,
+            "{milestone}: {policy} policy violation(s) but only {raw} overlapping pair(s) \
+             — the policy oracle cannot see more than the raw one"
         );
     }
 }
@@ -699,6 +743,22 @@ fn acceptance_minimap_click_moves_camera() {
     );
 }
 
+/// The live building whose centre stands on `centre`, by its floored
+/// cell-space position.
+fn building_standing_on(h: &RtsHarness, centre: Cell) -> EntityId {
+    let store = h.world().entities();
+    for slot in 0..store.slot_count() {
+        if !store.alive(slot) || !matches!(store.kind(slot), EntityKind::Building(_)) {
+            continue;
+        }
+        let p = store.position(slot);
+        if p[0].floor() as u32 == centre.x && p[1].floor() as u32 == centre.y {
+            return store.id_at(slot).expect("live building");
+        }
+    }
+    panic!("no building stands on {centre:?}")
+}
+
 /// The live node standing on `ground`, by its floored cell-space position.
 fn node_standing_on(h: &RtsHarness, ground: Cell) -> EntityId {
     let store = h.world().entities();
@@ -792,9 +852,24 @@ fn the_script_coordinates_hit_what_they_name() {
             }
             ScriptPoint::Modal(expected) => {
                 assert_eq!(
-                    modal_hit_test(ModalPage::Settings, *screen),
+                    modal_hit_test(ModalPage::Settings, *screen, 0.0),
                     *expected,
                     "the script's {what} coordinate {screen:?} no longer hits {expected:?}"
+                );
+            }
+            ScriptPoint::Building(centre) => {
+                let building = building_standing_on(&h, *centre);
+                assert_eq!(
+                    hud_hit_test(h.world(), *screen),
+                    None,
+                    "the script's {what} coordinate {screen:?} is a world click, but the \
+                     HUD now owns it"
+                );
+                assert_eq!(
+                    pick_at(h.world(), &view, *screen),
+                    Pick::Building(building),
+                    "the script's {what} coordinate {screen:?} no longer picks the building \
+                     standing on {centre:?}"
                 );
             }
         }
@@ -853,4 +928,274 @@ fn coords_in(text: &str) -> Vec<[f32; 2]> {
         }
     }
     out
+}
+
+// ---------------------------------------------------------------------------
+// T15: the focused feedback-polish script
+// ---------------------------------------------------------------------------
+
+/// The scroll offset one `wheel:...,-1` notch leaves the settings body at.
+const FOCUSED_SCROLL_PX: f32 = SETTINGS_SCROLL_STEP_PX;
+
+/// What one coordinate of the focused script claims, on the page it is
+/// clicked on.
+///
+/// A separate table from [`SCRIPT_COORDS`] rather than a shared one: the two
+/// scripts click the *same pixel* (`960,540`) on two different pages — a world
+/// cell in the canonical run, the SETTINGS button here — and one table that
+/// had to hold both meanings for one pixel would have to stop asserting.
+#[derive(Debug)]
+enum FocusedPoint {
+    /// A world click that picks the building whose centre stands on this cell.
+    Building(Cell),
+    /// Owned by the HUD chrome, before any modal is open.
+    Hud(HudHit),
+    /// Owned by the paused Escape menu.
+    PauseMenu(ModalHit),
+    /// Owned by the settings panel, at the scroll offset the script clicks it
+    /// at.
+    Settings(ModalHit, f32),
+}
+
+/// Every screen coordinate the focused script names, with what it claims.
+const FOCUSED_COORDS: &[([f32; 2], FocusedPoint, &str)] = &[
+    (
+        [960.0, 518.0],
+        FocusedPoint::Building(Cell { x: 166, y: 166 }),
+        "the HQ's own footprint corner (160.5, 160.5)",
+    ),
+    (
+        [1888.0, 24.0],
+        FocusedPoint::Hud(HudHit::Menu),
+        "MENU_RECT centre",
+    ),
+    (
+        [960.0, 540.0],
+        FocusedPoint::PauseMenu(ModalHit::OpenSettings),
+        "PAUSE_MENU_SETTINGS_BTN centre",
+    ),
+    (
+        [568.0, 288.0],
+        FocusedPoint::Settings(ModalHit::KeyboardPan(PAN_MIN), 0.0),
+        "keyboard-pan track, its own left edge: where the live drag starts",
+    ),
+    (
+        [1170.0, 288.0],
+        FocusedPoint::Settings(ModalHit::KeyboardPan(SLIDER_PAN_SPEED), 0.0),
+        "keyboard-pan track, at the 78 cells/s step: where the live drag ends",
+    ),
+    (
+        [960.0, 580.0],
+        FocusedPoint::Settings(ModalHit::Grid, 0.0),
+        "GRID_CONTROL_RECT centre",
+    ),
+    (
+        [552.0, 928.0],
+        FocusedPoint::Settings(ModalHit::Back, FOCUSED_SCROLL_PX),
+        "SETTINGS_BACK_BTN centre, clicked after the wheel notch",
+    ),
+    (
+        [960.0, 620.0],
+        FocusedPoint::PauseMenu(ModalHit::CloseMenu),
+        "PAUSE_MENU_CLOSE_BTN centre",
+    ),
+];
+
+fn focused_script_path() -> PathBuf {
+    mmd_engine::workspace_root().join(FOCUSED_SCRIPT_REL)
+}
+
+/// Step 1 of the focused script, asserted as the *pick* it claims to be.
+///
+/// `find_builder` falls back to "any live worker" and `enqueue_unit` is given
+/// a building id, so an accepted Worker enqueue alone would not prove the
+/// click resolved to the HQ. This is that proof — and the second half is why
+/// the script cannot simply reuse the canonical run's `960,540`: at the frame
+/// the focused script clicks, one T3-relocated worker's rendered sprite quad
+/// still reaches back over the HQ's screen centre and outranks it on pick
+/// depth.
+#[test]
+fn focused_script_hq_click_picks_the_building_not_a_worker() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let view = h.world().iso_view();
+    let hq = h.world().start_hq().expect("the scene's HQ");
+
+    assert_eq!(
+        pick_at(h.world(), &view, [960.0, 518.0]),
+        Pick::Building(hq),
+        "the focused script's step-1 coordinate does not pick the HQ"
+    );
+    assert!(
+        matches!(pick_at(h.world(), &view, [960.0, 540.0]), Pick::Unit(_)),
+        "the HQ's screen centre is pickable as the HQ at the opening frame after all — \
+         then the focused script's whole reason for clicking the footprint corner is gone \
+         and this table should say so"
+    );
+}
+
+/// The settings Back control is a *fixed footer*: it sits outside the
+/// scrollable body viewport, so the wheel notch the script fires just before
+/// clicking it must not move it.
+#[test]
+fn focused_script_back_button_is_fixed_under_scroll() {
+    let back = [552.0, 928.0];
+    assert!(
+        back[1] >= HudLayout::SETTINGS_BODY_VIEWPORT[1] + HudLayout::SETTINGS_BODY_VIEWPORT[3],
+        "the Back control is inside the scrollable body viewport, so it is not fixed"
+    );
+    for offset in [
+        0.0,
+        FOCUSED_SCROLL_PX,
+        mmd_engine::rts::settings_max_scroll(),
+    ] {
+        assert_eq!(
+            modal_hit_test(ModalPage::Settings, back, offset),
+            ModalHit::Back,
+            "Back stopped being hittable at scroll offset {offset}"
+        );
+    }
+    // ...and the body really did move under it, or "fixed" is untested.
+    assert_ne!(
+        modal_hit_test(ModalPage::Settings, [960.0, 580.0], FOCUSED_SCROLL_PX),
+        ModalHit::Grid,
+        "one wheel notch did not move the settings body at all, so the fixed-footer \
+         claim above is vacuous"
+    );
+    assert!(
+        FOCUSED_SCROLL_PX > 0.0 && FOCUSED_SCROLL_PX <= mmd_engine::rts::settings_max_scroll(),
+        "one wheel notch ({FOCUSED_SCROLL_PX}) does not land inside the scrollable range"
+    );
+}
+
+/// Every screen coordinate the focused script uses must hit what it claims,
+/// on the page it is clicked on — and the table and the script must cover each
+/// other, so a coordinate cannot drift by being added rather than edited.
+#[test]
+fn the_focused_script_coordinates_hit_what_they_name() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let view = h.world().iso_view();
+
+    for (screen, claim, what) in FOCUSED_COORDS {
+        match claim {
+            FocusedPoint::Building(centre) => {
+                let building = building_standing_on(&h, *centre);
+                assert_eq!(
+                    hud_hit_test(h.world(), *screen),
+                    None,
+                    "the focused script's {what} coordinate {screen:?} is a world click, \
+                     but the HUD now owns it"
+                );
+                assert_eq!(
+                    pick_at(h.world(), &view, *screen),
+                    Pick::Building(building),
+                    "the focused script's {what} coordinate {screen:?} no longer picks the \
+                     building standing on {centre:?}"
+                );
+            }
+            FocusedPoint::Hud(expected) => {
+                assert_eq!(
+                    hud_hit_test(h.world(), *screen),
+                    Some(*expected),
+                    "the focused script's {what} coordinate {screen:?} no longer hits \
+                     {expected:?}"
+                );
+            }
+            FocusedPoint::PauseMenu(expected) => {
+                assert_eq!(
+                    modal_hit_test(ModalPage::PauseMenu, *screen, 0.0),
+                    *expected,
+                    "the focused script's {what} coordinate {screen:?} no longer hits \
+                     {expected:?} on the paused menu"
+                );
+            }
+            FocusedPoint::Settings(expected, offset) => {
+                assert_eq!(
+                    modal_hit_test(ModalPage::Settings, *screen, *offset),
+                    *expected,
+                    "the focused script's {what} coordinate {screen:?} no longer hits \
+                     {expected:?} at scroll offset {offset}"
+                );
+            }
+        }
+    }
+
+    // The wheel target is not a control: it only has to be inside the body
+    // viewport, which is the whole condition the app scrolls on.
+    let wheel = [960.0, 540.0];
+    let vp = HudLayout::SETTINGS_BODY_VIEWPORT;
+    assert!(
+        wheel[0] >= vp[0]
+            && wheel[0] < vp[0] + vp[2]
+            && wheel[1] >= vp[1]
+            && wheel[1] < vp[1] + vp[3],
+        "the focused script's wheel point {wheel:?} is outside SETTINGS_BODY_VIEWPORT {vp:?}, \
+         so the notch would be ignored"
+    );
+
+    let text = std::fs::read_to_string(focused_script_path())
+        .unwrap_or_else(|e| panic!("read {}: {e}", focused_script_path().display()));
+    let used = coords_in(&text);
+    assert!(
+        !used.is_empty(),
+        "{FOCUSED_SCRIPT_REL} names no coordinates at all"
+    );
+    for screen in &used {
+        assert!(
+            FOCUSED_COORDS.iter().any(|(s, _, _)| s == screen),
+            "{FOCUSED_SCRIPT_REL} uses coordinate {screen:?}, which this test documents no \
+             meaning for"
+        );
+    }
+    for (screen, _, what) in FOCUSED_COORDS {
+        assert!(
+            used.contains(screen),
+            "this test documents the {what} coordinate {screen:?}, which \
+             {FOCUSED_SCRIPT_REL} no longer uses"
+        );
+    }
+}
+
+/// The grid is a *render* setting: toggling it changes what one frame packs
+/// and nothing the world hashes.
+///
+/// `crates/mmd-engine/tests/rts_pack.rs` owns each half on its own (the exact
+/// lattice, and that packing does not mutate the world). This is the joined
+/// claim the focused script's `show_grid=false` exit token rests on: the same
+/// world, packed both ways in one test, must differ in instance count and
+/// agree on the hash.
+#[test]
+fn grid_toggle_changes_frame_not_world_hash() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let before = h.state_hash_hex();
+    let cursor = [960.0, 540.0];
+
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(
+        h.world(),
+        cursor,
+        None,
+        FramePackOptions { show_grid: true },
+        &mut frame,
+    );
+    let with_grid = frame.instance_count();
+
+    pack_frame_with_options(
+        h.world(),
+        cursor,
+        None,
+        FramePackOptions { show_grid: false },
+        &mut frame,
+    );
+    let without_grid = frame.instance_count();
+
+    assert!(
+        with_grid > without_grid,
+        "grid on packed {with_grid} instances and grid off {without_grid}: the setting \
+         reaches no frame at all"
+    );
+    assert_eq!(
+        h.state_hash_hex(),
+        before,
+        "packing a frame with the grid on or off moved hashed world state"
+    );
 }

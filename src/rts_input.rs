@@ -1,7 +1,6 @@
 //! RTS keyboard + pan bindings: the live SDL path and the `--inject-input`
 //! script path resolve through the same tables, so the two cannot drift.
 
-use mmd_engine::rts::CommandId;
 use sdl3::keyboard::Keycode;
 
 /// RTS commands, produced by both the live SDL path and the script path.
@@ -20,11 +19,9 @@ pub enum RtsCommand {
     Escape,
     TogglePause,
     ToggleOverlay,
-    CancelPlacement,
-    /// Run one command through the shared executor — the same one a
-    /// command-grid click runs, so a hotkey and its card icon can never
-    /// drift (`T12`).
-    Execute(CommandId),
+    /// Execute the command in a positional card slot (0‒8, row-major).
+    /// Slot ≥ 9 is a no-op and never panics — validated in `execute_slot`.
+    ExecuteSlot(u8),
     /// Begin holding a pan direction. Components in `-1..=1`, screen space.
     PanStart([f32; 2]),
     /// Stop holding it.
@@ -39,6 +36,12 @@ pub enum RtsCommand {
     Drag([f32; 2], [f32; 2]),
     /// Right click — the context order.
     RightClick([f32; 2]),
+    /// Mouse wheel scroll at logical `point` with `delta` notches (+up / -down).
+    /// `point` has already been mapped through `viewport.map_pointer`.
+    Wheel {
+        point: [f32; 2],
+        delta: i32,
+    },
 }
 
 /// Bound key, its SDL keycode, the `--inject-input` name, and the command.
@@ -49,26 +52,18 @@ const KEY_BINDINGS: &[(Keycode, &str, RtsCommand)] = &[
     (Keycode::Escape, "esc", RtsCommand::Escape),
     (Keycode::Space, "space", RtsCommand::TogglePause),
     (Keycode::F1, "f1", RtsCommand::ToggleOverlay),
-    (Keycode::X, "x", RtsCommand::CancelPlacement),
-    (Keycode::Q, "q", RtsCommand::Execute(CommandId::BuildHq)),
-    (Keycode::W, "w", RtsCommand::Execute(CommandId::BuildDepot)),
-    (
-        Keycode::E,
-        "e",
-        RtsCommand::Execute(CommandId::BuildBarracks),
-    ),
-    (Keycode::A, "a", RtsCommand::Execute(CommandId::TrainWorker)),
-    (
-        Keycode::S,
-        "s",
-        RtsCommand::Execute(CommandId::TrainSoldier),
-    ),
-    (Keycode::R, "r", RtsCommand::Execute(CommandId::SetRally)),
+    (Keycode::Q, "q", RtsCommand::ExecuteSlot(0)),
+    (Keycode::W, "w", RtsCommand::ExecuteSlot(1)),
+    (Keycode::E, "e", RtsCommand::ExecuteSlot(2)),
+    (Keycode::A, "a", RtsCommand::ExecuteSlot(3)),
+    (Keycode::S, "s", RtsCommand::ExecuteSlot(4)),
+    (Keycode::D, "d", RtsCommand::ExecuteSlot(5)),
+    (Keycode::Z, "z", RtsCommand::ExecuteSlot(6)),
+    (Keycode::X, "x", RtsCommand::ExecuteSlot(7)),
+    (Keycode::C, "c", RtsCommand::ExecuteSlot(8)),
 ];
 
-/// Held pan keys. **Arrow keys only** — `W`, `A`, `S` and `E` are already
-/// build and production hotkeys, and a WASD pan would silently shadow half
-/// the build menu.
+/// Held pan keys. Arrow keys only — all letter keys are command-grid slots.
 const PAN_BINDINGS: &[(Keycode, &str, [f32; 2])] = &[
     (Keycode::Left, "left", [-1.0, 0.0]),
     (Keycode::Right, "right", [1.0, 0.0]),
@@ -135,24 +130,13 @@ pub fn pan_key_names() -> String {
 /// `the_window_banner_lists_every_binding` can assert against the same
 /// table-driven text the app prints, instead of a copy that could drift.
 pub fn window_banner() -> String {
-    "Esc menu, Space pause, F1 overlay, X cancel, Q/W/E build, A/S produce, R rally, arrows pan"
+    "Esc menu, Space pause, F1 overlay, QWE/ASD/ZXC card, right-click cancel, arrows pan"
         .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mmd_engine::rts::{BUILD_MENU, CommandId};
-
-    /// The `CommandId::BuildXxx` that matches a `BUILD_MENU` building kind.
-    fn build_command(kind: mmd_engine::rts::BuildingKind) -> CommandId {
-        use mmd_engine::rts::BuildingKind;
-        match kind {
-            BuildingKind::Hq => CommandId::BuildHq,
-            BuildingKind::Depot => CommandId::BuildDepot,
-            BuildingKind::Barracks => CommandId::BuildBarracks,
-        }
-    }
 
     /// The keyboard and the injection script must resolve to the same
     /// command for the same binding.
@@ -209,23 +193,45 @@ mod tests {
         }
     }
 
-    /// The HUD's build menu letters must match the app's keyboard table, or
-    /// the menu lies about which key does what.
+    /// All nine card slots map row-major Q/W/E A/S/D Z/X/C.
     #[test]
-    fn the_build_menu_matches_the_bindings() {
-        for (letter, kind) in BUILD_MENU {
-            let name = (letter.to_ascii_lowercase() as char).to_string();
+    fn all_nine_command_keys_map_row_major() {
+        let expected: &[(&str, u8)] = &[
+            ("q", 0),
+            ("w", 1),
+            ("e", 2),
+            ("a", 3),
+            ("s", 4),
+            ("d", 5),
+            ("z", 6),
+            ("x", 7),
+            ("c", 8),
+        ];
+        for &(name, slot) in expected {
             assert_eq!(
-                command_from_name(&name),
-                Some(RtsCommand::Execute(build_command(kind))),
-                "BUILD_MENU letter `{letter}` does not match KEY_BINDINGS"
+                command_from_name(name),
+                Some(RtsCommand::ExecuteSlot(slot)),
+                "key `{name}` should map to slot {slot}"
             );
         }
     }
 
+    /// X maps to slot 7 — it no longer cancels placement.
+    #[test]
+    fn x_executes_slot_seven() {
+        assert_eq!(command_from_name("x"), Some(RtsCommand::ExecuteSlot(7)));
+    }
+
+    /// R is not bound to any command.
+    #[test]
+    fn r_is_unbound() {
+        assert_eq!(command_from_keycode(Keycode::R), None);
+        assert_eq!(command_from_name("r"), None);
+    }
+
     #[test]
     fn unbound_keys_are_rejected() {
-        assert_eq!(command_from_keycode(Keycode::Z), None);
+        assert_eq!(command_from_keycode(Keycode::R), None);
         assert_eq!(command_from_name("f9"), None);
         assert_eq!(command_from_name(""), None);
     }

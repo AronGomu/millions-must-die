@@ -299,28 +299,32 @@ fn assert_no_user_config(label: &str) {
 /// A dedicated sentinel `HOME`/`XDG_DATA_HOME` for `case`, pre-seeded with a
 /// valid settings file that makes an *interactive* run harmless on a live
 /// desktop: a plain 1280x720 window (so no display mode is changed), no
-/// pointer confinement, and a silent master bus.
+/// pointer confinement, and a silent master bus. `show_grid` is the one knob
+/// a caller picks, because `T15`'s replay-isolation case needs a persisted
+/// value the run must be proven to ignore.
 ///
 /// The interactive path legitimately loads and creates a pref directory — that
 /// is what shipping does. What must never happen is that it is the developer's
 /// own, with the developer's own persisted window mode and
 /// `confine_pointer: true`. Seeding the sentinel uses the shipping load path
 /// rather than adding a test-only knob to the binary.
-fn seeded_settings_home(case: &str) -> PathBuf {
+fn seeded_settings_home(case: &str, show_grid: bool) -> PathBuf {
     let home = tmp_dir(case);
     let dir = home.join(SETTINGS_ORG_DIR).join("MillionsMustDie");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create sentinel pref dir");
     std::fs::write(
         dir.join("settings-v1.json"),
-        r#"{
+        format!(
+            r#"{{
   "schema_version": 1,
-  "display": { "mode": "windowed1280x720", "confine_pointer": false },
-  "camera": { "keyboard_pan": 48, "edge_pan": 48 },
-  "gameplay": { "pause_on_focus_loss": false },
-  "audio": { "master": 0, "music": 0, "voice": 0, "sfx": 0 }
-}
-"#,
+  "display": {{ "mode": "windowed1280x720", "confine_pointer": false }},
+  "camera": {{ "keyboard_pan": 48, "edge_pan": 48 }},
+  "gameplay": {{ "pause_on_focus_loss": false, "show_grid": {show_grid} }},
+  "audio": {{ "master": 0, "music": 0, "voice": 0, "sfx": 0 }}
+}}
+"#
+        ),
     )
     .expect("seed sentinel settings");
     home
@@ -838,9 +842,11 @@ fn pan_stops_on_key_up() {
 
 #[test]
 fn w_opens_the_depot_ghost() {
+    let w = fmt_xy(worker_screen());
+    let script = format!("1:key:f1;1:move:{w};2:lclick:{w};3:key:w");
     let Some(cli) = or_skip(
         "w_opens_the_depot_ghost",
-        rts(&["--frames", "5", "--inject-input", "1:key:f1;1:key:w"]),
+        rts(&["--frames", "5", "--inject-input", &script]),
     ) else {
         return;
     };
@@ -853,35 +859,50 @@ fn w_opens_the_depot_ghost() {
     );
 }
 
+/// X (slot 7) no longer cancels placement; right-click is the only cancel.
 #[test]
-fn x_cancels_the_ghost() {
-    let Some(cli) = or_skip(
-        "x_cancels_the_ghost",
-        rts(&[
-            "--frames",
-            "5",
-            "--inject-input",
-            "1:key:f1;1:key:w;3:key:x",
-        ]),
+fn right_click_is_only_placement_cancel() {
+    let p = fmt_xy(clear_build_site_screen());
+    // Start W ghost, cancel via right-click — ghost must be gone.
+    let w = fmt_xy(worker_screen());
+    let cancel_script = format!("1:key:f1;1:move:{w};2:lclick:{w};3:key:w;5:rclick:{p}");
+    let Some(cancelled) = or_skip(
+        "right_click_is_only_placement_cancel",
+        rts(&["--frames", "7", "--inject-input", &cancel_script]),
     ) else {
         return;
     };
-    cli.assert_success();
-    let last_hud = cli
+    cancelled.assert_success();
+    assert_eq!(
+        cancelled.exit_field("buildings"),
+        "1",
+        "{cancelled}\nright-click must cancel without building"
+    );
+    // Start W ghost, press X (slot 7) — ghost must STILL be pending (no cancel).
+    let x_script = format!("1:key:f1;1:move:{w};2:lclick:{w};3:key:w;5:key:x");
+    let Some(x_still_ghost) = or_skip(
+        "right_click_is_only_placement_cancel",
+        rts(&["--frames", "7", "--inject-input", &x_script]),
+    ) else {
+        return;
+    };
+    x_still_ghost.assert_success();
+    let last_hud = x_still_ghost
         .stdout
         .lines()
         .rfind(|l| l.starts_with("rts: hud "))
-        .unwrap_or_else(|| panic!("{cli}\nno HUD lines"));
+        .unwrap_or_else(|| panic!("{x_still_ghost}\nno HUD lines"));
     assert!(
-        last_hud.contains("ghost=none"),
-        "{cli}\nlast HUD line does not report `ghost=none`: {last_hud}"
+        !last_hud.contains("ghost=none"),
+        "{x_still_ghost}\nX must not cancel the ghost; HUD: {last_hud}"
     );
 }
 
 #[test]
 fn a_left_click_places_the_ghost() {
     let p = fmt_xy(clear_build_site_screen());
-    let script = format!("1:key:w;2:move:{p};3:lclick:{p}");
+    let w = fmt_xy(worker_screen());
+    let script = format!("1:move:{w};2:lclick:{w};3:key:w;4:move:{p};5:lclick:{p}");
     let Some(cli) = or_skip(
         "a_left_click_places_the_ghost",
         rts(&["--frames", "2500", "--inject-input", &script]),
@@ -896,38 +917,26 @@ fn a_left_click_places_the_ghost() {
 #[test]
 fn a_right_click_cancels_the_ghost_without_ordering() {
     let p = fmt_xy(clear_build_site_screen());
-    let cancel_script = format!("1:key:w;3:rclick:{p}");
-    let x_script = "1:key:w;3:key:x";
+    let w = fmt_xy(worker_screen());
+    let cancel_script = format!("1:move:{w};2:lclick:{w};3:key:w;5:rclick:{p}");
     let Some(cancelled) = or_skip(
         "a_right_click_cancels_the_ghost_without_ordering",
-        rts(&["--frames", "5", "--inject-input", &cancel_script]),
-    ) else {
-        return;
-    };
-    let Some(x_baseline) = or_skip(
-        "a_right_click_cancels_the_ghost_without_ordering",
-        rts(&["--frames", "5", "--inject-input", x_script]),
+        rts(&["--frames", "7", "--inject-input", &cancel_script]),
     ) else {
         return;
     };
     cancelled.assert_success();
-    x_baseline.assert_success();
     assert_eq!(
         cancelled.exit_field("buildings"),
         "1",
         "{cancelled}\na right click while a ghost was pending must not have built anything"
-    );
-    assert_eq!(
-        cancelled.final_hash(),
-        x_baseline.final_hash(),
-        "{cancelled}\n{x_baseline}\ncancelling via right click must match cancelling via `x`"
     );
 }
 
 #[test]
 fn a_produces_a_worker_at_the_hq() {
     let p = fmt_xy(hq_click_screen());
-    let script = format!("1:move:{p};2:lclick:{p};3:key:a");
+    let script = format!("1:move:{p};2:lclick:{p};3:key:q");
     let Some(cli) = or_skip(
         "a_produces_a_worker_at_the_hq",
         rts(&["--frames", "400", "--inject-input", &script]),
@@ -941,6 +950,18 @@ fn a_produces_a_worker_at_the_hq() {
         "{cli}\nexpected 6 + 1 workers"
     );
     assert_eq!(cli.exit_field("crystal"), "250", "{cli}\nexpected 300 - 50");
+}
+
+#[test]
+fn exit_line_reports_settings_scroll_px() {
+    let Some(cli) = or_skip(
+        "exit_line_reports_settings_scroll_px",
+        rts(&["--frames", "1"]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_field("settings_scroll_px"), "0", "{cli}");
 }
 
 #[test]
@@ -1222,7 +1243,7 @@ fn usage_error_exits_with_code_two() {
 /// desktop with `confine_pointer: true`.
 #[test]
 fn the_window_is_released_before_it_drops() {
-    let home = seeded_settings_home("the_window_is_released_before_it_drops");
+    let home = seeded_settings_home("the_window_is_released_before_it_drops", true);
     let mut cmd = app_bin();
     cmd.args(["rts", "--frames", "600", "--inject-input", "4:quit"]);
     cmd.env("HOME", &home);
@@ -1270,8 +1291,8 @@ fn the_window_is_released_before_it_drops() {
 // 6. HUD routing and the minimap (T12)
 // ---------------------------------------------------------------------------
 
-/// A point inside the top-right settings gear — HUD chrome, no world
-/// meaning.
+/// A point inside the top-right MENU control — HUD chrome, no world meaning.
+/// Canonical acceptance coordinate `[1888, 24]` stays inside `HudLayout::MENU`.
 fn gear_click_screen() -> [f32; 2] {
     [1888.0, 24.0]
 }
@@ -1361,11 +1382,11 @@ fn hud_rally_arms_and_waits_for_the_next_world_click() {
     // exactly one tick (the paused frame the menu was open), so `via_gear`
     // gets one extra frame budget to reach the same tick count as `direct`.
     let via_gear =
-        format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:key:esc;6:lclick:{target}");
+        format!("1:move:{hq};2:lclick:{hq};3:key:c;4:lclick:{gear};5:key:esc;6:lclick:{target}");
     // Same, without the intervening HUD/menu detour.
-    let direct = format!("1:move:{hq};2:lclick:{hq};3:key:r;5:lclick:{target}");
+    let direct = format!("1:move:{hq};2:lclick:{hq};3:key:c;5:lclick:{target}");
     // Arm rally, detour through the menu, but no world click ever arrives.
-    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:r;4:lclick:{gear};5:key:esc");
+    let armed_only = format!("1:move:{hq};2:lclick:{hq};3:key:c;4:lclick:{gear};5:key:esc");
 
     let Some(via_gear) = or_skip(
         "hud_rally_arms_and_waits_for_the_next_world_click",
@@ -1470,9 +1491,9 @@ fn pause_menu_settings_screen() -> [f32; 2] {
     [960.0, 540.0]
 }
 
-/// Inside the settings panel's `Back` control.
+/// Inside the settings panel's `Back` control (`HudLayout::SETTINGS_BACK_BTN`).
 fn settings_back_screen() -> [f32; 2] {
-    [632.0, 928.0]
+    [552.0, 928.0]
 }
 
 #[test]
@@ -1580,6 +1601,47 @@ fn menu_settings_button_navigates_and_back_returns() {
         cli.exit_field("paused"),
         "false",
         "{cli}\nSettings -> Back -> Escape must fully close the menu"
+    );
+}
+
+/// Keyboard-pan track left/right ends (engine `KEYBOARD_PAN_TRACK`).
+fn keyboard_pan_track_point(value: u32) -> [f32; 2] {
+    // KEYBOARD_PAN_TRACK = [568, 276, 784, 24]; pan 6..=96 step 6.
+    const X: f32 = 568.0;
+    const W: f32 = 784.0;
+    const Y: f32 = 277.0;
+    let frac = (value as f32 - 6.0) / (96.0 - 6.0);
+    [X + frac * W, Y]
+}
+
+#[test]
+fn scripted_slider_drag_commits_keyboard_pan_memory_only() {
+    // Open settings, drag keyboard pan 48 → 72, leave the panel open.
+    let settings_btn = fmt_xy(pause_menu_settings_screen());
+    let a = fmt_xy(keyboard_pan_track_point(48));
+    let b = fmt_xy(keyboard_pan_track_point(72));
+    let script = format!("2:key:esc;3:lclick:{settings_btn};4:drag:{a},{b}");
+    let Some(cli) = or_skip(
+        "scripted_slider_drag_commits_keyboard_pan_memory_only",
+        rts(&["--frames", "6", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("keyboard_pan"),
+        "72",
+        "{cli}\nscripted slider drag must publish the final snapped value"
+    );
+    assert_eq!(
+        cli.exit_field("ui_page"),
+        "settings",
+        "{cli}\ndrag must not close settings or fall through to the world"
+    );
+    assert_eq!(
+        cli.exit_field("selected"),
+        "0",
+        "{cli}\nslider drag must never box-select the world"
     );
 }
 
@@ -1908,5 +1970,96 @@ fn audio_offscreen_survives_invalid_audio_driver() {
     assert!(
         cli.stdout.lines().any(|l| l.starts_with("rts: audio ")),
         "{cli}\nan offscreen run must still report the (fake-sink) audio trace"
+    );
+}
+
+/// A left click while the ghost cursor covers the HQ (no valid snap within one
+/// footprint width) is a no-op: the ghost stays pending and no building appears.
+#[test]
+fn a_red_click_with_no_snap_is_a_noop() {
+    // Select the worker, open the Depot ghost (W key), then click at the HQ
+    // footprint centre (cell 166,166). ghost_min_corner → (162,162); every
+    // Depot candidate within radius 8 still overlaps the 12x12 HQ footprint,
+    // so no snap is found and the click is a no-op.
+    let w = fmt_xy(worker_screen());
+    // HQ footprint min=(160,160), edge=12, centre=(166,166).
+    let hq_centre = fmt_xy(screen_of(166.5, 166.5));
+    let script = format!("1:move:{w};2:lclick:{w};3:key:w;4:move:{hq_centre};5:lclick:{hq_centre}");
+    let Some(cli) = or_skip(
+        "a_red_click_with_no_snap_is_a_noop",
+        rts(&["--frames", "7", "--inject-input", &script]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("buildings"),
+        "1",
+        "{cli}\na red click with no valid snap must not place a building"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T15: replay isolation for the focused feedback-polish script
+// ---------------------------------------------------------------------------
+
+/// The focused script's `show_grid=false` exit token must be a property of the
+/// *script*, never of whoever ran it.
+///
+/// The script toggles SHOW GRID exactly once, so the token it ends on is
+/// entirely decided by the value the run *started* from. Two independent
+/// guards make that value `true` regardless of this machine: a non-interactive
+/// video driver never resolves a pref path at all, and `replay_settings`
+/// normalises `gameplay` to defaults for any scripted run. This case seeds a
+/// persisted `show_grid: false` into a sentinel `HOME`/`XDG_DATA_HOME` and
+/// proves the run still ends on `false` — if either guard were dropped the run
+/// would start from `false` and the one toggle would end on `true`.
+#[test]
+fn focused_script_is_independent_of_persisted_gameplay_settings() {
+    const CASE: &str = "focused_script_is_independent_of_persisted_gameplay_settings";
+    const FOCUSED: &str = "assets/scenarios/rts_feedback_polish_v1.script";
+    let home = seeded_settings_home(CASE, false);
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_millions_must_die"));
+    cmd.args(["rts", "--frames", "300", "--inject-input-file", FOCUSED]);
+    cmd.env("HOME", &home);
+    cmd.env("XDG_DATA_HOME", &home);
+    cmd.env("SDL_VIDEODRIVER", "offscreen");
+    cmd.env_remove("MMD_RTS_FRAMES");
+    cmd.env_remove("MMD_RTS_ONCE");
+    let Some(cli) = or_skip(
+        CASE,
+        run_to_completion(
+            cmd,
+            format!(
+                "HOME=<sentinel show_grid:false> rts --frames 300 --inject-input-file {FOCUSED}"
+            ),
+        ),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_field("show_grid"),
+        "false",
+        "{cli}\nthe focused run read this machine's persisted show_grid: it started from \
+         `false`, so its single toggle ended on `true`"
+    );
+    assert_eq!(
+        cli.exit_field("keyboard_pan"),
+        "78",
+        "{cli}\nthe slider drag did not land, so the show_grid claim above is not about \
+         a run that reached the settings panel"
+    );
+    // The persisted file is also untouched: a replay has no store to save
+    // through, so a scripted settings edit can never be written back.
+    let persisted = std::fs::read_to_string(
+        home.join(SETTINGS_ORG_DIR)
+            .join("MillionsMustDie")
+            .join("settings-v1.json"),
+    )
+    .expect("read the seeded settings file");
+    assert!(
+        persisted.contains("\"show_grid\": false"),
+        "the replay wrote its own scripted settings back over the seeded file:\n{persisted}"
     );
 }

@@ -11,8 +11,8 @@ use mmd_engine::rts::{
     BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, BuildingKind, DEPOT_BUILD_TICKS,
     DEPOT_COST, DEPOT_SUPPLY_GRANT, EntityId, EntityKind, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
     IssuedOrder, OWNER_PLAYER, Order, OrderReceiptBuffer, Placement, PlacementError, ResourceKind,
-    Resources, Supply, UnitKind, UnitOrderReceipt, build_ticks, building_cost, placement_valid,
-    supply_grant,
+    Resources, Supply, UnitKind, UnitOrderReceipt, build_ticks, building_cost, ghost_min_corner,
+    placement_candidate, placement_valid, supply_grant,
 };
 use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP};
 use mmd_engine::testkit::RtsHarness;
@@ -1053,4 +1053,160 @@ fn later_completion_sees_earlier_building() {
         }
     }
     assert_every_body_is_legal(&h);
+}
+
+// --- T10: placement_candidate -------------------------------------------------
+
+#[test]
+fn valid_raw_placement_is_unchanged() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    assert_eq!(cand.min, CLEAR_CORNER, "clear raw returns unchanged min");
+    assert!(cand.valid);
+}
+
+#[test]
+fn blocked_raw_snaps_to_nearest_valid_footprint() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    // Place a site at CLEAR_CORNER, blocking it.
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
+
+    // Cursor whose raw min == CLEAR_CORNER is now blocked.
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    assert!(cand.valid, "snap must find a nearby valid cell");
+    assert_ne!(
+        cand.min, CLEAR_CORNER,
+        "must not return the blocked raw min"
+    );
+
+    let edge = BuildingKind::Depot.footprint_cells() as i64;
+    let dx = cand.min.x as i64 - CLEAR_CORNER.x as i64;
+    let dy = cand.min.y as i64 - CLEAR_CORNER.y as i64;
+    assert!(
+        dx.abs() <= edge && dy.abs() <= edge,
+        "snap within one footprint width"
+    );
+    assert!(
+        placement_valid(h.world(), BuildingKind::Depot, cand.min).is_ok(),
+        "snapped position must be valid"
+    );
+}
+
+#[test]
+fn ranking_reference_is_the_saturated_raw_min_corner() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    // Edge 8 (Depot). cursor (1,1) and (4,4) both saturate to raw (0,0).
+    let edge = BuildingKind::Depot.footprint_cells();
+    assert_eq!(
+        ghost_min_corner(Cell { x: 1, y: 1 }, edge),
+        Cell { x: 0, y: 0 }
+    );
+    assert_eq!(
+        ghost_min_corner(Cell { x: 4, y: 4 }, edge),
+        Cell { x: 0, y: 0 }
+    );
+
+    let cand_a = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 1, y: 1 });
+    let cand_b = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 4, y: 4 });
+    assert_eq!(
+        cand_a, cand_b,
+        "different cursors with identical saturated raw must produce identical candidates"
+    );
+}
+
+#[test]
+fn candidate_tie_uses_lowest_flat_index() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    // Block CLEAR_CORNER so the search activates.
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
+
+    let width = h.world().scenario().width();
+    // Cursor giving raw = CLEAR_CORNER. Four equidistant candidates (dist2=64):
+    // (172,176), (188,176), (180,168), (180,184).
+    // Lowest flat: 180 + 168*320 = 53940 → (180, 168).
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    assert!(cand.valid);
+    let winner_flat = cand.min.x as u64 + cand.min.y as u64 * width as u64;
+    // All equidistant candidates at dist2=64 have flat >= 53940.
+    assert_eq!(
+        cand.min,
+        Cell { x: 180, y: 168 },
+        "lowest flat index among equidistant candidates must win"
+    );
+    let _ = winner_flat;
+}
+
+#[test]
+fn candidate_never_exceeds_one_footprint_width() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
+
+    let cursor = Cell { x: 184, y: 180 };
+    let edge = BuildingKind::Depot.footprint_cells();
+    let raw = ghost_min_corner(cursor, edge);
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor);
+
+    if cand.valid {
+        let dx = (cand.min.x as i64 - raw.x as i64).abs();
+        let dy = (cand.min.y as i64 - raw.y as i64).abs();
+        assert!(dx <= edge as i64, "snap dx {dx} exceeds edge {edge}");
+        assert!(dy <= edge as i64, "snap dy {dy} exceeds edge {edge}");
+    }
+}
+
+#[test]
+fn map_edge_search_is_safe() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    // Cursor at map corner — no panic, saturates safely.
+    let _ = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 0, y: 0 });
+    let _ = placement_candidate(h.world(), BuildingKind::Hq, Cell { x: 0, y: 0 });
+}
+
+#[test]
+fn no_nearby_candidate_returns_raw_invalid() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    // HQ at [160,172)x[160,172). Depot cursor at HQ centre: raw=(162,162).
+    // Any Depot min within radius 8 of (162,162) still overlaps the HQ.
+    let cursor = Cell { x: 166, y: 166 };
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor);
+    assert_eq!(
+        cand.min,
+        ghost_min_corner(cursor, BuildingKind::Depot.footprint_cells()),
+        "no snap: raw min returned"
+    );
+    assert!(!cand.valid, "no nearby candidate: must be invalid");
+}
+
+#[test]
+fn red_preview_click_is_noop() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let resources_before = h.world().resources();
+
+    // Cursor at HQ centre: no valid candidate.
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 166, y: 166 });
+    assert!(!cand.valid);
+
+    // Confirm_placement with the invalid raw min must fail (placement_valid rejects it).
+    let w0 = first_worker(&h);
+    let result = h.world_mut().confirm_placement(cand.min, w0);
+    assert!(result.is_err(), "confirm on invalid position must fail");
+    assert_eq!(
+        h.world().resources(),
+        resources_before,
+        "no debit on failed confirm"
+    );
+    assert_eq!(
+        h.world().placement(),
+        Placement::Pending {
+            kind: BuildingKind::Depot
+        },
+        "ghost must remain pending"
+    );
 }

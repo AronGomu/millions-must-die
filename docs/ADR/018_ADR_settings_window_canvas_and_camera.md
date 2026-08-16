@@ -120,3 +120,22 @@ pans at the documented speed.
 ## Validation contract
 
 Tests cover schema/defaults/fallback/recovery/offscreen isolation; exact aspect rect/HiDPI inverse/bar semantics; pure window sequences/rollback/focus clear; projected frontier/split speeds/look-at; per-frame depth uniforms; unchanged phase0 golden.
+
+## Amendment 2026-08-15 — settings surface, schema and scripted normalisation
+
+Supplemented by
+[ADR 021](021_ADR_rts_feedback_polish_and_gather_collision.md), which extends
+this record without changing what it decided:
+
+- The settings panel widens to `[440,100,1040,880]` with a scrolled body
+  viewport `[456,160,1008,720]`; the pan tracks, the checkbox squares and the
+  meaning of `[1170,288]` are unchanged, and Back stays fixed outside the
+  scroll transform.
+- Schema stays `1` at the same path. `gameplay.show_grid` and the four
+  `audio.*_muted` flags are additive serde-defaulted fields, so a phase-1.1
+  file loads with its values intact.
+- Every numeric setting gains a live snapped slider and a three-digit typed
+  field; both commit through the transaction this ADR already defined.
+- A **scripted** run now normalises `gameplay` settings to defaults exactly as
+  this record already normalises the camera, because `show_grid` reaches the
+  observed exit line.

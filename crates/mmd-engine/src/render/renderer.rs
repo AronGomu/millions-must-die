@@ -590,10 +590,11 @@ impl SpriteRenderer {
     /// so a unit standing in front of a ring never hides it and a panel is
     /// never occluded by a world annotation.
     ///
-    /// For the overlay the fragment stage picks the ring branch off a sentinel
-    /// in `uv_rect` ([`SpriteInstance::ring`]), so the texture bound for that
-    /// draw is never sampled; slot 0 is bound anyway because the pipeline
-    /// declares one sampler and a draw must not leave it unbound.
+    /// For the overlay the fragment stage picks the ring or diagonal-line branch
+    /// off a sentinel in `uv_rect` ([`SpriteInstance::ring`],
+    /// [`SpriteInstance::diagonal_line`]), so the texture bound for that draw is
+    /// never sampled; slot 0 is bound anyway because the pipeline declares one
+    /// sampler and a draw must not leave it unbound.
     fn draw_scene_into(
         &mut self,
         scene: ScenePass<'_>,

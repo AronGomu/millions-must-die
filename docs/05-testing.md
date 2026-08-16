@@ -58,6 +58,38 @@ Window modes, pointer confinement and audible output are proven as state
 sequences and API calls only, and are checked by hand against
 `ai_artefacts/manual_test_checklist.md`.
 
+## Feedback-polish scope
+
+The feedback-polish slice extends phase 1.1 on the same terms: **functional
+scope only**, eighteen systems, each covered by named automated tests, plus a
+second tracked script that drives the new chrome path end to end through the
+shipped binary. Performance stays unmeasured.
+
+The map, the automated/manual split, the collision invariant as it now stands
+and the one open regression are in the
+[feedback-polish functional close](rts-feedback-polish-functional-close.md).
+Seven more tests in `tests/validation_contract.rs` hold that page and its
+neighbours to the code: `feedback_polish_close_names_only_real_tests`,
+`feedback_polish_systems_have_behavioral_tests`,
+`feedback_polish_adr_is_accepted_and_amended_forward`,
+`feedback_polish_architecture_page_is_landed_with_evidence`,
+`rts_overlap_invariant_names_its_gather_exception`,
+`glossary_defines_the_feedback_polish_vocabulary` and
+`manual_checklist_covers_every_human_only_flow`.
+
+`rts_overlap_invariant_names_its_gather_exception` is the load-bearing one:
+ADR 021 narrowed ADR 017, so a live doc promising that no tick leaves two RTS
+bodies merged — without the gather exception — now describes an engine that
+does not exist, and would make a correct run look broken.
+
+The gate was **red on three `crates/mmd-engine/tests/rts_economy.rs` tests**
+for part of this branch's life: the building sprite ∪ footprint pick let a
+building win a click on a resource node centre it covers. That was a regression
+this branch introduced at `af16e7c`, not a pre-existing red gate — `af16e7c` is
+not an ancestor of `main`. It is **fixed**: `pick_at` ranks exact shapes above
+a building's sprite quad, so the three tests are green again with their
+original expectations. See the close doc for the tie rule.
+
 ## Required merge gate
 
 Every command here is deterministic and behavioural. None consumes a
@@ -102,6 +134,19 @@ asserts behaviour, an exit line and an exit code — it consumes no measurement
 number, and a scripted event that never fires fails it. The frame budget is
 part of the contract: `required_gate_keeps_phase_smokes` refuses a shortened
 run or an untracked script.
+
+A second tracked script, `assets/scenarios/rts_feedback_polish_v1.script`,
+drives the chrome path the canonical run deliberately does not carry: select
+the HQ by its own footprint corner, queue a Worker with the positional `q`,
+open the menu, open Settings, drag a slider onto an exact step, toggle the
+world grid, scroll the body with the wheel, Back, Close Menu, quit. It is not a
+separate gate line — `cargo test --workspace --locked` runs it from
+`tests/rts_acceptance.rs`, asserting the settings tokens on the exit line
+(`settings_scroll_px=`, `show_grid=`), the six accepted pointer activations and
+that the sim resumed after the menu closed. Keeping it out of the canonical
+script is deliberate: that run's pinned audio counters are phase-1.1 evidence,
+and re-timing them to carry menu clicks would rewrite the evidence instead of
+adding to it.
 
 `cargo run -p xtask -- audio --check` (phase 1.1) regenerates every tracked
 WAV and its manifest from integer code and byte-compares them, so drifted audio

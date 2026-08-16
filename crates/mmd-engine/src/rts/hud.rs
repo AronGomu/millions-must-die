@@ -10,11 +10,13 @@
 //! a HUD is entirely textured, so every push here lands in one of
 //! [`RtsFrame::ui`]'s five groups (worker, soldier, building, props, font).
 
-use crate::render::{DrawGroup, GLYPH_H_PX, SpriteInstance, frame_uv_rect, push_text};
+use crate::render::{DrawGroup, GLYPH_H_PX, GLYPH_W_PX, SpriteInstance, frame_uv_rect, push_text};
 
+use super::build::supply_grant;
 use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
 use super::minimap::minimap_projection;
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
+use super::production::produce_ticks;
 use super::world::RtsWorld;
 
 /// Every fixed logical-space rect the HUD's chrome occupies.
@@ -26,8 +28,12 @@ pub struct HudLayout;
 impl HudLayout {
     /// Top resource bar.
     pub const TOP_BAR: [f32; 4] = [0.0, 0.0, 1920.0, 40.0];
-    /// Settings gear, top-right of the top bar.
-    pub const GEAR: [f32; 4] = [1872.0, 8.0, 32.0, 32.0];
+    /// Framed `MENU` text control, top-right of the top bar.
+    ///
+    /// 4 glyphs × `GLYPH_W_PX * PANEL_TEXT_SCALE` = 64 px of text, drawn at
+    /// `[1840, 20]`; `[1888, 24]` stays inside and the right edge at 1912
+    /// stays inside the 1920 logical edge.
+    pub const MENU: [f32; 4] = [1832.0, 8.0, 80.0, 32.0];
     /// Bottom command panel, the whole strip.
     pub const BOTTOM_PANEL: [f32; 4] = [0.0, 840.0, 1920.0, 240.0];
     /// Minimap frame, left of the bottom panel.
@@ -41,19 +47,116 @@ impl HudLayout {
     /// The 3x3 command grid, inset to the right of [`Self::COMMAND_PANEL`].
     pub const COMMAND_GRID: [f32; 4] = [1696.0, 856.0, 208.0, 208.0];
 
-    /// The paused one-button gear/Escape menu (`T13`).
+    /// The paused Escape menu (`T13`/`T1`).
     pub const PAUSE_MENU: [f32; 4] = [720.0, 408.0, 480.0, 264.0];
-    /// The pause menu's only actionable control.
+    /// Pause menu Settings button — unmoved so `lclick:960,540` still opens it.
     pub const PAUSE_MENU_SETTINGS_BTN: [f32; 4] = [800.0, 508.0, 320.0, 64.0];
-    /// The nested settings panel (`T13`).
-    pub const SETTINGS_PANEL: [f32; 4] = [520.0, 100.0, 880.0, 880.0];
-    /// Settings panel's Back control.
-    pub const SETTINGS_BACK_BTN: [f32; 4] = [552.0, 900.0, 160.0, 56.0];
+    /// Pause menu Close Menu button, directly below Settings.
+    pub const PAUSE_MENU_CLOSE_BTN: [f32; 4] = [800.0, 588.0, 320.0, 64.0];
+    /// Nested settings panel — widened for value fields + scrollbar (`T1`).
+    pub const SETTINGS_PANEL: [f32; 4] = [440.0, 100.0, 1040.0, 880.0];
+    /// Settings panel Back control (fixed footer below the body viewport).
+    pub const SETTINGS_BACK_BTN: [f32; 4] = [472.0, 900.0, 160.0, 56.0];
+    /// Scrollable settings body viewport (`T6` adds scroll/clip behaviour).
+    pub const SETTINGS_BODY_VIEWPORT: [f32; 4] = [456.0, 160.0, 1008.0, 720.0];
+    /// Settings body scrollbar track (`T6` adds thumb behaviour).
+    pub const SETTINGS_SCROLLBAR_TRACK: [f32; 4] = [1432.0, 160.0, 16.0, 720.0];
+}
+
+/// Total content height of the scrollable settings body (y 160..1008).
+pub const SETTINGS_CONTENT_HEIGHT_PX: f32 = 848.0;
+/// Logical pixels scrolled per wheel notch.
+pub const SETTINGS_SCROLL_STEP_PX: f32 = 72.0;
+/// Minimum scrollbar thumb height.
+pub const SETTINGS_SCROLLBAR_MIN_THUMB_PX: f32 = 48.0;
+
+/// Maximum allowed scroll offset: content overrun beyond the viewport, floored at 0.
+pub fn settings_max_scroll() -> f32 {
+    (SETTINGS_CONTENT_HEIGHT_PX - HudLayout::SETTINGS_BODY_VIEWPORT[3]).max(0.0)
+}
+
+/// Clamp a scroll offset into `0.0..=settings_max_scroll()`.
+pub fn clamp_settings_scroll(v: f32) -> f32 {
+    v.clamp(0.0, settings_max_scroll())
+}
+
+/// Scrollbar thumb rect for the given scroll `offset`.
+///
+/// Thumb top is exactly at the viewport top when `offset == 0`; thumb bottom
+/// is exactly at the viewport bottom when `offset == settings_max_scroll()`.
+pub fn settings_scrollbar_thumb(offset: f32) -> [f32; 4] {
+    let vp = HudLayout::SETTINGS_BODY_VIEWPORT;
+    let track = HudLayout::SETTINGS_SCROLLBAR_TRACK;
+    let viewport_h = vp[3];
+    let thumb_len =
+        (viewport_h * viewport_h / SETTINGS_CONTENT_HEIGHT_PX).max(SETTINGS_SCROLLBAR_MIN_THUMB_PX);
+    let travel = viewport_h - thumb_len;
+    let max = settings_max_scroll();
+    let thumb_y = if max > 0.0 {
+        vp[1] + offset / max * travel
+    } else {
+        vp[1]
+    };
+    [track[0], thumb_y, track[2], thumb_len]
+}
+
+/// Clamp-and-crop a [`SpriteInstance`] to `clip`.
+///
+/// Returns `None` when the instance is fully outside. For partial overlap,
+/// adjusts `pos`, `size`, and `uv_rect` proportionally. Never call on
+/// ring-sentinel instances (negative `uv_rect[0]`).
+pub fn clip_sprite_to_rect(inst: SpriteInstance, clip: [f32; 4]) -> Option<SpriteInstance> {
+    let x0 = inst.pos[0];
+    let y0 = inst.pos[1];
+    let w = inst.size[0];
+    let h = inst.size[1];
+    let x1 = x0 + w;
+    let y1 = y0 + h;
+    let cx0 = clip[0];
+    let cy0 = clip[1];
+    let cx1 = cx0 + clip[2];
+    let cy1 = cy0 + clip[3];
+    if x1 <= cx0 || x0 >= cx1 || y1 <= cy0 || y0 >= cy1 {
+        return None;
+    }
+    let new_x0 = x0.max(cx0);
+    let new_y0 = y0.max(cy0);
+    let new_x1 = x1.min(cx1);
+    let new_y1 = y1.min(cy1);
+    let [u0, v0, u1, v1] = inst.uv_rect;
+    let uw = u1 - u0;
+    let vh = v1 - v0;
+    let new_u0 = if w > 0.0 {
+        u0 + (new_x0 - x0) / w * uw
+    } else {
+        u0
+    };
+    let new_u1 = if w > 0.0 {
+        u1 - (x1 - new_x1) / w * uw
+    } else {
+        u1
+    };
+    let new_v0 = if h > 0.0 {
+        v0 + (new_y0 - y0) / h * vh
+    } else {
+        v0
+    };
+    let new_v1 = if h > 0.0 {
+        v1 - (y1 - new_y1) / h * vh
+    } else {
+        v1
+    };
+    Some(SpriteInstance {
+        pos: [new_x0, new_y0],
+        size: [new_x1 - new_x0, new_y1 - new_y0],
+        uv_rect: [new_u0, new_v0, new_u1, new_v1],
+        tint: inst.tint,
+    })
 }
 
 /// Settings rows share one left margin/width inside [`HudLayout::SETTINGS_PANEL`]
-/// (`520 + 48` .. `520 + 880 - 48`), so every row lines up under the panel's
-/// own left/right padding.
+/// so every row lines up under the panel's own left/right padding. Unchanged
+/// from T13 so `snap_track` still reads 78 at x=1170 on the keyboard pan track.
 const ROW_X: f32 = 568.0;
 const ROW_W: f32 = 784.0;
 
@@ -72,10 +175,44 @@ pub const KEYBOARD_PAN_TRACK: [f32; 4] = [ROW_X, 276.0, ROW_W, 24.0];
 pub const EDGE_PAN_TRACK: [f32; 4] = [ROW_X, 372.0, ROW_W, 24.0];
 pub const CONFINE_CHECKBOX: [f32; 4] = [ROW_X, 468.0, 32.0, 32.0];
 pub const FOCUS_CHECKBOX: [f32; 4] = [ROW_X, 516.0, 32.0, 32.0];
-pub const MASTER_TRACK: [f32; 4] = [ROW_X, 584.0, ROW_W, 24.0];
-pub const MUSIC_TRACK: [f32; 4] = [ROW_X, 656.0, ROW_W, 24.0];
-pub const VOICE_TRACK: [f32; 4] = [ROW_X, 728.0, ROW_W, 24.0];
-pub const SFX_TRACK: [f32; 4] = [ROW_X, 800.0, ROW_W, 24.0];
+pub const GRID_CHECKBOX: [f32; 4] = [ROW_X, 564.0, 32.0, 32.0];
+/// Full-width label-row hit target for each checkbox-style control (the T1
+/// contract: the label row is the control, not only the 32px square).
+pub const CONFINE_CONTROL_RECT: [f32; 4] = [ROW_X, 468.0, ROW_W, 32.0];
+pub const FOCUS_CONTROL_RECT: [f32; 4] = [ROW_X, 516.0, ROW_W, 32.0];
+pub const GRID_CONTROL_RECT: [f32; 4] = [ROW_X, 564.0, ROW_W, 32.0];
+/// Audio block on a 96 px pitch so value fields / mute labels fit (`T1`).
+pub const MASTER_TRACK: [f32; 4] = [ROW_X, 680.0, ROW_W, 24.0];
+pub const MUSIC_TRACK: [f32; 4] = [ROW_X, 776.0, ROW_W, 24.0];
+pub const VOICE_TRACK: [f32; 4] = [ROW_X, 872.0, ROW_W, 24.0];
+pub const SFX_TRACK: [f32; 4] = [ROW_X, 968.0, ROW_W, 24.0];
+/// Numeric value field geometry — one field per slider row, right of the track.
+pub const VALUE_FIELD_X: f32 = 1368.0;
+pub const VALUE_FIELD_W: f32 = 56.0;
+pub const VALUE_FIELD_H: f32 = 24.0;
+/// Mute label row geometry — one label per audio channel, above its track.
+pub const MUTE_LABEL_W: f32 = 240.0;
+pub const MUTE_LABEL_H: f32 = 32.0;
+/// Pinned mute-label rects `[x, track_y - 40, 240, 32]` for Master/Music/Voice/Sfx.
+pub const MUTE_LABEL_RECTS: [[f32; 4]; 4] = [
+    [568.0, 640.0, 240.0, 32.0],
+    [568.0, 736.0, 240.0, 32.0],
+    [568.0, 832.0, 240.0, 32.0],
+    [568.0, 928.0, 240.0, 32.0],
+];
+pub const MUTE_LABELS: [&str; 4] = ["MASTER", "MUSIC", "VOICE", "SFX"];
+pub const MUTE_LABELS_MUTED: [&str; 4] =
+    ["MASTER MUTED", "MUSIC MUTED", "VOICE MUTED", "SFX MUTED"];
+
+/// Value-field rect for a slider track row: `[VALUE_FIELD_X, track_y, 56, 24]`.
+pub fn value_field_rect(track: [f32; 4]) -> [f32; 4] {
+    [VALUE_FIELD_X, track[1], VALUE_FIELD_W, VALUE_FIELD_H]
+}
+
+/// Mute-label rect for an audio track: `[ROW_X, track_y - 40, 240, 32]`.
+pub fn mute_label_rect(track: [f32; 4]) -> [f32; 4] {
+    [ROW_X, track[1] - 40.0, MUTE_LABEL_W, MUTE_LABEL_H]
+}
 
 /// Keyboard/edge pan bounds — must match `crate::rts_settings`'s
 /// `PAN_MIN`/`PAN_MAX`/`PAN_STEP` (schema-1 contract, duplicated here so this
@@ -89,9 +226,193 @@ pub const VOLUME_MIN: u32 = 0;
 pub const VOLUME_MAX: u32 = 100;
 pub const VOLUME_STEP: u32 = 5;
 
+/// Stable identity of one numeric settings row (slider + future value field).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NumericSettingId {
+    KeyboardPan,
+    EdgePan,
+    Master,
+    Music,
+    Voice,
+    Sfx,
+}
+
+/// Geometry + snap domain for one numeric settings row (`T3`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct NumericSettingSpec {
+    pub id: NumericSettingId,
+    pub label: &'static str,
+    pub min: u32,
+    pub max: u32,
+    pub step: u32,
+    pub track: [f32; 4],
+    pub value_field: [f32; 4],
+}
+
+/// The six live-draggable numeric rows. Rects equal the pinned track/field
+/// constants — asserted by tests, never re-derived by callers.
+pub const NUMERIC_SETTING_SPECS: [NumericSettingSpec; 6] = [
+    NumericSettingSpec {
+        id: NumericSettingId::KeyboardPan,
+        label: "KEYBOARD PAN",
+        min: PAN_MIN,
+        max: PAN_MAX,
+        step: PAN_STEP,
+        track: KEYBOARD_PAN_TRACK,
+        value_field: [VALUE_FIELD_X, 276.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::EdgePan,
+        label: "EDGE PAN",
+        min: PAN_MIN,
+        max: PAN_MAX,
+        step: PAN_STEP,
+        track: EDGE_PAN_TRACK,
+        value_field: [VALUE_FIELD_X, 372.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Master,
+        label: "MASTER",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: MASTER_TRACK,
+        value_field: [VALUE_FIELD_X, 680.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Music,
+        label: "MUSIC",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: MUSIC_TRACK,
+        value_field: [VALUE_FIELD_X, 776.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Voice,
+        label: "VOICE",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: VOICE_TRACK,
+        value_field: [VALUE_FIELD_X, 872.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+    NumericSettingSpec {
+        id: NumericSettingId::Sfx,
+        label: "SFX",
+        min: VOLUME_MIN,
+        max: VOLUME_MAX,
+        step: VOLUME_STEP,
+        track: SFX_TRACK,
+        value_field: [VALUE_FIELD_X, 968.0, VALUE_FIELD_W, VALUE_FIELD_H],
+    },
+];
+
+/// Slider thumb width in logical px.
+pub const SLIDER_THUMB_W_PX: f32 = 16.0;
+/// Thumb overhang above/below the track (thumb is 4px taller each side).
+pub const SLIDER_THUMB_OVERHANG_PX: f32 = 4.0;
+/// Empty track tint, premultiplied.
+pub const SLIDER_TRACK_TINT: [f32; 4] = [0.35, 0.35, 0.40, 1.00];
+/// Filled range tint, premultiplied.
+pub const SLIDER_FILL_TINT: [f32; 4] = [0.95, 0.85, 0.30, 1.00];
+/// Thumb tint, premultiplied.
+pub const SLIDER_THUMB_TINT: [f32; 4] = [0.98, 0.98, 0.98, 1.00];
+
+impl NumericSettingId {
+    /// Spec row for this id (exhaustive table index).
+    pub fn spec(self) -> &'static NumericSettingSpec {
+        match self {
+            Self::KeyboardPan => &NUMERIC_SETTING_SPECS[0],
+            Self::EdgePan => &NUMERIC_SETTING_SPECS[1],
+            Self::Master => &NUMERIC_SETTING_SPECS[2],
+            Self::Music => &NUMERIC_SETTING_SPECS[3],
+            Self::Voice => &NUMERIC_SETTING_SPECS[4],
+            Self::Sfx => &NUMERIC_SETTING_SPECS[5],
+        }
+    }
+
+    /// Stable slider [`ControlId`] for this numeric row.
+    pub fn slider_control(self) -> ControlId {
+        match self {
+            Self::KeyboardPan => ControlId::KeyboardPanSlider,
+            Self::EdgePan => ControlId::EdgePanSlider,
+            Self::Master => ControlId::MasterSlider,
+            Self::Music => ControlId::MusicSlider,
+            Self::Voice => ControlId::VoiceSlider,
+            Self::Sfx => ControlId::SfxSlider,
+        }
+    }
+
+    /// Stable value-field [`ControlId`] for this numeric row.
+    pub fn field_control(self) -> ControlId {
+        match self {
+            Self::KeyboardPan => ControlId::KeyboardPanField,
+            Self::EdgePan => ControlId::EdgePanField,
+            Self::Master => ControlId::MasterField,
+            Self::Music => ControlId::MusicField,
+            Self::Voice => ControlId::VoiceField,
+            Self::Sfx => ControlId::SfxField,
+        }
+    }
+}
+
+/// Map a stable value-field control back to its numeric id.
+pub fn numeric_id_from_field_control(id: ControlId) -> Option<NumericSettingId> {
+    match id {
+        ControlId::KeyboardPanField => Some(NumericSettingId::KeyboardPan),
+        ControlId::EdgePanField => Some(NumericSettingId::EdgePan),
+        ControlId::MasterField => Some(NumericSettingId::Master),
+        ControlId::MusicField => Some(NumericSettingId::Music),
+        ControlId::VoiceField => Some(NumericSettingId::Voice),
+        ControlId::SfxField => Some(NumericSettingId::Sfx),
+        _ => None,
+    }
+}
+
+/// Map a stable slider control back to its numeric id.
+pub fn numeric_id_from_slider_control(id: ControlId) -> Option<NumericSettingId> {
+    match id {
+        ControlId::KeyboardPanSlider => Some(NumericSettingId::KeyboardPan),
+        ControlId::EdgePanSlider => Some(NumericSettingId::EdgePan),
+        ControlId::MasterSlider => Some(NumericSettingId::Master),
+        ControlId::MusicSlider => Some(NumericSettingId::Music),
+        ControlId::VoiceSlider => Some(NumericSettingId::Voice),
+        ControlId::SfxSlider => Some(NumericSettingId::Sfx),
+        _ => None,
+    }
+}
+
+/// Clamp `value` into `min..=max`, then snap to nearest `step`.
+/// Half-steps round upward (away from zero on the positive step axis).
+pub fn clamp_snap(value: u32, min: u32, max: u32, step: u32) -> u32 {
+    let value = value.clamp(min, max);
+    if step == 0 || max == min {
+        return value;
+    }
+    let steps = ((value - min) as f32 / step as f32).round() as u32;
+    (min + steps * step).min(max)
+}
+
+/// Thumb rect for a track at the given snapped `value`.
+pub fn slider_thumb_rect(track: [f32; 4], value: u32, min: u32, max: u32) -> [f32; 4] {
+    let span = (max - min) as f32;
+    let frac = if span <= 0.0 {
+        0.0
+    } else {
+        ((value.saturating_sub(min)) as f32 / span).clamp(0.0, 1.0)
+    };
+    [
+        track[0] + frac * (track[2] - SLIDER_THUMB_W_PX),
+        track[1] - SLIDER_THUMB_OVERHANG_PX,
+        SLIDER_THUMB_W_PX,
+        track[3] + 2.0 * SLIDER_THUMB_OVERHANG_PX,
+    ]
+}
+
 /// Flat aliases of [`HudLayout`]'s rects, for call sites that only need one.
 pub const TOP_BAR_RECT: [f32; 4] = HudLayout::TOP_BAR;
-pub const GEAR_RECT: [f32; 4] = HudLayout::GEAR;
+pub const MENU_RECT: [f32; 4] = HudLayout::MENU;
 pub const BOTTOM_PANEL_RECT: [f32; 4] = HudLayout::BOTTOM_PANEL;
 pub const MINIMAP_PANEL_RECT: [f32; 4] = HudLayout::MINIMAP_PANEL;
 pub const MINIMAP_MAP_RECT: [f32; 4] = HudLayout::MINIMAP_MAP;
@@ -143,6 +464,8 @@ const OVERFLOW_TEXT_POS: [f32; 2] = [
 pub const COMMAND_GRID_COLS: usize = 3;
 pub const COMMAND_ICON_PX: f32 = 64.0;
 pub const COMMAND_ICON_GAP_PX: f32 = 8.0;
+/// Positional hotkey letters for the 9 command slots, row-major (Q W E / A S D / Z X C).
+pub const COMMAND_SLOT_KEYS: [u8; 9] = *b"QWEASDZXC";
 
 /// Panel tint, premultiplied. The sheet cell already carries the alpha; this
 /// keeps the tint neutral so the panel colour lives in exactly one place.
@@ -153,6 +476,113 @@ pub const TEXT_TINT: [f32; 4] = [0.90, 0.92, 0.96, 1.0];
 pub const TEXT_TINT_BLOCKED: [f32; 4] = [0.75, 0.28, 0.24, 1.0];
 /// Text for a hotkey letter.
 pub const TEXT_TINT_HOTKEY: [f32; 4] = [0.95, 0.80, 0.25, 1.0];
+
+/// Frame thickness around discrete interactive controls (`T1`).
+pub const CONTROL_FRAME_PX: f32 = 2.0;
+/// Idle frame tint — premultiplied, pairwise distinct from the other four.
+pub const CONTROL_TINT_IDLE: [f32; 4] = [0.22, 0.24, 0.30, 0.90];
+/// Hover frame tint.
+pub const CONTROL_TINT_HOVER: [f32; 4] = [0.34, 0.38, 0.46, 0.95];
+/// Pressed frame tint.
+pub const CONTROL_TINT_PRESSED: [f32; 4] = [0.10, 0.12, 0.16, 1.00];
+/// Selected frame tint.
+pub const CONTROL_TINT_SELECTED: [f32; 4] = [0.20, 0.52, 0.24, 1.00];
+/// Disabled frame tint.
+pub const CONTROL_TINT_DISABLED: [f32; 4] = [0.14, 0.14, 0.16, 0.55];
+
+/// Discrete visual state of one interactive control (`T1`).
+///
+/// Precedence when resolving: Disabled → Pressed → Hover → Selected → Idle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlVisualState {
+    Idle,
+    Hover,
+    Pressed,
+    Selected,
+    Disabled,
+}
+
+/// Stable identity of one interactive control for the pointer FSM (`T1`).
+///
+/// Identity never carries a live value (slider position, typed digits) — those
+/// are derived from the pointer / field buffer at activation time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ControlId {
+    Menu,
+    /// Selection-card icon slot (`0` for the single portrait; multi-grid index).
+    SelectionIcon(u8),
+    CommandSlot(u8),
+    PauseSettings,
+    PauseClose,
+    WindowMode(u8),
+    Confine,
+    Focus,
+    Grid,
+    KeyboardPanSlider,
+    EdgePanSlider,
+    MasterSlider,
+    MusicSlider,
+    VoiceSlider,
+    SfxSlider,
+    KeyboardPanField,
+    EdgePanField,
+    MasterField,
+    MusicField,
+    VoiceField,
+    SfxField,
+    MasterMute,
+    MusicMute,
+    VoiceMute,
+    SfxMute,
+    SettingsBack,
+    ScrollbarTrack,
+    ScrollbarThumb,
+}
+
+/// Pointer hover/press snapshot fed into interactive HUD/modal packers (`T1`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct InteractionSnapshot {
+    pub hovered: Option<ControlId>,
+    pub pressed: Option<ControlId>,
+}
+
+/// Resolve one control's visual state from interaction + selected/disabled flags.
+///
+/// Precedence: Disabled → Pressed → Hover → Selected → Idle.
+pub fn control_visual_state(
+    id: ControlId,
+    interaction: &InteractionSnapshot,
+    selected: bool,
+    disabled: bool,
+) -> ControlVisualState {
+    if disabled {
+        return ControlVisualState::Disabled;
+    }
+    if interaction.pressed == Some(id) {
+        return ControlVisualState::Pressed;
+    }
+    if interaction.hovered == Some(id) {
+        return ControlVisualState::Hover;
+    }
+    if selected {
+        return ControlVisualState::Selected;
+    }
+    ControlVisualState::Idle
+}
+
+/// Premultiplied frame tint for a resolved [`ControlVisualState`].
+pub fn control_tint(state: ControlVisualState) -> [f32; 4] {
+    match state {
+        ControlVisualState::Idle => CONTROL_TINT_IDLE,
+        ControlVisualState::Hover => CONTROL_TINT_HOVER,
+        ControlVisualState::Pressed => CONTROL_TINT_PRESSED,
+        ControlVisualState::Selected => CONTROL_TINT_SELECTED,
+        ControlVisualState::Disabled => CONTROL_TINT_DISABLED,
+    }
+}
+
+/// Top-left of the `MENU` label inside [`HudLayout::MENU`].
+pub const MENU_TEXT_POS: [f32; 2] = [1840.0, 20.0];
 
 /// The build hotkeys, in display order, with their letters.
 ///
@@ -350,6 +780,12 @@ fn push_panel(out: &mut Vec<SpriteInstance>, rect: [f32; 4], tint: [f32; 4]) {
     ));
 }
 
+/// One discrete-control frame fill — single shared path, no per-control tint copies.
+fn push_control_frame(out: &mut Vec<SpriteInstance>, rect: [f32; 4], state: ControlVisualState) {
+    let _ = CONTROL_FRAME_PX; // thickness reserved for border-style frames later
+    push_panel(out, rect, control_tint(state));
+}
+
 /// One square icon of `prop` at `pos`, edge `edge_px`, white — the sheet
 /// already carries the colour.
 fn push_icon(out: &mut Vec<SpriteInstance>, pos: [f32; 2], edge_px: f32, prop: Prop) {
@@ -361,8 +797,13 @@ fn push_icon(out: &mut Vec<SpriteInstance>, pos: [f32; 2], edge_px: f32, prop: P
     ));
 }
 
-/// Section: the top resource bar plus the settings gear.
-fn push_top_bar(world: &RtsWorld, props: &mut Vec<SpriteInstance>, font: &mut Vec<SpriteInstance>) {
+/// Section: the top resource bar plus the framed `MENU` text control.
+fn push_top_bar(
+    world: &RtsWorld,
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    interaction: &InteractionSnapshot,
+) {
     push_panel(props, HudLayout::TOP_BAR, PANEL_TINT);
 
     let resources = world.resources();
@@ -389,12 +830,9 @@ fn push_top_bar(world: &RtsWorld, props: &mut Vec<SpriteInstance>, font: &mut Ve
     let s = fmt_ratio(&mut buf, supply.used(), supply.cap());
     push_text(font, s, [584.0, text_y], TOP_TEXT_SCALE, supply_tint);
 
-    push_icon(
-        props,
-        [HudLayout::GEAR[0], HudLayout::GEAR[1]],
-        HudLayout::GEAR[2],
-        Prop::GearIcon,
-    );
+    let menu_state = control_visual_state(ControlId::Menu, interaction, false, false);
+    push_control_frame(props, HudLayout::MENU, menu_state);
+    push_text(font, "MENU", MENU_TEXT_POS, PANEL_TEXT_SCALE, TEXT_TINT);
 }
 
 /// Camera-polygon edge tint — the minimap's only "live" element.
@@ -541,7 +979,10 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
         EntityKind::Unit(UnitKind::Soldier) => {
             push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
         }
-        EntityKind::Building(_) => {
+        EntityKind::Building(b) => {
+            let id = store.id_at(slot).expect("live slot");
+
+            // Line 2: READY or BUILDING N%
             let target = store.progress_target(slot);
             // Not a manual `checked_div`: `target == 0` is the site-vs-finished
             // business branch (READY has no percentage at all), not a guard
@@ -558,11 +999,59 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                 cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 push_text(font, "%", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
             }
+            y += PANEL_LINE_PX;
 
-            if let Some(id) = store.id_at(slot)
-                && let Some(cell) = world.rally(id)
+            // Line 3: SUPPLY +N (zero grant still shown)
             {
-                y += PANEL_LINE_PX;
+                let grant = supply_grant(b);
+                let mut cx = x;
+                cx += push_text(font, "SUPPLY +", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                let s = fmt_u32(&mut buf, grant);
+                push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            }
+            y += PANEL_LINE_PX;
+
+            // Line 4: QUEUE
+            let queue = world.production_queue(id);
+            if let Some(q) = queue
+                && !q.is_empty()
+            {
+                let mut cx = x;
+                cx += push_text(font, "QUEUE ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                for (i, &kind) in q.entries().iter().enumerate() {
+                    if i > 0 {
+                        cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    }
+                    let label = match kind {
+                        UnitKind::Worker => "W",
+                        UnitKind::Soldier => "S",
+                    };
+                    cx += push_text(font, label, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                }
+                let _ = cx;
+            } else {
+                push_text(font, "QUEUE -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            }
+            y += PANEL_LINE_PX;
+
+            // Line 5: PROGRESS (head only; saturated at 100)
+            if let Some(q) = queue
+                && let Some(head) = q.head()
+            {
+                let ticks = produce_ticks(head);
+                let pct = (q.progress() * 100 / ticks).min(100);
+                let mut cx = x;
+                cx += push_text(font, "PROGRESS ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                let s = fmt_u32(&mut buf, pct);
+                cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                push_text(font, "%", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            } else {
+                push_text(font, "PROGRESS -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            }
+            y += PANEL_LINE_PX;
+
+            // Line 6: RALLY
+            if let Some(cell) = world.rally(id) {
                 let mut cx = x;
                 cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 let s = fmt_u32(&mut buf, cell.x);
@@ -570,6 +1059,9 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                 cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 let s = fmt_u32(&mut buf, cell.y);
                 push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                let _ = cx;
+            } else {
+                push_text(font, "RALLY -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
             }
         }
         EntityKind::Node(_) => {
@@ -582,19 +1074,25 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
     }
 }
 
-/// Single selection: a 128x128 portrait plus the full detail text.
+/// Single selection: a framed 128x128 portrait plus the full detail text.
 fn push_single_selection(
     world: &RtsWorld,
     id: EntityId,
     worker: &mut DrawGroup,
     soldier: &mut DrawGroup,
     building: &mut DrawGroup,
+    props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,
+    interaction: &InteractionSnapshot,
 ) {
     let store = world.entities();
     let Some(slot) = store.slot(id) else {
         return; // a stale primary draws nothing rather than a dead column
     };
+
+    let frame_rect = [PORTRAIT_POS[0], PORTRAIT_POS[1], PORTRAIT_PX, PORTRAIT_PX];
+    let state = control_visual_state(ControlId::SelectionIcon(0), interaction, true, false);
+    push_control_frame(props, frame_rect, state);
 
     let (target, uv) = portrait_source(store, slot);
     push_to_target(
@@ -613,7 +1111,7 @@ fn push_single_selection(
     push_detail_text(world, slot, font);
 }
 
-/// Multi selection: the first 24 sorted ids as 8x3 icons; stale ids are
+/// Multi selection: the first 24 sorted ids as 8x3 framed icons; stale ids are
 /// skipped; a selection over 24 draws a "+N" marker for the remainder.
 ///
 /// `ids` is already ascending by slot ([`super::selection::Selection::ids`]).
@@ -623,7 +1121,9 @@ fn push_multi_selection(
     worker: &mut DrawGroup,
     soldier: &mut DrawGroup,
     building: &mut DrawGroup,
+    props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,
+    interaction: &InteractionSnapshot,
 ) {
     let store = world.entities();
     let mut drawn = 0usize;
@@ -640,6 +1140,14 @@ fn push_multi_selection(
             MULTI_ICON_ORIGIN[0] + col as f32 * (MULTI_ICON_PX + MULTI_ICON_GAP_PX),
             MULTI_ICON_ORIGIN[1] + row as f32 * (MULTI_ICON_PX + MULTI_ICON_GAP_PX),
         ];
+        let frame_rect = [pos[0], pos[1], MULTI_ICON_PX, MULTI_ICON_PX];
+        let state = control_visual_state(
+            ControlId::SelectionIcon(drawn as u8),
+            interaction,
+            true,
+            false,
+        );
+        push_control_frame(props, frame_rect, state);
         let (target, uv) = portrait_source(store, slot);
         push_to_target(
             target,
@@ -686,6 +1194,7 @@ fn push_selection_card(
     soldier: &mut DrawGroup,
     building: &mut DrawGroup,
     font: &mut Vec<SpriteInstance>,
+    interaction: &InteractionSnapshot,
 ) {
     push_panel(props, HudLayout::SELECTION_PANEL, PANEL_TINT);
 
@@ -694,27 +1203,75 @@ fn push_selection_card(
         return;
     }
     if sel.len() == 1 {
-        push_single_selection(world, sel.ids()[0], worker, soldier, building, font);
+        push_single_selection(
+            world,
+            sel.ids()[0],
+            worker,
+            soldier,
+            building,
+            props,
+            font,
+            interaction,
+        );
     } else {
-        push_multi_selection(world, sel.ids(), worker, soldier, building, font);
+        push_multi_selection(
+            world,
+            sel.ids(),
+            worker,
+            soldier,
+            building,
+            props,
+            font,
+            interaction,
+        );
     }
 }
 
-/// Section: the command card — background, then the 3x3 grid.
-fn push_command_card(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
+/// Command-grid cell rect for slot `i` (`0..9`, row-major).
+pub fn command_slot_rect(i: usize) -> [f32; 4] {
+    let row = i / COMMAND_GRID_COLS;
+    let col = i % COMMAND_GRID_COLS;
+    [
+        HudLayout::COMMAND_GRID[0] + col as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
+        HudLayout::COMMAND_GRID[1] + row as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
+        COMMAND_ICON_PX,
+        COMMAND_ICON_PX,
+    ]
+}
+
+/// Section: the command card — background, then framed 3x3 grid (all 9 cells).
+fn push_command_card(
+    world: &RtsWorld,
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    interaction: &InteractionSnapshot,
+) {
     push_panel(props, HudLayout::COMMAND_PANEL, PANEL_TINT);
 
     for (i, cmd_slot) in command_slots(world).into_iter().enumerate() {
-        let Some(cmd) = cmd_slot.command else {
-            continue;
-        };
-        let row = i / COMMAND_GRID_COLS;
-        let col = i % COMMAND_GRID_COLS;
-        let pos = [
-            HudLayout::COMMAND_GRID[0] + col as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
-            HudLayout::COMMAND_GRID[1] + row as f32 * (COMMAND_ICON_PX + COMMAND_ICON_GAP_PX),
-        ];
-        push_icon(props, pos, COMMAND_ICON_PX, command_icon(cmd));
+        let rect = command_slot_rect(i);
+        let disabled = cmd_slot.command.is_none() || !cmd_slot.enabled;
+        let state = control_visual_state(
+            ControlId::CommandSlot(i as u8),
+            interaction,
+            false,
+            disabled,
+        );
+        push_control_frame(props, rect, state);
+        if let Some(cmd) = cmd_slot.command {
+            push_icon(
+                props,
+                [rect[0], rect[1]],
+                COMMAND_ICON_PX,
+                command_icon(cmd),
+            );
+        }
+        // Positional hotkey letter in bottom-right corner of the cell.
+        let key = &[COMMAND_SLOT_KEYS[i]];
+        let key_str = std::str::from_utf8(key).expect("ascii");
+        let kx = rect[0] + rect[2] - GLYPH_W_PX * PANEL_TEXT_SCALE;
+        let ky = rect[1] + rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE;
+        push_text(font, key_str, [kx, ky], PANEL_TEXT_SCALE, TEXT_TINT_HOTKEY);
     }
 }
 
@@ -733,8 +1290,10 @@ pub enum ModalPage {
 /// modal is open it owns *every* pointer point, never just its own controls.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ModalHit {
-    /// The pause menu's one button.
+    /// The pause menu's Settings button.
     OpenSettings,
+    /// The pause menu's Close Menu button.
+    CloseMenu,
     /// The settings panel's Back control.
     Back,
     /// One of [`WINDOW_MODE_BUTTONS`], `0..3`.
@@ -743,16 +1302,62 @@ pub enum ModalHit {
     KeyboardPan(u32),
     /// Edge pan track, already snapped to a legal step.
     EdgePan(u32),
-    /// Confine-pointer checkbox.
+    /// Confine-pointer checkbox (full label row).
     Confine,
-    /// Pause-on-focus-loss checkbox.
+    /// Pause-on-focus-loss checkbox (full label row).
     Focus,
+    /// Show-grid checkbox (full label row).
+    Grid,
     Master(u32),
     Music(u32),
     Voice(u32),
     Sfx(u32),
+    /// Framed numeric value field (typed edit target).
+    NumericField(NumericSettingId),
+    /// Click on an audio channel mute label — toggle its mute flag.
+    ToggleMute(AudioChannelId),
+    /// Scrollbar track click: `+1` = page down, `-1` = page up.
+    ScrollbarTrack(i32),
+    /// Scrollbar thumb press (drag handled via retained move).
+    ScrollbarThumb,
     /// Anywhere else inside the modal — consumed, no action.
     Consumed,
+}
+
+/// Stable [`ControlId`] for a modal hit, when the hit names a discrete control.
+pub fn control_id_from_modal_hit(hit: ModalHit) -> Option<ControlId> {
+    match hit {
+        ModalHit::OpenSettings => Some(ControlId::PauseSettings),
+        ModalHit::CloseMenu => Some(ControlId::PauseClose),
+        ModalHit::Back => Some(ControlId::SettingsBack),
+        ModalHit::WindowMode(i) => Some(ControlId::WindowMode(i)),
+        ModalHit::KeyboardPan(_) => Some(ControlId::KeyboardPanSlider),
+        ModalHit::EdgePan(_) => Some(ControlId::EdgePanSlider),
+        ModalHit::Confine => Some(ControlId::Confine),
+        ModalHit::Focus => Some(ControlId::Focus),
+        ModalHit::Grid => Some(ControlId::Grid),
+        ModalHit::Master(_) => Some(ControlId::MasterSlider),
+        ModalHit::Music(_) => Some(ControlId::MusicSlider),
+        ModalHit::Voice(_) => Some(ControlId::VoiceSlider),
+        ModalHit::Sfx(_) => Some(ControlId::SfxSlider),
+        ModalHit::NumericField(id) => Some(id.field_control()),
+        ModalHit::ToggleMute(AudioChannelId::Master) => Some(ControlId::MasterMute),
+        ModalHit::ToggleMute(AudioChannelId::Music) => Some(ControlId::MusicMute),
+        ModalHit::ToggleMute(AudioChannelId::Voice) => Some(ControlId::VoiceMute),
+        ModalHit::ToggleMute(AudioChannelId::Sfx) => Some(ControlId::SfxMute),
+        ModalHit::ScrollbarTrack(_) => Some(ControlId::ScrollbarTrack),
+        ModalHit::ScrollbarThumb => Some(ControlId::ScrollbarThumb),
+        ModalHit::Consumed => None,
+    }
+}
+
+/// Identifies one audio channel mute label control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AudioChannelId {
+    Master,
+    Music,
+    Voice,
+    Sfx,
 }
 
 /// The raw settings values [`pack_modal`] renders, in the numeric domain the
@@ -766,10 +1371,17 @@ pub struct ModalSnapshot {
     pub edge_pan: u32,
     pub confine_pointer: bool,
     pub pause_on_focus_loss: bool,
+    pub show_grid: bool,
     pub master: u32,
     pub music: u32,
     pub voice: u32,
     pub sfx: u32,
+    pub master_muted: bool,
+    pub music_muted: bool,
+    pub voice_muted: bool,
+    pub sfx_muted: bool,
+    /// Current settings-body scroll offset in logical pixels (0 = top, max = bottom).
+    pub scroll_offset: f32,
 }
 
 fn point_in_modal_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
@@ -781,88 +1393,139 @@ fn point_in_modal_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
 
 /// Nearest legal step for a click at `local_x` inside a `[x, y, w, h]` track,
 /// clamped to `min..=max`.
-fn snap_track(local_x: f32, track: [f32; 4], min: u32, max: u32, step: u32) -> u32 {
+pub fn snap_track(local_x: f32, track: [f32; 4], min: u32, max: u32, step: u32) -> u32 {
     let frac = ((local_x - track[0]) / track[2]).clamp(0.0, 1.0);
     let span = (max - min) as f32;
     let raw = min as f32 + frac * span;
-    let steps = ((raw - min as f32) / step as f32).round();
-    (min + steps as u32 * step).min(max)
+    // Snap through the shared clamp path so pointer + typed values agree.
+    clamp_snap(raw.round() as u32, min, max, step)
+}
+
+/// Snapped value for a numeric row at pointer x (x clamped to the track).
+pub fn snap_numeric_at_x(id: NumericSettingId, local_x: f32) -> u32 {
+    let spec = id.spec();
+    snap_track(local_x, spec.track, spec.min, spec.max, spec.step)
 }
 
 /// Classify a logical (1920x1080) point against an open modal's own chrome.
 /// Never returns `None` — an open modal owns every pointer point.
-pub fn modal_hit_test(page: ModalPage, point: [f32; 2]) -> ModalHit {
+pub fn modal_hit_test(page: ModalPage, point: [f32; 2], scroll_offset: f32) -> ModalHit {
     match page {
         ModalPage::PauseMenu => {
             if point_in_modal_rect(point, HudLayout::PAUSE_MENU_SETTINGS_BTN) {
                 ModalHit::OpenSettings
+            } else if point_in_modal_rect(point, HudLayout::PAUSE_MENU_CLOSE_BTN) {
+                ModalHit::CloseMenu
             } else {
                 ModalHit::Consumed
             }
         }
         ModalPage::Settings => {
+            // Fixed footer: Back button is always hittable regardless of scroll.
             if point_in_modal_rect(point, HudLayout::SETTINGS_BACK_BTN) {
                 return ModalHit::Back;
             }
+            // Scrollbar: thumb first (narrower hit zone), then track.
+            if point_in_modal_rect(point, HudLayout::SETTINGS_SCROLLBAR_TRACK) {
+                let thumb = settings_scrollbar_thumb(scroll_offset);
+                if point_in_modal_rect(point, thumb) {
+                    return ModalHit::ScrollbarThumb;
+                }
+                let dir = if point[1] < thumb[1] { -1i32 } else { 1i32 };
+                return ModalHit::ScrollbarTrack(dir);
+            }
+            // Body elements: reject if outside viewport, then apply inverse scroll transform.
+            if !point_in_modal_rect(point, HudLayout::SETTINGS_BODY_VIEWPORT) {
+                return ModalHit::Consumed;
+            }
+            // body_point is in content coordinates (screen + offset).
+            let body_point = [point[0], point[1] + scroll_offset];
             for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
-                if point_in_modal_rect(point, *rect) {
+                if point_in_modal_rect(body_point, *rect) {
                     return ModalHit::WindowMode(i as u8);
                 }
             }
-            if point_in_modal_rect(point, KEYBOARD_PAN_TRACK) {
+            // Value fields sit to the right of tracks (no overlap); test before
+            // tracks so a future layout slip cannot steal field clicks.
+            for spec in &NUMERIC_SETTING_SPECS {
+                if point_in_modal_rect(body_point, spec.value_field) {
+                    return ModalHit::NumericField(spec.id);
+                }
+            }
+            if point_in_modal_rect(body_point, KEYBOARD_PAN_TRACK) {
                 return ModalHit::KeyboardPan(snap_track(
-                    point[0],
+                    body_point[0],
                     KEYBOARD_PAN_TRACK,
                     PAN_MIN,
                     PAN_MAX,
                     PAN_STEP,
                 ));
             }
-            if point_in_modal_rect(point, EDGE_PAN_TRACK) {
+            if point_in_modal_rect(body_point, EDGE_PAN_TRACK) {
                 return ModalHit::EdgePan(snap_track(
-                    point[0],
+                    body_point[0],
                     EDGE_PAN_TRACK,
                     PAN_MIN,
                     PAN_MAX,
                     PAN_STEP,
                 ));
             }
-            if point_in_modal_rect(point, CONFINE_CHECKBOX) {
+            // Full label row is the control; the 32px square remains a subset.
+            if point_in_modal_rect(body_point, CONFINE_CONTROL_RECT)
+                || point_in_modal_rect(body_point, CONFINE_CHECKBOX)
+            {
                 return ModalHit::Confine;
             }
-            if point_in_modal_rect(point, FOCUS_CHECKBOX) {
+            if point_in_modal_rect(body_point, FOCUS_CONTROL_RECT)
+                || point_in_modal_rect(body_point, FOCUS_CHECKBOX)
+            {
                 return ModalHit::Focus;
             }
-            if point_in_modal_rect(point, MASTER_TRACK) {
+            if point_in_modal_rect(body_point, GRID_CONTROL_RECT)
+                || point_in_modal_rect(body_point, GRID_CHECKBOX)
+            {
+                return ModalHit::Grid;
+            }
+            for (i, &rect) in MUTE_LABEL_RECTS.iter().enumerate() {
+                if point_in_modal_rect(body_point, rect) {
+                    return ModalHit::ToggleMute(match i {
+                        0 => AudioChannelId::Master,
+                        1 => AudioChannelId::Music,
+                        2 => AudioChannelId::Voice,
+                        _ => AudioChannelId::Sfx,
+                    });
+                }
+            }
+            if point_in_modal_rect(body_point, MASTER_TRACK) {
                 return ModalHit::Master(snap_track(
-                    point[0],
+                    body_point[0],
                     MASTER_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
                     VOLUME_STEP,
                 ));
             }
-            if point_in_modal_rect(point, MUSIC_TRACK) {
+            if point_in_modal_rect(body_point, MUSIC_TRACK) {
                 return ModalHit::Music(snap_track(
-                    point[0],
+                    body_point[0],
                     MUSIC_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
                     VOLUME_STEP,
                 ));
             }
-            if point_in_modal_rect(point, VOICE_TRACK) {
+            if point_in_modal_rect(body_point, VOICE_TRACK) {
                 return ModalHit::Voice(snap_track(
-                    point[0],
+                    body_point[0],
                     VOICE_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
                     VOLUME_STEP,
                 ));
             }
-            if point_in_modal_rect(point, SFX_TRACK) {
+            if point_in_modal_rect(body_point, SFX_TRACK) {
                 return ModalHit::Sfx(snap_track(
-                    point[0],
+                    body_point[0],
                     SFX_TRACK,
                     VOLUME_MIN,
                     VOLUME_MAX,
@@ -879,14 +1542,33 @@ fn push_modal_button(
     font: &mut Vec<SpriteInstance>,
     rect: [f32; 4],
     label: &str,
+    id: ControlId,
+    interaction: &InteractionSnapshot,
     selected: bool,
 ) {
-    let tint = if selected {
-        [0.30, 0.55, 0.30, 1.0]
-    } else {
-        PANEL_TINT
-    };
-    push_panel(props, rect, tint);
+    let state = control_visual_state(id, interaction, selected, false);
+    push_control_frame(props, rect, state);
+    let text_y = rect[1] + (rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
+    push_text(
+        font,
+        label,
+        [rect[0] + 12.0, text_y],
+        PANEL_TEXT_SCALE,
+        TEXT_TINT,
+    );
+}
+
+fn push_modal_mute_label(
+    props: &mut Vec<SpriteInstance>,
+    font: &mut Vec<SpriteInstance>,
+    rect: [f32; 4],
+    label: &str,
+    id: ControlId,
+    interaction: &InteractionSnapshot,
+    muted: bool,
+) {
+    let state = control_visual_state(id, interaction, muted, false);
+    push_control_frame(props, rect, state);
     let text_y = rect[1] + (rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
     push_text(
         font,
@@ -900,29 +1582,53 @@ fn push_modal_button(
 fn push_modal_track(
     props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,
-    rect: [f32; 4],
-    label: &str,
+    spec: &NumericSettingSpec,
     value: u32,
-    min: u32,
-    max: u32,
+    interaction: &InteractionSnapshot,
+    active_edit: Option<(NumericSettingId, &[u8])>,
+    render_text_label: bool,
 ) {
-    push_text(
-        font,
-        label,
-        [rect[0], rect[1] - PANEL_LINE_PX],
-        PANEL_TEXT_SCALE,
-        TEXT_TINT,
-    );
-    push_panel(props, rect, [0.35, 0.35, 0.40, 1.0]);
-    let frac = ((value.saturating_sub(min)) as f32 / (max - min) as f32).clamp(0.0, 1.0);
+    let rect = spec.track;
+    let slider_id = spec.id.slider_control();
+    if render_text_label {
+        push_text(
+            font,
+            spec.label,
+            [rect[0], rect[1] - PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            TEXT_TINT,
+        );
+    }
+    let state = control_visual_state(slider_id, interaction, false, false);
+    push_control_frame(props, rect, state);
+    push_panel(props, rect, SLIDER_TRACK_TINT);
+    let span = (spec.max - spec.min) as f32;
+    let frac = if span <= 0.0 {
+        0.0
+    } else {
+        ((value.saturating_sub(spec.min)) as f32 / span).clamp(0.0, 1.0)
+    };
     let fill = [rect[0], rect[1], rect[2] * frac, rect[3]];
-    push_panel(props, fill, [0.95, 0.85, 0.30, 1.0]);
+    push_panel(props, fill, SLIDER_FILL_TINT);
+    let thumb = slider_thumb_rect(rect, value, spec.min, spec.max);
+    push_panel(props, thumb, SLIDER_THUMB_TINT);
+    // Framed value field: selected + buffer text while this row is being edited.
+    let field_id = spec.id.field_control();
+    let editing = active_edit.filter(|(id, _)| *id == spec.id);
+    let selected = editing.is_some();
+    let field_state = control_visual_state(field_id, interaction, selected, false);
+    push_control_frame(props, spec.value_field, field_state);
     let mut buf = [0u8; NUM_BUF];
-    let s = fmt_u32(&mut buf, value);
+    let s = if let Some((_, digits)) = editing {
+        core::str::from_utf8(digits).unwrap_or("")
+    } else {
+        fmt_u32(&mut buf, value)
+    };
+    let text_y = spec.value_field[1] + (spec.value_field[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
     push_text(
         font,
         s,
-        [rect[0] + rect[2] + 16.0, rect[1]],
+        [spec.value_field[0] + 4.0, text_y],
         PANEL_TEXT_SCALE,
         TEXT_TINT,
     );
@@ -931,21 +1637,27 @@ fn push_modal_track(
 fn push_modal_checkbox(
     props: &mut Vec<SpriteInstance>,
     font: &mut Vec<SpriteInstance>,
-    rect: [f32; 4],
+    square: [f32; 4],
+    row: [f32; 4],
     label: &str,
+    id: ControlId,
+    interaction: &InteractionSnapshot,
     checked: bool,
 ) {
-    let tint = if checked {
-        [0.30, 0.70, 0.30, 1.0]
+    // Frame the whole label row; the 32px square stays the filled indicator.
+    let state = control_visual_state(id, interaction, checked, false);
+    push_control_frame(props, row, state);
+    let square_tint = if checked {
+        CONTROL_TINT_SELECTED
     } else {
-        [0.35, 0.35, 0.40, 1.0]
+        CONTROL_TINT_IDLE
     };
-    push_panel(props, rect, tint);
-    let text_y = rect[1] + (rect[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
+    push_panel(props, square, square_tint);
+    let text_y = square[1] + (square[3] - GLYPH_H_PX * PANEL_TEXT_SCALE) * 0.5;
     push_text(
         font,
         label,
-        [rect[0] + rect[2] + 16.0, text_y],
+        [square[0] + square[2] + 16.0, text_y],
         PANEL_TEXT_SCALE,
         TEXT_TINT,
     );
@@ -956,10 +1668,33 @@ fn push_modal_checkbox(
 /// stay packed underneath. `warning`, when set, is the
 /// `SETTINGS NOT SAVED: <reason>` line a failed transactional commit leaves
 /// up.
+///
+/// Neutral wrapper: no hover/press tinting / no active field edit.
 pub fn pack_modal(
     page: ModalPage,
     snapshot: ModalSnapshot,
     warning: Option<&str>,
+    frame: &mut RtsFrame,
+) {
+    pack_modal_interactive(
+        page,
+        snapshot,
+        warning,
+        &InteractionSnapshot::default(),
+        None,
+        frame,
+    );
+}
+
+/// Interactive modal pack — frames + hover/press/selected tints from `interaction`.
+///
+/// `active_edit` is `(row, ascii digits)` for the focused value field, if any.
+pub fn pack_modal_interactive(
+    page: ModalPage,
+    snapshot: ModalSnapshot,
+    warning: Option<&str>,
+    interaction: &InteractionSnapshot,
+    active_edit: Option<(NumericSettingId, &[u8])>,
     frame: &mut RtsFrame,
 ) {
     let [_, _, _, props, font] = frame.ui.as_mut_slice() else {
@@ -973,93 +1708,167 @@ pub fn pack_modal(
                 &mut font.instances,
                 HudLayout::PAUSE_MENU_SETTINGS_BTN,
                 "SETTINGS",
+                ControlId::PauseSettings,
+                interaction,
+                false,
+            );
+            push_modal_button(
+                &mut props.instances,
+                &mut font.instances,
+                HudLayout::PAUSE_MENU_CLOSE_BTN,
+                "CLOSE MENU",
+                ControlId::PauseClose,
+                interaction,
                 false,
             );
         }
         ModalPage::Settings => {
+            // Fixed chrome: the outer panel drawn under everything.
             push_panel(&mut props.instances, HudLayout::SETTINGS_PANEL, PANEL_TINT);
+
+            // --- scrollable body ------------------------------------------------
+            let body_props_start = props.instances.len();
+            let body_font_start = font.instances.len();
+
             for (i, rect) in WINDOW_MODE_BUTTONS.iter().enumerate() {
                 push_modal_button(
                     &mut props.instances,
                     &mut font.instances,
                     *rect,
                     WINDOW_MODE_LABELS[i],
+                    ControlId::WindowMode(i as u8),
+                    interaction,
                     i as u8 == snapshot.window_mode_index,
                 );
             }
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                KEYBOARD_PAN_TRACK,
-                "KEYBOARD PAN",
+            let numeric_values = [
                 snapshot.keyboard_pan,
-                PAN_MIN,
-                PAN_MAX,
-            );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                EDGE_PAN_TRACK,
-                "EDGE PAN",
                 snapshot.edge_pan,
-                PAN_MIN,
-                PAN_MAX,
-            );
+                snapshot.master,
+                snapshot.music,
+                snapshot.voice,
+                snapshot.sfx,
+            ];
+            // Pan rows, then checkboxes, then audio — vertical stack order.
+            for i in 0..2 {
+                push_modal_track(
+                    &mut props.instances,
+                    &mut font.instances,
+                    &NUMERIC_SETTING_SPECS[i],
+                    numeric_values[i],
+                    interaction,
+                    active_edit,
+                    true,
+                );
+            }
             push_modal_checkbox(
                 &mut props.instances,
                 &mut font.instances,
                 CONFINE_CHECKBOX,
+                CONFINE_CONTROL_RECT,
                 "CONFINE POINTER",
+                ControlId::Confine,
+                interaction,
                 snapshot.confine_pointer,
             );
             push_modal_checkbox(
                 &mut props.instances,
                 &mut font.instances,
                 FOCUS_CHECKBOX,
+                FOCUS_CONTROL_RECT,
                 "PAUSE ON FOCUS LOSS",
+                ControlId::Focus,
+                interaction,
                 snapshot.pause_on_focus_loss,
             );
-            push_modal_track(
+            push_modal_checkbox(
                 &mut props.instances,
                 &mut font.instances,
-                MASTER_TRACK,
-                "MASTER",
-                snapshot.master,
-                VOLUME_MIN,
-                VOLUME_MAX,
+                GRID_CHECKBOX,
+                GRID_CONTROL_RECT,
+                "SHOW GRID",
+                ControlId::Grid,
+                interaction,
+                snapshot.show_grid,
             );
-            push_modal_track(
+            let mute_states = [
+                (ControlId::MasterMute, snapshot.master_muted),
+                (ControlId::MusicMute, snapshot.music_muted),
+                (ControlId::VoiceMute, snapshot.voice_muted),
+                (ControlId::SfxMute, snapshot.sfx_muted),
+            ];
+            for (i, &(mute_id, muted)) in (2usize..6).zip(mute_states.iter()) {
+                let ch = i - 2;
+                let label = if muted {
+                    MUTE_LABELS_MUTED[ch]
+                } else {
+                    MUTE_LABELS[ch]
+                };
+                push_modal_mute_label(
+                    &mut props.instances,
+                    &mut font.instances,
+                    MUTE_LABEL_RECTS[ch],
+                    label,
+                    mute_id,
+                    interaction,
+                    muted,
+                );
+                push_modal_track(
+                    &mut props.instances,
+                    &mut font.instances,
+                    &NUMERIC_SETTING_SPECS[i],
+                    numeric_values[i],
+                    interaction,
+                    active_edit,
+                    false,
+                );
+            }
+
+            // Apply scroll transform + clip body instances in-place (no allocation).
+            let offset = snapshot.scroll_offset;
+            let clip = HudLayout::SETTINGS_BODY_VIEWPORT;
+            for inst in &mut props.instances[body_props_start..] {
+                inst.pos[1] -= offset;
+            }
+            let mut write = body_props_start;
+            for read in body_props_start..props.instances.len() {
+                if let Some(clipped) = clip_sprite_to_rect(props.instances[read], clip) {
+                    props.instances[write] = clipped;
+                    write += 1;
+                }
+            }
+            props.instances.truncate(write);
+            for inst in &mut font.instances[body_font_start..] {
+                inst.pos[1] -= offset;
+            }
+            write = body_font_start;
+            for read in body_font_start..font.instances.len() {
+                if let Some(clipped) = clip_sprite_to_rect(font.instances[read], clip) {
+                    font.instances[write] = clipped;
+                    write += 1;
+                }
+            }
+            font.instances.truncate(write);
+
+            // --- scrollbar (fixed, not scrolled) --------------------------------
+            push_panel(
                 &mut props.instances,
-                &mut font.instances,
-                MUSIC_TRACK,
-                "MUSIC",
-                snapshot.music,
-                VOLUME_MIN,
-                VOLUME_MAX,
+                HudLayout::SETTINGS_SCROLLBAR_TRACK,
+                SLIDER_TRACK_TINT,
             );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                VOICE_TRACK,
-                "VOICE",
-                snapshot.voice,
-                VOLUME_MIN,
-                VOLUME_MAX,
-            );
-            push_modal_track(
-                &mut props.instances,
-                &mut font.instances,
-                SFX_TRACK,
-                "SFX",
-                snapshot.sfx,
-                VOLUME_MIN,
-                VOLUME_MAX,
-            );
+            let thumb = settings_scrollbar_thumb(offset);
+            let thumb_state =
+                control_visual_state(ControlId::ScrollbarThumb, interaction, false, false);
+            push_control_frame(&mut props.instances, thumb, thumb_state);
+
+            // --- fixed footer ---------------------------------------------------
             push_modal_button(
                 &mut props.instances,
                 &mut font.instances,
                 HudLayout::SETTINGS_BACK_BTN,
                 "BACK",
+                ControlId::SettingsBack,
+                interaction,
                 false,
             );
             if let Some(msg) = warning {
@@ -1078,17 +1887,29 @@ pub fn pack_modal(
     }
 }
 
-/// Append the whole HUD to `frame`.
+/// Append the whole HUD to `frame` with a neutral (no hover/press) snapshot.
 ///
-/// Appends to every group of [`RtsFrame::ui`]; never touches `world` or
-/// `overlay`. Call **after** [`super::pack_frame`], which owns the
-/// world-space half of the UI layer. Allocation-free.
+/// Call **after** [`super::pack_frame`]. Allocation-free when buffers are warm.
 pub fn pack_hud(world: &RtsWorld, frame: &mut RtsFrame) {
+    pack_hud_interactive(world, &InteractionSnapshot::default(), frame);
+}
+
+/// Interactive HUD pack — frames + hover/press/selected/disabled tints.
+pub fn pack_hud_interactive(
+    world: &RtsWorld,
+    interaction: &InteractionSnapshot,
+    frame: &mut RtsFrame,
+) {
     let [worker, soldier, building, props, font] = frame.ui.as_mut_slice() else {
         unreachable!("RtsFrame::new always reserves exactly 5 UI groups")
     };
 
-    push_top_bar(world, &mut props.instances, &mut font.instances);
+    push_top_bar(
+        world,
+        &mut props.instances,
+        &mut font.instances,
+        interaction,
+    );
     push_panel(&mut props.instances, HudLayout::BOTTOM_PANEL, PANEL_TINT);
     push_minimap(world, &mut props.instances);
     push_selection_card(
@@ -1098,6 +1919,12 @@ pub fn pack_hud(world: &RtsWorld, frame: &mut RtsFrame) {
         soldier,
         building,
         &mut font.instances,
+        interaction,
     );
-    push_command_card(world, &mut props.instances);
+    push_command_card(
+        world,
+        &mut props.instances,
+        &mut font.instances,
+        interaction,
+    );
 }

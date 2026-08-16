@@ -1,0 +1,29 @@
+# Phase-1.1 feedback polish, joined: HQ pick -> positional key -> menu ->
+# settings slider -> grid toggle -> scroll -> fixed Back -> Close Menu.
+# Frames are 1-based. Coordinates are screen pixels at the starting camera.
+#
+# Deliberately *focused*, next to `rts_acceptance_v1.script` rather than folded
+# into it: the canonical run owns the economy loop and its audio counters are
+# pinned cue by cue, so adding this chrome to it would only inflate those
+# numbers. Nothing here issues a unit order, so every voice counter of this
+# run stays 0 and the whole exit line is about the feedback surface.
+#
+# Every coordinate below is a centre (or the start) of an exported rect, never
+# a hand-measured pixel — `the_focused_script_coordinates_hit_what_they_name`
+# in `crates/mmd-engine/tests/rts_acceptance.rs` re-derives each one from the
+# live layout/hit tests and fails if a rect ever moves.
+
+1:move:960,518
+4:lclick:960,518               # the HQ's own footprint corner (160.5,160.5): a Pick::Building
+8:key:q                        # positional slot 0 = Worker; the HQ is selected, so it is enabled
+
+16:lclick:1888,24              # MENU_RECT centre -> paused menu
+24:lclick:960,540              # PAUSE_MENU_SETTINGS_BTN centre -> settings panel
+
+32:drag:568,288,1170,288       # keyboard-pan track, left edge -> the 78 cells/s step
+40:lclick:960,580              # GRID_CONTROL_RECT centre [568,564,784,32] -> show_grid = false
+48:wheel:960,540,-1            # inside SETTINGS_BODY_VIEWPORT: one notch down, +72 px
+56:lclick:552,928              # SETTINGS_BACK_BTN centre — fixed footer, unmoved by the scroll
+64:lclick:960,620              # PAUSE_MENU_CLOSE_BTN centre -> gameplay
+
+72:quit

@@ -117,3 +117,13 @@ item.
 ## Validation contract
 
 Tests prove byte-identical generated assets/manifest/headroom; exact event sorting/caps/reject/UI mapping/gains; fake sink no hash change; stream lane/watermark policy; interactive failure exit1; offscreen never opens device; one 1,600-frame acceptance reports exact music/voice/reject/SFX counters.
+
+## Amendment 2026-08-15 — explicit mute flags
+
+Supplemented by
+[ADR 021](021_ADR_rts_feedback_polish_and_gather_collision.md): each bus gains
+a persisted mute flag, toggled by clicking its label. A muted bus contributes
+gain zero while its stream keeps running and its stored level is untouched, so
+unmuting restores the exact level the user had. Muting is therefore not
+"volume 0" — the generated assets, the lane policy and the counters in this
+record are unchanged.

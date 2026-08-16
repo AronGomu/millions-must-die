@@ -130,3 +130,20 @@ what Escape opens (`menu_gear_click_opens_the_menu_exactly_like_escape`).
 ## Validation contract
 
 Tests cover exact non-overlap rects, single/24/overflow, command contexts/slots, minimap roundtrip/polygon/click, icon actions, mouse-hotkey parity, rally pending, modal transition table/pause preservation, setting rollback, HUD background consumption, allocation-free packing.
+
+## Amendment 2026-08-15 — control identity, positional keys, building pick
+
+Supplemented by
+[ADR 021](021_ADR_rts_feedback_polish_and_gather_collision.md):
+
+- Every discrete control gains a stable identity and a framed visual state
+  (`Disabled > Pressed > Hover > Selected > Idle`); pointer activation requires
+  the same control on down and up.
+- The top-right gear becomes the framed text control `MENU` at
+  `[1832,8,80,32]`; its hit point `[1888,24]` is unchanged. The pause menu
+  gains `CLOSE MENU` below the unmoved Settings button.
+- Command keys bind by card **position** (`QWE`/`ASD`/`ZXC` → slots 0–8), so
+  the old semantic A/S/R bindings end and `X` becomes slot 7. Right-click
+  remains placement cancel only.
+- A player building is picked by its rendered sprite rect ∪ its ground
+  footprint, and the single-building card is exactly six lines.

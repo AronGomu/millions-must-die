@@ -123,6 +123,15 @@ describes `sim/`, and no document may merge the two claims.
   only after a chain is rejected does it try its descent rotated ±45° then
   ±90°. Nothing relaxes an existing overlap: every displaced position is proven
   legal before anything commits.
+- **The invariant, stated narrowly.** A completed tick may leave two RTS unit
+  bodies merged in exactly two cases: both units are active gather workers, or
+  that exact pair is inside its bounded 12-attempt gather-exit transition
+  (ADR 021, narrowing ADR 017). Every other merged pair is repaired, or counted
+  by `body_overlaps` and reported through `TickError::UnrepairableOverlap`.
+  Never write this rule without its exception, and never widen the exception:
+  static terrain, map edges, resource nodes and finished buildings stay hard
+  for gathering workers too, and a pair with a non-worker or non-gathering
+  member is an ordinary hard pair.
 - **Static navigation.** `rts::StaticNav` holds the raw solids (terrain,
   resource footprints, finished buildings) and a *centre-blocked* mask of the
   positions a 3-cell circle cannot occupy. Pooled fields rebuild over the mask;
@@ -142,15 +151,70 @@ describes `sim/`, and no document may merge the two claims.
   site atomically preplans every evacuation before stamping itself solid, or
   stays walkable one more tick.
 
+- **Gather-exit transition.** The pair table is a preallocated dense
+  triangular byte per entity pair: `0` hard, `255` active gather provenance,
+  `1..=12` completed exit attempts. One worker moves at most half a cell away
+  per attempt; an attempt that reaches non-penetration clears the pair to hard
+  the same tick, before normal movement. After twelve attempts a relocation is
+  searched inside the same navigation component, and a failed relocation
+  returns the pair to hard and reports it rather than granting it permanent
+  grace. The table enters the state hash in a length-prefixed,
+  identity-pinned block, so a replay cannot silently disagree about which
+  slots a byte belonged to.
+
 Decisions: [ADR 016](ADR/016_ADR_phase1_1_scope_and_input_geometry.md),
 [ADR 017](ADR/017_ADR_rts_hard_collision_navigation_and_formations.md),
 [ADR 018](ADR/018_ADR_settings_window_canvas_and_camera.md),
 [ADR 019](ADR/019_ADR_hud_minimap_and_input_routing.md),
-[ADR 020](ADR/020_ADR_audio_events_buses_and_generated_assets.md). Shape of the
-slice: the
+[ADR 020](ADR/020_ADR_audio_events_buses_and_generated_assets.md), and
+[ADR 021](ADR/021_ADR_rts_feedback_polish_and_gather_collision.md) for the
+gather policy. Shape of the slice: the
 [phase 1.1 architecture](rts-interaction-ui-audio-hardening-architecture.html)
 page. What it proves and does not:
 [phase 1.1 functional close](rts-interaction-ui-audio-hardening-functional-close.md).
+
+## Feedback polish
+
+An extension of phase 1.1, driven by user feedback rather than by a missing
+system. Everything here is app/render-side except the gather policy above.
+
+- **Controls have identity.** Every discrete control carries a stable id and a
+  framed visual state (`Disabled > Pressed > Hover > Selected > Idle`); an
+  activation requires the same control on pointer-down and pointer-up, so a
+  press that slides off a button does nothing. The top-right control is framed
+  text `MENU`; the pause menu gains `CLOSE MENU` beneath the unmoved Settings
+  button.
+- **Settings are manipulated, not nudged.** Six numeric settings share one
+  descriptor table: each has a live snapped slider and a three-digit typed
+  field, and every accepted edit commits through the one runtime → gains →
+  save → publish transaction. Each audio bus has a persisted mute flag that
+  zeroes gain while keeping the stored level. The body scrolls by wheel and
+  thumb over a single offset shared by render and hit test; Back and the
+  warning stay fixed. A wheel notch is a mapped pointer event, so a letterbox
+  bar drops it.
+- **Two texture-free primitives, one instance layout.** The world grid and the
+  drag box are diagonal line instances with their own sentinel, drawn in the
+  depth-off procedural overlay without sampling the atlas — which is the only
+  way to get an exact opaque pure-green border, since the panel-fill prop
+  renders `texel * tint`. The grid is the full map lattice
+  (`width + height + 2` lines), app-side config, default on, and never enters
+  the world hash.
+- **Placement helps the click.** An invalid cursor cell searches the
+  surrounding footprint corners and ranks candidates from the corner the ghost
+  is actually drawn at; preview and commit consume the same candidate, so the
+  green footprint a player sees is the one that gets built.
+- **Buildings answer clicks.** A player building is picked by its rendered
+  sprite rect ∪ its ground footprint, and its card is exactly six lines: kind,
+  ready/build %, supply grant, queue, head progress, rally.
+- **Command keys are positional.** `QWE`/`ASD`/`ZXC` map row-major onto the
+  3×3 card, so the key is wherever the button is; keyboard and pointer share
+  one executor and a disabled slot is a silent no-op.
+
+Decision:
+[ADR 021](ADR/021_ADR_rts_feedback_polish_and_gather_collision.md). Shape:
+[feedback-polish architecture](rts-feedback-polish-architecture.html). What it
+proves, what it does not, and the one open regression:
+[feedback-polish functional close](rts-feedback-polish-functional-close.md).
 
 ## App shell, HUD and audio
 
@@ -169,9 +233,10 @@ deterministic and audio-free.
   half the logical view, not to the raw grid edge, so no pan can show dead
   space. Keyboard and edge pan carry independent speeds.
 - **HUD first, world second.** A fixed pointer-owner order — lifecycle, Escape,
-  modal, gear, minimap, selection icons, command card, HUD background, world —
+  modal, MENU, minimap, selection icons, command card, HUD background, world —
   is chosen at mouse-down and retained through the gesture. Every textured HUD
-  element is a `ui` draw group; `overlay` stays procedural rings only.
+  element is a `ui` draw group; `overlay` stays procedural rings and
+  texture-free lines only.
 - **Audio derives from receipts.** Accepted-action receipts become semantic
   `AudioEvent`s (music, select/move/gather/build/reject voice, UI click),
   capped and sorted, weighted by Music/Voice/SFX buses under a master scalar,

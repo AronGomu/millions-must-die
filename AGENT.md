@@ -45,6 +45,18 @@ checklist items (`ai_artefacts/manual_test_checklist.md`). What it proves and
 does not: `docs/rts-interaction-ui-audio-hardening-functional-close.md`;
 decisions in ADR 016–020.
 
+Feedback polish (branch `plan/rts-feedback-polish`) extends phase 1.1 on user
+feedback: framed control states with a `MENU`/`CLOSE MENU` pair, live sliders
+and typed numeric settings fields, per-bus mute labels, a scrolled settings
+body, a persisted default-on world grid, assisted building placement, a
+sprite ∪ footprint building pick with a six-line card, positional QWE/ASD/ZXC
+command keys, an exact pure-green drag box, and an order-scoped gather-worker
+collision policy. Decision: ADR 021, which narrows ADR 017's invariant (see
+the collision constraint below) and amends ADR 018–020 forward. What it proves
+and does not — including the `rts_economy` node-click regression this branch
+introduced at `af16e7c` and then fixed by ranking exact pickshapes above a
+building's sprite quad: `docs/rts-feedback-polish-functional-close.md`.
+
 ## Workspace layout
 
 - `.` (root) — app binary crate: `cargo run -- run` (game), `bench` (frozen, non-gating). Entry `src/main.rs`.
@@ -79,7 +91,7 @@ cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 30
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
 ```
 - DCO: `./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA` on candidate range only; substitute real SHAs for the two tokens; see `docs/05-testing.md`.
-- The `rts` line is the interactive RTS smoke: one tracked script drives select → gather → build (command card) → produce → minimap jump → pause menu → settings edit → `quit`, and asserts an exit line ending `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. `audio --check` regenerates every tracked WAV + manifest and byte-compares. Single source of truth for the gate: `docs/05-testing.md`.
+- The `rts` line is the interactive RTS smoke: one tracked script drives select → gather → build (command card) → produce → minimap jump → pause menu → settings edit → `quit`, and asserts an exit line carrying `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`, then the feedback-polish tokens `settings_scroll_px=<n> show_grid=<bool>`. A second tracked script, `assets/scenarios/rts_feedback_polish_v1.script`, drives the chrome path (menu → positional `q` → Settings → slider → grid → wheel → Back → Close Menu) and is asserted by `tests/rts_acceptance.rs`. `audio --check` regenerates every tracked WAV + manifest and byte-compares. Single source of truth for the gate: `docs/05-testing.md`.
 - Toolchain: Rust 1.95.0 pinned via `rust-toolchain.toml`. Linux/NixOS: `nix develop` / `nix flake check`. Windows/macOS: rustup from `rust-toolchain.toml`.
 - On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip.
 - Golden regeneration (explicit, reviewed): `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine --test gpu_golden -- --ignored update_host_golden`.
@@ -89,7 +101,9 @@ cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptan
 
 - No per-frame allocations in simulation (enforced by `alloc_guard.rs`, per-thread `MeasureGuard`).
 - No per-enemy pathfinding — navigation via flow fields. **This extends to player units**: they descend a pooled field from `nav::FieldPool` (`NAV_FIELD_SLOTS = 8`, exact LRU, ties to the lowest slot), never a per-unit path. Formation slots are bounded terminal steering around one anchor field, not pathfinding.
-- Collision is **two different contracts, and every doc must name which**. Horde `sim/`: *soft separation steering* — a repulsion sum bends the descent vector, never resolves an overlap, and no code or doc may claim horde agents cannot overlap (ADR 009). RTS `rts/`: **hard bodies** — radius 3 cells, contact distance 6, sequential proposal/commit with a continuous sweep, plus bounded push-aside (`MAX_PUSH_DEPTH = 3`, `MAX_PUSHED_BODIES = 8`, one push per body per tick, all-or-nothing) and a ±45°/±90° deflection fallback; no completed tick leaves two RTS unit bodies merged (ADR 017).
+- Collision is **two different contracts, and every doc must name which**. Horde `sim/`: *soft separation steering* — a repulsion sum bends the descent vector, never resolves an overlap, and no code or doc may claim horde agents cannot overlap (ADR 009).
+- The other contract: `rts/` **hard bodies** — radius 3 cells, contact distance 6, sequential proposal/commit with a continuous sweep, plus bounded push-aside (`MAX_PUSH_DEPTH = 3`, `MAX_PUSHED_BODIES = 8`, one push per body per tick, all-or-nothing) and a ±45°/±90° deflection fallback.
+- The RTS invariant is **narrow, and never state it unconditionally** (ADR 021 narrowing ADR 017): a tick may leave two RTS unit bodies merged only when both are active gather workers, or when that exact pair is inside its bounded 12-attempt gather-exit transition. Every other pair is repaired, or counted by `body_overlaps` and reported through `TickError::UnrepairableOverlap` — so `body_overlaps=0` is a *policy* claim, not a raw-geometry one. Static terrain, map edges, nodes and finished buildings stay hard for everyone, gathering workers included.
 - Supply is **reserved at enqueue**, never charged at completion, and `Supply::used` is **recomputed** every tick from live units plus queue reservations — never incremented at a call site.
 - Render layers: `ScenePass::overlay` is depth-off and binds texture slot 0, so it is honest **only for procedural rings**. Every textured depth-off element — placement tiles, drag box, rally flag, icons, panel fill, glyphs — must be a `ui` draw group, or it samples the zombie atlas.
 - `sim/` is frozen for phase 1. Its entire phase-1 diff is two visibility keywords (`dir_from_vector` → `pub`, `step_admissible` → `pub(crate)`) plus one `#[cfg(test)]` re-export; the 5 000-agent exit-line hash must not move.

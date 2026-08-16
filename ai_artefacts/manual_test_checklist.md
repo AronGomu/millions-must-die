@@ -213,3 +213,525 @@ command below except what a browser or a human eye must judge.
 - [ ] Run the merge gate's RTS smoke in its real windowed form — `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` — and confirm it exits 0 with the exit line ending `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`. The agent ran this offscreen only; the windowed run is the one that proves window + pointer + audio.
 - [ ] Run `cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300` and the `collision_sprite_v1` twin in their real windowed form and confirm both exit cleanly; the agent ran them offscreen.
 - [ ] Confirm `cargo run -p xtask -- audio --check` prints `audio: ok (7 wav + manifest)` on your machine, and that `git status` is clean afterwards.
+
+## T1 interaction-fsm-menu-close
+
+- [ ] Launch `cargo run -- rts`: confirm top-right control shows framed text `MENU` (not a gear icon); click it and confirm the pause menu opens with a Menu SFX.
+- [ ] Hover and press `MENU`, command-grid cells (empty + filled), selection icons, Settings/Close/Back/window-mode/checkbox rows: confirm idle/hover/pressed/selected/disabled frames are pairwise-distinct and readable.
+- [ ] Open pause menu: confirm Settings still at centre `[960,540]` and Close Menu sits directly below; click Close Menu and confirm return to gameplay with one Menu SFX.
+- [ ] Space to pause, open Menu, Close Menu: confirm manual Space pause is still active (sim stays paused) after close.
+- [ ] Open Menu, press on Settings, drag to Close Menu, release: confirm neither Settings nor Close activates.
+- [ ] Open Menu, press on modal chrome, drag onto the world, release: confirm no world select/order.
+- [ ] Escape nesting still works (Gameplay→Menu→Settings→Menu→Gameplay); no F10 binding appears.
+- [ ] Open Settings: confirm panel is wider, audio rows sit lower (96px pitch), checkbox label rows are fully hittable, Back still works; keyboard-pan track at x=1170 still reads 78 after a click there.
+
+## T2 settings-schema-grid-mutes
+
+- [ ] Back up any existing `~/.local/share/AronGomu/MillionsMustDie/settings-v1.json`, replace it with a pre-grid legacy body (schema 1, no `show_grid` / `*_muted` keys, non-default pan/volumes), launch `cargo run -- rts`, quit: confirm startup `rts: settings ...` line keeps the old numeric values and ends with `show_grid=true master_muted=false music_muted=false voice_muted=false sfx_muted=false` and no warning.
+- [ ] After that first load, open Settings (once UI exposes mutes) or hand-edit the saved file: confirm a subsequent save keeps `schema_version: 1`, same filename, and writes explicit `show_grid` + four mute keys; second identical save is byte-stable.
+- [ ] Hand-write `"music_muted": "yes"` into the JSON and relaunch: confirm warn-and-default (defaults load, warning names the file) rather than a crash or partial mute state.
+- [ ] With music playing, force mute via settings JSON (`master_muted: true`) and relaunch interactive: confirm levels in the debug line stay at prior numbers while audio is silent; flip flag back to false and confirm prior loudness returns without restarting streams mid-cue feel.
+- [ ] `SDL_VIDEODRIVER=offscreen cargo run -- rts --frames 3` still prints no settings warning and never touches the real pref path (defaults only).
+
+## T3 live-sliders
+
+- [ ] Launch `cargo run -- rts`, open Settings: confirm each of the six numeric rows (Keyboard Pan, Edge Pan, Master, Music, Voice, SFX) shows a track, filled range, light thumb, and a framed value field to the right.
+- [ ] Drag Keyboard Pan from the default (48) toward 60 and release outside the track: confirm the value and camera pan speed update *while dragging* (not only on release), ownership stays on that slider, and only one Settings SFX plays for the whole drag.
+- [ ] Drag Master (or Music/Voice/SFX) across several steps: confirm audio level changes live during the drag and repeated motion inside one step does not spam clicks/saves.
+- [ ] Click (no drag) a point on a volume track: confirm it still snaps to the nearest legal step (0..100 step 5) exactly as before.
+- [ ] Force a save failure mid-drag if you can (e.g. replace the settings file with a directory while the panel is open, then drag): confirm the old value/runtime stay, a `SETTINGS NOT SAVED:` warning appears, and a later legal drag step still works without releasing first.
+- [ ] While dragging a slider, release over the world: confirm no unit selection/order and the settings page stays open.
+
+## T4 numeric-editing
+
+- [ ] Launch `cargo run -- rts`, open Settings, click a framed value field (right of Keyboard Pan): confirm it shows selected frame and the current digits; type `999` and press Enter: confirm value becomes 96 (pan max) and camera pan speed matches; one Settings SFX on commit.
+- [ ] Click Master field, type `53`, Enter: confirm it snaps to 55; drag is unnecessary — typed path uses the same clamp_snap.
+- [ ] Click a field, Backspace until empty, Enter: confirm old value remains and no save/gain change occurs.
+- [ ] Click a field, type a new value, press Escape: confirm original value restored and page stays Settings (one Escape does not back to pause menu).
+- [ ] With a valid buffer in a field, click the PAUSE ON FOCUS LOSS checkbox: confirm the typed value commits first, then the checkbox toggles.
+- [ ] With a valid buffer in a field, Alt-Tab away (focus loss): confirm value is saved, text input stops (no stuck IME), pointer/keys clear, and if pause-on-focus-loss is on the pause menu opens.
+- [ ] With no field focused, Escape nesting still works: Gameplay→Menu→Settings→Menu→Gameplay.
+
+## T5 mute-label-controls
+
+- [ ] Launch `cargo run -- rts`, open Settings: confirm each of the four audio rows (Master, Music, Voice, SFX) shows a framed label button above its slider (text: "MASTER", "MUSIC", "VOICE", "SFX" in idle/green tint when unmuted).
+- [ ] Click the MASTER label: confirm it turns selected (green frame), text changes to "MASTER MUTED", all audio buses go silent, and the master/per-bus numeric sliders and fields remain interactive showing the same stored numbers.
+- [ ] Click MASTER label again: confirm it reverts to idle, text returns to "MASTER", audio restores to the exact previous levels, and the slider/field values are unchanged.
+- [ ] Click MUSIC label to mute it, then drag the MUSIC slider to a new value: confirm the stored level changes (slider and field update), but the effective music gain stays 0 while muted.
+- [ ] Unmute MUSIC: confirm the new stored level is immediately heard (gain goes to the dragged value, not the old pre-mute value).
+- [ ] Click VOICE label to mute, then click it again (unmute): confirm only the voice bus is affected; master, music, SFX are unaffected.
+- [ ] Open Settings, mute SFX, close Settings, relaunch `cargo run -- rts` with the same pref path: confirm sfx_muted persists in the settings file and SFX remains muted on relaunch.
+- [ ] Force a save failure (replace settings file with a directory) and click a mute label: confirm the flag rolls back (label stays idle), the old gains are restored, and a `SETTINGS NOT SAVED:` warning appears.
+
+## T6 scroll-and-clip-settings-body
+
+- [ ] Launch `cargo run -- rts`, open Settings: confirm the scrollbar track (right edge) and thumb are visible; thumb top is flush with the body viewport top at scroll=0.
+- [ ] Scroll mouse wheel down inside the settings body: confirm body content moves up (SFX rows come into view), thumb moves down; scroll back up to confirm return to offset=0 and thumb top returns to viewport top.
+- [ ] Wheel while pointer is in the scrollbar area (not the body): confirm the scroll still works (consumed silently, no world action).
+- [ ] Wheel on any other page (gameplay, pause menu): confirm no scroll change occurs.
+- [ ] Drag the scrollbar thumb from top to bottom: confirm it reaches exactly max offset (128 px) and no further; drag from bottom to top: confirm it returns to 0.
+- [ ] Click the scrollbar track above the thumb: confirm one-page-up scroll; click below: one-page-down.
+- [ ] At max scroll, confirm the Back button and any warning text are still visible and clickable (fixed footer, unaffected by scroll).
+- [ ] Scroll part-way, confirm the SFX slider and mute label respond to clicks at their displayed (scrolled) positions; confirm clicking at their content position (off-screen above) is consumed.
+- [ ] Confirm rendered body panels do not bleed outside the body viewport (no pixel spill above y=160 or below y=880).
+- [ ] Close Settings (Back), reopen: confirm scroll resets to 0 (or persists, depending on product decision — the exit line will show `settings_scroll_px=<rounded>` for verification).
+
+## T7 — Positional command keys (QWE/ASD/ZXC)
+
+- [ ] Q on selected Worker opens HQ ghost; W opens Depot ghost; E opens Barracks ghost
+- [ ] Q on selected Barracks queues Soldier; C arms rally
+- [ ] X on selected Worker with slot 7 empty/disabled: no cancel, no SFX
+- [ ] Right-click while ghost pending: ghost cancels, no build order placed
+- [ ] Hotkey letters Q/W/E/A/S/D/Z/X/C visible in bottom-right of each command cell
+- [ ] Disabled/empty cells still show their hotkey letter
+- [ ] R key: no effect in any context (unbound)
+- [ ] Banner text visible in OS window title: "QWE/ASD/ZXC card, right-click cancel"
+- [ ] Pointer clicks on command card still work as before (shared execute_slot path)
+
+## T9 — building sprite pick and full stats card
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --test rts_selection --locked` exits 0 (41 tests)
+- [x] `cargo test -p mmd-engine --test rts_hud --locked` exits 0 (67 tests)
+- [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (26 tests)
+- [ ] Manual: click on the top/side of a building sprite (above the footprint) — confirm it selects the building
+- [ ] Manual: click on a footprint cell below the building sprite — confirm it selects the building
+- [ ] Manual: select HQ with no queue — confirm six-line card: HQ / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
+- [ ] Manual: enqueue Workers at HQ — confirm QUEUE W,W,... and PROGRESS N% update live
+- [ ] Manual: rally flag set — confirm RALLY x,y on line 6
+- [ ] Manual: select Barracks — confirm SUPPLY +0 on line 3
+- [ ] Manual: select an under-construction site — confirm BUILDING N% on line 2, remaining lines explicit
+
+## T10 — Assisted placement (snap to nearest valid footprint)
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --test rts_build --locked` exits 0 (50 tests)
+- [x] `cargo test -p mmd-engine --test rts_pack --locked` exits 0 (41 tests)
+- [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (27 tests)
+- [x] `cargo test --locked --test rts_cli_contract` exits 0 (59 tests)
+- [ ] Manual: move the ghost cursor to a position just outside an obstacle — confirm ghost visibly snaps to green
+- [ ] Manual: click the snapped green ghost — confirm the site appears at the snapped footprint, not the raw cursor position
+- [ ] Manual: move the ghost cursor over the HQ centre — confirm ghost stays red (no snap within radius)
+- [ ] Manual: click the red ghost over the HQ — confirm no building placed, ghost remains pending
+- [ ] Manual: right-click still cancels placement (regression)
+- [ ] Manual: units still do not block placement (regression)
+- [ ] Manual: costs/orders unchanged on successful snap-click
+
+## T11 — Procedural diagonal-line renderer
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `nix shell nixpkgs#shaderc -c bash -c 'glslc -fshader-stage=vertex shaders/glsl/sprite.vert.glsl -o shaders/generated/sprite.vert.spv; glslc -fshader-stage=fragment shaders/glsl/sprite.frag.glsl -o shaders/generated/sprite.frag.spv'` exits 0
+- [x] `cargo run -p xtask -- shaders --check` exits 0 (all 6 manifest hashes re-pinned)
+- [x] `cargo test -p mmd-engine --test gpu_smoke --locked` exits 0 (13 passed)
+- [x] `cargo test -p mmd-engine --test render_correctness --locked` exits 0 (50 passed, includes 5 new T11 tests)
+- [x] `every_tracked_manifest_pins_the_live_shader_and_atlas` passes (shader_canonical_sha256 pinned in all 6 manifests)
+- [x] `golden_frame_matches` passes (phase-0 sprite/ring scene pixel-identical)
+- [ ] Manual: launch `cargo run -- rts`, confirm the existing sprite/ring display is visually unchanged
+
+## T8 (rts-feedback-polish) — Render exact green area selection
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --test rts_pack --locked` exits 0 (43 passed)
+- [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (27 passed)
+- [x] `cargo test -p mmd-engine --test render_correctness --locked` exits 0 (50 passed)
+- [ ] Manual: drag a selection rectangle — world visible through 10% green fill; border is bright opaque green 2px
+- [ ] Manual: backward drag (start bottom-right, drag to top-left) produces identical box
+- [ ] App functional: entities inside the drag rect are still selected on release
+
+## T12 world-grid
+
+- [ ] `cargo run -- rts` shows a thin subdued isometric grid across the full map at startup (show_grid default true).
+- [ ] Opening Settings → SHOW GRID checkbox is visible at scroll 0; clicking it turns the grid off immediately next frame.
+- [ ] Relaunching after toggling off: grid remains off (persisted false).
+- [ ] Toggling back on and relaunching: grid is on (persisted true).
+- [ ] Camera pan: grid lines stay aligned to map edges while panning.
+- [ ] HUD overlays grid (minimap panel, command panel, etc. render above grid).
+- [ ] Selection rings appear on top of grid lines.
+- [ ] No visible performance regression at 320×320 map.
+- [ ] `cargo run -- rts --frames 30` clean-exit line contains `show_grid=true` by default.
+
+## T13 (rts-feedback-polish) — Exempt active gather worker pairs from mutual collision
+
+Automated (all run on `plan/rts-feedback-polish`, base `db9c7e4`):
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --features testkit --test rts_collision --locked` exits 0 (24 passed, 1 ignored)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_world --locked` exits 0 (51 passed)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_acceptance --locked` exits 0 (7 passed)
+- [x] `cargo test -p mmd-engine --features testkit --test frame_allocations --locked -- --test-threads=1` exits 0 (29 passed)
+- [x] `cargo test -p mmd-engine --features testkit --lib --locked` exits 0 (63 passed)
+- [x] `git diff --exit-code -- crates/mmd-engine/src/sim` clean (horde sim untouched)
+- [x] Whole engine suite green except `rts_economy` (3 failures, identical at HEAD `db9c7e4` —
+      pre-existing pick regression `Building(0)` vs `Node(1)`, not from this ticket)
+
+Manual:
+
+- [ ] Manual: `cargo run -- rts` — box-select several workers, right-click a crystal node.
+      They may now walk through and stand on top of each other around the node instead of
+      queueing/shoving. This is the intended change.
+- [ ] Manual: while a gather crowd is overlapping, right-click empty ground with one of them
+      selected. The moment it stops gathering it is pushed back out to a clear cell (immediate
+      hard repair — T14 replaces this with a smoothed 12-tick exit).
+- [ ] Manual: send soldiers (or idle workers) into a gathering crowd — they must still collide
+      hard against the workers and never overlap them.
+- [ ] Manual: gathering workers must still be stopped by walls, buildings and the map edge;
+      no clipping through static geometry while overlapping each other.
+- [ ] Manual: place a building whose footprint covers a gathering crowd — evacuation must
+      still spread every worker to distinct, non-overlapping cells.
+- [ ] App functional: `cargo run -- rts --frames 30` clean-exit line still reports
+      `body_overlaps=0` (the token now counts *policy violations*, not raw overlaps).
+
+Known regression handed to the parent (out of this ticket's Inputs):
+
+- [ ] `cargo test --test rts_acceptance` (shipped-binary script replay) goes from 5 failures at
+      HEAD to 6. New: `the_acceptance_run_builds_two_buildings` (`buildings` 2 vs 3). The tracked
+      script `assets/scenarios/rts_acceptance_v1.script` selects workers by screen coordinate at
+      frames 24/40 and only holds "while the six relocated workers are still on the spawn cells";
+      gathering workers now leave sooner, so one selection click misses (`voice_select` 7 vs 8).
+      Needs a script-coordinate refresh ticket — the script is not in T13's Inputs.
+
+## T14 — bound gather-exit separation with same-component relocation fallback
+
+Branch `plan/rts-feedback-polish`. Ticket
+`ai_artefacts/PLAN_2026_08_14_rts-feedback-polish/T14_gather-exit-separation.md`.
+
+What changed: an active gather pair's collision exemption no longer ends in one frame. A pair
+that stops gathering keeps it for at most `GATHER_SEPARATION_TICKS` (12) separation attempts of
+`GATHER_SEPARATION_STEP_CELLS` (0.5) each, one attempt per pair per tick; the tick that spends
+the last attempt relocates one of the two through the existing same-component
+`nearest_free_body_center` search instead. Either way the pair byte is back to `0` — hard,
+counted by `body_overlap_count`, repairable — before the tick ends. A fallback that finds
+nowhere sets the pair hard, stashes `TickError::UnrepairableOverlap`, and hands the pair to the
+next tick's generic repair. There is no state in which a pair keeps an exemption it did not
+earn.
+
+Automated gates (all run on this branch, this diff):
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo clippy -p mmd-engine --all-targets --all-features --locked` — no new warning in any
+      file this ticket touched (the remaining `too_many_arguments` / unused-import warnings are
+      pre-existing in `rts/hud.rs` and `src/rts_run.rs`)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_collision --locked` — 43 passed
+      (20 new T14 cases + 3 new `rts::collision` unit tests)
+- [x] `cargo test -p mmd-engine --features testkit --test rts_world --locked` — 51 passed
+- [x] `cargo test -p mmd-engine --features testkit --test rts_acceptance --locked` — 7 passed
+- [x] `cargo test -p mmd-engine --features testkit --test frame_allocations --locked --
+      --test-threads=1` — 30 passed, including the new `gather_exit_allocates_nothing`
+- [x] `git diff -- crates/mmd-engine/src/sim` empty (horde sim untouched)
+- [x] Red proven, not assumed: temporarily restoring T13's clear-to-`0` behaviour in
+      `mark_active_gather_pairs` fails 11 of the new cases; restoring T14 returns 43/43
+
+Pre-existing red gates — unchanged by this ticket, not this ticket's to fix:
+
+- [x] `cargo test --test rts_acceptance` (shipped-binary script replay): **6 failures before,
+      6 after** — the same six script-coordinate/milestone cases T13 handed to the parent.
+      This host's Vulkan driver intermittently returns `VK_ERROR_DEVICE_LOST` and inflates that
+      count to 7 or 14 on a bad run; three consecutive clean runs give 6.
+      **Superseded by T15**, which owns the script re-timing those six cases were waiting for:
+      the same command now reads 21 passed / 0 failed.
+- [x] `cargo test -p mmd-engine --features testkit --test rts_economy`: **3 failures before,
+      3 after** (`context_order_with_no_selection_is_a_no_op`,
+      `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`)
+- [x] `cargo test --test validation_contract`: 2 failures, pre-existing — the close docs name
+      `the_drag_box_is_four_edges` and `the_gear_icon_appears_in_the_top_bar`, neither of which
+      exists at `HEAD` (`git grep <name> HEAD -- <file>` returns nothing). Owned by whoever
+      renamed them in `e16f7d7`; this ticket touches neither `rts_pack.rs` nor `rts_hud.rs`.
+
+App functional, run on this diff:
+
+- [x] `cargo run --release -- rts --frames 1600 --inject-input-file
+      assets/scenarios/rts_acceptance_v1.script` clean-exit line reports `body_overlaps=0` over
+      a full script replay that issues *and cancels* gather orders — so real exits ran and the
+      hard-body invariant still held at every completed tick.
+
+Manual, by hand at the keyboard (not yet run — needs a human at `cargo run -- rts`):
+
+- [ ] Box-select several workers, right-click a crystal node. They still walk through and stand
+      on each other around the node (T13's behaviour, unchanged).
+- [ ] While a gather crowd is overlapping, right-click empty ground with one of them selected.
+      The worker must now **slide** out of the crowd over a few frames instead of snapping to a
+      clear cell. Nothing should visibly teleport.
+- [ ] Same, but with the crowd wedged into a corner or against a wall so it cannot slide: after
+      about a fifth of a second the stuck worker relocates to a nearby cell centre exactly once.
+      One jump, not a stutter, and never across a wall into a region it could not have walked to.
+- [ ] Send soldiers (or idle workers) into a gathering or exiting crowd — they must still
+      collide hard and never overlap. A pair mid-exit is exempt from *each other only*.
+- [ ] Exiting workers must still be stopped by walls, buildings and the map edge; no clipping
+      through static geometry while separating.
+- [ ] Known corridor behaviour: walk a group through the narrow corridor on the tracked scene
+      and confirm it is unchanged — the exit path adds no shove and no push chain.
+
+## T15 (rts-feedback-polish) — Gate feedback polish end to end
+
+Integration proof, not new behavior: **no production file changed**. `git diff --stat` for this
+ticket is two script assets and four test files.
+
+What moved, and why:
+
+- `assets/scenarios/rts_acceptance_v1.script` — **re-timed**, not re-aimed. T13 lets an active
+  gather pair pass through its partner instead of shouldering it aside, so the six T3-relocated
+  workers clear the spawn cells sooner than they used to and the builder clicks at frames 40–52
+  landed on empty ground. The two build blocks moved to frames 22–28 and 30–36; every coordinate
+  is unchanged.
+- One coordinate *did* move: the HQ selection at frame 120 is now `960,518`, not `960,540`.
+  `960,540` is the HQ's screen centre, and gathering workers shuttle their loads back to the HQ
+  for the whole run, so a worker sprite quad outranks the building on pick depth at essentially
+  every frame after the group starts working — measured, not guessed: the click failed at frames
+  60, 120, 200, 300, 500, 700 and 1000 alike. `960,518` is `screen_of(160.5, 160.5)`, the HQ's
+  own footprint corner, which `tests/rts_cli_contract.rs`'s `hq_click_screen` already uses for
+  exactly this reason. `960,540` is still in the script — as the SETTINGS button at frame 1330.
+- `assets/scenarios/rts_feedback_polish_v1.script` — new, focused, and deliberately *not* folded
+  into the canonical script: `acceptance_audio_counts_are_exact` pins the canonical run's audio
+  counters cue by cue, and adding chrome to it would inflate every one of those numbers.
+
+No expected value in `tests/rts_acceptance.rs` changed. Once the script was re-timed, every
+pinned counter recovered its documented value on its own — `buildings=3`, `units=8`,
+`supply=9/20`, `voice_select=8`, `voice_order=9`, `voice_reject=1`, `sfx_ui=8`, and the
+`rts: audio` line's `voice=7 cues=17 ui=8 reject=1 music=1`.
+
+Automated gates (all run on this branch, this diff):
+
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `cargo check --workspace --all-targets --all-features --locked` exits 0
+- [x] `cargo test -p mmd-engine --features testkit --test rts_acceptance --locked` — **12 passed**
+      (was 7): `focused_script_hq_click_picks_the_building_not_a_worker`,
+      `focused_script_back_button_is_fixed_under_scroll`,
+      `the_focused_script_coordinates_hit_what_they_name`,
+      `grid_toggle_changes_frame_not_world_hash`, `canonical_gather_overlap_is_non_vacuous`
+- [x] `cargo test -p mmd-engine --features testkit --test frame_allocations --locked --
+      --test-threads=1` — **31 passed**, including the new
+      `combined_feedback_frame_allocates_nothing` (grid-on world pack + HUD + interactive
+      settings modal at a non-zero scroll offset + the bounded gather-exit transition, entered
+      inside the measured window by cutting a merged gather group loose on iteration 0)
+- [x] `cargo test --locked --test rts_acceptance` — **21 passed, 0 failed** (was 11 passed /
+      **6 failed** at `f6165ca`). New: `feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q`,
+      `canonical_acceptance_reports_zero_collision_policy_violations`,
+      `focused_run_is_cross_process_deterministic`, `the_focused_run_fires_every_entry`
+- [x] `cargo test --locked --test rts_cli_contract` — **60 passed**, including the new
+      `focused_script_is_independent_of_persisted_gameplay_settings`
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
+      exit 0 — `hash=565369dbcf2f49e74a5cdd15acf2b154a646e012706c6b10ddb2fdc6dd71f941`,
+      `buildings=3 units=8 supply=9/20 body_overlaps=0 ui_page=gameplay sfx_ui=8`
+- [x] `cargo run -- rts --frames 300 --inject-input-file assets/scenarios/rts_feedback_polish_v1.script`
+      exit 0 — `hash=89131ec96678215e2906df57332525f867fbb9e484262606d5e38b4dc00df741`,
+      `crystal=250 supply=7/10 keyboard_pan=78 show_grid=false settings_scroll_px=72
+      ui_page=gameplay paused=false sfx_ui=6 voice_select=0 voice_order=0 voice_reject=0`
+- [x] `cargo run -- run --agents 5000 --frames 300` exit 0,
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` — the value pinned
+      since T4, unchanged. `collision_mid_v1` → `3df604770021490eb416b38bcd9bc4a25bb417638010c458d5563a17578d268a`,
+      `collision_sprite_v1` → `5561f201e8040451c8c1692849643e7c9ca8c48ffd89e949883a13c2db97cce4`
+- [x] `git diff -- crates/mmd-engine/src/sim` empty (horde sim untouched)
+- [x] GPU goldens inspected, **not** regenerated: `MMD_REQUIRE_GPU=1 cargo test -p mmd-engine
+      --features testkit --test gpu_golden --locked` 12 passed with no `MMD_UPDATE_GOLDEN`;
+      `gpu_smoke` 13 passed; `render_correctness` 50 passed;
+      `git status --porcelain lab/goldens/ assets/sprites/generated/` empty
+
+Pre-existing red gates — unchanged by this ticket, not this ticket's to fix:
+
+- [x] `cargo test -p mmd-engine --features testkit --test rts_economy`: **3 failures before,
+      3 after** (`context_order_with_no_selection_is_a_no_op`,
+      `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`)
+- [x] `cargo test --locked --test validation_contract`: **2 failures before, 2 after** —
+      `phase1_close_doc_names_only_real_tests` and `phase1_1_close_names_only_real_tests`, both
+      on close docs naming `the_drag_box_is_four_edges` / `the_gear_icon_appears_in_the_top_bar`,
+      renamed before this branch. This ticket adds test names and renames none, so the count is
+      untouched; the close docs are outside its Inputs list.
+- [x] `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings`: **3
+      `too_many_arguments` errors before, 3 after**, all in `crates/mmd-engine/src/rts/hud.rs`
+      (lines 1078, 1118, 1637) — a production file this ticket does not touch.
+
+Known host flake, not a code defect: this machine's NVIDIA driver raises `NVRM: Xid 69` for the
+app under sustained back-to-back GPU runs, and the affected process exits 1 with
+`vkQueueSubmit VK_ERROR_DEVICE_LOST` before it prints an exit line. The first Xid of this session
+predates the first file edit. Every gate above was captured on a run that did **not** hit it;
+`tests/rts_acceptance.rs` reads 21/21 on a rested device. Mitigation applied inside this ticket's
+own Inputs: `the_acceptance_run_is_deterministic` and `phase1_1_run_is_cross_process_deterministic`
+now share one *second* canonical process (`second_acceptance_run`) instead of spawning one each,
+so the file spends two thousand-frame processes on the device rather than three.
+
+Manual, by hand at the keyboard (not yet run — needs a human at `cargo run -- rts`):
+
+- [ ] Open the game. The isometric world grid is on by default. Open MENU → SETTINGS, click the
+      SHOW GRID row anywhere along its width (not only the 32 px box), and confirm the grid
+      disappears; back out and confirm it stays off for the rest of the session.
+- [ ] With SETTINGS open, drag the KEYBOARD PAN slider from its left edge to the middle and watch
+      the number track the pointer *while dragging*, not only on release.
+- [ ] Scroll the settings body with the wheel. The BACK button must not move — it is a fixed
+      footer below the scrolling area — while the rows above it slide under the panel edge.
+- [ ] From the settings panel press BACK, then CLOSE MENU. You must land back in gameplay with
+      the simulation running, not on a paused menu.
+- [ ] Select the HQ by clicking its near footprint corner (not its centre while workers are
+      standing on it) and press `Q`. A Worker must be enqueued — the card's slot 0 highlights and
+      50 crystal leaves the bank.
+- [ ] Do the same with nothing selected: `Q` must do nothing at all (no cue, no debit).
+
+## T16 (rts-feedback-polish) — Docs, ADR close, and the human-only pass
+
+Docs-only ticket: no production file changed. `git diff --stat` for this ticket is docs, the
+ADR set, this checklist and `tests/validation_contract.rs`.
+
+Automated gates (run on this branch, this diff — full output in the ticket report):
+
+- [x] `cargo test --locked --test validation_contract` — **21 passed, 0 failed** (was 12 passed /
+      2 failed at `d5ccfcd`). Seven new tests: `feedback_polish_close_names_only_real_tests`,
+      `feedback_polish_systems_have_behavioral_tests`,
+      `feedback_polish_adr_is_accepted_and_amended_forward`,
+      `feedback_polish_architecture_page_is_landed_with_evidence`,
+      `rts_overlap_invariant_names_its_gather_exception`,
+      `glossary_defines_the_feedback_polish_vocabulary`,
+      `manual_checklist_covers_every_human_only_flow`. The two pre-existing failures were stale
+      test names in the phase-1 and phase-1.1 close docs and are repaired here.
+- [x] `cargo fmt --all -- --check` exits 0
+- [x] `git diff -- crates/mmd-engine/src/sim` empty (horde sim untouched)
+- [x] No golden PNG regenerated: `git status --porcelain lab/goldens/ assets/sprites/generated/`
+      empty
+
+Regression introduced by this branch — **now fixed**:
+
+- [x] `cargo test -p mmd-engine --test rts_economy`: 3 failures
+      (`context_order_with_no_selection_is_a_no_op`,
+      `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`).
+      Bisected to `af16e7c` (building sprite ∪ footprint pick): green at `d7ddb60`, red at
+      `af16e7c`. `af16e7c` is **not** an ancestor of `main`, so this was a regression this
+      branch introduced, not a pre-existing red gate — the earlier entry here that called it
+      "pre-existing, out of this ticket's Requirements" was wrong. Fixed by the tie rule:
+      `pick_at` consults a building's rendered sprite quad only as a fallback tier, after the
+      exact shapes (unit body/sprite, node rect, building footprint) matched nothing. Re-run:
+      38 passed, 0 failed, with the three tests' original expectations untouched.
+
+Pre-existing red gates — **still red**, out of this ticket's Requirements:
+
+- [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 3
+      `too_many_arguments` before, 3 after, all in `crates/mmd-engine/src/rts/hud.rs`.
+
+Rest of the merge gate, run in order on this diff:
+
+- [x] `nix flake check` — "all checks passed!"
+- [x] `cargo run -p xtask -- bootstrap --check`, `shaders --check`, `atlases --check`,
+      `audio --check` — all exit 0
+- [x] `cargo run -- run --agents 5000 --frames 300` — exit 0,
+      `hash=864147ca3a0e09f7ebc5762b778fce193e705a2bc943ceaf67acf087581ee881` (unchanged);
+      `collision_mid_v1` → `3df604770021490eb416b38bcd9bc4a25bb417638010c458d5563a17578d268a`,
+      `collision_sprite_v1` → `5561f201e8040451c8c1692849643e7c9ca8c48ffd89e949883a13c2db97cce4`
+- [x] `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`
+      — exit 0, `hash=565369dbcf2f49e74a5cdd15acf2b154a646e012706c6b10ddb2fdc6dd71f941`,
+      `body_overlaps=0 ui_page=gameplay sfx_ui=8 keyboard_pan=78 settings_scroll_px=0 show_grid=true`
+- [x] Host GPU flake seen again in the joined `cargo test --workspace` run
+      (`VK_ERROR_DEVICE_LOST` in `the_acceptance_run_is_deterministic`,
+      `phase1_1_run_is_cross_process_deterministic`, `a_left_click_places_the_ghost`,
+      `a_right_click_moves_the_selection`). All pass standalone on a rested device:
+      `--test rts_acceptance` 21/21, `--test rts_cli_contract` 60/60, `gpu_smoke` 13/13.
+- [x] `MMD_REQUIRE_GPU=1 cargo test --workspace --locked` — no device-lost this pass; fails on
+      the same 3 `rts_economy` tests plus `dummy_driver_run_does_not_touch_settings` and
+      `no_rts_run_creates_the_real_user_config`, which force `SDL_VIDEODRIVER=dummy` and so have
+      no GPU device: `MMD_REQUIRE_GPU=1` turns their legitimate skip into a failure. Environment
+      interaction in tests this ticket does not touch.
+
+### Manual pass — every flow no offscreen test can prove
+
+Run `cargo run -- rts` on the development host, with sound on and a real pointer.
+
+**Control feedback**
+
+- [ ] Hover each of MENU, a command cell, a checkbox label row and a mute label: the frame
+      brightens on hover and darkens while pressed, and releasing off the control does nothing.
+- [ ] A selected command cell stays in its selected tint after the pointer leaves; a disabled
+      cell never lights up on hover, pressed or click, and plays no sound.
+
+**Menu, Close and pause**
+
+- [ ] MENU (top right) opens the pause menu; Escape backs out one level at a time
+      (Settings → pause menu → gameplay).
+- [ ] CLOSE MENU returns to gameplay with the simulation running.
+- [ ] Press Space to pause manually, open and close the menu: the manual pause survives, and the
+      sim is still paused after CLOSE MENU.
+
+**Sliders**
+
+- [ ] Drag all six sliders (keyboard pan, edge pan, master, music, voice, SFX) end to end. Each
+      number tracks the pointer while dragging, snaps to legal steps, and the effect is audible
+      or visible immediately — not on release.
+- [ ] Drag a slider off the panel and release: the value stays where the drag left it and no
+      world selection happens underneath.
+
+**Numeric fields**
+
+- [ ] Type into a numeric field and press Enter: the value clamps, snaps to the nearest step and
+      commits.
+- [ ] Type and then click elsewhere (pointer blur): the same commit happens.
+- [ ] Type and then Alt-Tab away: the edit finalises before the window loses focus, and the
+      pause-on-focus-loss behaviour is unchanged.
+- [ ] Type and press Escape: the original value returns and the menu does **not** navigate back.
+- [ ] Clear the field and press Enter: the original value returns and nothing is saved.
+
+**Mutes**
+
+- [ ] Click each of the four bus labels (master, music, voice, SFX). Sound from that bus stops,
+      the label reads muted and takes the selected frame, and the number beside it is unchanged.
+- [ ] Unmute: the exact previous level returns. Quit, relaunch, and confirm the mute flags and
+      the levels persisted.
+
+**Scrolling and clipping**
+
+- [ ] Scroll the settings body with the wheel: content moves in the direction the wheel says,
+      and stops at both ends.
+- [ ] Drag the scrollbar thumb: it follows the pointer and keeps following it outside the panel.
+- [ ] Watch a row at the viewport edge: it is clipped mid-row, not popped in or out whole.
+- [ ] BACK and the warning line stay fixed while the body scrolls.
+- [ ] Resize the window to a 4:3 shape so letterbox bars appear, then scroll with the pointer
+      **inside a bar**: nothing scrolls. Scroll inside the content: it scrolls normally.
+
+**World grid**
+
+- [ ] The grid is visible on first launch and covers the whole map, including its far corners.
+- [ ] Toggle SHOW GRID off, quit, relaunch: the grid is still off (it persists).
+- [ ] With the grid on, select units: selection rings draw over the grid, never under it.
+
+**Placement**
+
+- [ ] Start a Depot placement and move the cursor onto blocked ground: the green preview snaps to
+      a nearby legal footprint; click and confirm the building lands exactly on the green
+      footprint you saw, not on the cell under the cursor.
+- [ ] Repeat at a map corner, where the ghost saturates: the snap still ranks from the drawn
+      corner, and the committed footprint is the previewed one.
+- [ ] Move onto deeply blocked ground with nothing legal nearby: the ghost is red and the click
+      does nothing.
+
+**Building card**
+
+- [ ] Click the top of an HQ sprite corner, well above its footprint: the building is selected,
+      not the worker standing next to it.
+- [ ] Read the card: exactly six lines — kind, READY/BUILDING %, SUPPLY, QUEUE, PROGRESS, RALLY.
+      Queue entries read oldest first.
+
+**Commands**
+
+- [ ] With the HQ selected, press each of Q W E A S D Z X C in turn: the key fires the command
+      in that positional cell of the 3×3 card and nothing else.
+- [ ] Confirm the keyboard fires no click sound while pointer clicks on the same cells do.
+- [ ] With a placement pending, right-click: the placement cancels. Right-click with nothing
+      pending: no order is issued.
+
+**Gather overlap**
+
+- [ ] Send six workers onto one crystal node: they overlap on the node instead of shoving each
+      other off it, and keep delivering.
+- [ ] Right-click a distant point to pull one overlapping worker away: it separates smoothly
+      over several ticks (its bounded exit), it does not teleport, and the pair goes hard again
+      the moment it is clear.
+- [ ] Wall a merged pair in — build so the pair is boxed against terrain, then order one away.
+      Watch the fallback relocate a worker inside the same region. If nothing is reachable the
+      run must report a violation on the exit line (`body_overlaps=` non-zero) rather than
+      leaving the pair quietly merged forever.
+- [ ] Move a soldier into a gathering worker: they collide hard, as any non-gather pair does.
+
+**Docs**
+
+- [ ] Open `docs/rts-feedback-polish-architecture.html` in a browser: the badge reads LANDED,
+      the evidence table resolves, and both footer links open.

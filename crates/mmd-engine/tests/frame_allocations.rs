@@ -13,9 +13,11 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, GatherPhase, OWNER_PLAYER, Order,
-    OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots,
-    hud_hit_test, minimap_projection, pack_frame, pack_hud,
+    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, FramePackOptions, GatherPhase,
+    InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER,
+    Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS,
+    command_slots, hud_hit_test, minimap_projection, modal_hit_test, pack_frame,
+    pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::Cell;
@@ -444,7 +446,7 @@ fn pack_frame_allocates_nothing() {
     let packed = frame.instance_count();
     assert_eq!(
         packed,
-        17 + 1 + 1 + 65 + 4,
+        17 + 1 + 1 + 65 + 5,
         "the warm-up must exercise all three layers: world, ring, UI"
     );
 
@@ -514,6 +516,134 @@ fn new_hud_pack_allocates_nothing() {
         packed,
         "re-packing an unchanged world changed the frame"
     );
+}
+
+/// Settings modal with an active typed field must also pack allocation-free
+/// after warmup (`T4`).
+#[test]
+fn settings_edit_field_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let snapshot = ModalSnapshot {
+        window_mode_index: 0,
+        keyboard_pan: 48,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        show_grid: true,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
+        scroll_offset: 0.0,
+    };
+    let interaction = InteractionSnapshot::default();
+    let digits: &[u8] = b"999";
+    let active = Some((NumericSettingId::KeyboardPan, digits));
+
+    let mut frame = RtsFrame::new();
+    pack_modal_interactive(
+        ModalPage::Settings,
+        snapshot,
+        Some("SETTINGS NOT SAVED: test"),
+        &interaction,
+        active,
+        &mut frame,
+    );
+    let packed = frame.instance_count();
+    assert!(packed > 0, "warmup must pack the settings modal");
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        frame.clear();
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            Some("SETTINGS NOT SAVED: test"),
+            &interaction,
+            active,
+            &mut frame,
+        );
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "packing settings with active edit allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(frame.instance_count(), packed);
+}
+
+/// Settings modal packed at non-zero scroll offset must be allocation-free after warmup (`T6`).
+#[test]
+fn scroll_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let snapshot = ModalSnapshot {
+        window_mode_index: 0,
+        keyboard_pan: 48,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        show_grid: true,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
+        scroll_offset: mmd_engine::rts::settings_max_scroll(),
+    };
+    let interaction = InteractionSnapshot::default();
+
+    let mut frame = RtsFrame::new();
+    pack_modal_interactive(
+        ModalPage::Settings,
+        snapshot,
+        None,
+        &interaction,
+        None,
+        &mut frame,
+    );
+    let packed = frame.instance_count();
+    assert!(
+        packed > 0,
+        "warmup must pack the settings modal at max scroll"
+    );
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        frame.clear();
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            None,
+            &interaction,
+            None,
+            &mut frame,
+        );
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "packing settings at non-zero scroll allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(frame.instance_count(), packed);
 }
 
 #[test]
@@ -704,6 +834,78 @@ fn the_gather_loop_allocates_nothing() {
         h.world().resources().crystal > 300,
         "the measured ticks banked nothing"
     );
+}
+
+/// The bounded gather-exit transition is under the same contract as the rest
+/// of the movement pass.
+///
+/// It is the one part of the pass that is easy to get wrong here: it takes a
+/// snapshot of every unit body, walks every live pair, and — when a bound runs
+/// out — falls through to the whole-grid relocation search. All three are
+/// preallocated or allocation-free, and the measured window covers a full
+/// bound plus the fallback so none of them is skipped.
+#[test]
+fn gather_exit_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6);
+    // Warm-up outside the scope, exactly as `movement_allocates_nothing` does:
+    // the first field acquire is the miss that settles the scratch heap.
+    let crystal_nodes = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal));
+    assert_eq!(
+        h.world_mut().order_gather_group(&workers, crystal_nodes[0]),
+        Ok(6)
+    );
+    h.step_exact(120);
+
+    // Park the whole shift inside one another and give the heap one tick of
+    // active-gather provenance, so cutting the orders below starts six real
+    // exits at once rather than five clean pairs.
+    for (k, &id) in workers.iter().enumerate() {
+        assert!(
+            h.world_mut()
+                .force_position_for_test(id, [162.5 + k as f32 * 0.5, 178.5])
+        );
+        assert!(h.world_mut().force_order_for_test(
+            id,
+            Order::Gather {
+                node: crystal_nodes[0],
+                phase: GatherPhase::Mining { ticks_left: 10_000 },
+            }
+        ));
+    }
+    h.step_exact(1);
+    assert!(
+        h.world().raw_body_overlap_count() >= 1,
+        "the shift must really be merged, or the measured ticks exercise no \
+         exit at all"
+    );
+
+    let guard = MeasureGuard::enter();
+    for &id in &workers {
+        assert!(h.world_mut().force_order_for_test(id, Order::Idle));
+    }
+    h.step_exact(40);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(
+        guard.allocations(),
+        0,
+        "the gather-exit transition allocated"
+    );
+    guard.assert_zero();
+    drop(guard);
+
+    // ...and the exits really ran to their end: a pass that did nothing
+    // allocates nothing either.
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "every exit must have finished inside its bound"
+    );
+    assert_eq!(h.world().raw_body_overlap_count(), 0);
 }
 
 /// Selection is under the same zero-allocation contract as the rest of the
@@ -1156,5 +1358,260 @@ fn joined_phase1_1_frame_allocates_nothing() {
         h.world().body_overlap_count(),
         0,
         "the measured window let two bodies penetrate"
+    );
+}
+
+/// Building detail with a full queue (5 Workers), rally, and SUPPLY/PROGRESS
+/// lines must be allocation-free — the longest-path building card.
+#[test]
+fn full_building_detail_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    h.world_mut().selection_mut().insert(hq);
+    h.world_mut().resources_mut().crystal = 10_000;
+    // Scene starts with 6 workers (6 supply used); HQ grants 10, leaving 4 free.
+    for _ in 0..4 {
+        assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    }
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    let cursor = [960.0, 540.0];
+
+    // Warm-up: any first-frame growth settles now.
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), cursor, None, &mut frame);
+    pack_hud(h.world(), &mut frame);
+    let packed = frame.instance_count();
+    assert!(packed > 0, "warmup must pack something");
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        pack_frame(h.world(), cursor, None, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(guard.allocations(), 0, "full building detail HUD allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        frame.instance_count(),
+        packed,
+        "re-packing changed the frame"
+    );
+}
+
+/// `placement_candidate` searches a bounded stack loop: no Vec, no alloc.
+/// Verified with a blocked raw position so the search path activates.
+#[test]
+fn placement_search_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = h.ids_of_kind(mmd_engine::rts::EntityKind::Unit(
+        mmd_engine::rts::UnitKind::Worker,
+    ))[0];
+
+    // Block CLEAR_CORNER so the snap search activates.
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    assert!(
+        h.world_mut()
+            .confirm_placement(Cell { x: 180, y: 176 }, w0)
+            .is_ok()
+    );
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+
+    // Warm-up outside the measure scope.
+    let cursor = Cell { x: 184, y: 180 };
+    let _ = placement_candidate(h.world(), BuildingKind::Depot, cursor);
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        std::hint::black_box(placement_candidate(h.world(), BuildingKind::Depot, cursor));
+    }
+    assert_eq!(guard.allocations(), 0, "placement_candidate allocated");
+    guard.assert_zero();
+}
+
+// ── T12: Grid no-alloc ───────────────────────────────────────────────────────
+
+/// `pack_frame_with_options(show_grid=true)` must not allocate — the overlay
+/// buffer is reserved at `MAX_ENTITIES + MAX_GRID_LINES` in `RtsFrame::new`.
+#[test]
+fn grid_pack_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    let cursor = [960.0, 540.0];
+    let options = FramePackOptions { show_grid: true };
+
+    // Warm-up.
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), cursor, None, options, &mut frame);
+
+    let guard = MeasureGuard::enter();
+    for _ in 0..600 {
+        pack_frame_with_options(h.world(), cursor, None, options, &mut frame);
+        std::hint::black_box(frame.instance_count());
+    }
+    assert_eq!(guard.allocations(), 0, "grid pack allocated");
+    guard.assert_zero();
+}
+
+#[test]
+fn grid_capacity_is_at_least_max_map() {
+    // Total overlay capacity at construction must cover MAX_ENTITIES rings
+    // plus MAX_GRID_LINES grid instances without growing the buffer.
+    let frame = RtsFrame::new();
+    assert!(
+        frame.overlay.capacity() >= mmd_engine::rts::MAX_ENTITIES + MAX_GRID_LINES,
+        "overlay capacity {} < MAX_ENTITIES + MAX_GRID_LINES ({})",
+        frame.overlay.capacity(),
+        mmd_engine::rts::MAX_ENTITIES + MAX_GRID_LINES
+    );
+}
+
+/// T15: the *joined feedback* frame — everything the focused polish path and
+/// the canonical run exercise together, in one measured window.
+///
+/// On top of `joined_phase1_1_frame_allocates_nothing` this adds the three
+/// surfaces the feedback-polish slice introduced: the world pack with the
+/// default-on grid (`T12`), the interactive settings modal packed at a
+/// non-zero scroll offset with its hit test (`T1`/`T6`), and the bounded
+/// gather-exit transition (`T13`/`T14`), which is entered *inside* the
+/// window by cutting a merged gather group loose on the first iteration.
+///
+/// Each of those already has its own case above; this one exists because an
+/// allocation can hide in the seam between two individually-clean subsystems,
+/// and the seam is what ships.
+///
+/// `raw_body_overlap_count` / `body_overlap_count` are deliberately outside
+/// the measured window: both are observation seams that build their own live
+/// list, never a per-frame path.
+#[test]
+fn combined_feedback_frame_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert_eq!(workers.len(), 6, "the scene's six starting workers");
+    for &id in &workers {
+        h.world_mut().selection_mut().insert(id);
+    }
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    assert!(
+        h.world_mut().order_gather_group(&workers, node).is_ok(),
+        "the whole group must take the gather order before measuring"
+    );
+
+    // The two scripts' own geometry, so this frame is the shipped one.
+    let cursor = [960.0, 540.0];
+    let drag = Some(DragBox {
+        a: [850.0, 520.0],
+        b: [1000.0, 600.0],
+    });
+    let node_quad_corner = [897.0, 411.0];
+    let command_slot_1 = [1800.0, 888.0];
+    let grid_row = [960.0, 580.0];
+    let options = FramePackOptions { show_grid: true };
+    let scroll = mmd_engine::rts::SETTINGS_SCROLL_STEP_PX;
+    let snapshot = ModalSnapshot {
+        window_mode_index: 2,
+        keyboard_pan: 78,
+        edge_pan: 48,
+        confine_pointer: true,
+        pause_on_focus_loss: false,
+        show_grid: false,
+        master: 80,
+        music: 35,
+        voice: 70,
+        sfx: 60,
+        master_muted: false,
+        music_muted: false,
+        voice_muted: false,
+        sfx_muted: false,
+        scroll_offset: scroll,
+    };
+    let interaction = InteractionSnapshot::default();
+
+    let mut frame = RtsFrame::new();
+    let mut receipts = OrderReceiptBuffer::new();
+
+    // Warm-up outside the scope: the nav field, every packing buffer and the
+    // receipt buffer grow now, not under the guard. Long enough that the
+    // group has converged on the node and really is interpenetrating under
+    // the T13 gather exemption — otherwise cutting it loose below would enter
+    // no separation transition at all.
+    for _ in 0..8 {
+        h.step_exact(1);
+        let view = h.world().iso_view();
+        let _ = h
+            .world_mut()
+            .issue_context_order_at(&view, node_quad_corner, &mut receipts);
+        pack_frame_with_options(h.world(), cursor, drag, options, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            None,
+            &interaction,
+            None,
+            &mut frame,
+        );
+    }
+    h.step_exact(400);
+    let merged = h.world().raw_body_overlap_count();
+    assert!(
+        merged > 0,
+        "the gather group never merged, so the measured window would enter no \
+         separation transition"
+    );
+    let packed = frame.instance_count();
+    assert!(
+        packed > 17,
+        "the warm-up must have packed more than the bare world"
+    );
+
+    let far = [1200.0, 700.0];
+    let guard = MeasureGuard::enter();
+    for i in 0..120 {
+        h.step_exact(1);
+        let view = h.world().iso_view();
+        // Iteration 0 cuts the merged gather group loose: every following tick
+        // runs the bounded exit — gradual attempts, refused candidates and the
+        // same-component relocation fallback — inside the measured window.
+        let target = if i == 0 { far } else { node_quad_corner };
+        let result = h
+            .world_mut()
+            .issue_context_order_at(&view, target, &mut receipts);
+        std::hint::black_box((result.accepted, receipts.as_slice().len()));
+        pack_frame_with_options(h.world(), cursor, drag, options, &mut frame);
+        pack_hud(h.world(), &mut frame);
+        pack_modal_interactive(
+            ModalPage::Settings,
+            snapshot,
+            None,
+            &interaction,
+            None,
+            &mut frame,
+        );
+        std::hint::black_box(minimap_projection(h.world()).scale);
+        std::hint::black_box(command_slots(h.world())[1].enabled);
+        std::hint::black_box(hud_hit_test(h.world(), command_slot_1));
+        std::hint::black_box(modal_hit_test(ModalPage::Settings, grid_row, scroll));
+    }
+    assert_eq!(guard.allocations(), 0, "a joined feedback frame allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        h.world().body_overlap_count(),
+        0,
+        "the measured window left a collision-policy violation behind"
     );
 }

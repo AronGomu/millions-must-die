@@ -38,6 +38,17 @@ pub struct SpriteInstance {
 /// keeps the ring on the same pipeline and the same vertex format as a sprite.
 pub const RING_SENTINEL: f32 = -1.0;
 
+/// Value written to `uv_rect.x` to select the shader's diagonal-line branch.
+///
+/// Sits below the ring sentinel range so the shader can distinguish the three
+/// instance kinds with two comparisons:
+///   `< -1.5` → line, `>= -1.5 && < 0` → ring, `>= 0` → sprite.
+///
+/// Encoding: `pos = a`, `size = b - a` (segment vector),
+/// `uv_rect = [DIAGONAL_LINE_SENTINEL, thickness_px, 0, 0]`.
+/// The struct stays 48 bytes — no new fields.
+pub const DIAGONAL_LINE_SENTINEL: f32 = -2.0;
+
 impl SpriteInstance {
     /// Byte size of one instance record.
     pub const STRIDE: u32 = size_of::<Self>() as u32;
@@ -69,12 +80,32 @@ impl SpriteInstance {
         }
     }
 
+    /// Build a texture-free procedural diagonal-line instance.
+    ///
+    /// Encodes `pos = a`, `size = b - a`, `uv_rect.x = DIAGONAL_LINE_SENTINEL`,
+    /// `uv_rect.y = thickness_px`. A zero-length segment (`a == b`) produces a
+    /// valid instance whose vertex stage collapses to a point, rasterising nothing.
+    pub fn diagonal_line(a: [f32; 2], b: [f32; 2], thickness_px: f32, tint: [f32; 4]) -> Self {
+        Self {
+            pos: a,
+            size: [b[0] - a[0], b[1] - a[1]],
+            uv_rect: [DIAGONAL_LINE_SENTINEL, thickness_px, 0.0, 0.0],
+            tint,
+        }
+    }
+
+    /// Whether the shader will take the diagonal-line branch for this instance.
+    pub fn is_diagonal_line(&self) -> bool {
+        self.uv_rect[0] < -1.5
+    }
+
     /// Whether the shader will take the ring branch for this instance.
     ///
-    /// One predicate shared by the renderer, the tests and the shader comment,
-    /// so "what counts as a ring" cannot be stated two ways.
+    /// Narrows to the ring-sentinel range `[-1.5, 0)` so that line instances
+    /// (which have `uv_rect.x = DIAGONAL_LINE_SENTINEL = -2.0`) are not
+    /// counted as rings. Sentinel contract: `line < -1.5 <= ring < 0 <= sprite`.
     pub fn is_ring(&self) -> bool {
-        self.uv_rect[0] < 0.0
+        self.uv_rect[0] >= -1.5 && self.uv_rect[0] < 0.0
     }
 }
 

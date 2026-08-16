@@ -24,6 +24,16 @@ const SCRIPT: &str = "assets/scenarios/rts_acceptance_v1.script";
 /// Frame budget the merge gate gives it. The script quits before this.
 const FRAMES: &str = "1600";
 
+/// The focused feedback-polish script (`T15`), relative to the crate root.
+///
+/// Deliberately a second script rather than more lines on the canonical one:
+/// [`acceptance_audio_counts_are_exact`] pins the canonical run's audio
+/// counters cue by cue, and folding this chrome into it would inflate every
+/// one of those numbers without proving anything new about the economy loop.
+const FOCUSED_SCRIPT: &str = "assets/scenarios/rts_feedback_polish_v1.script";
+/// Frame budget for the focused script. It quits at frame 72.
+const FOCUSED_FRAMES: &str = "300";
+
 /// Serializes every subprocess this file spawns against the real GPU — the
 /// same reason `tests/rts_cli_contract.rs` does it: enough thousand-frame runs
 /// overlapping on one physical device trips `VK_ERROR_DEVICE_LOST`.
@@ -219,6 +229,47 @@ fn rts(extra: &[&str]) -> Cli {
 /// The tracked acceptance run itself — the exact command the merge gate lists.
 fn acceptance_run() -> Cli {
     rts(&["--frames", FRAMES, "--inject-input-file", SCRIPT])
+}
+
+/// The focused feedback-polish run, as the merge gate lists it.
+fn focused_run() -> Cli {
+    rts(&[
+        "--frames",
+        FOCUSED_FRAMES,
+        "--inject-input-file",
+        FOCUSED_SCRIPT,
+    ])
+}
+
+/// A *second*, independent canonical process, shared by the two determinism
+/// cases below.
+///
+/// Both of them need a run this one did not produce — a shared run compared
+/// with itself would only prove that a `String` equals itself — but neither
+/// needs a second run of its *own*: two processes is the whole claim, and one
+/// pair serves both. Spending a third thousand-frame process on the same
+/// device is what [`shared_acceptance_run`]'s own comment warns about, and this
+/// host reproduces `VK_ERROR_DEVICE_LOST` when enough of them overlap.
+fn second_acceptance_run(case: &str) -> Option<&'static Cli> {
+    static RUN: OnceLock<Option<Cli>> = OnceLock::new();
+    RUN.get_or_init(|| or_skip("a second tracked acceptance run", acceptance_run()))
+        .as_ref()
+        .or_else(|| {
+            eprintln!("SKIP {case}: no GPU device on this host");
+            None
+        })
+}
+
+/// One focused run, shared by every case that only reads its exit line — same
+/// device-serialisation reason as [`shared_acceptance_run`].
+fn shared_focused_run(case: &str) -> Option<&'static Cli> {
+    static RUN: OnceLock<Option<Cli>> = OnceLock::new();
+    RUN.get_or_init(|| or_skip("the focused feedback-polish run", focused_run()))
+        .as_ref()
+        .or_else(|| {
+            eprintln!("SKIP {case}: no GPU device on this host");
+            None
+        })
 }
 
 /// One acceptance run, shared by every case that only reads its exit line.
@@ -475,7 +526,7 @@ fn the_acceptance_run_is_deterministic() {
     };
     // A second, independent process: a shared run compared with itself would
     // prove only that a `String` equals itself.
-    let Some(b) = or_skip("the_acceptance_run_is_deterministic", acceptance_run()) else {
+    let Some(b) = second_acceptance_run("the_acceptance_run_is_deterministic") else {
         return;
     };
     a.assert_success();
@@ -495,6 +546,13 @@ fn the_acceptance_run_is_deterministic() {
 /// `RtsWorld::body_overlap_count` at exit, and a run that drives selection,
 /// group orders, construction and production through the real input path
 /// must never leave a single penetrating pair behind.
+///
+/// `body_overlaps` counts **collision-policy violations**, not raw geometric
+/// overlap: since T13 an active gather pair may pass through its partner, and
+/// since T14 a pair that has just stopped gathering may stay merged for a
+/// bounded separation window. Both are exempt here by design — which is what
+/// [`canonical_acceptance_reports_zero_collision_policy_violations`] below
+/// exists to keep honest.
 #[test]
 fn acceptance_never_has_body_penetration() {
     let Some(cli) = shared_acceptance_run("acceptance_never_has_body_penetration") else {
@@ -505,6 +563,58 @@ fn acceptance_never_has_body_penetration() {
         cli.exit_u32("body_overlaps"),
         0,
         "{cli}\nlive unit bodies penetrate each other at the end of the run"
+    );
+}
+
+/// The same exit field, read for what it actually means — across **both**
+/// shipped scripts, and only over a run that really did pile bodies together.
+///
+/// A zero from an engine that never overlapped anything would be free. This
+/// case spends the canonical run's own economy counters to show the six
+/// starting workers really did converge on one node (both resources banked,
+/// nine accepted order cues) and *still* ended with no violation, and it holds
+/// the focused feedback run — which issues no order at all — to the same zero,
+/// so the field cannot start reporting raw overlap without one of the two
+/// failing. The geometric half of the claim, that those gather pairs do
+/// interpenetrate, is `crates/mmd-engine/tests/rts_acceptance.rs`'s
+/// `canonical_gather_overlap_is_non_vacuous`.
+#[test]
+fn canonical_acceptance_reports_zero_collision_policy_violations() {
+    let Some(cli) =
+        shared_acceptance_run("canonical_acceptance_reports_zero_collision_policy_violations")
+    else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.exit_u32("body_overlaps"),
+        0,
+        "{cli}\nlive unit bodies penetrate each other in violation of the collision \
+         policy at the end of the run"
+    );
+    assert_eq!(
+        cli.exit_u32("voice_order"),
+        9,
+        "{cli}\nthe run did not issue its six crystal gathers, its gas gather and its two \
+         build orders, so nothing ever crowded one node and the zero above is vacuous"
+    );
+    assert!(
+        cli.exit_u32("crystal") > 0 && cli.exit_u32("gas") > 50,
+        "{cli}\nthe run banked neither resource, so its workers never worked a node \
+         together and the zero above is vacuous"
+    );
+
+    let Some(focused) =
+        shared_focused_run("canonical_acceptance_reports_zero_collision_policy_violations")
+    else {
+        return;
+    };
+    focused.assert_success();
+    assert_eq!(
+        focused.exit_u32("body_overlaps"),
+        0,
+        "{focused}\nthe focused run issues no order at all and still reports a collision \
+         policy violation"
     );
 }
 
@@ -664,10 +774,7 @@ fn phase1_1_run_is_cross_process_deterministic() {
     let Some(a) = shared_acceptance_run("phase1_1_run_is_cross_process_deterministic") else {
         return;
     };
-    let Some(b) = or_skip(
-        "phase1_1_run_is_cross_process_deterministic",
-        acceptance_run(),
-    ) else {
+    let Some(b) = second_acceptance_run("phase1_1_run_is_cross_process_deterministic") else {
         return;
     };
     a.assert_success();
@@ -785,4 +892,180 @@ fn comments_and_blank_lines_are_ignored() {
         from_file.final_hash(),
         "{from_flag}\n{from_file}\ncomments or newlines changed what the script did"
     );
+}
+
+// ---------------------------------------------------------------------------
+// T15: the focused feedback-polish run
+// ---------------------------------------------------------------------------
+
+/// The focused script, resolved against the crate root.
+fn focused_script_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(FOCUSED_SCRIPT)
+}
+
+/// The joined feedback path, driven through the shipped binary: pick the HQ,
+/// fire the positional `q` slot, open the menu, drag a live slider, toggle the
+/// grid, scroll the settings body, leave through the fixed Back control and
+/// then through Close Menu.
+///
+/// Every claim below is read off the exit line rather than off "the script
+/// fired", because a scripted entry that lands on a dead control still fires.
+#[test]
+fn feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q() {
+    let Some(cli) =
+        shared_focused_run("feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q")
+    else {
+        return;
+    };
+    cli.assert_success();
+    assert!(
+        !cli.combined().contains("never fired"),
+        "{cli}\nan entry of the focused script never fired"
+    );
+    assert_eq!(
+        cli.exit_field("quit"),
+        "true",
+        "{cli}\nthe script's `quit` never landed"
+    );
+
+    // `q` on a selected HQ is command slot 0 = Worker. The HQ is the only
+    // thing that can take it, and 50 crystal of the starting 300 is the
+    // enqueue's own receipt.
+    assert_eq!(
+        cli.exit_u32("crystal"),
+        250,
+        "{cli}\nthe positional `q` did not debit WORKER_COST from the starting 300"
+    );
+    let supply = cli.exit_field("supply");
+    assert_eq!(
+        supply, "7/10",
+        "{cli}\nsupply {supply}: six live workers plus one reserved by the HQ's queue \
+         is 7 of the starting cap"
+    );
+
+    // The settings edits, each on its own exit token.
+    assert_eq!(
+        cli.exit_u32("keyboard_pan"),
+        78,
+        "{cli}\nthe live slider drag did not land on the 78 cells/s step"
+    );
+    assert_eq!(
+        cli.exit_field("show_grid"),
+        "false",
+        "{cli}\nthe SHOW GRID row did not toggle the setting"
+    );
+    let scroll = cli.exit_u32("settings_scroll_px");
+    assert!(
+        scroll > 0,
+        "{cli}\nsettings_scroll_px is {scroll}: the wheel notch inside the settings \
+         body never moved it"
+    );
+
+    // Both modal exits worked: Back returned to the paused menu, and Close
+    // Menu returned to gameplay with the sim running again.
+    assert_eq!(
+        cli.exit_field("ui_page"),
+        "gameplay",
+        "{cli}\nthe run ended inside a menu; Back then Close Menu must back all the way out"
+    );
+    assert_eq!(
+        cli.exit_field("paused"),
+        "false",
+        "{cli}\nthe sim is still paused after Close Menu"
+    );
+    let (frames, tick) = (cli.exit_u32("frames"), cli.exit_u32("tick"));
+    assert!(
+        tick < frames,
+        "{cli}\ntick {tick} of {frames} frames: the menu never paused the sim"
+    );
+    assert!(
+        tick > 0,
+        "{cli}\nthe sim never advanced at all, so 'it resumed' proves nothing"
+    );
+
+    // Six accepted pointer activations: menu, SETTINGS, the slider, SHOW GRID,
+    // Back, Close Menu. The wheel is not an activation and `q` is a key, so
+    // neither counts.
+    assert_eq!(
+        cli.exit_u32("sfx_ui"),
+        6,
+        "{cli}\nnot every chrome control in the focused path activated"
+    );
+    // ...and this run issues no unit order at all, which is what keeps it
+    // from inflating the canonical run's pinned voice counters.
+    for key in ["voice_select", "voice_order", "voice_reject"] {
+        assert_eq!(
+            cli.exit_u32(key),
+            0,
+            "{cli}\n{key} is not 0: the focused run has started voicing units"
+        );
+    }
+    assert_eq!(cli.exit_u32("music_starts"), 1, "{cli}");
+
+    // The script really is the joined path this test claims, not a subset
+    // that happens to end on the same tokens.
+    let script = std::fs::read_to_string(focused_script_path()).expect("read the focused script");
+    for needle in [
+        "lclick:960,518", // the HQ, by its own footprint corner
+        "key:q",          // the positional command slot
+        "lclick:1888,24", // MENU_RECT
+        "lclick:960,540", // PAUSE_MENU_SETTINGS_BTN
+        "drag:568,288,1170,288",
+        "lclick:960,580", // GRID_CONTROL_RECT
+        "wheel:960,540,-1",
+        "lclick:552,928", // SETTINGS_BACK_BTN
+        "lclick:960,620", // PAUSE_MENU_CLOSE_BTN
+    ] {
+        assert!(
+            script.contains(needle),
+            "the focused script no longer contains `{needle}`"
+        );
+    }
+}
+
+/// The focused run is reproducible across processes, exit line and all.
+#[test]
+fn focused_run_is_cross_process_deterministic() {
+    let Some(a) = shared_focused_run("focused_run_is_cross_process_deterministic") else {
+        return;
+    };
+    let Some(b) = or_skip("focused_run_is_cross_process_deterministic", focused_run()) else {
+        return;
+    };
+    a.assert_success();
+    b.assert_success();
+    assert_eq!(
+        a.phase1_1(),
+        b.phase1_1(),
+        "{a}\n{b}\ntwo processes running the focused script disagreed"
+    );
+    assert_eq!(
+        a.exit_field("show_grid"),
+        b.exit_field("show_grid"),
+        "{a}\n{b}\nthe two runs disagreed about the grid setting"
+    );
+    assert_eq!(
+        a.exit_u32("settings_scroll_px"),
+        b.exit_u32("settings_scroll_px"),
+        "{a}\n{b}\nthe two runs disagreed about the settings scroll offset"
+    );
+}
+
+/// Anti-vacuity for the focused run's clean exit: the same script under a
+/// budget that ends before its last entry must fail.
+#[test]
+fn the_focused_run_fires_every_entry() {
+    let Some(cli) = shared_focused_run("the_focused_run_fires_every_entry") else {
+        return;
+    };
+    cli.assert_success();
+    let Some(short) = or_skip(
+        "the_focused_run_fires_every_entry",
+        rts(&["--frames", "30", "--inject-input-file", FOCUSED_SCRIPT]),
+    ) else {
+        return;
+    };
+    short
+        .assert_actionable_failure()
+        .assert_says(&["never fired"]);
 }

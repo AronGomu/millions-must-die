@@ -42,18 +42,19 @@ struct VSOutput
     float3 ring : TEXCOORD2;
 };
 
-// A negative `uv_rect.x` marks a hitbox-ring instance instead of an atlas
-// sprite. Safe because every rect `frame_uv_rect` can emit is a ratio of
-// non-negative integers, so a sprite's `u0 >= 0` always
-// (`crates/mmd-engine/src/render/atlas.rs`, pinned by
-// `ring_instances_keep_the_pinned_layout`). Reusing the field is what keeps
-// `SpriteInstance` at its locked 48 bytes.
+// A negative `uv_rect.x` marks a non-atlas instance. Two thresholds split
+// three kinds — the writer emits exact sentinel values:
+//   `render::instance::DIAGONAL_LINE_SENTINEL = -2.0`  →  line branch
+//   `render::instance::RING_SENTINEL          = -1.0`  →  ring branch
+//   sprite rects from `frame_uv_rect` have `u0 >= 0`   →  sprite branch
 //
-// This is the *threshold*, not the value: the writer emits
-// `render::instance::RING_SENTINEL = -1.0`, and any negative selects the
-// branch. The invariant is `RING_SENTINEL < MMD_RING_THRESHOLD <= 0.0` — do
-// not "sync" this to -1.0, which would make the test `x < -1.0`, never true,
-// and silently render every ring as an atlas sprite.
+// Sentinel split (threshold values, not sentinel copies — do not "sync" to
+// the sentinel or the comparison becomes `x < -2.0`, which is never true for
+// line instances at exactly -2.0):
+//   `uv_rect.x < MMD_LINE_THRESHOLD`                 → line
+//   `uv_rect.x >= MMD_LINE_THRESHOLD && < MMD_RING_THRESHOLD` → ring
+//   `uv_rect.x >= MMD_RING_THRESHOLD`                → sprite
+#define MMD_LINE_THRESHOLD -1.5
 #define MMD_RING_THRESHOLD 0.0
 
 // Alpha below this is discarded outright rather than blended.
@@ -97,7 +98,35 @@ VSOutput VSMain(VSInput input)
     float ground_y = input.instance_pos.y + input.instance_size.y;
     float depth = max(saturate(ground_y * depth_scale + depth_bias), MMD_DEPTH_EPSILON);
 
-    if (input.uv_rect.x < MMD_RING_THRESHOLD)
+    if (input.uv_rect.x < MMD_LINE_THRESHOLD)
+    {
+        // Diagonal line: transform the unit quad into a rotated rectangle
+        // aligned along the segment vector stored in `instance_size`.
+        // `instance_pos` is endpoint `a`; `instance_size` is `b - a`.
+        // A zero-length segment collapses all four vertices to `a`, producing a
+        // degenerate triangle with zero area that rasterises nothing.
+        float thickness = input.uv_rect.y;
+        float2 seg = input.instance_size;
+        float seg_len = length(seg);
+        float2 line_world;
+        if (seg_len < 1e-6)
+        {
+            line_world = input.instance_pos;
+        }
+        else
+        {
+            float2 tangent = seg / seg_len;
+            float2 normal = float2(-tangent.y, tangent.x);
+            float2 center = input.instance_pos + seg * 0.5;
+            line_world = center + input.corner.x * seg + input.corner.y * normal * thickness;
+        }
+        float2 line_ndc = (line_world / view_size) * 2.0 - 1.0;
+        line_ndc.y = -line_ndc.y;
+        output.position = float4(line_ndc, 0.0, 1.0);
+        output.uv = input.uv;
+        output.ring = float3(2.0, 0.0, 0.0);
+    }
+    else if (input.uv_rect.x < MMD_RING_THRESHOLD)
     {
         // Ring: raw unit-quad coords, no atlas lerp. The pixel stage measures
         // its own distance from the quad centre in these coordinates.
@@ -129,6 +158,12 @@ SamplerState AtlasSampler : register(s0, space2);
 
 float4 PSMain(VSOutput input) : SV_Target0
 {
+    if (input.ring.x > 1.5)
+    {
+        // Diagonal line: premultiplied tint, no atlas sample.
+        return input.tint;
+    }
+
     if (input.ring.x > 0.5)
     {
         // Annulus in unit-quad space: `outer` is the true body radius, so the

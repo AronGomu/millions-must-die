@@ -8,6 +8,19 @@ use super::entity::{BuildingKind, EntityKind};
 use super::selection::footprint_min;
 use super::world::RtsWorld;
 
+/// The minimum corner of a footprint of `edge` cells centred on `cell`.
+///
+/// `cell - edge/2`, saturating at zero. The ghost follows the cursor's cell as
+/// its **centre**, which is what every RTS does; anchoring the min corner to
+/// the cursor makes a 12-cell building appear down-right of the pointer.
+pub fn ghost_min_corner(cell: Cell, edge: u32) -> Cell {
+    let half = edge / 2;
+    Cell {
+        x: cell.x.saturating_sub(half),
+        y: cell.y.saturating_sub(half),
+    }
+}
+
 /// Cost of each building.
 pub const HQ_COST: Resources = Resources {
     crystal: 400,
@@ -185,6 +198,80 @@ pub fn placement_valid(
     }
 
     Ok(())
+}
+
+/// The result of a placement candidate search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PlacementCandidate {
+    pub min: Cell,
+    pub valid: bool,
+}
+
+/// Compute the best placement candidate for `kind` at `cursor_cell`.
+///
+/// Returns the raw min corner unchanged if it is valid. Otherwise searches all
+/// min-corner deltas `dx, dy ∈ [-edge, +edge]` (one-footprint-width radius),
+/// calls `placement_valid` for each, and returns the candidate closest to the
+/// raw min corner (squared `i64` distance measured from the **saturated** raw
+/// min corner; ties broken by lowest flat index `x + y * map_width`). If no
+/// candidate is found, returns the raw min corner with `valid = false`.
+///
+/// Allocates nothing: all work is on the stack.
+pub fn placement_candidate(
+    world: &RtsWorld,
+    kind: BuildingKind,
+    cursor_cell: Cell,
+) -> PlacementCandidate {
+    let edge = kind.footprint_cells();
+    let raw = ghost_min_corner(cursor_cell, edge);
+
+    if placement_valid(world, kind, raw).is_ok() {
+        return PlacementCandidate {
+            min: raw,
+            valid: true,
+        };
+    }
+
+    let width = world.scenario().width();
+    let raw_x = raw.x as i64;
+    let raw_y = raw.y as i64;
+    let radius = edge as i64;
+
+    let mut best_min: Option<Cell> = None;
+    let mut best_dist2: i64 = i64::MAX;
+    let mut best_flat: u64 = u64::MAX;
+
+    for dy in -radius..=radius {
+        for dx in -radius..=radius {
+            let cx = raw_x + dx;
+            let cy = raw_y + dy;
+            if cx < 0 || cy < 0 || cx > u32::MAX as i64 || cy > u32::MAX as i64 {
+                continue;
+            }
+            let cand = Cell {
+                x: cx as u32,
+                y: cy as u32,
+            };
+            if placement_valid(world, kind, cand).is_err() {
+                continue;
+            }
+            let dist2 = dx * dx + dy * dy;
+            let flat = cx as u64 + cy as u64 * width as u64;
+            if dist2 < best_dist2 || (dist2 == best_dist2 && flat < best_flat) {
+                best_dist2 = dist2;
+                best_flat = flat;
+                best_min = Some(cand);
+            }
+        }
+    }
+
+    match best_min {
+        Some(min) => PlacementCandidate { min, valid: true },
+        None => PlacementCandidate {
+            min: raw,
+            valid: false,
+        },
+    }
 }
 
 /// The cells a footprint occupies, as an iterator, from its centre and edge.

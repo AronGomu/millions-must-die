@@ -255,3 +255,36 @@ movement, production and construction runs assert it stays `0`
 `rts_collision::forced_overlap_is_repaired` and
 `rts_collision::an_unrepairable_overlap_is_reported_on_every_tick` keep the
 forced-overlap behaviour green.
+
+One further arming source, added when this amendment met the one below: a
+gather exit that spends its whole bound and finds nowhere to relocate
+(`separate_exiting_pairs` → `relocate_stuck_pair`) hands the world exactly the
+thing this pass exists to clear — a hard merged pair — so it arms the pass too,
+under the same `#[cfg(feature = "testkit")]`. That is a *failure* path, not a
+shipping one: no normal tick reaches it, so the `overlap_repair_runs() == 0`
+invariants above are untouched. In a shipping build, which compiles no pass at
+all, the failure is still reported the tick it happens
+(`TickError::UnrepairableOverlap`) and stays counted by `body_overlaps` for as
+long as it lasts — the exit line is the shipping-visible signal, and it does not
+go quiet.
+
+## Amendment 2026-08-15 — the invariant is no longer unconditional
+
+Superseded in part by
+[ADR 021](021_ADR_rts_feedback_polish_and_gather_collision.md). The decision
+above stands as written for every pair it still covers; what changed is its
+scope, so it is amended here rather than rewritten.
+
+The unconditional form — *no completed tick leaves two RTS unit bodies merged*
+— is now narrowed to:
+
+> Every penetrating RTS-unit pair after a tick is either both active gather
+> workers, or the exact remembered pair inside its bounded 12-attempt
+> gather-exit transition. Every other pair is non-penetrating, or is counted
+> by `body_overlaps` and reported through `TickError::UnrepairableOverlap`.
+
+Everything else in this record is unchanged: static terrain, map edges, nodes
+and finished buildings stay hard for every unit; a pair with a non-worker or
+non-gathering member stays hard; formation slots, spawn, production,
+construction evacuation and placement relocation stay all-body-free. The
+parked single-file corridor defect below is still open and still out of scope.

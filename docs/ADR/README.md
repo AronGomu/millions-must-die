@@ -72,4 +72,11 @@ Accepted phase-1.1 decisions:
 19. [HUD, minimap, menu + input routing](019_ADR_hud_minimap_and_input_routing.md)
 20. [Audio events, buses, runtime + generated assets](020_ADR_audio_events_buses_and_generated_assets.md)
 
+Accepted feedback-polish decision:
+
+21. [RTS feedback polish + gather-worker collision policy](021_ADR_rts_feedback_polish_and_gather_collision.md)
+    — narrows ADR 017's unconditional no-penetration invariant to everything
+    except an active gather-worker pair and its bounded exit; ADR 017–020 carry
+    forward amendments rather than rewritten decisions.
+
 New decision → new ADR. Changed decision → superseding ADR; do not rewrite history silently.

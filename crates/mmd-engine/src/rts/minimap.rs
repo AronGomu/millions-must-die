@@ -9,7 +9,7 @@ use crate::render::IsoView;
 
 use super::entity::EntityId;
 use super::hud::{
-    COMMAND_GRID_COLS, COMMAND_ICON_GAP_PX, COMMAND_ICON_PX, HudLayout, MULTI_ICON_CAP,
+    COMMAND_GRID_COLS, COMMAND_ICON_GAP_PX, COMMAND_ICON_PX, ControlId, HudLayout, MULTI_ICON_CAP,
     MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, PORTRAIT_POS,
     PORTRAIT_PX,
 };
@@ -153,8 +153,8 @@ pub fn minimap_projection(world: &RtsWorld) -> MinimapProjection {
 /// one inverse, not two agreeing derivations.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum HudHit {
-    /// The settings gear, top-right of the top bar.
-    Gear,
+    /// The framed `MENU` text control, top-right of the top bar.
+    Menu,
     /// A point inside the minimap's own map rect, in screen space.
     Minimap([f32; 2]),
     /// One selection-card icon (or the single-selection portrait).
@@ -229,8 +229,8 @@ fn selection_icon_hit(world: &RtsWorld, point: [f32; 2]) -> Option<EntityId> {
 /// with nothing under the pointer, so the app's pointer router can consume
 /// every HUD-area click and never let one fall through as a world order.
 pub fn hud_hit_test(world: &RtsWorld, point: [f32; 2]) -> Option<HudHit> {
-    if point_in_rect(point, HudLayout::GEAR) {
-        return Some(HudHit::Gear);
+    if point_in_rect(point, HudLayout::MENU) {
+        return Some(HudHit::Menu);
     }
     if point_in_rect(point, HudLayout::TOP_BAR) {
         return Some(HudHit::Background);
@@ -255,6 +255,45 @@ pub fn hud_hit_test(world: &RtsWorld, point: [f32; 2]) -> Option<HudHit> {
     }
     if point_in_rect(point, HudLayout::BOTTOM_PANEL) {
         return Some(HudHit::Background);
+    }
+    None
+}
+
+/// Stable [`ControlId`] for a HUD hit, when the hit names a discrete control.
+///
+/// Minimap / Background have no control identity — activation for those stays
+/// owner-scoped rather than ID-matched.
+pub fn control_id_from_hud_hit(world: &RtsWorld, hit: HudHit) -> Option<ControlId> {
+    match hit {
+        HudHit::Menu => Some(ControlId::Menu),
+        HudHit::CommandSlot(i) => Some(ControlId::CommandSlot(i)),
+        HudHit::SelectionIcon(id) => selection_icon_control_id(world, id),
+        HudHit::Minimap(_) | HudHit::Background => None,
+    }
+}
+
+/// Selection-card slot index used as [`ControlId::SelectionIcon`] identity.
+fn selection_icon_control_id(world: &RtsWorld, id: EntityId) -> Option<ControlId> {
+    let sel = world.selection();
+    if sel.is_empty() {
+        return None;
+    }
+    if sel.len() == 1 {
+        return (sel.primary() == Some(id)).then_some(ControlId::SelectionIcon(0));
+    }
+    let store = world.entities();
+    let mut drawn = 0usize;
+    for &sid in sel.ids() {
+        if drawn >= MULTI_ICON_CAP {
+            break;
+        }
+        if store.slot(sid).is_none() {
+            continue;
+        }
+        if sid == id {
+            return Some(ControlId::SelectionIcon(drawn as u8));
+        }
+        drawn += 1;
     }
     None
 }

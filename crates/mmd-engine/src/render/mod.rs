@@ -39,9 +39,10 @@ pub use golden::{
     write_golden_diff,
 };
 pub use instance::{
-    FrameUniforms, ISO_DEPTH_EPSILON, ISO_TILE_H_PER_CELL, ISO_TILE_W_PER_CELL, IsoView,
-    QUAD_INDICES, QUAD_VERTICES, QuadVertex, RING_SENTINEL, SpriteInstance, clip_to_pixel,
-    iso_depth, iso_origin, iso_project, iso_unproject, quad_is_visible, world_to_clip,
+    DIAGONAL_LINE_SENTINEL, FrameUniforms, ISO_DEPTH_EPSILON, ISO_TILE_H_PER_CELL,
+    ISO_TILE_W_PER_CELL, IsoView, QUAD_INDICES, QUAD_VERTICES, QuadVertex, RING_SENTINEL,
+    SpriteInstance, clip_to_pixel, iso_depth, iso_origin, iso_project, iso_unproject,
+    quad_is_visible, world_to_clip,
 };
 pub use renderer::{
     DrawGroup, FRAMES_IN_FLIGHT, MAX_INSTANCES, Readback, ScenePass, SpriteRenderer, VIEW_HEIGHT,
