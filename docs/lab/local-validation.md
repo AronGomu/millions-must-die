@@ -73,6 +73,12 @@ Coordinator builds a deterministic `MMDARC01` content-addressed archive (SHA-256
 $HOME/.local/bin/mmd-lab archive --root . --out-dir /tmp/mmd-archives
 ```
 
+Archive packing uses fixed, non-configurable ceilings: traversal depth `32`, visited entries `16,384`, packed files `8,192`, one file `16 MiB`, retained decoded file data `64 MiB`, and final encoded archive `80 MiB`. Root depth is `0`; a direct child is depth `1`. Every successfully enumerated entry consumes the visited-entry budget before name skipping or symlink filtering, including ordinary directories, skipped names, files, and symlinks. Symlink targets are never traversed. Accepted inputs keep the exact existing `MMDARC01` byte format and hash.
+
+The major byte-buffer subtotal across packing, fake transport, and hash-verification clone paths is bounded by `64 MiB + 3 × 80 MiB = 304 MiB`. This is not an exact peak or a process RAM cap. Path and entry metadata remain structurally bounded by visited/file/depth ceilings plus host filesystem path/name limits, but are not separately byte-capped. Allocator capacity, hashing state, standard-library state, and OS metadata add overhead.
+
+Resource failures use stable messages beginning `archive limit exceeded:`, `archive size overflow:`, or `archive allocation failed:`. Filesystem `io:` details remain OS-defined. `mmd-lab archive` still reports `archive failed: ...` and exits `1`; `validate` and `validate-runner` still report their existing `... archive failed: ...` prefixes and exit `3`. No CLI flag, environment variable, or config setting overrides archive ceilings.
+
 ## Fake 3-agent matrix (no physical hosts)
 
 ```bash
