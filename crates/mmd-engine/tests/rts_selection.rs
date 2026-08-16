@@ -8,8 +8,8 @@ use mmd_engine::render::{Camera, IsoView};
 use mmd_engine::rts::{
     BuildingKind, DRAG_MIN_PX, EntityId, EntityKind, OWNER_NEUTRAL, OWNER_PLAYER, Pick,
     RTS_SPRITE_SIZE_PX, ResourceKind, Selection, UnitKind, building_pick_contains,
-    building_screen_rect, entity_pick_depth, footprint_contains, footprint_min, is_drag,
-    normalise_rect, pick_at, sprite_screen_rect, unit_pick_contains,
+    building_plot_contains, building_screen_rect, entity_pick_depth, footprint_contains,
+    footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect, unit_pick_contains,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
@@ -261,25 +261,22 @@ fn clicking_a_node_selects_it() {
     let slot = h.world().entities().slot(node).expect("live node");
     assert_eq!(h.world().entities().position(slot), [140.5, 150.5]);
 
-    // Click the upper-left corner of the node's sprite rect: that portion of
-    // the sprite is above/left of the HQ's 96x96 building sprite, which
-    // extends far enough south to overlap the node's ground point.
-    let rect = sprite_screen_rect(&view(), [140.5, 150.5]);
-    let screen = [rect[0] + 2.0, rect[1] + 2.0];
+    let screen = view().project(140.5, 150.5);
     assert_eq!(pick_at(h.world(), &view(), screen), Pick::Node(node));
 }
 
 #[test]
 fn clicking_a_node_one_cell_off_misses_it() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    // Pick a point above the node sprite (and above the HQ sprite) — genuinely
-    // outside all entity pick regions in this scene.
-    let node_rect = sprite_screen_rect(&view(), [140.5, 150.5]);
-    let screen = [
-        node_rect[0] + (node_rect[2] - node_rect[0]) * 0.5,
-        node_rect[1] - 4.0,
-    ];
-    assert_eq!(pick_at(h.world(), &view(), screen), Pick::Nothing);
+    let screen = view().project(141.5, 150.5);
+    // One cell east of the node's centre is [948, 448]: past the bottom edge
+    // of the node's sprite rect (y 446), so no exact shape covers it. Before
+    // the building sprite quad became pickable this was `Pick::Nothing`; the
+    // point lies inside the HQ's quad ([936, 432, 1032, 528]), so the fallback
+    // tier now answers with the HQ. What this test pins is unchanged: one cell
+    // off does not pick the node.
+    let hq = h.world().start_hq().expect("hq");
+    assert_eq!(pick_at(h.world(), &view(), screen), Pick::Building(hq));
 }
 
 #[test]
@@ -617,11 +614,21 @@ fn state_hash_sees_the_selection() {
 #[test]
 fn all_building_sprite_corners_are_pickable() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    // Move all workers well clear so none overlap with the HQ sprite.
-    for id in workers(&h) {
+    let hq = h.world().start_hq().expect("hq");
+    // The sprite quad is `pick_at`'s fallback tier, so any exact shape over a
+    // probe point wins it — the scene's workers and its nearest crystal node
+    // both reach into the HQ's quad. Move every other entity well clear so
+    // this stays a test about the quad's geometry.
+    let mut slots = Vec::new();
+    h.world().entities().collect_live(&mut slots);
+    for id in slots
+        .into_iter()
+        .filter_map(|slot| h.world().entities().id_at(slot))
+        .filter(|&id| id != hq)
+        .collect::<Vec<_>>()
+    {
         set_pos(&mut h, id, [40.5, 40.5]);
     }
-    let hq = h.world().start_hq().expect("hq");
     let slot = h.world().entities().slot(hq).expect("live hq");
     let ground = h.world().entities().position(slot);
     let rect = building_screen_rect(&view(), ground, BuildingKind::Hq.footprint_cells());
@@ -747,4 +754,74 @@ fn building_pick_contains_sprite_and_footprint() {
     // Outside both.
     let outside = v.project(172.5, 172.5);
     assert!(!building_pick_contains(&v, ground, edge, outside));
+}
+
+#[test]
+fn an_exact_shape_beats_a_building_sprite_quad() {
+    // The rendered building quad is a square of mostly transparent air whose
+    // ground point is deeper than everything drawn behind it. As a peer of the
+    // exact shapes it swallowed every node and unit standing near a building,
+    // so it is a fallback tier: consulted only when no exact shape matched.
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    // Well clear of every scenario entity, which all sit near the HQ.
+    let ground = [50.0, 250.0];
+    let edge = BuildingKind::Depot.footprint_cells();
+    let depot = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Depot),
+            OWNER_PLAYER,
+            ground,
+        )
+        .expect("spawn an isolated depot");
+    let rect = building_screen_rect(&view(), ground, edge);
+
+    // Sprite-only air with nothing behind it: the fallback tier still picks
+    // the building, which is what "the whole rendered building is clickable"
+    // bought.
+    let air = [(rect[0] + rect[2]) * 0.5, rect[1] + 2.0];
+    assert!(
+        !building_plot_contains(&view(), ground, edge, air),
+        "the probe must be sprite-only, not on the plot"
+    );
+    assert_eq!(
+        pick_at(h.world(), &view(), air),
+        Pick::Building(depot),
+        "a click on sprite-only area with nothing behind it still picks the building"
+    );
+
+    // A node north of the depot: outside the footprint, but its ground point
+    // projects inside the depot's quad.
+    let node_ground = [46.5, 242.5];
+    let node = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Node(ResourceKind::Crystal),
+            OWNER_NEUTRAL,
+            node_ground,
+        )
+        .expect("spawn a node inside the depot's quad");
+    let screen = view().project(node_ground[0], node_ground[1]);
+    assert!(
+        screen[0] >= rect[0]
+            && screen[0] <= rect[2]
+            && screen[1] >= rect[1]
+            && screen[1] <= rect[3],
+        "the node's ground point must fall inside the depot's sprite quad ({screen:?} vs {rect:?})"
+    );
+    assert!(
+        !building_plot_contains(&view(), ground, edge, screen),
+        "the node's ground point must be outside the depot's footprint"
+    );
+    assert!(
+        entity_pick_depth(&view(), ground) > entity_pick_depth(&view(), node_ground),
+        "the depot must be the deeper candidate, or this proves nothing about tiers"
+    );
+    assert_eq!(
+        pick_at(h.world(), &view(), screen),
+        Pick::Node(node),
+        "an exact node quad beats a building's sprite quad however deep the building"
+    );
 }

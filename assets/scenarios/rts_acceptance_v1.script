@@ -46,7 +46,7 @@
 
 # --- the minimap, then the nested menu ---
 1310:lclick:360,960            # minimap, inside the diamond's right half (map ~298,22)
-1320:lclick:1888,24            # gear -> paused menu
+1320:lclick:1888,24            # MENU_RECT centre -> paused menu
 1330:lclick:960,540            # SETTINGS -> settings panel
 1340:lclick:1170,288           # keyboard-pan slider -> 78 cells/s
 1350:key:esc                   # settings -> menu

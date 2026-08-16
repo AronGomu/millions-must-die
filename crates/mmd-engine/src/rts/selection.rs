@@ -205,23 +205,32 @@ pub fn building_screen_rect(view: &IsoView, ground: [f32; 2], edge_cells: u32) -
     [pos[0], pos[1], pos[0] + size[0], pos[1] + size[1]]
 }
 
-/// Whether a building whose footprint is centred at `ground` (cell space) is
-/// hit by a click at `screen`.
+/// Whether a click at `screen` lands inside the **rendered sprite quad** of a
+/// building whose footprint is centred at `ground` (cell space).
 ///
-/// Union of two shapes: the full rendered sprite rect (so the whole tower is
-/// always clickable) **or** the footprint cells that project below the sprite
-/// (so a click on the building's plot rather than its tower still picks it).
-pub fn building_pick_contains(
+/// The quad is a square that towers far above the plot and is mostly
+/// transparent up there, so it is [`pick_at`]'s *fallback* shape only: it
+/// covers ground points belonging to entities drawn behind the tower, and a
+/// click there means the entity, not the pixels of empty air over it.
+pub fn building_quad_contains(
     view: &IsoView,
     ground: [f32; 2],
     edge_cells: u32,
     screen: [f32; 2],
 ) -> bool {
     let rect = building_screen_rect(view, ground, edge_cells);
-    if screen[0] >= rect[0] && screen[0] <= rect[2] && screen[1] >= rect[1] && screen[1] <= rect[3]
-    {
-        return true;
-    }
+    screen[0] >= rect[0] && screen[0] <= rect[2] && screen[1] >= rect[1] && screen[1] <= rect[3]
+}
+
+/// Whether a click at `screen` lands on the **footprint cells** of a building
+/// whose footprint is centred at `ground` (cell space) — the plot it stands
+/// on, which is the building's exact shape.
+pub fn building_plot_contains(
+    view: &IsoView,
+    ground: [f32; 2],
+    edge_cells: u32,
+    screen: [f32; 2],
+) -> bool {
     let p = view.unproject(screen[0], screen[1]);
     if !p[0].is_finite() || !p[1].is_finite() {
         return false;
@@ -231,6 +240,25 @@ pub fn building_pick_contains(
         y: p[1].floor().max(0.0) as u32,
     };
     footprint_contains(ground, edge_cells, cell)
+}
+
+/// Whether a building whose footprint is centred at `ground` (cell space) is
+/// hit by a click at `screen`.
+///
+/// Union of two shapes: the full rendered sprite rect (so the whole tower is
+/// always clickable) **or** the footprint cells that project below the sprite
+/// (so a click on the building's plot rather than its tower still picks it).
+/// [`pick_at`] does not use the union directly — it ranks the two shapes, see
+/// there — but the union is what "this click is over that building at all"
+/// means.
+pub fn building_pick_contains(
+    view: &IsoView,
+    ground: [f32; 2],
+    edge_cells: u32,
+    screen: [f32; 2],
+) -> bool {
+    building_quad_contains(view, ground, edge_cells, screen)
+        || building_plot_contains(view, ground, edge_cells, screen)
 }
 
 /// The top-left corner of a quad of `size` whose **bottom edge** sits on
@@ -291,70 +319,91 @@ pub fn entity_pick_depth(view: &IsoView, ground: [f32; 2]) -> f32 {
     view.depth(s[1])
 }
 
+/// Which shape of an entity a click landed on — the rank a candidate competes
+/// in inside [`pick_at`].
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PickTier {
+    /// An exact shape: a unit's sprite/body, a node's quad, a building's plot.
+    Exact,
+    /// A building's rendered sprite quad, most of which is empty air.
+    BuildingQuad,
+}
+
 /// Resolve a screen-space click against the world.
 ///
-/// Every live entity whose rendered/hitbox geometry covers `screen` is a
-/// candidate; the one with the greatest [`entity_pick_depth`] wins — the same
-/// comparison the GPU's `GREATER` depth test makes when two sprites overlap a
-/// pixel. Iteration is ascending by entity slot and only a **strictly**
-/// greater depth replaces the current best, so an exact tie keeps the lower
-/// slot: the earlier-packed instance the depth test would not have let a
-/// later, equal-depth one overwrite.
+/// Candidates are ranked in two tiers, and a tier-1 hit always beats a tier-2
+/// one however deep:
+/// 1. **Exact shapes** — the geometry an entity actually occupies.
+/// 2. **Building sprite quads** — consulted only when tier 1 matched nothing.
+///
+/// Within a tier, the candidate with the greatest [`entity_pick_depth`] wins —
+/// the same comparison the GPU's `GREATER` depth test makes when two sprites
+/// overlap a pixel. Iteration is ascending by entity slot and only a
+/// **strictly** greater depth replaces the current best of that tier, so an
+/// exact tie keeps the lower slot: the earlier-packed instance the depth test
+/// would not have let a later, equal-depth one overwrite.
 ///
 /// Hit shapes, by kind:
-/// - **Unit** (player-owned only) — [`unit_pick_contains`]: the full sprite
-///   rect union the unit kind's body circle.
-/// - **Building** (player-owned only) — footprint-based, via
-///   [`footprint_contains`] against the clicked cell.
-/// - **Node** — the full [`sprite_screen_rect`], no ownership filter.
+/// - **Unit** (player-owned only) — tier 1, [`unit_pick_contains`]: the full
+///   sprite rect union the unit kind's body circle.
+/// - **Building** (player-owned only) — tier 1 on its plot, via
+///   [`building_plot_contains`]; tier 2 over the rest of its rendered quad,
+///   via [`building_quad_contains`]. The whole tower stays clickable, but its
+///   quad is a square of mostly transparent air whose ground point is deeper
+///   than everything drawn behind it, so letting it compete as a peer would
+///   swallow every node and unit standing near a building.
+/// - **Node** — tier 1, the full [`sprite_screen_rect`], no ownership filter.
 ///
-/// No type-priority branch: a worker standing on its own HQ wins only when its
-/// ground point renders strictly in front of the HQ's.
+/// No type-priority branch beyond that: a worker standing on its own HQ's plot
+/// wins only when its ground point renders strictly in front of the HQ's.
 pub fn pick_at(world: &RtsWorld, view: &IsoView, screen: [f32; 2]) -> Pick {
     let slot_count = world.entities().slot_count();
 
-    let mut best: Option<(f32, usize)> = None;
+    let mut exact: Option<(f32, usize)> = None;
+    let mut quad: Option<(f32, usize)> = None;
     for slot in 0..slot_count {
         if !world.entities().alive(slot) {
             continue;
         }
+        let mine = world.entities().owner(slot) == OWNER_PLAYER;
+        let ground = world.entities().position(slot);
         let hit = match world.entities().kind(slot) {
-            EntityKind::Unit(kind) => {
-                world.entities().owner(slot) == OWNER_PLAYER
-                    && unit_pick_contains(
-                        view,
-                        world.entities().position(slot),
-                        kind.body_radius_cells(),
-                        screen,
-                    )
-            }
+            EntityKind::Unit(kind) => (mine
+                && unit_pick_contains(view, ground, kind.body_radius_cells(), screen))
+            .then_some(PickTier::Exact),
             EntityKind::Building(b) => {
-                world.entities().owner(slot) == OWNER_PLAYER
-                    && building_pick_contains(
-                        view,
-                        world.entities().position(slot),
-                        b.footprint_cells(),
-                        screen,
-                    )
+                let edge = b.footprint_cells();
+                if !mine {
+                    None
+                } else if building_plot_contains(view, ground, edge, screen) {
+                    Some(PickTier::Exact)
+                } else if building_quad_contains(view, ground, edge, screen) {
+                    Some(PickTier::BuildingQuad)
+                } else {
+                    None
+                }
             }
             EntityKind::Node(_) => {
-                let rect = sprite_screen_rect(view, world.entities().position(slot));
-                screen[0] >= rect[0]
+                let rect = sprite_screen_rect(view, ground);
+                (screen[0] >= rect[0]
                     && screen[0] <= rect[2]
                     && screen[1] >= rect[1]
-                    && screen[1] <= rect[3]
+                    && screen[1] <= rect[3])
+                    .then_some(PickTier::Exact)
             }
         };
-        if !hit {
-            continue;
-        }
-        let depth = entity_pick_depth(view, world.entities().position(slot));
+        let best = match hit {
+            Some(PickTier::Exact) => &mut exact,
+            Some(PickTier::BuildingQuad) => &mut quad,
+            None => continue,
+        };
+        let depth = entity_pick_depth(view, ground);
         if best.is_none_or(|(bd, _)| depth > bd) {
-            best = Some((depth, slot));
+            *best = Some((depth, slot));
         }
     }
 
-    match best {
+    match exact.or(quad) {
         Some((_, slot)) => {
             let id = world.entities().id_at(slot).expect("live");
             match world.entities().kind(slot) {

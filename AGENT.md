@@ -53,9 +53,9 @@ sprite ∪ footprint building pick with a six-line card, positional QWE/ASD/ZXC
 command keys, an exact pure-green drag box, and an order-scoped gather-worker
 collision policy. Decision: ADR 021, which narrows ADR 017's invariant (see
 the collision constraint below) and amends ADR 018–020 forward. What it proves
-and does not — including the open `rts_economy` node-click regression that
-keeps `cargo test --workspace` red:
-`docs/rts-feedback-polish-functional-close.md`.
+and does not — including the `rts_economy` node-click regression this branch
+introduced at `af16e7c` and then fixed by ranking exact pickshapes above a
+building's sprite quad: `docs/rts-feedback-polish-functional-close.md`.
 
 ## Workspace layout
 

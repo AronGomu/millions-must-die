@@ -109,28 +109,39 @@ The horde contract is the opposite one and is not affected: ADR 009 soft
 separation steering never resolves an overlap, and no doc may claim horde
 agents cannot overlap.
 
-## Open regression — building pick steals node clicks
+## Closed regression — building pick stole node clicks
 
 The building pickshape became `rendered sprite rect ∪ ground footprint`. A
-building sprite is taller than its footprint, so a building can now win a click
+building sprite is taller than its footprint, so a building could win a click
 on a resource node whose centre it covers on screen. Three tests in
-`crates/mmd-engine/tests/rts_economy.rs` fail on the merge gate because of it:
+`crates/mmd-engine/tests/rts_economy.rs` failed on the merge gate because of
+it:
 
-| Test | Observed |
+| Test | Observed while red |
 | --- | --- |
-| `context_order_with_no_selection_is_a_no_op` | a click on the crystal node's own projected centre returns the HQ |
-| `mixed_resource_order_partitions_by_capability` | the same click, so the mixed order never partitions |
-| `nonworkers_move_around_resource` | the same click, so the non-worker never routes around the node |
+| `context_order_with_no_selection_is_a_no_op` | a click on the crystal node's own projected centre returned the HQ |
+| `mixed_resource_order_partitions_by_capability` | the same click, so the mixed order never partitioned |
+| `nonworkers_move_around_resource` | the same click, so the non-worker never routed around the node |
 
 Bisected: green at `d7ddb60`, red at `af16e7c`, which is the commit that
-introduced the union pickshape. It is a real behaviour regression against a
-phase-1.1 claim ("a click on any part of a rendered resource sprite hits that
-node"), not a stale expectation, so it is **not** repaired by editing the
-tests. It needs a tie rule — the narrower pickshape, or the node, winning a
-click both shapes contain — and that is a behaviour ticket of its own.
+introduced the union pickshape. `af16e7c` is **not** an ancestor of `main`, so
+this was a regression introduced by this branch, not a pre-existing red gate,
+and it was mislabelled as pre-existing while it stood. It was a real behaviour
+regression against a phase-1.1 claim ("a click on any part of a rendered
+resource sprite hits that node"), not a stale expectation, so it was **not**
+repaired by editing the tests.
 
-Until it lands, `cargo test --workspace --locked` is red on those three tests,
-and this page does not claim otherwise.
+**Fixed** by the tie rule the paragraph above asked for: `pick_at` now ranks
+candidates in two tiers. Tier 1 is the exact shapes — a unit's sprite rect ∪
+body circle, a node's sprite rect, a building's ground footprint. Tier 2 is a
+building's rendered sprite quad, consulted only when tier 1 matched nothing.
+Depth ordering is unchanged **within** a tier, so a narrower, exact shape
+always wins a contended click while the whole rendered building stays
+clickable where nothing stands behind it. Pinned by
+`an_exact_shape_beats_a_building_sprite_quad` in
+`crates/mmd-engine/tests/rts_selection.rs`; the three
+`crates/mmd-engine/tests/rts_economy.rs` tests are green again with their
+original expectations untouched.
 
 ## System → test map
 

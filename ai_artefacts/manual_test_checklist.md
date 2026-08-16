@@ -592,12 +592,21 @@ Automated gates (run on this branch, this diff — full output in the ticket rep
 - [x] No golden PNG regenerated: `git status --porcelain lab/goldens/ assets/sprites/generated/`
       empty
 
+Regression introduced by this branch — **now fixed**:
+
+- [x] `cargo test -p mmd-engine --test rts_economy`: 3 failures
+      (`context_order_with_no_selection_is_a_no_op`,
+      `mixed_resource_order_partitions_by_capability`, `nonworkers_move_around_resource`).
+      Bisected to `af16e7c` (building sprite ∪ footprint pick): green at `d7ddb60`, red at
+      `af16e7c`. `af16e7c` is **not** an ancestor of `main`, so this was a regression this
+      branch introduced, not a pre-existing red gate — the earlier entry here that called it
+      "pre-existing, out of this ticket's Requirements" was wrong. Fixed by the tie rule:
+      `pick_at` consults a building's rendered sprite quad only as a fallback tier, after the
+      exact shapes (unit body/sprite, node rect, building footprint) matched nothing. Re-run:
+      38 passed, 0 failed, with the three tests' original expectations untouched.
+
 Pre-existing red gates — **still red**, out of this ticket's Requirements:
 
-- [x] `cargo test -p mmd-engine --test rts_economy`: 3 failures before, 3 after. Bisected to
-      `af16e7c` (building sprite ∪ footprint pick): green at `d7ddb60`, red at `af16e7c`. Now
-      documented as an open regression in the feedback-polish functional close instead of being
-      silently carried.
 - [x] `cargo clippy --workspace --all-targets --all-features -- -D warnings`: 3
       `too_many_arguments` before, 3 after, all in `crates/mmd-engine/src/rts/hud.rs`.
 

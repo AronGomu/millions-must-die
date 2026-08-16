@@ -82,10 +82,13 @@ ADR 021 narrowed ADR 017, so a live doc promising that no tick leaves two RTS
 bodies merged — without the gather exception — now describes an engine that
 does not exist, and would make a correct run look broken.
 
-The gate is currently **red on three `crates/mmd-engine/tests/rts_economy.rs`
-tests**: the building sprite ∪ footprint pick lets a building win a click on a
-resource node centre it covers. The regression is open and named in the close
-doc; nothing here claims a green gate while it stands.
+The gate was **red on three `crates/mmd-engine/tests/rts_economy.rs` tests**
+for part of this branch's life: the building sprite ∪ footprint pick let a
+building win a click on a resource node centre it covers. That was a regression
+this branch introduced at `af16e7c`, not a pre-existing red gate — `af16e7c` is
+not an ancestor of `main`. It is **fixed**: `pick_at` ranks exact shapes above
+a building's sprite quad, so the three tests are green again with their
+original expectations. See the close doc for the tie rule.
 
 ## Required merge gate
 

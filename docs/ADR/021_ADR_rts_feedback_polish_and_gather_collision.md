@@ -257,6 +257,11 @@ Differences from the decision as written, all narrowing rather than widening:
   re-timing them to carry menu/grid/scroll clicks would have rewritten that
   evidence instead of adding to it.
 - Three `rts_economy` node-click tests were left failing by the building-pick
-  union and are **not** repaired here; they are recorded as an open regression
-  in the [functional close](../rts-feedback-polish-functional-close.md), not as
-  an accepted behaviour change.
+  union at `af16e7c` — a regression this branch introduced, not a pre-existing
+  red gate, and never an accepted behaviour change. They are repaired by
+  ranking the pickshapes rather than by editing the tests: `pick_at` treats a
+  building's rendered sprite quad as a fallback tier consulted only when no
+  exact shape (unit body/sprite, node rect, building footprint) matched. The
+  whole rendered building stays clickable; a narrower shape wins a contended
+  click. Recorded in the
+  [functional close](../rts-feedback-polish-functional-close.md).

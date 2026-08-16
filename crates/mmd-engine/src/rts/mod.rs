@@ -80,9 +80,9 @@ pub use production::{
 };
 pub use selection::{
     DRAG_MIN_PX, MAX_SELECTION, Pick, RTS_SPRITE_SIZE_PX, Selection, box_select,
-    building_pick_contains, building_quad_px, building_screen_rect, entity_pick_depth,
-    footprint_contains, footprint_min, is_drag, normalise_rect, pick_at, sprite_screen_rect,
-    unit_pick_contains,
+    building_pick_contains, building_plot_contains, building_quad_contains, building_quad_px,
+    building_screen_rect, entity_pick_depth, footprint_contains, footprint_min, is_drag,
+    normalise_rect, pick_at, sprite_screen_rect, unit_pick_contains,
 };
 pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
