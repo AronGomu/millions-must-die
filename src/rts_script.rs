@@ -249,6 +249,16 @@ impl RtsScript {
         false
     }
 
+    /// Whether an unfired `quit` is scheduled for `frame`. A peek: it fires
+    /// nothing and appends nothing, so the live loop can preserve the
+    /// last-rendered digest *before* the batch that will quit mutates the
+    /// world.
+    pub fn requests_quit_on_frame(&self, frame: u64) -> bool {
+        self.entries
+            .iter()
+            .any(|e| !e.fired && e.frame == frame && e.cmd == RtsCommand::Quit)
+    }
+
     /// Entries the run never reached, in script order.
     pub fn unfired(&self) -> Vec<String> {
         self.entries
@@ -417,5 +427,35 @@ mod tests {
         assert_eq!(script.entries.len(), 1);
         assert_eq!(script.entries[0].name, "quit");
         assert_eq!(script.entries[0].cmd, RtsCommand::Quit);
+    }
+
+    /// The peek the live loop takes before a batch: it must see the quit that
+    /// is still to come, on that frame only, and fire nothing itself.
+    #[test]
+    fn script_requests_quit_on_frame_preflight() {
+        let mut script = RtsScript::parse("1:lclick:1,1;3:quit").expect("valid script");
+        assert!(
+            script.requests_quit_on_frame(3),
+            "the peek must see the quit scheduled for frame 3"
+        );
+        assert!(
+            !script.requests_quit_on_frame(1),
+            "frame 1 schedules a click, not a quit"
+        );
+        assert!(
+            !script.requests_quit_on_frame(2),
+            "no entry is scheduled for frame 2"
+        );
+
+        let mut out = Vec::new();
+        assert!(
+            script.drain_frame(3, &mut out),
+            "the peek must not have consumed the quit"
+        );
+        assert_eq!(out, vec![RtsCommand::Quit]);
+        assert!(
+            !script.requests_quit_on_frame(3),
+            "a fired quit is no longer pending"
+        );
     }
 }
