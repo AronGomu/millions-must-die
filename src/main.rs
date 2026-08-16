@@ -100,6 +100,23 @@ enum Commands {
     },
 }
 
+/// Env knob `MMD_WINDOW_HIDDEN`: build every window hidden, never show it and
+/// never grab the pointer with it.
+///
+/// This is *not* `SDL_VIDEODRIVER=offscreen`. Offscreen skips the window path
+/// entirely — no window is created, no swapchain is claimed, and the run
+/// reports `mode=offscreen`. This knob keeps the whole windowed path: the real
+/// video driver, a real window, a real device claim, a real swapchain present
+/// and a real release, reported as `mode=window`. The only thing it drops is
+/// the mapping onto the developer's desktop, so a test suite that has to prove
+/// the windowed path cannot steal focus, move the pointer or flash a window
+/// while it does it.
+///
+/// Same parse as `MMD_REQUIRE_GPU`: set to anything but `0` or empty.
+pub fn hidden_windows_requested() -> bool {
+    std::env::var_os("MMD_WINDOW_HIDDEN").is_some_and(|v| v != "0" && !v.is_empty())
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
     match cli.command {

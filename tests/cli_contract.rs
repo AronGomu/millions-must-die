@@ -183,12 +183,17 @@ impl std::fmt::Display for Cli {
 }
 
 fn app_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_millions_must_die"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_millions_must_die"));
+    // Whole-file rule: no run this test binary spawns may appear on or focus
+    // the developer's desktop. The two real-driver cases still build, claim,
+    // present to and release a real window — it is never shown.
+    cmd.env("MMD_WINDOW_HIDDEN", "1");
+    cmd
 }
 
 /// Invoke the app with `args`. `offscreen` forces SDL's offscreen video driver
-/// so a test never opens a window on the developer's desktop; the one case
-/// that needs a real window opts out.
+/// so a test never builds a window at all; the two cases that need a real
+/// window opt out and get a hidden one instead (see [`app_bin`]).
 fn invoke(args: &[&str], offscreen: bool) -> Cli {
     let mut cmd = app_bin();
     cmd.args(args);

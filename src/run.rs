@@ -356,13 +356,18 @@ pub fn run(opts: RunOptions) -> Result<(), RunError> {
     let window = if offscreen_driver {
         None
     } else {
-        match renderer
-            .ctx
-            .video
-            .window("millions_must_die — flow-field horde", WINDOW_W, WINDOW_H)
-            .position_centered()
-            .build()
-        {
+        let mut builder =
+            renderer
+                .ctx
+                .video
+                .window("millions_must_die — flow-field horde", WINDOW_W, WINDOW_H);
+        builder.position_centered();
+        // Hidden runs keep the claim/present/release path and lose only the
+        // mapping onto the desktop (see `crate::hidden_windows_requested`).
+        if crate::hidden_windows_requested() {
+            builder.hidden();
+        }
+        match builder.build() {
             Ok(w) => match renderer.ctx.claim_window(&w) {
                 Ok(()) => Some(w),
                 Err(e) => {

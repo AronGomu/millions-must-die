@@ -209,7 +209,12 @@ fn tail(out: &str) -> String {
 }
 
 fn app_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_millions_must_die"))
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_millions_must_die"));
+    // Every spawn here also forces `SDL_VIDEODRIVER=offscreen`, so no window is
+    // built at all; this is the belt-and-braces half, so a case that ever drops
+    // the driver override still cannot appear on the developer's desktop.
+    cmd.env("MMD_WINDOW_HIDDEN", "1");
+    cmd
 }
 
 /// Invoke `rts` with `extra` args, forcing SDL's offscreen video driver so a

@@ -304,6 +304,11 @@ pub fn refresh_viewport(window: &Window) -> Result<DisplayViewport, RunError> {
 /// Build the `rts` window hidden + resizable, apply the startup mode, then
 /// show it. Does not claim it for the GPU device — the caller does that
 /// after this returns, per the startup ordering ADR 018 fixes.
+///
+/// Under `MMD_WINDOW_HIDDEN` the final `show` is skipped and the window stays
+/// hidden for the whole run: the mode is still applied and the caller still
+/// claims, presents to and releases a real swapchain, but nothing is mapped
+/// onto the desktop and nothing takes focus.
 pub fn build_rts_window(
     video: &sdl3::VideoSubsystem,
     mode: WindowMode,
@@ -316,6 +321,10 @@ pub fn build_rts_window(
         .map_err(|e| RunError::Failed(format!("rts window build failed: {e}")))?;
 
     apply_window_mode(&mut SdlWindowOps(&mut window), mode)?;
+
+    if crate::hidden_windows_requested() {
+        return Ok(window);
+    }
 
     if !window.show() {
         return Err(RunError::Failed(format!(

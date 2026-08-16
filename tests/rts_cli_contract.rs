@@ -335,6 +335,12 @@ fn app_bin() -> Command {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_millions_must_die"));
     cmd.env("HOME", sentinel);
     cmd.env("XDG_DATA_HOME", sentinel);
+    // Whole-file rule: no run this test binary spawns may appear on, focus or
+    // grab the developer's desktop. Cases that force `SDL_VIDEODRIVER` never
+    // build a window at all; the one real-driver case
+    // ([`the_window_is_released_before_it_drops`]) builds, claims, presents to
+    // and releases a real window that is never shown.
+    cmd.env("MMD_WINDOW_HIDDEN", "1");
     cmd
 }
 

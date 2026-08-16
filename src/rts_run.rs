@@ -1203,7 +1203,12 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     // `WindowEvent::FocusGained` — some window managers never deliver one
     // for the window that already has focus at creation, and a run must
     // never start with a stale (missing) confinement.
-    if let Err(e) = SdlWindowOps(&mut window).set_mouse_grab(settings.display.confine_pointer) {
+    //
+    // A hidden window never grabs: `MMD_WINDOW_HIDDEN` exists so a run cannot
+    // touch the desktop it runs on, and confining the pointer to a window that
+    // is not on screen is the worst version of touching it.
+    let confine = settings.display.confine_pointer && !crate::hidden_windows_requested();
+    if let Err(e) = SdlWindowOps(&mut window).set_mouse_grab(confine) {
         eprintln!("rts: startup pointer grab failed ({e}); continuing unconfined");
     }
     let mut win_state = RtsWindowState {

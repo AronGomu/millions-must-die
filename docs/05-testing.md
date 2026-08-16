@@ -52,11 +52,13 @@ Four more tests in `tests/validation_contract.rs` hold that page to the code:
 `phase1_1_systems_have_behavioral_tests`,
 `required_gate_contains_audio_check` and `required_gate_keeps_phase_smokes`.
 
-What phase 1.1 does **not** gate is as load-bearing as what it does. The gate
-runs offscreen: it opens no window, grabs no pointer and opens no audio device.
-Window modes, pointer confinement and audible output are proven as state
-sequences and API calls only, and are checked by hand against
-`ai_artefacts/manual_test_checklist.md`.
+What phase 1.1 does **not** gate is as load-bearing as what it does. Nothing on
+the gate is *seen* or *heard*: no run maps a window onto the desktop, none
+grabs the pointer and none opens an audio device (see
+[Windows during a test run](#windows-during-a-test-run) for how the two
+windowed cases stay off screen). Window modes, pointer confinement and audible
+output are proven as state sequences and API calls only, and are checked by
+hand against `ai_artefacts/manual_test_checklist.md`.
 
 ## Feedback-polish scope
 
@@ -166,6 +168,38 @@ is what makes the asymmetric push observable rather than merely configured.
 Hard success is **all tests green**: deterministic simulation and navigation
 behaviour, render correctness on the development host, app and CLI lifecycle,
 contract hashes, and the allocation invariant.
+
+## Windows during a test run
+
+`cargo test --workspace --locked` maps **no window onto the developer's
+desktop**, takes no focus and grabs no pointer. Two mechanisms, and the
+difference between them matters:
+
+| Mechanism | What it does | Reported mode |
+| --- | --- | --- |
+| `SDL_VIDEODRIVER=offscreen` | no window is built at all; the app takes its offscreen-only path | `mode=offscreen` |
+| `MMD_WINDOW_HIDDEN=1` | a real window is built, claimed by the device, presented to and released — it is never shown, never focused, never grabbed | `mode=window` |
+
+Most cases force the offscreen driver. Three cases must exercise the windowed
+path instead, and they use the second mechanism:
+`cli_contract.rs::windowed_run_honours_the_frame_budget`,
+`cli_contract.rs::quit_exits_clean_and_releases_window` and
+`rts_cli_contract.rs::the_window_is_released_before_it_drops`. Each still
+asserts `mode=window` and the release line, so what they prove is unchanged —
+only the mapping onto the desktop is gone. Renderer-level window cases
+(`render_correctness.rs::renderer_smoke_device_resize_shutdown`) build their
+windows hidden directly and need no knob.
+
+What this does **not** prove is anything about a *visible* window: that a mode
+switch reaches the compositor, that the pointer is confined, or that a frame is
+visible at all. Those stay human checklist items
+(`ai_artefacts/manual_test_checklist.md`).
+
+The knob is available to any run, not only tests. The four interactive smokes
+on the required gate open a real, visible window by design; prefix one with
+`MMD_WINDOW_HIDDEN=1` to keep it off the desktop it runs on. The gate lists
+them unprefixed, and `required_gate_keeps_phase_smokes` compares those command
+strings verbatim, so prefixing is a local choice, never an edit to the gate.
 
 ## Render correctness — development host only
 
