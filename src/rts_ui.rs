@@ -276,6 +276,7 @@ pub fn finish_numeric_edit(session: &mut RtsSession, mode: NumericEditEnd) {
 pub fn finalize_numeric_edit_on_focus_loss(session: &mut RtsSession) {
     finish_numeric_edit(session, NumericEditEnd::Commit);
     session.clear_press();
+    session.clear_right_press();
     session.keyboard_held = [0.0, 0.0];
 }
 
