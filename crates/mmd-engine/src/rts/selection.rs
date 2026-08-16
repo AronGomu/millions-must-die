@@ -321,7 +321,6 @@ pub fn entity_pick_depth(view: &IsoView, ground: [f32; 2]) -> f32 {
 
 /// Which shape of an entity a click landed on — the rank a candidate competes
 /// in inside [`pick_at`].
-#[derive(Clone, Copy, PartialEq, Eq)]
 enum PickTier {
     /// An exact shape: a unit's sprite/body, a node's quad, a building's plot.
     Exact,
