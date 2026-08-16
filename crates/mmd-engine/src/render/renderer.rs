@@ -558,8 +558,13 @@ impl SpriteRenderer {
 
     /// Draw a whole [`ScenePass`] into the offscreen target (no readback).
     pub fn draw_offscreen_scene(&mut self, scene: ScenePass<'_>) -> Result<(), RenderError> {
-        let _fence = self.draw_scene_into(scene)?;
-        // Drop fence without waiting — interactive path does not track queue depth here.
+        // Waited, not dropped: this path has no other backpressure, so a
+        // caller that submits faster than the GPU retires (the RTS loop does,
+        // and did so as soon as it stopped digesting the world every frame)
+        // grows the queue without bound until the driver kills the device
+        // with `VK_ERROR_DEVICE_LOST`. One frame in flight is enough for a
+        // headless run, and this is a correctness bound, not a timing claim.
+        self.draw_scene_into(scene)?.wait();
         Ok(())
     }
 
