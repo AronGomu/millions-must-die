@@ -1011,7 +1011,7 @@ fn feedback_polish_script_exercises_menu_close_grid_scroll_slider_and_q() {
     // that happens to end on the same tokens.
     let script = std::fs::read_to_string(focused_script_path()).expect("read the focused script");
     for needle in [
-        "lclick:960,518", // the HQ, by its own footprint corner
+        "lclick:960,494", // the HQ, by its own footprint corner
         "key:q",          // the positional command slot
         "lclick:1888,24", // MENU_RECT
         "lclick:960,540", // PAUSE_MENU_SETTINGS_BTN

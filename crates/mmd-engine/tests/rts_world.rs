@@ -151,18 +151,18 @@ fn collect_live_is_ascending_and_excludes_the_dead() {
 
 #[test]
 fn footprints_come_from_the_scenario_constants() {
-    assert_eq!(EntityKind::Building(BuildingKind::Hq).footprint_cells(), 12);
+    assert_eq!(EntityKind::Building(BuildingKind::Hq).footprint_cells(), 24);
     assert_eq!(
         EntityKind::Building(BuildingKind::Depot).footprint_cells(),
         8
     );
     assert_eq!(
         EntityKind::Building(BuildingKind::Barracks).footprint_cells(),
-        10
+        16
     );
     assert_eq!(
         EntityKind::Building(BuildingKind::Turret).footprint_cells(),
-        6
+        8
     );
     assert_eq!(EntityKind::Unit(UnitKind::Worker).footprint_cells(), 1);
     assert_eq!(EntityKind::Node(ResourceKind::Crystal).footprint_cells(), 1);
@@ -302,7 +302,7 @@ fn the_hq_sits_at_its_footprint_centre() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("start hq");
     let slot = h.world().entities().slot(hq).expect("hq slot");
-    assert_eq!(h.world().entities().position(slot), [166.0, 166.0]);
+    assert_eq!(h.world().entities().position(slot), [172.0, 172.0]);
 }
 
 /// The seeded HQ is a *finished* building, and a finished building blocks
@@ -366,12 +366,12 @@ fn workers_start_on_the_scenario_spawn_cells() {
     // shows up as a diff against a known-good layout, not a vague "positions
     // changed".
     let expected: Vec<[f32; 2]> = vec![
-        [162.5, 178.5],
-        [168.5, 178.5],
-        [164.5, 184.5],
-        [170.5, 184.5],
-        [174.5, 178.5],
-        [175.5, 172.5],
+        [162.5, 190.5],
+        [168.5, 190.5],
+        [164.5, 196.5],
+        [170.5, 196.5],
+        [174.5, 190.5],
+        [158.5, 195.5],
     ];
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     assert_eq!(workers.len(), expected.len());
@@ -560,7 +560,7 @@ fn rts_spec(obstacles: Vec<u32>, spawns: Vec<Cell>, destination: Cell) -> Scenar
             start_crystal: 300,
             start_gas: 100,
             start_supply_cap: 10,
-            hq_cell: Cell { x: 100, y: 100 },
+            hq_cell: Cell { x: 96, y: 96 },
             crystal_nodes: vec![Cell { x: 100, y: 50 }],
             gas_nodes: vec![Cell { x: 101, y: 50 }],
             enemies: None,
@@ -735,8 +735,8 @@ fn a_unit_reaches_its_destination() {
     let worker = h
         .ids_of_kind(EntityKind::Unit(UnitKind::Worker))
         .into_iter()
-        .find(|id| position_of(&h, *id) == [174.5, 178.5])
-        .expect("a worker spawned near (174, 178) after relocation");
+        .find(|id| position_of(&h, *id) == [174.5, 190.5])
+        .expect("a worker spawned near (174, 190) after relocation");
     let dest = Cell { x: 200, y: 200 };
     assert!(h.world_mut().order_move(worker, dest));
 

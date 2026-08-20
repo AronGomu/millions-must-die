@@ -4261,7 +4261,7 @@ mod tests {
                 start_crystal: 300,
                 start_gas: 100,
                 start_supply_cap: 10,
-                hq_cell: Cell { x: 51, y: 51 },
+                hq_cell: Cell { x: 40, y: 40 },
                 crystal_nodes: vec![Cell { x: 1, y: 62 }],
                 gas_nodes: vec![Cell { x: 1, y: 61 }],
                 enemies: None,

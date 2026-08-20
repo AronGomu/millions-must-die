@@ -18,9 +18,9 @@ use mmd_engine::testkit::RtsHarness;
 const GRID: u32 = 320;
 
 /// Depot footprint min corner, clear of terrain, nodes and the HQ.
-const DEPOT_MIN: Cell = Cell { x: 180, y: 176 };
+const DEPOT_MIN: Cell = Cell { x: 144, y: 176 };
 /// The centre of that footprint (edge 8), where a caught unit ends up.
-const DEPOT_CENTER: [f32; 2] = [184.0, 180.0];
+const DEPOT_CENTER: [f32; 2] = [148.0, 180.0];
 
 fn spawn_worker(h: &mut RtsHarness, pos: [f32; 2]) -> EntityId {
     h.world_mut()
@@ -66,7 +66,7 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 /// walks another body south past the Depot has to get this scaffolding body
 /// out of the way first.
 fn place_depot(h: &mut RtsHarness) -> (EntityId, EntityId) {
-    let builder = spawn_worker(h, [191.0, 180.0]);
+    let builder = spawn_worker(h, [155.0, 180.0]);
     assert!(
         h.world_mut().begin_placement(BuildingKind::Depot),
         "the scene's starting crystal must cover a Depot"
@@ -124,21 +124,22 @@ fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
     // Far enough that even at the tripled worker speed the walker is still
     // in flight when the Depot's build timer lands the stamp, not already
     // idle at its destination.
-    // The scene's own starting workers stand right on this route, around
-    // (166, 178). Since T4 they are 3-cell bodies: they would decide where
-    // this walker gets to long before its cached field did, and the
-    // destination sits inside their cluster, where no second body can stand at
-    // all. Clear them — this case is about a *field* going stale, not about a
-    // crowd.
+    // The scene's own starting workers stand around (162..175, 190..197).
+    // Since T4 they are 3-cell bodies: they would decide where this walker
+    // gets to long before its cached field did. Clear them — this case is
+    // about a *field* going stale, not about a crowd.
     for w in h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)) {
         assert!(h.world_mut().entities_mut().despawn(w));
     }
-    let walker = spawn_worker(&mut h, [310.5, 180.5]);
-    let dest = Cell { x: 170, y: 180 };
+    // Since T7 the clear Depot corner sits west of the enlarged HQ, so the
+    // route the Depot must land across runs north-to-south down its own
+    // column, not west along the old east-side lane.
+    let walker = spawn_worker(&mut h, [148.5, 110.5]);
+    let dest = Cell { x: 148, y: 210 };
     assert!(h.world_mut().order_move(walker, dest));
 
     // The Depot lands squarely across the route the walker is already on.
-    let (depot, _) = place_depot(&mut h);
+    let (depot, builder) = place_depot(&mut h);
     // Every field this run needs is now built; nothing but the stamp can
     // force another rebuild.
     let rebuilds_before_stamp = h.world().nav().rebuild_count();
@@ -151,6 +152,11 @@ fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
         }
     }
     let finished_at = finished_at.expect("the Depot never finished");
+    // The builder is scaffolding, and since T7 it stands in the single-file
+    // gap between the Depot and the HQ (see
+    // [`a_parked_body_plugs_the_single_file_depot_corridor`]). Clear it: this
+    // case is about a *field* going stale, not about a body in the way.
+    assert!(h.world_mut().entities_mut().despawn(builder));
 
     h.step_exact(4_000);
 
@@ -264,8 +270,16 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
     }
 
     // Every body assertion above has run, including against the builder.
-    // Clear it out of the single-file corridor the route south uses.
+    // Clear it out of the single-file corridor the route south uses — and the
+    // scene's own six starting workers with it, which since T7 sit squarely
+    // across the route east at (162..175, 190..197). This case is about one
+    // evacuated body taking an order, not about a crowd.
     assert!(h.world_mut().entities_mut().despawn(builder));
+    for other in h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)) {
+        if other != caught {
+            assert!(h.world_mut().entities_mut().despawn(other));
+        }
+    }
 
     let dest = Cell { x: 200, y: 200 };
     assert!(
@@ -289,10 +303,10 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
 /// A finished Depot at [`DEPOT_MIN`] leaves a **single-file** corridor on its
 /// east side, and one idle body parked in it blocks every other body for good.
 ///
-/// The geometry: the Depot occupies `[180, 188) x [176, 184)` and the crystal
-/// node at `(196, 178)` inflates its own clearance westward, so between them
-/// the only legal body centres are the two columns `x = 191` and `x = 192`.
-/// Two 3-cell-radius bodies six cells apart do not fit side by side in two
+/// The geometry: since T7 the Depot occupies `[144, 152) x [176, 184)` and the
+/// 24-cell HQ occupies `[160, 184) x [160, 184)`, so between them the only
+/// legal body centres are the three columns `x = 155, 156, 157`.
+/// Two 3-cell-radius bodies six cells apart do not fit side by side in three
 /// columns, so the corridor passes one body at a time.
 ///
 /// What then makes the block permanent is the push rule, not the navigation
@@ -326,12 +340,14 @@ fn a_parked_body_plugs_the_single_file_depot_corridor() {
     assert!(!h.world().is_site(depot), "the Depot never finished");
     assert_eq!(
         position_of(&h, builder),
-        [191.0, 180.0],
+        [155.0, 180.0],
         "the builder must still be parked in the corridor"
     );
 
-    let w = spawn_worker(&mut h, [176.5, 166.5]);
-    let dest = Cell { x: 200, y: 200 };
+    // North of the corridor's mouth, and a destination immediately south of
+    // it: the walk is through the gap or not at all.
+    let w = spawn_worker(&mut h, [156.5, 170.5]);
+    let dest = Cell { x: 156, y: 186 };
     assert!(h.world_mut().order_move(w, dest));
     h.step_exact(3_000);
 
@@ -366,7 +382,7 @@ fn a_parked_body_plugs_the_single_file_depot_corridor() {
     assert!(!h.world().is_site(depot), "the Depot never finished");
     assert!(h.world_mut().entities_mut().despawn(builder));
 
-    let w = spawn_worker(&mut h, [176.5, 166.5]);
+    let w = spawn_worker(&mut h, [156.5, 170.5]);
     assert!(h.world_mut().order_move(w, dest));
     h.step_exact(3_000);
 

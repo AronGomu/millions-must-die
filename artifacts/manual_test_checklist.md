@@ -841,7 +841,7 @@ behaves as expected in a running session where a human can observe world state.
 ## T5 turret
 
 - [ ] Launch `cargo run -- rts`. Select a Worker and confirm the command card now shows a **fourth** build button in the middle-left slot, keyed **A**, with its own colored icon — Q=HQ, W=Depot, E=Barracks, A=Turret.
-- [ ] With the Worker still selected, press **A** and confirm a placement ghost appears under the cursor and follows it — the ghost is a small square, visibly smaller than the Depot and Barracks ghosts.
+- [ ] With the Worker still selected, press **A** and confirm a placement ghost appears under the cursor and follows it — since the build-grid re-cut the ghost is exactly **one build square**, the same size as the Depot's and a quarter of the Barracks' 2 x 2.
 - [ ] Move the ghost over the map edge and over a crystal/gas node, and confirm it reads as invalid there; move it back onto open ground and confirm it reads as valid again.
 - [ ] Left-click on valid open ground and confirm 75 crystal is deducted immediately, a construction site appears, and the Worker walks over and starts building it.
 - [ ] Watch the site while it is still under construction with a Ghoul standing close by, and confirm the **site never shoots** — an unfinished turret is inert.
@@ -865,3 +865,19 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Observe the minimap while Ghouls are alive on the map — confirm each Ghoul appears as a small **red dot** on the minimap in the correct relative position.
 - [ ] Kill all Ghouls (or wait for them to die) — confirm the red dots disappear from the minimap once no enemy units remain.
 - [ ] Confirm that nothing in `git status --porcelain -- assets/scenarios` shows a tracked scenario asset as modified.
+
+## T7 build-grid-and-footprint-recut
+
+- [ ] Launch `cargo run -- rts` and confirm the world grid overlay now draws **large squares**, not one line per cell: eight cells to a square, so the base area reads as a coarse lattice rather than fine graph paper.
+- [ ] Open the pause menu (gear at top-right) -> SETTINGS, turn the grid setting **off**, close the menu, and confirm the lattice disappears from the world.
+- [ ] With the grid setting still off, select a Worker and press **W** (Depot): confirm the square lattice **appears anyway** while the ghost is pending, and disappears again the moment you cancel the ghost with a right-click.
+- [ ] With a Depot ghost pending, move the mouse slowly across the map: confirm the ghost does not slide smoothly cell by cell but **snaps** from one square to the next, and that its outline always sits flush inside one lattice square.
+- [ ] Confirm the Depot ghost is drawn as **one** tile covering the whole square, not as 64 small cell tiles.
+- [ ] Press **E** (Barracks) instead: confirm its ghost covers exactly **2 x 2** squares. Press **Q** (HQ): confirm **3 x 3** squares. Press **A** (Turret): confirm **1 x 1**, the same size as the Depot.
+- [ ] Place a Depot immediately beside the starting HQ: confirm the finished Depot's edge lines up flush with a lattice line and with the HQ's own edge — no half-square offset anywhere.
+- [ ] Move the ghost over the HQ itself so it reads invalid (red), then drag it outwards: confirm the assisted placement, when it does snap to a legal spot, lands on a **square boundary** and never half a square off.
+- [ ] Confirm the starting HQ is visibly larger than before this change (it now covers 3 x 3 squares) and that the camera opens centred on it.
+- [ ] Confirm the six starting Workers spawn **south of** the HQ, clear of its footprint, and that none of them is standing inside the building.
+- [ ] Select a Worker and walk it around: confirm movement is still smooth and continuous — units are **not** snapped to the build grid, only buildings are.
+- [ ] Run `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` in a window and watch it: confirm the whole select -> gather -> build Depot -> produce Worker -> build Barracks -> produce Soldier -> minimap -> menu flow still plays out visibly and ends in a clean quit.
+- [ ] Confirm `git status --porcelain -- assets/scenarios` is clean after that run — the scripts and the scene are inputs, never outputs.

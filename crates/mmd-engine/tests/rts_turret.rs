@@ -17,46 +17,46 @@ use mmd_engine::rts::{
 use mmd_engine::scenario::{Cell, TURRET_FOOTPRINT_CELLS};
 use mmd_engine::testkit::RtsHarness;
 
-/// Obstacle-free 6×6 corner of the tracked scene (verified against the
-/// RON's obstacle list) — the corner family `rts_production.rs` builds at.
-const TURRET_CORNER: Cell = Cell { x: 180, y: 176 };
+/// Obstacle-free, build-square-aligned 8×8 corner of the tracked scene
+/// (verified against the RON's obstacle and node lists), north of the
+/// 24-cell HQ and more than one body radius clear of it.
+const TURRET_CORNER: Cell = Cell { x: 160, y: 144 };
 /// A building spawns centred at `min + edge/2`, so this turret's centre.
-/// Its footprint rectangle spans x 180..186, y 176..182.
-const TURRET_CENTER_CELL: (u32, u32) = (183, 179);
-/// Obstacle-free 6×6 corner whose finished turret sits 4.5 cells from
-/// the first crystal node (140,150) — the HQ is ~21.7 away, so a
+/// Its footprint rectangle spans x 160..168, y 144..152.
+const TURRET_CENTER_CELL: (u32, u32) = (164, 148);
+/// Obstacle-free 8×8 corner whose finished turret sits 4.5 cells from
+/// the first crystal node (140,150) — the HQ is ~41 away, so a
 /// drop-off bug would pick the turret.
-const NODE_SIDE_CORNER: Cell = Cell { x: 130, y: 148 };
+const NODE_SIDE_CORNER: Cell = Cell { x: 128, y: 144 };
 
-/// Where the twelve ghouls of [`ghouls_kill_turret`] start: the border of
-/// the box x 171..191, y 168..190 around the turret at [`TURRET_CORNER`].
+/// Where the twelve ghouls of [`ghouls_kill_turret`] start: a ring around
+/// the turret at [`TURRET_CORNER`].
 ///
 /// Why a ring and not a column: the tracked scene carries a diagonal
-/// obstacle lattice east of the turret — single cells at (196,178),
-/// (208,179), (195,186), (207,187), (209,171), (221,172) and friends. A
-/// body of radius 3 is barred from every position within 3.0 cells of
-/// one, which walls the eastern lanes and strands a column of attackers
-/// out of their own 8-cell reach. Every position below is instead
-/// hand-checked against three rules: at least 3.0 cells clear of the
-/// turret's stamped rectangle (x 180..186, y 176..182) and of every
-/// obstacle rectangle, at least 6 cells from the next spawn (radius 3,
-/// so no two bodies touch — the closest pair here is 6.5), and inside
-/// the obstacle-free interior x 171..191 / y 168..190. Their footprint
-/// distances run 5.0 to 12.1 cells, so every one of the twelve is inside
-/// or a few steps from the 8-cell ghoul reach and the whole ring engages.
+/// obstacle lattice, and a body of radius 3 is barred from every position
+/// within 3.0 cells of an obstacle cell rectangle — whole lanes are
+/// impassable, and a column of attackers strands itself out of its own
+/// 8-cell reach. Every position below is instead derived against four
+/// rules: at least 3.0 cells clear of the turret's stamped rectangle
+/// (x 160..168, y 144..152), of every obstacle and node rectangle, and of
+/// the 24-cell HQ (x 160..184, y 160..184); and at least 6 cells from the
+/// next spawn (radius 3, so no two bodies touch — the closest pair here is
+/// 6.5). Their footprint distances run 4.5 to 12.5 cells, so every one of
+/// the twelve is inside or a few steps from the 8-cell ghoul reach and the
+/// whole ring engages.
 const GHOUL_RING: [[f32; 2]; 12] = [
-    [171.0, 168.0],
-    [177.5, 168.0],
-    [184.0, 168.0],
-    [191.0, 168.0],
-    [191.0, 175.5],
-    [191.0, 182.5],
-    [191.0, 190.0],
-    [184.0, 190.0],
-    [177.5, 190.0],
-    [171.0, 190.0],
-    [171.0, 182.5],
-    [171.0, 175.5],
+    [180.5, 148.5],
+    [173.5, 153.5],
+    [167.5, 156.5],
+    [160.5, 156.5],
+    [155.5, 162.5],
+    [154.5, 153.5],
+    [150.5, 147.5],
+    [149.5, 139.5],
+    [158.5, 138.5],
+    [163.5, 131.5],
+    [169.5, 138.5],
+    [175.5, 141.5],
 ];
 
 fn first_worker(h: &RtsHarness) -> EntityId {
@@ -111,7 +111,7 @@ fn fire_probe(pos: [f32; 2]) -> u32 {
 #[test]
 fn turret_stats_cost_and_footprint_are_published() {
     assert_eq!(EntityKind::Building(BuildingKind::Turret).tag(), 0x23);
-    assert_eq!(TURRET_FOOTPRINT_CELLS, 6);
+    assert_eq!(TURRET_FOOTPRINT_CELLS, 8);
     assert_eq!(
         BuildingKind::Turret.footprint_cells(),
         TURRET_FOOTPRINT_CELLS
@@ -195,7 +195,7 @@ fn turret_placeable_under_four_rules() {
         Err(PlacementError::OverlapsBuilding)
     );
     assert_eq!(
-        placement_valid(h.world(), BuildingKind::Turret, Cell { x: 138, y: 148 }),
+        placement_valid(h.world(), BuildingKind::Turret, Cell { x: 136, y: 144 }),
         Err(PlacementError::CoversNode { x: 140, y: 150 }),
         "the first crystal node sits inside the probe footprint"
     );
@@ -257,9 +257,10 @@ fn unfinished_turret_never_fires() {
     }
     assert!(attending, "builder must start the site within 600 ticks");
 
-    // 31.5 effective cells: rect face x=186, minus body radius 3. Far
-    // from the builder, well inside would-be weapon range.
-    let g = spawn_ghoul(&mut h, [220.5, 179.0]);
+    // 34.0 effective cells: rect face x=168, minus body radius 3. Far
+    // from the builder, well inside would-be weapon range, and in one of
+    // the obstacle lattice's clear windows on this row.
+    let g = spawn_ghoul(&mut h, [205.0, 148.0]);
     h.step_exact(10);
     assert_eq!(hp_of(&h, g), 30, "a site never target-scans");
 
@@ -291,8 +292,8 @@ fn turret_auto_fires_nearest() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let w0 = first_worker(&h);
     build_and_finish_turret(&mut h, TURRET_CORNER, w0);
-    let near = spawn_ghoul(&mut h, [210.5, 179.0]); // 21.5 effective
-    let far = spawn_ghoul(&mut h, [217.5, 179.0]); // 28.5 effective
+    let near = spawn_ghoul(&mut h, [196.0, 148.0]); // 25.0 effective
+    let far = spawn_ghoul(&mut h, [205.0, 148.0]); // 34.0 effective
     h.step_exact(1);
     assert_eq!(hp_of(&h, near), 20, "nearest ghoul takes the first 10");
     assert_eq!(hp_of(&h, far), 30, "one shot per cooldown, one target");
@@ -318,11 +319,11 @@ fn turret_target_ties_break_to_lowest_slot() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let w0 = first_worker(&h);
     build_and_finish_turret(&mut h, TURRET_CORNER, w0);
-    // Both exactly 24.5 cells from the footprint rectangle on the
-    // centre row: x = 186 + 24.5 east, x = 180 − 24.5 west. Exact f32
+    // Both exactly 28.0 cells from the footprint rectangle on the
+    // centre row: x = 168 + 28 east, x = 160 − 28 west. Exact f32
     // equality — no rounding enters a subtraction of these literals.
-    let east = spawn_ghoul(&mut h, [210.5, 179.0]); // spawned first → lower slot
-    let west = spawn_ghoul(&mut h, [155.5, 179.0]);
+    let east = spawn_ghoul(&mut h, [196.0, 148.0]); // spawned first → lower slot
+    let west = spawn_ghoul(&mut h, [132.0, 148.0]);
     h.step_exact(1);
     assert_eq!(hp_of(&h, east), 20, "equal distance → lower slot");
     assert_eq!(hp_of(&h, west), 30);
@@ -331,14 +332,14 @@ fn turret_target_ties_break_to_lowest_slot() {
 #[test]
 fn turret_range_measured_from_footprint() {
     // Effective distance = distance from the footprint *rectangle* to
-    // the target's hull. The rect's +x face is at x = 186: a ghoul on
-    // the centre row at x = 224.9 reads 38.9 to the rect = 35.9
-    // effective (in range); x = 225.1 reads 36.1 (out). Measured from
-    // the *centre* the first case would read 224.9 − 183 − 3 = 38.9 > 36
-    // and never fire — the "6-cell footprint must not lose 3 cells of
-    // range" claim, pinned.
-    assert_eq!(fire_probe([224.9, 179.0]), 20, "35.9 effective: in range");
-    assert_eq!(fire_probe([225.1, 179.0]), 30, "36.1 effective: out");
+    // the target's hull. The rect's +x face is at x = 168: a ghoul on
+    // the centre row at x = 206.9 reads 38.9 to the rect = 35.9
+    // effective (in range); x = 207.1 reads 39.1 = 36.1 (out). Measured
+    // from the *centre* the first case would read 206.9 − 164 − 3 = 39.9
+    // > 36 and never fire — the "an 8-cell footprint must not lose 4
+    // cells of range" claim, pinned.
+    assert_eq!(fire_probe([206.9, 148.0]), 20, "35.9 effective: in range");
+    assert_eq!(fire_probe([207.1, 148.0]), 30, "36.1 effective: out");
 }
 
 // --- death and economy ---------------------------------------------------

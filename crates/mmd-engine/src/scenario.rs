@@ -93,15 +93,24 @@ pub const RTS_MAX_MAP_EDGE: u32 = 512;
 /// Largest cell count (`width * height`) an RTS-family map may declare.
 pub const RTS_MAX_MAP_CELLS: u32 = 262_144;
 
-/// Footprint edge of the HQ, in cells. The validator needs it to prove the HQ
-/// site is buildable; the build system reuses the same constant.
-pub const HQ_FOOTPRINT_CELLS: u32 = 12;
-/// Footprint edge of the Depot, in cells.
+/// Edge of one *visible build square*, in true coordinate cells.
+///
+/// Units move on the cell grid as floats and ignore this entirely; it
+/// exists so buildings line up with each other and with what the player
+/// is shown. Every building footprint is a whole number of squares, and
+/// every building's min corner is a multiple of this.
+pub const BUILD_SQUARE_CELLS: u32 = 8;
+
+/// Footprint edge of the HQ, in cells — 3 × 3 squares. The validator needs it
+/// to prove the HQ site is buildable; the build system reuses the same
+/// constant.
+pub const HQ_FOOTPRINT_CELLS: u32 = 24;
+/// Footprint edge of the Depot, in cells — 1 × 1 square.
 pub const DEPOT_FOOTPRINT_CELLS: u32 = 8;
-/// Footprint edge of the Barracks, in cells.
-pub const BARRACKS_FOOTPRINT_CELLS: u32 = 10;
-/// Footprint edge of the Turret, in cells.
-pub const TURRET_FOOTPRINT_CELLS: u32 = 6;
+/// Footprint edge of the Barracks, in cells — 2 × 2 squares.
+pub const BARRACKS_FOOTPRINT_CELLS: u32 = 16;
+/// Footprint edge of the Turret, in cells — 1 × 1 square.
+pub const TURRET_FOOTPRINT_CELLS: u32 = 8;
 
 /// Largest starting stock a scene may grant, per resource. Generous, but not
 /// "the whole slice is already paid for".
@@ -833,6 +842,10 @@ fn validate_rts_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
 
 /// The RTS block is present exactly on the RTS family, and every cell it names
 /// is a cell a base could actually use.
+///
+/// `hq_cell` is additionally checked for [`BUILD_SQUARE_CELLS`] alignment, and
+/// that check runs *before* the footprint bounds check so a misaligned cell
+/// reports as misaligned rather than as an overflow.
 fn validate_rts_block(
     doc: &ScenarioSpec,
     blocked: &[bool],
@@ -924,6 +937,15 @@ fn validate_rts_block(
             )));
         }
         seen.push(**cell);
+    }
+
+    // Alignment is checked *before* bounds so a misaligned cell reports as
+    // misaligned rather than as a footprint overflow.
+    if rts.hq_cell.x % BUILD_SQUARE_CELLS != 0 || rts.hq_cell.y % BUILD_SQUARE_CELLS != 0 {
+        return Err(ScenarioError::InvalidRts(format!(
+            "hq_cell ({}, {}): not aligned to the {BUILD_SQUARE_CELLS}-cell build square",
+            rts.hq_cell.x, rts.hq_cell.y
+        )));
     }
 
     let hq_min_x = rts.hq_cell.x;

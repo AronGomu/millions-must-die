@@ -24,8 +24,8 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 
 /// Clear, obstacle-free, node-free, HQ-free corners of the tracked scene —
 /// the same corners `rts_production.rs` builds at.
-const DEPOT_CORNER: Cell = Cell { x: 180, y: 176 };
-const BARRACKS_CORNER: Cell = Cell { x: 198, y: 176 };
+const DEPOT_CORNER: Cell = Cell { x: 144, y: 176 };
+const BARRACKS_CORNER: Cell = Cell { x: 144, y: 152 };
 
 /// A damage amount no current kind survives through its armor.
 const OVERKILL: u32 = 100_000;
@@ -375,7 +375,7 @@ fn hp_enters_the_state_hash() {
 const W: u32 = 96;
 const H: u32 = 96;
 
-/// A combat sandbox: HQ (12-cell footprint, centre [88.0, 88.0]) in the
+/// A combat sandbox: HQ (24-cell footprint, centre [84.0, 84.0]) in the
 /// south-east corner, nodes in the north-east corner, the one mandatory
 /// seeded worker parked in the north-west corner far from every fight.
 /// Each case spawns and places its own combatants.
@@ -404,7 +404,7 @@ fn combat_spec() -> ScenarioSpec {
             start_crystal: 300,
             start_gas: 100,
             start_supply_cap: 10,
-            hq_cell: Cell { x: 82, y: 82 },
+            hq_cell: Cell { x: 72, y: 72 },
             crystal_nodes: vec![Cell { x: 94, y: 1 }],
             gas_nodes: vec![Cell { x: 93, y: 1 }],
             enemies: None,
@@ -692,8 +692,11 @@ fn ghouls_march_on_hq() {
 fn ghoul_attacks_first_thing_in_range() {
     let mut h = harness();
     let hq = h.world().start_hq().expect("seeded hq");
-    let ghoul = spawn_unit(&mut h, UnitKind::Ghoul, OWNER_ENEMY, [40.5, 88.5]);
-    let worker = spawn_unit(&mut h, UnitKind::Worker, OWNER_PLAYER, [58.5, 88.5]);
+    // On the straight line from the ghoul to the march's own goal — the
+    // 24-cell HQ's north-west approach cell (72, 68) since T7 — so the march
+    // really does run into the worker instead of passing north of it.
+    let ghoul = spawn_unit(&mut h, UnitKind::Ghoul, OWNER_ENEMY, [40.5, 68.5]);
+    let worker = spawn_unit(&mut h, UnitKind::Worker, OWNER_PLAYER, [58.5, 68.5]);
 
     let mut hits: Vec<(u64, u32)> = Vec::new();
     let mut hp = hp_of(&h, worker);
@@ -921,7 +924,7 @@ fn field_pool_not_churned() {
     spec.width = 160;
     spec.height = 160;
     let rts = spec.rts.as_mut().expect("rts block");
-    rts.hq_cell = Cell { x: 144, y: 144 };
+    rts.hq_cell = Cell { x: 136, y: 136 };
     rts.crystal_nodes = vec![Cell { x: 158, y: 1 }];
     rts.gas_nodes = vec![Cell { x: 157, y: 1 }];
     rts.enemies = Some(EnemySpec {
@@ -1014,8 +1017,8 @@ fn death_events_drain_once() {
         DeathEvent {
             kind: EntityKind::Building(BuildingKind::Depot),
             owner: OWNER_PLAYER,
-            // DEPOT_CORNER (180, 176) + edge 8 / 2.
-            center: [184.0, 180.0],
+            // DEPOT_CORNER (144, 176) + edge 8 / 2.
+            center: [148.0, 180.0],
         }
     );
     h.world_mut().drain_death_events(&mut out);

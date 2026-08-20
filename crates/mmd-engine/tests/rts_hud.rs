@@ -662,7 +662,7 @@ fn pack_hud_does_not_mutate_the_world() {
     h.world_mut().selection_mut().insert(hq);
     assert!(
         h.world_mut()
-            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 180, y: 176 }))
+            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 144, y: 176 }))
     );
 
     let before = h.state_hash();

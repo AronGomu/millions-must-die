@@ -12,7 +12,9 @@ use mmd_engine::rts::{
     RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, StaticNav, UnitKind,
 };
 use mmd_engine::rts::{FORMATION_ARRIVAL_CELLS, Order};
-use mmd_engine::scenario::{Cell, RtsSpec, Scenario, ScenarioSpec};
+use mmd_engine::scenario::{
+    BUILD_SQUARE_CELLS, Cell, HQ_FOOTPRINT_CELLS, RtsSpec, Scenario, ScenarioSpec,
+};
 use mmd_engine::testkit::RtsHarness;
 
 const RADIUS: f32 = RTS_UNIT_BODY_RADIUS_CELLS;
@@ -27,10 +29,15 @@ fn small_scenario(width: u32, height: u32, obstacle_cells: Vec<u32>) -> Scenario
         .expect("small scenario must validate")
 }
 
-/// A live world over [`small_scenario`]'s 50 x 40 corridor grid — HQ, starting
+/// A live world over [`small_scenario`]'s 74 x 64 corridor grid — HQ, starting
 /// workers and all, so a case can walk a real body instead of reading a mask.
+///
+/// 74 x 64, not the 50 x 40 this file used before T7: the HQ's footprint grew
+/// to 24 cells, and a 24-cell corner block on a 50 x 40 grid would swallow the
+/// far side of every corridor case. The obstacle geometry below is unchanged;
+/// the extra ground is empty margin that keeps the HQ out of it.
 fn spec_harness(obstacle_cells: Vec<u32>) -> RtsHarness {
-    RtsHarness::spec(small_spec(50, 40, obstacle_cells))
+    RtsHarness::spec(small_spec(74, 64, obstacle_cells))
         .build()
         .expect("corridor harness")
 }
@@ -61,8 +68,8 @@ fn small_spec(width: u32, height: u32, obstacle_cells: Vec<u32>) -> ScenarioSpec
             start_gas: 100,
             start_supply_cap: 10,
             hq_cell: Cell {
-                x: width - 13,
-                y: height - 13,
+                x: (width - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
+                y: (height - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
             },
             // Far from the HQ footprint (and, for the corridor tests, on the
             // same side of any wall as the destination) so a case's own
@@ -90,7 +97,7 @@ fn flat_index(x: u32, y: u32, width: u32) -> u32 {
 
 #[test]
 fn body_clears_map_edges() {
-    let scenario = small_scenario(40, 40, vec![]);
+    let scenario = small_scenario(64, 64, vec![]);
     let store = EntityStore::new();
     let nav = StaticNav::new(&scenario, &store).expect("static nav");
 
@@ -103,8 +110,8 @@ fn body_clears_map_edges() {
         "a centre exactly one radius from the left edge must be legal — touching is legal"
     );
     assert!(
-        nav.position_clear([37.0, 20.0], RADIUS),
-        "a centre exactly one radius from the right edge (width 40) must be legal"
+        nav.position_clear([61.0, 20.0], RADIUS),
+        "a centre exactly one radius from the right edge (width 64) must be legal"
     );
 }
 
@@ -112,12 +119,12 @@ fn body_clears_map_edges() {
 fn body_clears_static_rectangles() {
     // A terrain block at cells (10..12, 10..12) — a 2x2 solid square.
     let obstacles = vec![
-        flat_index(10, 10, 40),
-        flat_index(11, 10, 40),
-        flat_index(10, 11, 40),
-        flat_index(11, 11, 40),
+        flat_index(10, 10, 64),
+        flat_index(11, 10, 64),
+        flat_index(10, 11, 64),
+        flat_index(11, 11, 64),
     ];
-    let scenario = small_scenario(40, 40, obstacles);
+    let scenario = small_scenario(64, 64, obstacles);
 
     // A resource node and a finished building, spawned into the store, both
     // contribute solids the same way terrain does.
@@ -176,9 +183,9 @@ fn body_clears_static_rectangles() {
 // ---------------------------------------------------------------------------
 
 /// A full-height wall at `x == wall_x`, with a `gap` cells wide opening
-/// centred on `y == 20`, on a 50 x 40 grid.
+/// centred on `y == 20`, on a 74 x 64 grid.
 fn walled_corridor(wall_x: u32, gap: u32) -> (Scenario, EntityStore) {
-    let scenario = small_scenario(50, 40, walled_corridor_obstacles(wall_x, gap));
+    let scenario = small_scenario(74, 64, walled_corridor_obstacles(wall_x, gap));
     let store = EntityStore::new();
     (scenario, store)
 }
@@ -186,9 +193,9 @@ fn walled_corridor(wall_x: u32, gap: u32) -> (Scenario, EntityStore) {
 fn walled_corridor_obstacles(wall_x: u32, gap: u32) -> Vec<u32> {
     let gap_lo = 20u32.saturating_sub(gap / 2);
     let gap_hi = gap_lo + gap;
-    (0..40u32)
+    (0..64u32)
         .filter(|y| !(gap_lo..gap_hi).contains(y))
-        .map(|y| flat_index(wall_x, y, 50))
+        .map(|y| flat_index(wall_x, y, 74))
         .collect()
 }
 
@@ -240,7 +247,7 @@ fn wide_corridor_is_reachable() {
 /// what makes the positive half non-vacuous.
 #[test]
 fn a_body_walks_through_the_wide_corridor_and_not_the_narrow_one() {
-    // Clear of the HQ footprint ([31, 43) x [21, 33)) and its inflation, and
+    // Clear of the HQ footprint ([48, 72) x [40, 64)) and its inflation, and
     // one full radius inside the map edges.
     let far_side = Cell { x: 46, y: 10 };
     let near_start = [5.5f32, 20.5];
@@ -294,7 +301,7 @@ fn a_body_walks_through_the_wide_corridor_and_not_the_narrow_one() {
 
 #[test]
 fn sites_remain_walkable_until_completion() {
-    let scenario = small_scenario(40, 40, vec![]);
+    let scenario = small_scenario(64, 64, vec![]);
 
     let mut site_store = EntityStore::new();
     let site = site_store
@@ -321,7 +328,7 @@ fn sites_remain_walkable_until_completion() {
 
     // Depot footprint centred at (20, 20), edge 8 -> min corner (16, 16),
     // covering [16, 24) on each axis. The footprint's own centre cell:
-    let idx = flat_index(20, 20, 40) as usize;
+    let idx = flat_index(20, 20, 64) as usize;
     assert!(
         !site_nav.center_blocked()[idx],
         "an unfinished site's own footprint centre must stay walkable"
@@ -333,7 +340,7 @@ fn sites_remain_walkable_until_completion() {
 
     // The inflated clearance zone around the finished building reaches
     // outside its own footprint; the site's does not.
-    let ring_idx = flat_index(15, 20, 40) as usize; // one cell outside the footprint's min edge
+    let ring_idx = flat_index(15, 20, 64) as usize; // one cell outside the footprint's min edge
     assert!(
         !site_nav.center_blocked()[ring_idx],
         "an unfinished site must not inflate navigation around itself"
@@ -392,7 +399,7 @@ fn approach_targets_stay_outside_solids() {
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     let site = h
         .world_mut()
-        .confirm_placement(Cell { x: 180, y: 176 }, builder)
+        .confirm_placement(Cell { x: 144, y: 176 }, builder)
         .expect("placement");
     let mut finished = false;
     for _ in 0..3_000 {

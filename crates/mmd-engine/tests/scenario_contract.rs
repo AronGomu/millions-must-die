@@ -4,10 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    COLLISION_SCENE_V1, Cell, EnemySpec, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, HQ_FOOTPRINT_CELLS,
-    MAX_COLLISION_RADIUS_Q8, MAX_ENEMIES, MAX_LIVE_AGENTS, MAX_SEPARATION_STRENGTH_Q8,
-    MAX_START_RESOURCE, MAX_SUPPLY_CAP, RTS_PROTOTYPE_V1, RtsSpec, Scenario, ScenarioError,
-    ScenarioSpec, WaveSpec,
+    BUILD_SQUARE_CELLS, COLLISION_SCENE_V1, Cell, EnemySpec, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS,
+    HQ_FOOTPRINT_CELLS, MAX_COLLISION_RADIUS_Q8, MAX_ENEMIES, MAX_LIVE_AGENTS,
+    MAX_SEPARATION_STRENGTH_Q8, MAX_START_RESOURCE, MAX_SUPPLY_CAP, RTS_PROTOTYPE_V1, RtsSpec,
+    Scenario, ScenarioError, ScenarioSpec, WaveSpec,
 };
 use mmd_engine::testkit::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, fixture_path,
@@ -1242,6 +1242,32 @@ fn rts_scene_carries_its_block() {
 }
 
 #[test]
+fn hq_cell_must_sit_on_a_build_square() {
+    let mut spec = rts_spec();
+    spec.rts.as_mut().unwrap().hq_cell = Cell { x: 161, y: 160 };
+    expect_invalid_rts(
+        spec,
+        "hq_cell (161, 160): not aligned to the 8-cell build square",
+    );
+}
+
+#[test]
+fn the_tracked_scene_is_square_aligned() {
+    let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
+    let rts = scene.rts().expect("rts block must be present");
+    assert_eq!(
+        rts.hq_cell.x % BUILD_SQUARE_CELLS,
+        0,
+        "hq_cell x off-square"
+    );
+    assert_eq!(
+        rts.hq_cell.y % BUILD_SQUARE_CELLS,
+        0,
+        "hq_cell y off-square"
+    );
+}
+
+#[test]
 fn rts_obstacles_match_the_published_formula() {
     let scene = Scenario::load_verified(rts_scene_path()).expect("rts scene must load");
     let rts = scene.rts().expect("rts block must be present");
@@ -1461,7 +1487,7 @@ fn a_blocked_hq_footprint_is_rejected() {
 #[test]
 fn an_out_of_bounds_hq_footprint_is_rejected() {
     let mut base = rts_spec();
-    base.rts.as_mut().unwrap().hq_cell = Cell { x: 315, y: 315 };
+    base.rts.as_mut().unwrap().hq_cell = Cell { x: 312, y: 312 };
     expect_invalid_rts(base, "out of bounds");
 }
 

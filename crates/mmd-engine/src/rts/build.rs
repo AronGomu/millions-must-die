@@ -1,23 +1,39 @@
 //! Building costs, build times, supply grants, footprints, and placement
 //! validity — T10.
 
-use crate::scenario::Cell;
+use crate::scenario::{BUILD_SQUARE_CELLS, Cell};
 
 use super::economy::Resources;
 use super::entity::{BuildingKind, EntityKind};
 use super::selection::footprint_min;
 use super::world::RtsWorld;
 
-/// The minimum corner of a footprint of `edge` cells centred on `cell`.
+/// The minimum corner of a footprint of `edge` cells centred on `cell`,
+/// snapped to the build square.
 ///
-/// `cell - edge/2`, saturating at zero. The ghost follows the cursor's cell as
+/// `cell - edge/2`, saturating at zero, then floored onto a
+/// [`BUILD_SQUARE_CELLS`] boundary. The ghost follows the cursor's cell as
 /// its **centre**, which is what every RTS does; anchoring the min corner to
-/// the cursor makes a 12-cell building appear down-right of the pointer.
+/// the cursor makes a 24-cell building appear down-right of the pointer.
+///
+/// Snapping happens here so every caller — ghost, candidate search, confirm —
+/// goes through one place and cannot land a building off-square.
 pub fn ghost_min_corner(cell: Cell, edge: u32) -> Cell {
     let half = edge / 2;
-    Cell {
+    snap_to_build_square(Cell {
         x: cell.x.saturating_sub(half),
         y: cell.y.saturating_sub(half),
+    })
+}
+
+/// Floor `cell` to the nearest build-square boundary on both axes.
+///
+/// Placement is the only caller: movement, gathering and collision all
+/// keep working in true cells.
+pub fn snap_to_build_square(cell: Cell) -> Cell {
+    Cell {
+        x: cell.x - cell.x % BUILD_SQUARE_CELLS,
+        y: cell.y - cell.y % BUILD_SQUARE_CELLS,
     }
 }
 
@@ -221,11 +237,16 @@ pub struct PlacementCandidate {
 /// Compute the best placement candidate for `kind` at `cursor_cell`.
 ///
 /// Returns the raw min corner unchanged if it is valid. Otherwise searches all
-/// min-corner deltas `dx, dy ∈ [-edge, +edge]` (one-footprint-width radius),
-/// calls `placement_valid` for each, and returns the candidate closest to the
-/// raw min corner (squared `i64` distance measured from the **saturated** raw
-/// min corner; ties broken by lowest flat index `x + y * map_width`). If no
-/// candidate is found, returns the raw min corner with `valid = false`.
+/// min-corner deltas `dx, dy ∈ [-edge, +edge]` (one-footprint-width radius) in
+/// steps of one build square, calls `placement_valid` for each, and returns the
+/// candidate closest to the raw min corner (squared `i64` distance measured
+/// from the **saturated** raw min corner; ties broken by lowest flat index
+/// `x + y * map_width`). If no candidate is found, returns the raw min corner
+/// with `valid = false`.
+///
+/// Every candidate is snapped to the build square, so an assisted placement
+/// can never land off-grid even though the raw corner already arrives snapped
+/// from [`ghost_min_corner`].
 ///
 /// Allocates nothing: all work is on the stack.
 pub fn placement_candidate(
@@ -252,22 +273,24 @@ pub fn placement_candidate(
     let mut best_dist2: i64 = i64::MAX;
     let mut best_flat: u64 = u64::MAX;
 
-    for dy in -radius..=radius {
-        for dx in -radius..=radius {
+    let step = BUILD_SQUARE_CELLS as usize;
+    for dy in (-radius..=radius).step_by(step) {
+        for dx in (-radius..=radius).step_by(step) {
             let cx = raw_x + dx;
             let cy = raw_y + dy;
             if cx < 0 || cy < 0 || cx > u32::MAX as i64 || cy > u32::MAX as i64 {
                 continue;
             }
-            let cand = Cell {
+            let cand = snap_to_build_square(Cell {
                 x: cx as u32,
                 y: cy as u32,
-            };
+            });
             if placement_valid(world, kind, cand).is_err() {
                 continue;
             }
-            let dist2 = dx * dx + dy * dy;
-            let flat = cx as u64 + cy as u64 * width as u64;
+            let dist2 = (cand.x as i64 - raw_x) * (cand.x as i64 - raw_x)
+                + (cand.y as i64 - raw_y) * (cand.y as i64 - raw_y);
+            let flat = cand.x as u64 + cand.y as u64 * width as u64;
             if dist2 < best_dist2 || (dist2 == best_dist2 && flat < best_flat) {
                 best_dist2 = dist2;
                 best_flat = flat;

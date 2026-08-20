@@ -430,7 +430,7 @@ fn pack_frame_allocates_nothing() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     let cursor = [960.0, 540.0];
     let drag = Some(DragBox {
@@ -462,10 +462,12 @@ fn pack_frame_allocates_nothing() {
     pack_frame(h.world(), cursor, drag, &mut frame);
     flashes.pack(&iso, &mut frame);
     let packed = frame.instance_count();
+    // Since T7 a pending ghost forces the build-square lattice on whatever
+    // `show_grid` says, so the 320-cell map's 82 boundary lines ride along.
     assert_eq!(
         packed,
-        17 + 1 + 2 + 1 + 65 + 5 + 1,
-        "world, ring, the selected HQ's bar, rally, ghost, drag box, flash"
+        17 + 1 + 2 + 1 + 2 + 5 + 1 + 2 * (320 / 8 + 1),
+        "world, ring, the selected HQ's bar, rally, ghost, drag box, flash, grid"
     );
 
     let guard = MeasureGuard::enter();
@@ -506,7 +508,7 @@ fn new_hud_pack_allocates_nothing() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
     assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     let cursor = [960.0, 540.0];
 
@@ -780,7 +782,7 @@ fn movement_allocates_nothing() {
     let slot = h.world().entities().slot(workers[0]).expect("worker slot");
     assert_ne!(
         h.world().entities().position(slot),
-        [162.5, 178.5],
+        [162.5, 190.5],
         "the measured ticks moved nobody"
     );
 }
@@ -938,8 +940,8 @@ fn selection_operations_allocate_nothing() {
 
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let view = Camera::new(320, 320, 4.0, [1920.0, 1080.0], [166.0, 172.0]).iso_view();
-    let a = view.project(162.5, 178.5);
-    let b = view.project(167.5, 178.5);
+    let a = view.project(162.5, 190.5);
+    let b = view.project(167.5, 190.5);
 
     // T3's radius-aware initial spawn scatters the scene's six workers well
     // outside this box (they cannot share a cell one apart at a 3-cell body
@@ -951,7 +953,7 @@ fn selection_operations_allocate_nothing() {
         let slot = h.world().entities().slot(*id).expect("live worker");
         h.world_mut()
             .entities_mut()
-            .set_position(slot, [162.5 + i as f32, 178.5]);
+            .set_position(slot, [162.5 + i as f32, 190.5]);
     }
 
     // Warm-up outside the scope: whatever the selection/scratch buffers grow
@@ -985,7 +987,7 @@ fn construction_allocates_nothing() {
     // Three obstacle-, node- and HQ-free Depot footprints, mutually
     // non-overlapping, each paid from the scene's exact starting 300 crystal.
     let sites: Vec<_> = [
-        Cell { x: 180, y: 176 },
+        Cell { x: 144, y: 176 },
         Cell { x: 198, y: 176 },
         Cell { x: 210, y: 176 },
     ]
@@ -1396,7 +1398,7 @@ fn full_building_detail_pack_allocates_nothing() {
     for _ in 0..4 {
         assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     }
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
     let cursor = [960.0, 540.0];
 
     // Warm-up: any first-frame growth settles now.
@@ -1439,7 +1441,7 @@ fn placement_search_allocates_nothing() {
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     assert!(
         h.world_mut()
-            .confirm_placement(Cell { x: 180, y: 176 }, w0)
+            .confirm_placement(Cell { x: 144, y: 176 }, w0)
             .is_ok()
     );
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
@@ -1678,7 +1680,7 @@ fn combat_march_allocates_nothing() {
             start_crystal: 300,
             start_gas: 100,
             start_supply_cap: 10,
-            hq_cell: Cell { x: 82, y: 82 },
+            hq_cell: Cell { x: 72, y: 72 },
             crystal_nodes: vec![Cell { x: 94, y: 1 }],
             gas_nodes: vec![Cell { x: 93, y: 1 }],
             enemies: None,
@@ -1700,8 +1702,10 @@ fn combat_march_allocates_nothing() {
                 .expect("store has room");
         }
     }
-    // …and two workers parked on the line they march down.
-    for pos in [[76.5_f32, 76.5], [76.5, 82.5]] {
+    // …and two workers parked on the line they march down. Since T7 the
+    // 24-cell HQ spans [72, 96) on each axis, so the march's own goal is its
+    // north-west approach cell and the line runs east along y = 62..68.
+    for pos in [[64.5_f32, 62.5], [64.5, 68.5]] {
         h.world_mut()
             .entities_mut()
             .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)

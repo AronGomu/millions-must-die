@@ -25,7 +25,7 @@ use crate::render::{
     SLOT_RTS_WORKER, SLOT_UI_FONT, ScenePass, SpriteInstance, frame_uv_rect, quad_is_visible,
 };
 use crate::runtime::ring_quad_size_px;
-use crate::scenario::RTS_MAX_MAP_EDGE;
+use crate::scenario::{BUILD_SQUARE_CELLS, RTS_MAX_MAP_EDGE};
 
 /// Columns of every RTS sheet — the grid [`frame_uv_rect`] addresses.
 const SHEET_COLS: u32 = 4;
@@ -43,10 +43,11 @@ const UI_TEXT_CAPACITY: usize = 4_096;
 
 /// Maximum grid lines for a full-map isometric lattice.
 ///
-/// Two boundary families: `x = 0..=width` (width+1 lines) and
-/// `y = 0..=height` (height+1 lines). The map is square-bounded by
-/// [`RTS_MAX_MAP_EDGE`], so the ceiling is `2 * (RTS_MAX_MAP_EDGE + 1)`.
-pub const MAX_GRID_LINES: usize = 2 * (RTS_MAX_MAP_EDGE as usize + 1);
+/// The lattice is drawn in **build squares**, not cells: two boundary
+/// families, `x = 0..=width` and `y = 0..=height`, each stepping by
+/// [`BUILD_SQUARE_CELLS`]. The map is square-bounded by [`RTS_MAX_MAP_EDGE`],
+/// so the ceiling is `2 * (RTS_MAX_MAP_EDGE / BUILD_SQUARE_CELLS + 1)`.
+pub const MAX_GRID_LINES: usize = 2 * (RTS_MAX_MAP_EDGE as usize / BUILD_SQUARE_CELLS as usize + 1);
 
 /// Grid-line stroke width in screen pixels.
 pub const GRID_LINE_PX: f32 = 1.0;
@@ -395,27 +396,46 @@ impl DeathFlashes {
     }
 }
 
-/// Pack the isometric world-grid lattice into `frame.overlay`.
+/// Pack the isometric build-square lattice into `frame.overlay`.
 ///
 /// Two families of boundary lines: `x = 0..=width` projected as column edges,
-/// and `y = 0..=height` projected as row edges. Exactly `width + height + 2`
-/// lines are pushed; the caller must ensure `frame.overlay` has capacity.
+/// and `y = 0..=height` projected as row edges, both stepping by
+/// [`BUILD_SQUARE_CELLS`]. Exactly `width / BUILD_SQUARE_CELLS + height /
+/// BUILD_SQUARE_CELLS + 2` lines are pushed on a map whose edges are whole
+/// squares, plus one closing boundary per axis that is not; the caller must
+/// ensure `frame.overlay` has capacity.
 fn pack_grid(world: &RtsWorld, frame: &mut RtsFrame) {
     let iso = world.iso_view();
     let w = world.scenario().width();
     let h = world.scenario().height();
+    let step = BUILD_SQUARE_CELLS as usize;
     // x-family: vertical column edges, x in 0..=width.
-    for x in 0..=w {
+    for x in (0..=w).step_by(step) {
         let a = iso.project(x as f32, 0.0);
         let b = iso.project(x as f32, h as f32);
         frame
             .overlay
             .push(SpriteInstance::diagonal_line(a, b, GRID_LINE_PX, GRID_TINT));
     }
+    // A map edge that is not a whole number of squares still gets its last line.
+    if !w.is_multiple_of(BUILD_SQUARE_CELLS) {
+        let a = iso.project(w as f32, 0.0);
+        let b = iso.project(w as f32, h as f32);
+        frame
+            .overlay
+            .push(SpriteInstance::diagonal_line(a, b, GRID_LINE_PX, GRID_TINT));
+    }
     // y-family: horizontal row edges, y in 0..=height.
-    for y in 0..=h {
+    for y in (0..=h).step_by(step) {
         let a = iso.project(0.0, y as f32);
         let b = iso.project(w as f32, y as f32);
+        frame
+            .overlay
+            .push(SpriteInstance::diagonal_line(a, b, GRID_LINE_PX, GRID_TINT));
+    }
+    if !h.is_multiple_of(BUILD_SQUARE_CELLS) {
+        let a = iso.project(0.0, h as f32);
+        let b = iso.project(w as f32, h as f32);
         frame
             .overlay
             .push(SpriteInstance::diagonal_line(a, b, GRID_LINE_PX, GRID_TINT));
@@ -524,8 +544,10 @@ fn pack_frame_inner(
     }
     frame.scratch = scratch;
 
-    // 2a. Grid overlay: full-map isometric lattice, packed before rings.
-    if options.show_grid {
+    // 2a. Grid overlay: full-map isometric lattice, packed before rings. The
+    //     lattice is a placement aid first and a setting second, so a pending
+    //     ghost forces it on whatever the setting says.
+    if options.show_grid || matches!(world.placement(), Placement::Pending { .. }) {
         pack_grid(world, frame);
     }
 
@@ -643,12 +665,18 @@ fn pack_frame_inner(
                 Prop::PlacementBad
             });
 
-            // One tile per footprint cell, centred on that cell's ground point.
-            let tile = [iso.tile_w, iso.tile_h * 2.0];
-            for dy in 0..edge {
-                for dx in 0..edge {
-                    let cx = min.x.saturating_add(dx) as f32 + 0.5;
-                    let cy = min.y.saturating_add(dy) as f32 + 0.5;
+            // One tile per build square, centred on that square's ground point.
+            let squares = edge / BUILD_SQUARE_CELLS;
+            let tile = [
+                iso.tile_w * BUILD_SQUARE_CELLS as f32,
+                iso.tile_h * 2.0 * BUILD_SQUARE_CELLS as f32,
+            ];
+            for sy in 0..squares {
+                for sx in 0..squares {
+                    let cx = min.x.saturating_add(sx * BUILD_SQUARE_CELLS) as f32
+                        + BUILD_SQUARE_CELLS as f32 * 0.5;
+                    let cy = min.y.saturating_add(sy * BUILD_SQUARE_CELLS) as f32
+                        + BUILD_SQUARE_CELLS as f32 * 0.5;
                     let ground = iso.project(cx, cy);
                     let pos = [ground[0] - tile[0] * 0.5, ground[1] - tile[1] * 0.5];
                     if !quad_is_visible(pos, tile, iso.view_size) {

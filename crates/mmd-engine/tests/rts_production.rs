@@ -20,14 +20,17 @@ fn first_worker(h: &RtsHarness) -> EntityId {
     h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0]
 }
 
-/// Clear, obstacle-free, node-free, HQ-free corners, far enough apart that a
-/// Depot (edge 8) and a Barracks (edge 10) placed at each never overlap.
-const DEPOT_CORNER: Cell = Cell { x: 180, y: 176 };
-const BARRACKS_CORNER: Cell = Cell { x: 198, y: 176 };
+/// Clear, obstacle-free, node-free, HQ-free build-square corners, far enough
+/// apart that a Depot (edge 8) and a Barracks (edge 16) placed at each never
+/// overlap.
+const DEPOT_CORNER: Cell = Cell { x: 144, y: 176 };
+const BARRACKS_CORNER: Cell = Cell { x: 144, y: 152 };
 
 /// Place, confirm and fully attend a building until it finishes. Generous on
-/// ticks (2 000, well past any of this slice's build times) because the
-/// builder must first walk in.
+/// ticks (4 000, well past any of this slice's build times) because the
+/// builder must first walk in — and since T7 both corners sit west of the
+/// enlarged HQ, which is a longer walk out of the spawn cluster than the old
+/// east-side plots were.
 fn build_and_finish(
     h: &mut RtsHarness,
     kind: BuildingKind,
@@ -39,10 +42,10 @@ fn build_and_finish(
         .world_mut()
         .confirm_placement(corner, builder)
         .expect("confirm placement");
-    h.step_exact(2_000);
+    h.step_exact(4_000);
     assert!(
         !h.world().is_site(site),
-        "building must have finished within 2000 ticks"
+        "building must have finished within 4000 ticks"
     );
     site
 }
@@ -260,7 +263,7 @@ fn enqueue_rejects_a_full_queue() {
     // has 4 free, not enough for 5 Workers. Building a Depot elsewhere grants
     // +10, which is not this test's subject and is only setup.
     h.world_mut().resources_mut().crystal = 10_000;
-    build_and_finish(&mut h, BuildingKind::Depot, DEPOT_CORNER, workers[1]);
+    build_and_finish(&mut h, BuildingKind::Depot, DEPOT_CORNER, workers[0]);
     h.world_mut().resources_mut().crystal = 10_000;
 
     for _ in 0..PRODUCTION_QUEUE_CAP {
@@ -532,7 +535,7 @@ fn supply_used_counts_reservations() {
 #[test]
 fn reserved_supply_reports_the_queues() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    let w2 = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[2];
+    let w2 = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
     let barracks = build_and_finish(&mut h, BuildingKind::Barracks, BARRACKS_CORNER, w2);
     let hq = h.world().start_hq().expect("hq");
     assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
@@ -632,7 +635,7 @@ fn a_barracks_can_be_queued_the_tick_it_finishes() {
     let worker_slot = h.world().entities().slot(w0).expect("worker slot");
     h.world_mut()
         .entities_mut()
-        .set_position(worker_slot, [198.0, 181.0]);
+        .set_position(worker_slot, [141.0, 160.0]);
     assert!(h.world_mut().order_build(w0, barracks));
     h.step_exact(1);
 
@@ -959,10 +962,10 @@ fn new_spawn_joins_same_tick_collision() {
     let hq = h.world().start_hq().expect("hq");
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     assert_eq!(workers.len(), 6);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 176, y: 184 })));
+    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 176, y: 192 })));
     assert!(
         h.world_mut()
-            .order_move_group(&workers, Cell { x: 176, y: 184 })
+            .order_move_group(&workers, Cell { x: 176, y: 192 })
             .is_ok()
     );
     assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());

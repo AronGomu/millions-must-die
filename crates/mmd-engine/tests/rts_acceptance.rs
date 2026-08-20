@@ -66,12 +66,12 @@ const START_GAS: u32 = 100;
 /// wider area than the old one-cell-apart spawn row, so this box is wider
 /// than the pre-T3 one — it must still enclose every relocated worker's
 /// ground point.
-const DRAG_A: [f32; 2] = [850.0, 520.0];
-const DRAG_B: [f32; 2] = [1000.0, 600.0];
-/// Depot footprint min corner (ghost cell `(184, 180)`, edge 8).
-const DEPOT_MIN: Cell = Cell { x: 180, y: 176 };
-/// Barracks footprint min corner (ghost cell `(151, 181)`, edge 10).
-const BARRACKS_MIN: Cell = Cell { x: 146, y: 176 };
+const DRAG_A: [f32; 2] = [800.0, 520.0];
+const DRAG_B: [f32; 2] = [940.0, 620.0];
+/// Depot footprint min corner (ghost cell `(188, 196)`, edge 8).
+const DEPOT_MIN: Cell = Cell { x: 184, y: 192 };
+/// Barracks footprint min corner (ghost cell `(152, 168)`, edge 16).
+const BARRACKS_MIN: Cell = Cell { x: 144, y: 160 };
 
 /// The minimap point the tracked script clicks, in screen pixels.
 ///
@@ -120,36 +120,36 @@ enum ScriptPoint {
 const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
     (
         [960.0, 540.0],
-        ScriptPoint::Cell(Cell { x: 166, y: 166 }),
+        ScriptPoint::Cell(Cell { x: 172, y: 172 }),
         "the SETTINGS button with the menu open (a world click on HQ centre otherwise)",
     ),
     (
-        [960.0, 518.0],
-        ScriptPoint::Building(Cell { x: 166, y: 166 }),
+        [960.0, 494.0],
+        ScriptPoint::Building(Cell { x: 172, y: 172 }),
         "the HQ's own footprint corner (160.5, 160.5), which picks the HQ",
     ),
     (
-        [850.0, 520.0],
-        ScriptPoint::Cell(Cell { x: 147, y: 174 }),
+        [800.0, 520.0],
+        ScriptPoint::Cell(Cell { x: 147, y: 187 }),
         "worker box, top-left",
     ),
     (
-        [1000.0, 600.0],
-        ScriptPoint::Cell(Cell { x: 186, y: 176 }),
+        [940.0, 620.0],
+        ScriptPoint::Cell(Cell { x: 189, y: 194 }),
         "worker box, bottom-right",
     ),
     (
-        [897.0, 411.0],
+        [897.0, 387.0],
         ScriptPoint::NodeQuad(Cell { x: 140, y: 150 }),
         "crystal node quad, one pixel inside its top-left corner",
     ),
     (
-        [916.0, 568.0],
-        ScriptPoint::Cell(Cell { x: 167, y: 178 }),
-        "worker spawn cell (167,178)",
+        [872.0, 567.0],
+        ScriptPoint::Cell(Cell { x: 167, y: 189 }),
+        "an already-selected worker's ground point at frame 12",
     ),
     (
-        [1049.0, 559.0],
+        [1049.0, 535.0],
         ScriptPoint::NodeQuad(Cell { x: 196, y: 168 }),
         "gas node quad, one pixel inside its top-left corner",
     ),
@@ -159,9 +159,14 @@ const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
         "the invalid order: logical content, no HUD, no map cell",
     ),
     (
-        [896.0, 558.0],
-        ScriptPoint::Cell(Cell { x: 162, y: 178 }),
-        "worker spawn cell (162,178)",
+        [780.0, 520.0],
+        ScriptPoint::Cell(Cell { x: 144, y: 189 }),
+        "the Depot builder's box, top-left",
+    ),
+    (
+        [830.0, 552.0],
+        ScriptPoint::Cell(Cell { x: 158, y: 191 }),
+        "the Depot builder's box, bottom-right",
     ),
     (
         [1800.0, 888.0],
@@ -169,14 +174,19 @@ const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
         "command slot 1 centre (Depot)",
     ),
     (
-        [976.0, 606.0],
-        ScriptPoint::Cell(Cell { x: 184, y: 180 }),
+        [928.0, 622.0],
+        ScriptPoint::Cell(Cell { x: 188, y: 196 }),
         "Depot ghost cell",
     ),
     (
-        [906.0, 563.0],
-        ScriptPoint::Cell(Cell { x: 165, y: 178 }),
-        "worker spawn cell (165,178)",
+        [834.0, 500.0],
+        ScriptPoint::Cell(Cell { x: 146, y: 177 }),
+        "the Barracks builder's box, top-left",
+    ),
+    (
+        [880.0, 524.0],
+        ScriptPoint::Cell(Cell { x: 158, y: 178 }),
+        "the Barracks builder's box, bottom-right",
     ),
     (
         [1872.0, 888.0],
@@ -184,9 +194,9 @@ const SCRIPT_COORDS: &[([f32; 2], ScriptPoint, &str)] = &[
         "command slot 2 centre (Barracks)",
     ),
     (
-        [840.0, 542.0],
-        ScriptPoint::Cell(Cell { x: 151, y: 181 }),
-        "Barracks ghost cell",
+        [896.0, 494.0],
+        ScriptPoint::Cell(Cell { x: 152, y: 168 }),
+        "Barracks ghost cell, and the finished Barracks' own footprint",
     ),
     (
         [1728.0, 888.0],
@@ -361,7 +371,12 @@ fn drive() -> Run {
     scan!(h, "after the HQ produced a Worker");
 
     // --- 9. place the Barracks ---------------------------------------------
-    let barracks_builder = workers[1];
+    // workers[3], not workers[1]: since T7 the six seeded bodies are packed
+    // tighter under the enlarged HQ, and the middle of that cluster cannot
+    // push its way west to the Barracks plot inside this run's tick budget
+    // (ADR 017's bounded push chain). The tracked script boxes the same
+    // outer worker for the same reason.
+    let barracks_builder = workers[3];
     let before = h.world().resources();
     assert!(
         h.world_mut().begin_placement(BuildingKind::Barracks),
@@ -960,8 +975,8 @@ enum FocusedPoint {
 /// Every screen coordinate the focused script names, with what it claims.
 const FOCUSED_COORDS: &[([f32; 2], FocusedPoint, &str)] = &[
     (
-        [960.0, 518.0],
-        FocusedPoint::Building(Cell { x: 166, y: 166 }),
+        [960.0, 494.0],
+        FocusedPoint::Building(Cell { x: 172, y: 172 }),
         "the HQ's own footprint corner (160.5, 160.5)",
     ),
     (
@@ -1009,11 +1024,14 @@ fn focused_script_path() -> PathBuf {
 ///
 /// `find_builder` falls back to "any live worker" and `enqueue_unit` is given
 /// a building id, so an accepted Worker enqueue alone would not prove the
-/// click resolved to the HQ. This is that proof — and the second half is why
-/// the script cannot simply reuse the canonical run's `960,540`: at the frame
-/// the focused script clicks, one T3-relocated worker's rendered sprite quad
-/// still reaches back over the HQ's screen centre and outranks it on pick
-/// depth.
+/// click resolved to the HQ. This is that proof.
+///
+/// Before T7 the second half of this case also pinned *why* the script uses
+/// the footprint corner rather than the HQ's screen centre: a T3-relocated
+/// worker's sprite quad reached back over the centre and outranked the HQ on
+/// pick depth. T7 moved the spawn row out of the enlarged footprint, so that
+/// occlusion is gone and both points now pick the HQ — which this case says
+/// outright rather than leaving the corner click unexplained.
 #[test]
 fn focused_script_hq_click_picks_the_building_not_a_worker() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
@@ -1021,15 +1039,15 @@ fn focused_script_hq_click_picks_the_building_not_a_worker() {
     let hq = h.world().start_hq().expect("the scene's HQ");
 
     assert_eq!(
-        pick_at(h.world(), &view, [960.0, 518.0]),
+        pick_at(h.world(), &view, [960.0, 494.0]),
         Pick::Building(hq),
         "the focused script's step-1 coordinate does not pick the HQ"
     );
-    assert!(
-        matches!(pick_at(h.world(), &view, [960.0, 540.0]), Pick::Unit(_)),
-        "the HQ's screen centre is pickable as the HQ at the opening frame after all — \
-         then the focused script's whole reason for clicking the footprint corner is gone \
-         and this table should say so"
+    assert_eq!(
+        pick_at(h.world(), &view, [960.0, 540.0]),
+        Pick::Building(hq),
+        "since T7 no worker's sprite quad reaches back over the HQ's screen \
+         centre, so it must pick the HQ too"
     );
 }
 

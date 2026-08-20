@@ -12,9 +12,9 @@ use mmd_engine::rts::{
     DEPOT_COST, DEPOT_SUPPLY_GRANT, EntityId, EntityKind, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
     IssuedOrder, OWNER_PLAYER, Order, OrderReceiptBuffer, Placement, PlacementError, ResourceKind,
     Resources, Supply, UnitKind, UnitOrderReceipt, build_ticks, building_cost, ghost_min_corner,
-    placement_candidate, placement_valid, supply_grant,
+    placement_candidate, placement_valid, snap_to_build_square, supply_grant,
 };
-use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP};
+use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell, MAX_SUPPLY_CAP};
 use mmd_engine::testkit::RtsHarness;
 
 fn first_worker(h: &RtsHarness) -> EntityId {
@@ -27,7 +27,7 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 
 /// A clear, obstacle-free, node-free, HQ-free corner within easy walking
 /// distance of the six spawn workers.
-const CLEAR_CORNER: Cell = Cell { x: 180, y: 176 };
+const CLEAR_CORNER: Cell = Cell { x: 144, y: 176 };
 
 // --- constants ---------------------------------------------------------------
 
@@ -121,7 +121,7 @@ fn placement_rejects_overlap_with_a_site() {
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
 
-    let overlapping = Cell { x: 183, y: 176 };
+    let overlapping = Cell { x: 148, y: 176 };
     assert_eq!(
         placement_valid(h.world(), BuildingKind::Depot, overlapping),
         Err(PlacementError::OverlapsBuilding)
@@ -587,19 +587,25 @@ fn cancel_of_a_stale_id_is_refused() {
 #[test]
 fn a_builder_walks_to_a_far_site() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    // (298.5, 298.5), not the raw (300.5, 300.5): the direct entity-store
-    // spawn below bypasses `RtsWorld`'s own collision-safe placement search,
-    // so it must land on a cell that is itself legal in the inflated
-    // navigation mask, or the mover never takes its first step — its own
-    // cell would sample as blocked, which `FieldPool::reachable` correctly
-    // reports as unreachable.
+    // (20.5, 298.5), not the raw (0.5, 300.5): the direct entity-store spawn
+    // below bypasses `RtsWorld`'s own collision-safe placement search, so it
+    // must land on a cell that is itself legal in the inflated navigation
+    // mask, or the mover never takes its first step — its own cell would
+    // sample as blocked, which `FieldPool::reachable` correctly reports as
+    // unreachable.
+    //
+    // The *south-west* corner, not the south-east one T7 inherited: since T7
+    // moved [`CLEAR_CORNER`] west of the enlarged HQ, a walk in from the
+    // south-east threads the six parked starting workers and wedges against
+    // them. Hard bodies are a real obstacle, and this case is about the walk,
+    // not about a traffic jam.
     let far = h
         .world_mut()
         .entities_mut()
         .spawn(
             EntityKind::Unit(UnitKind::Worker),
             OWNER_PLAYER,
-            [298.5, 298.5],
+            [20.5, 298.5],
         )
         .expect("spawn a far worker");
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
@@ -855,8 +861,8 @@ fn completion_evacuates_every_overlapping_body() {
     // Two bodies inside the 8 x 8 footprint, one body diameter apart, plus the
     // builder standing against its east edge — all three penetrate the
     // footprint the finished Depot will occupy.
-    let inside_a = spawn_worker(&mut h, [180.5, 176.5]);
-    let inside_b = spawn_worker(&mut h, [186.5, 182.5]);
+    let inside_a = spawn_worker(&mut h, [145.5, 177.5]);
+    let inside_b = spawn_worker(&mut h, [150.5, 182.5]);
     let caught = [inside_a, inside_b];
 
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
@@ -1005,8 +1011,8 @@ fn later_completion_sees_earlier_building() {
     // Two Depots, one body diameter apart, each attended by a builder standing
     // on its own footprint edge (`rect_distance == 0`, so attendance needs no
     // walk-in) and therefore caught by its own completion.
-    let first_min = Cell { x: 176, y: 176 };
-    let second_min = Cell { x: 187, y: 176 };
+    let first_min = Cell { x: 139, y: 176 };
+    let second_min = Cell { x: 150, y: 176 };
     let mut sites = Vec::new();
     for (min, builder) in [(first_min, workers[0]), (second_min, workers[1])] {
         let slot = h.world().entities().slot(builder).expect("live worker");
@@ -1060,7 +1066,7 @@ fn later_completion_sees_earlier_building() {
 #[test]
 fn valid_raw_placement_is_unchanged() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 148, y: 180 });
     assert_eq!(cand.min, CLEAR_CORNER, "clear raw returns unchanged min");
     assert!(cand.valid);
 }
@@ -1074,7 +1080,7 @@ fn blocked_raw_snaps_to_nearest_valid_footprint() {
     assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
 
     // Cursor whose raw min == CLEAR_CORNER is now blocked.
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 148, y: 180 });
     assert!(cand.valid, "snap must find a nearby valid cell");
     assert_ne!(
         cand.min, CLEAR_CORNER,
@@ -1125,16 +1131,17 @@ fn candidate_tie_uses_lowest_flat_index() {
     assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
 
     let width = h.world().scenario().width();
-    // Cursor giving raw = CLEAR_CORNER. Four equidistant candidates (dist2=64):
-    // (172,176), (188,176), (180,168), (180,184).
-    // Lowest flat: 180 + 168*320 = 53940 → (180, 168).
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    // Cursor giving raw = CLEAR_CORNER. The search steps whole build squares,
+    // so the four equidistant candidates (dist2 = 64) are
+    // (136,176), (152,176), (144,168), (144,184).
+    // Lowest flat: 144 + 168*320 = 53904 → (144, 168).
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 148, y: 180 });
     assert!(cand.valid);
     let winner_flat = cand.min.x as u64 + cand.min.y as u64 * width as u64;
-    // All equidistant candidates at dist2=64 have flat >= 53940.
+    // All equidistant candidates at dist2=64 have flat >= 53904.
     assert_eq!(
         cand.min,
-        Cell { x: 180, y: 168 },
+        Cell { x: 144, y: 168 },
         "lowest flat index among equidistant candidates must win"
     );
     let _ = winner_flat;
@@ -1171,9 +1178,10 @@ fn map_edge_search_is_safe() {
 #[test]
 fn no_nearby_candidate_returns_raw_invalid() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    // HQ at [160,172)x[160,172). Depot cursor at HQ centre: raw=(162,162).
-    // Any Depot min within radius 8 of (162,162) still overlaps the HQ.
-    let cursor = Cell { x: 166, y: 166 };
+    // HQ at [160,184)x[160,184). Depot cursor at the HQ centre snaps to
+    // raw=(168,168); every build square the search reaches — x and y in
+    // {160, 168, 176} — still lies inside the HQ footprint.
+    let cursor = Cell { x: 172, y: 172 };
     let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor);
     assert_eq!(
         cand.min,
@@ -1190,7 +1198,7 @@ fn red_preview_click_is_noop() {
     let resources_before = h.world().resources();
 
     // Cursor at HQ centre: no valid candidate.
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 166, y: 166 });
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 172, y: 172 });
     assert!(!cand.valid);
 
     // Confirm_placement with the invalid raw min must fail (placement_valid rejects it).
@@ -1209,4 +1217,66 @@ fn red_preview_click_is_noop() {
         },
         "ghost must remain pending"
     );
+}
+
+// --- the build square --------------------------------------------------------
+
+#[test]
+fn every_footprint_is_a_whole_number_of_build_squares() {
+    let square = BUILD_SQUARE_CELLS;
+    for kind in [
+        BuildingKind::Hq,
+        BuildingKind::Depot,
+        BuildingKind::Barracks,
+        BuildingKind::Turret,
+    ] {
+        let edge = kind.footprint_cells();
+        assert_eq!(
+            edge % square,
+            0,
+            "{kind:?} footprint {edge} is not a whole number of {square}-cell squares"
+        );
+    }
+    assert_eq!(BuildingKind::Depot.footprint_cells() / square, 1);
+    assert_eq!(BuildingKind::Turret.footprint_cells() / square, 1);
+    assert_eq!(BuildingKind::Barracks.footprint_cells() / square, 2);
+    assert_eq!(BuildingKind::Hq.footprint_cells() / square, 3);
+}
+
+#[test]
+fn the_ghost_snaps_its_min_corner_to_a_build_square() {
+    let square = BUILD_SQUARE_CELLS;
+    let edge = BuildingKind::Depot.footprint_cells();
+    for cursor in [
+        Cell { x: 163, y: 171 },
+        Cell { x: 160, y: 160 },
+        Cell { x: 167, y: 191 },
+    ] {
+        let min = ghost_min_corner(cursor, edge);
+        assert_eq!(min.x % square, 0, "{cursor:?}: x off-square");
+        assert_eq!(min.y % square, 0, "{cursor:?}: y off-square");
+
+        // Snapping only ever floors, and never by a whole square or more.
+        let unsnapped = Cell {
+            x: cursor.x.saturating_sub(edge / 2),
+            y: cursor.y.saturating_sub(edge / 2),
+        };
+        assert!(min.x <= unsnapped.x && unsnapped.x - min.x < square);
+        assert!(min.y <= unsnapped.y && unsnapped.y - min.y < square);
+        assert_eq!(min, snap_to_build_square(unsnapped));
+    }
+}
+
+#[test]
+fn an_assisted_placement_stays_on_the_grid() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    // Straight over the HQ footprint: the raw corner is illegal, so the
+    // assisted search has to move — and every corner it may move to is a
+    // build-square corner.
+    let cursor = Cell { x: 166, y: 166 };
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor);
+    assert!(cand.valid, "the ring search must find a legal square");
+    assert_eq!(cand.min.x % BUILD_SQUARE_CELLS, 0);
+    assert_eq!(cand.min.y % BUILD_SQUARE_CELLS, 0);
+    assert!(placement_valid(h.world(), BuildingKind::Depot, cand.min).is_ok());
 }

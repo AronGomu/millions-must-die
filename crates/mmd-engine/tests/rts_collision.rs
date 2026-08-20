@@ -20,7 +20,7 @@ use mmd_engine::rts::{
     RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, TickError, UnitKind,
     moving_circle_hits_point, units_overlap,
 };
-use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
+use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell, HQ_FOOTPRINT_CELLS, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
 
 mod common;
@@ -64,8 +64,8 @@ fn collision_spec(spawns: Vec<Cell>, obstacle_cells: Vec<u32>) -> ScenarioSpec {
             start_gas: 100,
             start_supply_cap: 10,
             hq_cell: Cell {
-                x: W - 13,
-                y: H - 13,
+                x: (W - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
+                y: (H - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
             },
             crystal_nodes: vec![Cell { x: 1, y: H - 2 }],
             gas_nodes: vec![Cell { x: 1, y: H - 3 }],
@@ -1740,17 +1740,17 @@ fn fallback_priority_rotates() {
 const POCKET_GRID: u32 = 48;
 /// Half-open cell rectangle `[x0, x1) x [y0, y1)`.
 type OpenRect = (u32, u32, u32, u32);
-/// The HQ's own 12 x 12 footprint, which `StaticNav` stamps solid at load, so
+/// The HQ's own 24 x 24 footprint, which `StaticNav` stamps solid at load, so
 /// this block holds no legal body centre at all.
-const POCKET_HQ: OpenRect = (4, 16, 4, 16);
+const POCKET_HQ: OpenRect = (0, 24, 0, 24);
 /// Four cells wide: raw-walkable, so the scenario's point-agent reachability
 /// check passes, and far too narrow for a 3-cell body to stand or pass.
-const POCKET_CORRIDOR: OpenRect = (16, 20, 8, 12);
+const POCKET_CORRIDOR: OpenRect = (24, 28, 8, 12);
 /// A 7 x 7 pocket holds exactly one legal body centre — the smallest open
 /// square a 3-cell body fits in, and it fits in one place.
-const POCKET_ONE: OpenRect = (20, 27, 6, 13);
+const POCKET_ONE: OpenRect = (28, 35, 6, 13);
 /// The single legal body centre of [`POCKET_ONE`].
-const POCKET_ONE_CENTRE: [f32; 2] = [23.5, 9.5];
+const POCKET_ONE_CENTRE: [f32; 2] = [31.5, 9.5];
 
 /// An RTS scene whose only open ground is `open`, everything else solid.
 fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
@@ -1762,19 +1762,19 @@ fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
                 .any(|&(x0, x1, y0, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
         })
         .collect();
-    let mut spec = collision_spec(vec![Cell { x: 22, y: 9 }], obstacle_cells);
+    let mut spec = collision_spec(vec![Cell { x: 30, y: 9 }], obstacle_cells);
     spec.width = POCKET_GRID;
     spec.height = POCKET_GRID;
-    spec.destination = Cell { x: 23, y: 9 };
+    spec.destination = Cell { x: 31, y: 9 };
     spec.rts = Some(RtsSpec {
         start_crystal: 300,
         start_gas: 100,
         start_supply_cap: 10,
-        hq_cell: Cell { x: 4, y: 4 },
+        hq_cell: Cell { x: 0, y: 0 },
         // Both nodes sit in the corridor: raw-walkable and reachable, and no
         // body can stand there anyway, so they add and remove no centre.
-        crystal_nodes: vec![Cell { x: 17, y: 9 }],
-        gas_nodes: vec![Cell { x: 18, y: 10 }],
+        crystal_nodes: vec![Cell { x: 25, y: 9 }],
+        gas_nodes: vec![Cell { x: 26, y: 10 }],
         enemies: None,
     });
     RtsHarness::spec(spec)

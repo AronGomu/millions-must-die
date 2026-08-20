@@ -14,34 +14,45 @@
 # lets an active gather pair pass through its partner instead of shouldering
 # it aside, so the group leaves those cells sooner than it used to: the two
 # builder clicks are timed for the faster departure, not the old one.
+#
+# T7 re-authored every world coordinate below. The HQ is now 24 cells, so the
+# camera opens on its centre (172,172) and the screen formula is
+# sx = 960 + 4*(x - y), sy = 540 + 2*(x + y - 344); the spawn row moved out of
+# the enlarged footprint to y = 190. The Depot plot moved east and the
+# Barracks plot west because both old plots are now inside the HQ, and every
+# min corner is floored onto the 8-cell build square.
 
 1:move:960,540
-5:drag:850,520,1000,600        # box-select the six starting workers (T3 scatters them wider than one row)
-10:rclick:897,411              # crystal node, one pixel inside its visible quad [896,410,48,48] (ground 920,458)
-12:lclick:916,568              # narrow to one already-selected worker (spawn cell 167,178) — a re-select is silent
-16:rclick:1049,559             # gas node, one pixel inside its visible quad [1048,558,48,48] (ground 1072,606)
+5:drag:800,520,940,620         # box-select the six starting workers (T3 scatters them wider than one row)
+10:rclick:897,387              # crystal node, one pixel inside its visible quad [896,386,48,48] (ground 920,434)
+12:lclick:872,567              # narrow to one already-selected worker (its ground point at frame 12) — a re-select is silent
+16:rclick:1049,535             # gas node, one pixel inside its visible quad [1048,534,48,48] (ground 1072,582)
 20:rclick:1900,100             # off the map, one worker selected: exactly one Reject
 
-# --- Depot, built by the worker still over spawn cell (162,178) ---
-22:lclick:896,558
+# --- Depot, built by one boxed worker --------------------------------------
+#
+# A *box* around a single worker, not a click on it: at this frame the six
+# bodies are still close enough that their pick shapes overlap, and only the
+# box reads ground points alone. The box holds exactly one of them.
+22:drag:780,520,830,552        # the Depot builder, alone in its box
 24:lclick:1800,888             # command slot 1 = Depot ghost
-26:move:976,606
-27:lclick:976,606              # place it at min corner (180,176)
-28:rclick:976,606              # order that worker onto its own site: one Build receipt
+26:move:928,622
+27:lclick:928,622              # cursor cell (188,196) -> min corner (184,192), south-east of the HQ
+28:rclick:928,622              # order that worker onto its own site: one Build receipt
 
-# --- Barracks, built by the worker still over spawn cell (165,178) ---
-30:lclick:906,563
-32:lclick:1872,888             # command slot 2 = Barracks ghost
-34:move:840,542
-35:lclick:840,542              # place it at min corner (146,176)
-36:rclick:840,542              # order that worker onto its own site: one Build receipt
+# --- Barracks, built by a second boxed worker -------------------------------
+40:drag:834,500,880,524        # the Barracks builder, alone in its box
+42:lclick:1872,888             # command slot 2 = Barracks ghost
+44:move:896,494
+45:lclick:896,494              # cursor cell (152,168) -> min corner (144,160), west of the HQ
+46:rclick:896,494              # order that worker onto its own site: one Build receipt
 
 # --- a Worker from the HQ ---
-120:lclick:960,518             # select the HQ, at its own footprint corner (160.5,160.5)
+120:lclick:960,494             # select the HQ, at its own footprint corner (160.5,160.5)
 125:lclick:1728,888            # command slot 0 = Worker
 
 # --- a Soldier from the Barracks ---
-900:lclick:840,542             # select the finished Barracks
+900:lclick:896,494              # select the finished Barracks (footprint centre 152,168)
 905:lclick:1728,888            # command slot 0 = Soldier
 
 # --- the minimap, then the nested menu ---

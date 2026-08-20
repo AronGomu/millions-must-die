@@ -429,11 +429,11 @@ fn delivery_uses_the_footprint_not_the_centre() {
     ));
     assert_eq!(h.world().entities().amount(node_slot), 0);
 
-    // HQ centre is [166.0, 166.0], footprint edge 12: the footprint spans
-    // 160..172 on each axis. One cell outside the edge on the x axis is
-    // (172 + 1.0, 166.0) — 7.0 from the centre, well past a centre-distance
+    // HQ centre is [172.0, 172.0], footprint edge 24: the footprint spans
+    // 160..184 on each axis. One cell outside the edge on the x axis is
+    // (184 + 1.0, 172.0) — 13.0 from the centre, well past a centre-distance
     // rule, but exactly `DROP_OFF_REACH_CELLS` from the footprint rectangle.
-    let boundary = [173.0, 166.0];
+    let boundary = [185.0, 172.0];
     h.world_mut().entities_mut().set_position(w0_slot, boundary);
     let before_crystal = h.world().resources().crystal;
 
@@ -473,7 +473,7 @@ fn delivery_one_cell_further_does_not_fire() {
     // footprint" is no longer guaranteed to be outside it. 8 cells clear of
     // the footprint edge is comfortably past any approach cell this scene's
     // terrain could ever produce.
-    let far_outside = [180.0, 166.0];
+    let far_outside = [192.0, 172.0];
     h.world_mut()
         .entities_mut()
         .set_position(w0_slot, far_outside);

@@ -431,7 +431,11 @@ fn the_ghost_draws_over_the_world() {
         .find(|g| g.atlas_id == SLOT_RTS_PROPS)
         .expect("prop group")
         .instances;
-    assert_eq!(props.len(), 65, "64 ghost tiles plus the silhouette");
+    assert_eq!(
+        props.len(),
+        2,
+        "one build-square ghost tile plus the silhouette"
+    );
     assert_eq!(
         props[0].uv_rect,
         frame_uv_rect(0, 2),
