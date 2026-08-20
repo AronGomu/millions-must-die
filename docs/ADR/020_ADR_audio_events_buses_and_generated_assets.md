@@ -4,7 +4,7 @@
 - Date: 2026-08-10
 - Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 019](019_ADR_hud_minimap_and_input_routing.md)
-- Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
 ## Context
 

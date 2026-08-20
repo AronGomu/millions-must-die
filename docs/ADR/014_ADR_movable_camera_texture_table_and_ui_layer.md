@@ -9,7 +9,7 @@
   stands: the `GREATER`/clear-`0` depth test, the alpha cutout, the 48-byte
   `SpriteInstance`, the ring sentinel, `MAX_LIVE_AGENTS = 5_000`.
 - Supplements: [ADR 004](004_ADR_sdl3_sprite_renderer_and_assets.md)
-- Plan: `ai-artifacts/PLAN_2026_08_10_rts-engine-prototype.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-engine-prototype.md`
 
 ## Context
 
@@ -130,7 +130,7 @@ generator swap with no code change.
   byte-unmodified. Both are asserted.
 - The `overlay`/`ui` split is a real rule a future contributor can get wrong:
   a textured instance pushed into `overlay` will sample the zombie atlas.
-  It is documented on the field, on the packer, and in `AGENT.md`.
+  It is documented on the field, on the packer, and in `AGENTS.md`.
 - Real art will change every hash in `assets/sprites/generated/rts/manifest.json`
   and `ui/manifest.json`. That is the intended failure mode — the check exists
   so an accidental change is loud and a deliberate one is reviewed.

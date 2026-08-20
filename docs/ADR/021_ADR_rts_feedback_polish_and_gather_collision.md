@@ -213,7 +213,7 @@ Implementation must prove:
 - all gather phase/owner combinations, hard third/static pairs, nested push coherence;
 - 12-attempt exit, same-tick clear on contact, same-component fallback, failed-fallback return to hard state, preserved active provenance, slot reuse, framed hash, cross-process reproducibility;
 - canonical + focused RTS scripts; unchanged horde smokes;
-- full merge gate in `AGENT.md`/`docs/05-testing.md`.
+- full merge gate in `AGENTS.md`/`docs/05-testing.md`.
 
 ## Landed evidence
 

@@ -199,7 +199,7 @@ is also carried in the ADR it belongs to.
 The gate runs offscreen. That is deliberate: it is the only way the merge gate
 can be deterministic. It also means the following are proven as *state
 sequences and API calls*, never as physical behaviour, and each has a human
-checklist item in `ai_artefacts/manual_test_checklist.md`:
+checklist item in `artifacts/manual_test_checklist.md`:
 
 | Not claimed by any test on the gate | What is claimed instead |
 | --- | --- |

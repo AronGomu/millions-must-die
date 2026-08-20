@@ -34,7 +34,7 @@
 - [RTS interaction, UI + audio hardening functional close](rts-interaction-ui-audio-hardening-functional-close.md)
   — what phase 1.1 proves, what no offscreen test can claim, and every known gap
 - [Architecture decision records](ADR/README.md) — 016–020
-- Manual (human-only) checks: `../ai_artefacts/manual_test_checklist.md`
+- Manual (human-only) checks: `../artifacts/manual_test_checklist.md`
 
 ## Feedback polish
 

@@ -4,7 +4,7 @@
 - Date: 2026-08-10
 - Supplements: [ADR 003](003_ADR_simulation_and_flow_field.md) — the horde
   simulation is unchanged; this adds a *second*, separate entity store beside it.
-- Plan: `ai-artifacts/PLAN_2026_08_10_rts-engine-prototype.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-engine-prototype.md`
 
 ## Context
 

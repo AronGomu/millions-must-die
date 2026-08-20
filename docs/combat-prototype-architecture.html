@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combat prototype architecture — Millions Must Die</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --red:#f87171; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 ui-sans-serif,system-ui,sans-serif; }
+  main { width:min(1080px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+  h1 { font-size:clamp(1.8rem,4.5vw,2.8rem); line-height:1.08; letter-spacing:-.03em; margin:0 0 8px; }
+  h2 { font-size:1.35rem; margin:44px 0 14px; color:var(--accent); }
+  p { margin:0 0 12px; max-width:85ch; }
+  .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+  .lede { color:var(--muted); max-width:85ch; }
+  code { background:var(--panel-2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:.875em; }
+  table { width:100%; border-collapse:collapse; margin:16px 0; font-size:.925rem; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; }
+  svg { display:block; width:100%; height:auto; margin:16px 0; }
+  svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+  .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; }
+  .svg-node.hot { stroke:var(--accent); }
+  .svg-line { fill:none; stroke:var(--line); stroke-width:2; }
+  .svg-label { fill:var(--text); font-size:12px; }
+  .svg-note { fill:var(--muted); font-size:10px; }
+  .warn { border-left:3px solid var(--red); padding:12px 16px; background:var(--panel); border-radius:0 10px 10px 0; margin:16px 0; max-width:85ch; }
+  figure { margin:16px 0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+  figcaption { color:var(--muted); font-size:.85rem; margin-bottom:10px; } figcaption b { color:var(--text); display:block; font-size:1rem; }
+  ul { margin:0 0 12px; padding-left:22px; } li { margin-bottom:6px; max-width:80ch; }
+</style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">Architecture · Phase 2 · ADR 022 / ADR 023</span>
+  <h1>Combat prototype</h1>
+  <p class="lede">Weapons, damage, turrets, enemy AI as one vertical slice on the RTS world. Enemies are RTS entities under <code>OWNER_ENEMY = 1</code> — same store, same hard bodies, same pooled flow fields, same state hash. The horde <code>sim/</code> is untouched and this page claims nothing about it: hundreds of enemies here are not phase 3's tens of thousands.</p>
+
+  <h2>Where combat sits in the tick</h2>
+  <figure role="img" aria-labelledby="tick-t tick-d">
+    <figcaption><b id="tick-t">The pinned system order, phase 2</b><span id="tick-d">Wave spawner runs after camera; enemy AI and combat run between orders and movement; supply recount and selection prune stay last.</span></figcaption>
+    <svg viewBox="0 0 900 130">
+      <title>Tick pipeline</title><desc>commands, camera, wave spawner, construction, production, orders and gather, enemy AI, combat, movement, supply recount, selection prune.</desc>
+      <rect class="svg-node" x="10" y="20" width="92" height="34" rx="7"/><text class="svg-label" x="56" y="41" text-anchor="middle">commands</text>
+      <rect class="svg-node" x="110" y="20" width="76" height="34" rx="7"/><text class="svg-label" x="148" y="41" text-anchor="middle">camera</text>
+      <rect class="svg-node hot" x="194" y="20" width="110" height="34" rx="7"/><text class="svg-label" x="249" y="41" text-anchor="middle">wave spawner</text>
+      <rect class="svg-node" x="312" y="20" width="110" height="34" rx="7"/><text class="svg-label" x="367" y="41" text-anchor="middle">construction</text>
+      <rect class="svg-node" x="430" y="20" width="100" height="34" rx="7"/><text class="svg-label" x="480" y="41" text-anchor="middle">production</text>
+      <rect class="svg-node" x="538" y="20" width="120" height="34" rx="7"/><text class="svg-label" x="598" y="41" text-anchor="middle">orders · gather</text>
+      <rect class="svg-node hot" x="666" y="20" width="92" height="34" rx="7"/><text class="svg-label" x="712" y="41" text-anchor="middle">enemy AI</text>
+      <rect class="svg-node hot" x="766" y="20" width="80" height="34" rx="7"/><text class="svg-label" x="806" y="41" text-anchor="middle">combat</text>
+      <rect class="svg-node" x="10" y="76" width="100" height="34" rx="7"/><text class="svg-label" x="60" y="97" text-anchor="middle">movement</text>
+      <rect class="svg-node" x="118" y="76" width="130" height="34" rx="7"/><text class="svg-label" x="183" y="97" text-anchor="middle">supply recount</text>
+      <rect class="svg-node" x="256" y="76" width="130" height="34" rx="7"/><text class="svg-label" x="321" y="97" text-anchor="middle">selection prune</text>
+      <path class="svg-line" d="M102 37 H110 M186 37 H194 M304 37 H312 M422 37 H430 M530 37 H538 M658 37 H666 M758 37 H766 M846 37 C866 37 866 60 60 60 60 60 60 76 60 76 M110 93 H118 M248 93 H256"/>
+      <text class="svg-note" x="400" y="122">A reordering is a visible diff, not an accident — the order is documented on <code>RtsWorld::tick</code>.</text>
+    </svg>
+  </figure>
+
+  <h2>Damage, cooldowns, death</h2>
+  <ul>
+    <li><b>Instant-hit on cooldown.</b> No projectile entities. Target in weapon range + cooldown 0 → <code>apply_damage</code> the same tick, cooldown resets. Per hit: <code>max(1, damage − armor)</code>.</li>
+    <li><b>Columns and tables.</b> HP is a u32 store column; armor and max HP are kind tables (pure functions of kind). Cooldown is a u32 column. HP, cooldowns and the kill/loss counters enter <code>state_hash</code> fixed-width.</li>
+    <li><b>Death.</b> <code>DamageResult = Damaged | Killed | Indestructible | NoTarget</code>; nodes indestructible. Units despawn (generational ids make stale handles resolve <code>None</code>). Buildings — HQ included — un-stamp their footprint (invalidating <em>every</em> cached field, the same rule as stamping), cancel their production queue with no refund, revoke their supply grant. HQ death clears <code>start_hq</code> and idles gatherers needing drop-off. Selection prune stays last in the tick.</li>
+  </ul>
+
+  <h2>Targeting and firing rules</h2>
+  <table>
+    <tr><th>Order</th><th>Fires?</th><th>Behavior</th></tr>
+    <tr><td><code>Idle</code></td><td>yes</td><td>Auto-acquire nearest enemy in range, fire in place. Never chases.</td></tr>
+    <tr><td><code>AttackMove</code> (tag 5)</td><td>yes</td><td>Descend shared field toward goal; halt and fire while a target is in range; resume on kill.</td></tr>
+    <tr><td><code>Attack</code> (tag 4)</td><td>yes</td><td>Close distance to the target, fire when in range; dead target → Idle (player) / resume march (enemy).</td></tr>
+    <tr><td><code>Move / Gather / Build</code></td><td>never</td><td>A plain Move is a pure reposition — the retreat tool.</td></tr>
+    <tr><td>Turret (no order)</td><td>yes</td><td>Static firer via <code>building_weapon</code>; range measured from the footprint rect; unfinished sites never fire.</td></tr>
+  </table>
+  <p>Target selection is deterministic everywhere: nearest valid enemy-of-owner in range, lowest-slot tie-break, ascending-slot iteration. Range to a unit is center distance minus body radius; to a building, distance to the footprint rectangle.</p>
+
+  <h2>Enemy AI — one rule, one field</h2>
+  <p>March on the objective; attack the first player thing in weapon range. The objective is the <b>approach cell</b> of the nearest player building — a pooled field cannot target a blocked footprint cell — starting at the HQ, retargeting on death events only (cached, no per-tick scan), lowest-slot tie-break, Idle when no player building remains. Every idle enemy is assigned <code>AttackMove</code> at the objective, so hundreds of Ghouls share <em>one</em> pooled flow field: "no per-enemy pathfinding" survives contact with an army, and <code>NAV_FIELD_SLOTS = 8</code> stands.</p>
+  <p>Enemies use the ordinary hard-body contract — proposal/commit movement, bounded push chains, and they are <b>ordinary hard pairs</b>: ADR 021's gather-worker exception is not widened. The horde's soft separation (ADR 009) is a different contract on a different store, and no document may merge the two claims.</p>
+
+  <h2>Player surface</h2>
+  <ul>
+    <li><b>Commands.</b> <code>cmd_attack_target</code> / <code>cmd_attack_move</code> / <code>cmd_stop</code>. A arms attack-targeting (click enemy = target, click ground = attack-move); right-click an enemy attacks directly; Stop idles. Attack = card slot 3, Stop = slot 4 — positional keys, zero new script tokens.</li>
+    <li><b>Feedback.</b> HP bars are texture-free overlay line instances (the grid/drag-box primitive) over damaged ∪ selected entities, hidden at full HP; death is a 12-frame procedural ring; the minimap gains red enemy dots. None of it enters the world hash; offscreen exit lines stay byte-identical.</li>
+    <li><b>Audio.</b> Attack accepts voice as the existing order cue; rejects as the reject cue. No new bus. Turret fire is silent this phase — a named gap.</li>
+  </ul>
+
+  <h2>The gate, and why waves-only</h2>
+  <div class="warn"><b>Pre-placed enemies were proven infeasible</b> (ADR 023): any reachable pre-placed Ghoul reaches the base by ~tick 810; ten kill the 400-HP HQ by ~tick 1170 — inside the phase-1 scripts' pinned windows and the CLI contract's 3000-frame pins, which cannot be honestly re-baselined.</div>
+  <p>The tracked scene therefore takes <b>waves only</b>: two far-edge spawn points, 400 Ghouls (12 at tick 3000, then 150/150/88 at 4100/4160/4220). First contact lands ≈ tick 3480 — after every pinned window — so both phase-1 scripts' asserted counts are provably unchanged and the one-time re-baseline collapses to a sidecar regeneration plus new zero-valued token pins. The combat script (~4500 frames) demonstrates a soldier-ordered kill, an auto-acquire kill, a turret kill and ≥ 1 player loss, and the exit line appends <code>kills losses enemies_spawned first_combat_tick hq_alive</code>. <code>first_combat_tick &gt; 3000</code> is the pinned proof that combat begins by marching into range, not by adjacency at spawn.</p>
+  <p>Long-horizon engine tests that outlive tick 3000 repoint to a byte-identical enemy-free baseline fixture, so they keep testing what they always tested. Phase-0 contracts — the 5000-agent exit hash, collision scenes, render goldens, <code>atlas_count: 4</code> — do not move.</p>
+
+  <h2>What this phase does not claim</h2>
+  <ul>
+    <li>No horde-scale enemies (phase 3), no walls or wave design (phase 4), no balance (phase 5), no missions or win/lose (phase 6).</li>
+    <li>No performance number of any kind — performance stays unmeasured by policy.</li>
+    <li>One enemy kind, melee only; no ranged enemy, no worker attack, no damage types, no projectiles.</li>
+    <li>Nothing here claims a window appeared or a sound was heard — human checklist items stay human.</li>
+  </ul>
+</main>
+</body>
+</html>

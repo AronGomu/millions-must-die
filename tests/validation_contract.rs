@@ -42,9 +42,9 @@ const DESIGN_DOC: &str = "docs/DESIGN.md";
 /// Shared vocabulary.
 const GLOSSARY_DOC: &str = "docs/GLOSSARY.md";
 /// Repo context file, read before any change.
-const AGENT_DOC: &str = "AGENT.md";
+const AGENT_DOC: &str = "AGENTS.md";
 /// The human-only checklist: everything an offscreen gate can neither see nor hear.
-const MANUAL_CHECKLIST: &str = "ai_artefacts/manual_test_checklist.md";
+const MANUAL_CHECKLIST: &str = "artifacts/manual_test_checklist.md";
 
 /// Heading text (any level) introducing the required-command list. Matched
 /// case-insensitively and ignoring trailing punctuation.

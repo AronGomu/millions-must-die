@@ -5,7 +5,7 @@
 - Supplements: [ADR 010](010_ADR_separation_amortisation_and_push_priority.md)
 - Supplements: [ADR 009](009_ADR_agent_separation_and_collision.md) — the
   separation model is unchanged; this records which threads run it
-- Plan: `ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
+- Plan: `artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
 
 ## Context
 

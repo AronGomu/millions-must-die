@@ -79,4 +79,13 @@ Accepted feedback-polish decision:
     except an active gather-worker pair and its bounded exit; ADR 017–020 carry
     forward amendments rather than rewritten decisions.
 
+Accepted phase-2 (combat prototype) decisions:
+
+22. [Combat model + enemy faction](022_ADR_combat_model_and_enemy_faction.md)
+    — enemies are RTS entities under `OWNER_ENEMY`, ordinary hard pairs (ADR
+    021's gather exception is not widened); instant-hit flat-stat combat.
+23. [Combat gate, scale + the one-time re-baseline](023_ADR_combat_gate_scale_and_rebaseline.md)
+    — waves-only enemies on the tracked scene, first spawn after every pinned
+    window, exit-line combat tokens.
+
 New decision → new ADR. Changed decision → superseding ADR; do not rewrite history silently.

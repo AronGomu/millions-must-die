@@ -9,7 +9,7 @@
 - Supplements: [ADR 009](009_ADR_agent_separation_and_collision.md),
   [ADR 010](010_ADR_separation_amortisation_and_push_priority.md),
   [ADR 011](011_ADR_parallel_separation_and_the_allocation_invariant.md)
-- Plan: `ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
+- Plan: `artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
 
 ## Context
 

@@ -4,7 +4,7 @@
 - Date: 2026-08-10
 - Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supersedes in part: [ADR 014](014_ADR_movable_camera_texture_table_and_ui_layer.md) — fixed 24-cell/s camera and raw grid-edge clamp only
-- Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
 ## Context
 

@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-10
 - Supplements: [ADR 013](013_ADR_phase1_scope_and_rts_entity_model.md)
-- Plan: `ai-artifacts/PLAN_2026_08_10_rts-engine-prototype.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-engine-prototype.md`
 
 ## Context
 

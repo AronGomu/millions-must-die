@@ -58,7 +58,7 @@ grabs the pointer and none opens an audio device (see
 [Windows during a test run](#windows-during-a-test-run) for how the two
 windowed cases stay off screen). Window modes, pointer confinement and audible
 output are proven as state sequences and API calls only, and are checked by
-hand against `ai_artefacts/manual_test_checklist.md`.
+hand against `artifacts/manual_test_checklist.md`.
 
 ## Feedback-polish scope
 
@@ -193,7 +193,7 @@ windows hidden directly and need no knob.
 What this does **not** prove is anything about a *visible* window: that a mode
 switch reaches the compositor, that the pointer is confined, or that a frame is
 visible at all. Those stay human checklist items
-(`ai_artefacts/manual_test_checklist.md`).
+(`artifacts/manual_test_checklist.md`).
 
 The knob is available to any run, not only tests. The four interactive smokes
 on the required gate open a real, visible window by design; prefix one with

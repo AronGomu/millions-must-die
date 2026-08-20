@@ -201,7 +201,7 @@ The three columns a close doc most often blurs, kept apart:
 | Command keys | row-major mapping, silent disabled slot | muscle memory across the three cards | — |
 | Gather overlap | every phase/owner pair, bounded exit, fallback, hash | that two workers on one node look right | — |
 
-The hand column is `ai_artefacts/manual_test_checklist.md`, section T16, and
+The hand column is `artifacts/manual_test_checklist.md`, section T16, and
 `manual_checklist_covers_every_human_only_flow` fails if a flow named here has
 no steps there.
 

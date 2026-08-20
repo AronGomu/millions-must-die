@@ -4,7 +4,7 @@
 - Date: 2026-08-10
 - Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 014](014_ADR_movable_camera_texture_table_and_ui_layer.md), [ADR 018](018_ADR_settings_window_canvas_and_camera.md)
-- Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
 ## Context
 

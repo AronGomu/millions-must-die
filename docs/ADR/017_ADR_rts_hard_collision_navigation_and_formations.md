@@ -5,7 +5,7 @@
 - Accepted: 2026-08-12 (T18, on landed phase-1.1 evidence)
 - Supplements: [ADR 013](013_ADR_phase1_scope_and_rts_entity_model.md), [ADR 015](015_ADR_economy_construction_and_production_determinism.md)
 - Scoped contrast: [ADR 009](009_ADR_agent_separation_and_collision.md) remains authoritative for horde `sim/`
-- Plan: `ai_artefacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
+- Plan: `artifacts/PLAN_2026_08_10_rts-interaction-ui-audio-hardening.md`
 
 ## Context
 
@@ -13,7 +13,7 @@ RTS movement currently commits each unit independently. Units merge forever. Sce
 
 User requires hard non-overlap for every current/future RTS-world unit owner, radius 3 cells, including clearance from terrain, nodes, finished buildings, static obstacles, map edges.
 
-This reverses an old project-wide shorthand in `AGENT.md` for player units. It does **not** reverse ADR 009's horde choice: dense 5,000-agent `sim/` remains soft-separation/overlap-capable.
+This reverses an old project-wide shorthand in `AGENTS.md` for player units. It does **not** reverse ADR 009's horde choice: dense 5,000-agent `sim/` remains soft-separation/overlap-capable.
 
 ## Decision
 

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Combat Prototype — protecting the old scripts, auto-acquire, scale</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 2 · Gate compatibility, targeting, scale</span>
+    <h1>Combat Prototype — protecting the old scripts, auto-acquire, scale</h1>
+    <p class="lede">Round 1 settled all eight branches; three follow-up decisions became askable. The big one: you chose to put enemies inside the existing <code>rts_prototype_v1</code> scene — but both tracked scripts assert exact exit counts over their first 1600 frames, so enemies must either stay out of the way of that window or the scripts get re-baselined. Everything else (stat numbers, owner id byte, refund rules) I will decide and log as assumptions.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><b>Combat Prototype</b><span class="arrow">→</span><span class="node">Enemy model ✓</span><span class="node">Weapons ✓</span><span class="node">Damage ✓</span><span class="node">Turret ✓</span><span class="node">AI ✓</span><span class="node">UX ✓</span><span class="node">Win/lose ✓</span><span class="arrow">→</span><span class="node active">Gate compatibility</span><span class="node active">Auto-acquire</span><span class="node active">Enemy scale</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure role="img" aria-labelledby="fig1-title fig1-desc">
+      <figcaption><b id="fig1-title">The 1600-frame protected window</b><span id="fig1-desc">Both phase-1 scripts run 1600 frames on the shared scene and assert exact counts; the new combat script runs longer on the same deterministic timeline.</span></figcaption>
+      <svg viewBox="0 0 440 250">
+        <title>Timeline of scripted runs against enemy first contact</title>
+        <desc>A shared deterministic timeline: two existing 1600-frame scripts end before enemy first contact; a new longer combat script contains the fight. An alternative marks re-baselining the old scripts.</desc>
+        <text class="svg-note" x="10" y="18">one scene = one deterministic timeline (seed 0)</text>
+        <path class="svg-line" d="M10 40 H430"/>
+        <rect class="svg-node" x="10" y="30" width="150" height="20" rx="4"/>
+        <text class="svg-note" x="85" y="44" text-anchor="middle">frames 0 – 1600</text>
+        <text class="svg-label" x="10" y="72">rts_acceptance_v1.script</text>
+        <path class="svg-line" d="M10 80 H160"/><circle class="svg-accent" cx="160" cy="80" r="4"/>
+        <text class="svg-note" x="168" y="84">exact counts asserted here</text>
+        <text class="svg-label" x="10" y="108">rts_feedback_polish_v1.script</text>
+        <path class="svg-line" d="M10 116 H160"/><circle class="svg-accent" cx="160" cy="116" r="4"/>
+        <text class="svg-label" x="10" y="144">new combat script (longer run)</text>
+        <path class="svg-line" d="M10 152 H400"/><circle class="svg-accent" cx="400" cy="152" r="4"/>
+        <rect class="svg-node active" x="200" y="166" width="230" height="30" rx="6"/>
+        <text class="svg-label" x="315" y="185" text-anchor="middle">first contact after frame 1600 (Q1-A)</text>
+        <text class="svg-note" x="10" y="225">Q1-B instead: let contact land early, re-run old scripts,</text>
+        <text class="svg-note" x="10" y="240">update their asserted counts + scene sha256 once.</text>
+      </svg>
+    </figure>
+    <figure role="img" aria-labelledby="fig2-title fig2-desc">
+      <figcaption><b id="fig2-title">Auto-acquire and scale, on the map</b><span id="fig2-desc">Idle soldier and turret each own a range circle; enemies march the shared flow field from spawn points toward the HQ. Scale options set how many march.</span></figcaption>
+      <svg viewBox="0 0 440 250">
+        <title>Map sketch of auto-acquire ranges and enemy waves</title>
+        <desc>An HQ on the left with a turret and an idle soldier showing range circles; spawn points on the right emit pre-placed and wave enemies along a flow field arrow to the HQ.</desc>
+        <rect class="svg-node" x="20" y="90" width="60" height="60" rx="6"/>
+        <text class="svg-label" x="50" y="124" text-anchor="middle">HQ</text>
+        <circle cx="130" cy="70" r="38" fill="none" stroke="#4a3b25" stroke-dasharray="4 4" stroke-width="2"/>
+        <rect class="svg-node" x="115" y="55" width="30" height="30" rx="4"/>
+        <text class="svg-note" x="130" y="120" text-anchor="middle">turret · auto-fire (settled)</text>
+        <circle cx="150" cy="180" r="32" fill="none" stroke="#fbbf24" stroke-dasharray="4 4" stroke-width="2"/>
+        <circle class="svg-node active" cx="150" cy="180" r="9"/>
+        <text class="svg-note" x="150" y="228" text-anchor="middle">idle soldier · Q2 decides</text>
+        <path class="svg-line" d="M390 70 C300 80 260 100 210 110" marker-end="none"/>
+        <polygon class="svg-arrow" points="210,110 224,104 222,116"/>
+        <circle class="svg-node" cx="400" cy="60" r="10"/><circle class="svg-node" cx="415" cy="90" r="10"/>
+        <text class="svg-note" x="405" y="35" text-anchor="middle">spawn points</text>
+        <circle class="svg-node" cx="360" cy="120" r="7"/><circle class="svg-node" cx="378" cy="132" r="7"/><circle class="svg-node" cx="352" cy="140" r="7"/>
+        <text class="svg-note" x="368" y="165" text-anchor="middle">pre-placed + waves · Q3 sets count</text>
+        <text class="svg-note" x="240" y="210">all enemies share one pooled flow field</text>
+        <text class="svg-note" x="240" y="225">to the HQ — never per-enemy paths</text>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="How do enemies coexist with the two frozen-count phase-1 scripts?">
+      <legend>1. How do enemies coexist with the two exact-count phase-1 scripts?</legend>
+      <p class="why">You chose to extend `rts_prototype_v1`; both tracked scripts assert exact exit counts over 1600 frames on that scene, so enemy arrival timing is a contract decision, not a detail.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="First contact after frame 1600 by construction; old counts must hold unchanged, proven by the existing tests"><span><b>First contact after frame 1600 by construction — old counts hold unchanged</b><span class="rank">Recommended</span><span class="detail">Spawn distance, march speed and wave delays are chosen so no enemy reaches any player entity before frame 1600; the combat script runs longer (~3000+ frames) and contains the whole fight. The old tests keep passing as-is and become the proof.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Accept early contact; re-baseline both old scripts' asserted counts and the scene sha256 once"><span><b>Accept early contact; re-baseline both old scripts once</b><span class="rank">Second</span><span class="detail">Fight can start immediately, but two closed-phase scripts get their asserted counts rewritten — the phase-1 close docs then describe a run that no longer exists.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Enemies dormant until a scenario activation tick past 1600 (no marching before it)"><span><b>Enemies dormant until a scenario activation tick past 1600</b><span class="rank">Third</span><span class="detail">Strongest isolation — nothing even moves during the old window — but adds a dormancy state that only exists to protect old scripts, and contradicts “pre-placed enemies march” until the timer fires.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. acceptable combat-script length; or 'dormant is fine, call it wave 0 delay'"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Do idle armed units auto-acquire targets?">
+      <legend>2. Do idle armed units auto-acquire targets?</legend>
+      <p class="why">Turret auto-fire is settled; whether an idle or moving soldier opens fire without an order defines how the defense actually plays (SC1 clones say yes).</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Idle and attack-moving soldiers auto-acquire nearest enemy in range; plain Move never fires"><span><b>Idle + attack-moving soldiers auto-acquire nearest enemy in range; plain Move never fires</b><span class="rank">Recommended</span><span class="detail">Exact SC1 behavior: parked soldiers defend themselves, A-move sweeps, right-click Move stays a pure reposition you can use to retreat.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Only explicit orders and turrets fire; idle soldiers hold fire"><span><b>Only explicit orders and turrets fire; idle soldiers hold fire</b><span class="rank">Second</span><span class="detail">Simpler order logic, but parked soldiers watching the HQ die reads as broken in a fortress-defense game.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Auto-acquire plus chase: idle soldiers pursue the target while it lives"><span><b>Auto-acquire plus chase until target dies</b><span class="rank">Third</span><span class="detail">Needs leash rules or your line walks off the wall — SC1 keeps idle units in place for a reason.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. stand ground but rotate targets? acquire radius = weapon range or slightly larger?"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What enemy scale does this phase prove?">
+      <legend>3. What enemy scale does this phase prove?</legend>
+      <p class="why">MAX_ENTITIES = 2048 minus 500 player pop bounds the ceiling; phase 3 owns horde scale — this number decides what the combat script demonstrates and what the exit line counts.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Dozens: ~10 pre-placed + 2-3 waves of ~10-20, under 100 total"><span><b>Dozens — ~10 pre-placed + 2–3 waves of 10–20 each, under 100 total</b><span class="rank">Recommended</span><span class="detail">Enough to besiege a turret line and kill an undefended HQ; readable fights; entity headroom untouched; horde pressure stays phase 3's claim.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Hundreds: waves totalling 300-800 across the run"><span><b>Hundreds — waves totalling 300–800 across the run</b><span class="rank">Second</span><span class="detail">A taste of mass battle now, but tuning dozens of simultaneous hard-body pushers is phase-3 work leaking forward, and performance is unmeasured by policy.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Minimal: under 20 enemies total, single wave"><span><b>Minimal — under 20 total, single wave</b><span class="rank">Third</span><span class="detail">Proves the mechanics and nothing else; the turret never faces a real siege.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. exact counts you want on the gate script, or 'your call within dozens'"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 2 · Gate compatibility, targeting, scale — Combat Prototype\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>

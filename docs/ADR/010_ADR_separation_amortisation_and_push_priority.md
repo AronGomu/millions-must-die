@@ -5,7 +5,7 @@
 - Supplements: [ADR 009](009_ADR_agent_separation_and_collision.md) — the
   separation *model* is unchanged. This records how often it runs, how it is
   indexed, and how it is weighted.
-- Plan: `ai-artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
+- Plan: `artifacts/PLAN_2026_08_09_horde-sim-headroom.md`
 - Evidence: `.tmp/RESEARCH_they_are_billions_performance.md` (primary source per
   claim)
 

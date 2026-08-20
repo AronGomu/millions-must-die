@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plan — RTS Engine Prototype (Phase 1)</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#232321;
+    --ink:#ffffff; --ink-2:#c3c2b7; --muted:#898781;
+    --rule:#2c2c2a; --edge:#383835;
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d24f8f; --s7:#9085e9;
+    --ring: rgba(255,255,255,0.10);
+  }
+  @media (prefers-color-scheme: light) {
+    :root:where(:not([data-theme="dark"])) {
+      color-scheme: light;
+      --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ee;
+      --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+      --rule:#e1e0d9; --edge:#c3c2b7;
+      --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#c23b7d; --s7:#4a3aa7;
+      --ring: rgba(11,11,11,0.10);
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f2f1ee;
+    --ink:#0b0b0b; --ink-2:#52514e; --muted:#898781;
+    --rule:#e1e0d9; --edge:#c3c2b7;
+    --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#c23b7d; --s7:#4a3aa7;
+    --ring: rgba(11,11,11,0.10);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin:0; padding:0; background:var(--plane); color:var(--ink);
+         font:16px/1.62 system-ui,-apple-system,"Segoe UI",sans-serif; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:64rem; margin:0 auto; padding:3rem 1.25rem 5rem; }
+
+  header { border-bottom:1px solid var(--rule); padding-bottom:1.5rem; margin-bottom:2.5rem; }
+  .kicker { font-size:.75rem; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:0 0 .6rem; }
+  h1 { font-size:clamp(1.6rem,4vw,2.3rem); line-height:1.18; margin:0 0 .7rem; font-weight:650; }
+  .lede { color:var(--ink-2); font-size:1.05rem; margin:0; max-width:48rem; }
+
+  h2 { font-size:1.22rem; margin:3rem 0 .9rem; font-weight:640; padding-bottom:.45rem; border-bottom:1px solid var(--rule); }
+  h3 { font-size:.98rem; margin:1.6rem 0 .45rem; font-weight:640; color:var(--ink); }
+  p { margin:0 0 1rem; color:var(--ink-2); }
+  a { color:var(--s1); }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.875em;
+         background:var(--surface-2); border:1px solid var(--ring); border-radius:4px;
+         padding:.08em .35em; color:var(--ink); }
+
+  .panel { background:var(--surface); border:1px solid var(--ring); border-radius:10px;
+           padding:1.2rem 1.35rem; margin:1.2rem 0; }
+  .panel > :last-child { margin-bottom:0; }
+
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(19rem,1fr)); gap:1rem; margin:1.2rem 0; }
+
+  .figure { background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:1rem; margin:1.4rem 0; }
+  .scroll { overflow-x:auto; }
+  .figure svg { display:block; min-width:720px; }
+  .caption { color:var(--muted); font-size:.82rem; margin:.8rem .2rem 0; }
+
+  table { width:100%; border-collapse:collapse; font-size:.88rem; }
+  .scroll table { min-width:44rem; }
+  th,td { text-align:left; padding:.55rem .65rem; border-bottom:1px solid var(--rule); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; font-size:.72rem; letter-spacing:.07em; text-transform:uppercase; }
+  td { color:var(--ink-2); }
+  td strong { color:var(--ink); font-weight:620; }
+  tbody tr:last-child td { border-bottom:none; }
+  td.num { font-variant-numeric:tabular-nums; white-space:nowrap; }
+
+  ul.plain { margin:0 0 1rem; padding-left:1.15rem; color:var(--ink-2); }
+  ul.plain li { margin-bottom:.35rem; }
+
+  .tag { display:inline-block; font-size:.66rem; letter-spacing:.06em; text-transform:uppercase;
+         padding:.14em .5em; border-radius:4px; border:1px solid currentColor; font-weight:640; }
+  .tag.in { color:var(--s3); } .tag.out { color:var(--s4); }
+
+  .card { background:var(--surface); border:1px solid var(--ring); border-radius:10px; padding:1rem 1.15rem; }
+  .card h3 { margin:0 0 .35rem; }
+  .card p { margin:0 0 .5rem; font-size:.9rem; }
+  .card .dep { font-size:.72rem; color:var(--muted); letter-spacing:.05em; text-transform:uppercase; }
+
+  .legend { display:flex; flex-wrap:wrap; gap:.4rem 1.3rem; margin:0 0 1rem; padding:0; list-style:none; font-size:.82rem; color:var(--ink-2); }
+  .legend li { display:flex; align-items:center; gap:.45rem; }
+  .dot { width:10px; height:10px; border-radius:3px; flex:none; }
+
+  footer { margin-top:3.5rem; padding-top:1.2rem; border-top:1px solid var(--rule); color:var(--muted); font-size:.82rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <p class="kicker">Millions Must Die · Plan · 2026-08-10</p>
+  <h1>Phase 1 — RTS Engine Prototype</h1>
+  <p class="lede">
+    Sixteen commit-sized tickets that put camera, selection, workers, economy,
+    building and unit production on top of the phase-0 engine — thin, vertical,
+    and without moving a single phase-0 hash. Index:
+    <code>artifacts/PLAN_2026_08_10_rts-engine-prototype.md</code>.
+  </p>
+</header>
+
+<h2>Goal</h2>
+
+<div class="panel">
+<p>
+  Prove the custom engine can run real-time-strategy mechanics, not just a horde
+  walk. All six phase-1 systems present end to end on a new horde-free scene.
+</p>
+<p style="margin-bottom:0">
+  <strong>Success</strong> =
+  <code>cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script</code>
+  exits 0 having panned the camera, box-selected workers, gathered both
+  resources, placed and finished a Depot and a Barracks, and produced a Soldier
+  bounded by supply — every step asserted headlessly and deterministically,
+  with the whole phase-0 merge gate still green and the render golden
+  byte-unchanged.
+</p>
+</div>
+
+<h2>Scope</h2>
+
+<div class="grid2">
+  <div class="card">
+    <h3><span class="tag in">in</span></h3>
+    <ul class="plain" style="margin-bottom:0">
+      <li>Pan + edge-pan camera, clamped; screen→cell unprojection</li>
+      <li>Mouse: click, shift-click, drag box, right-click context order</li>
+      <li>SoA entity store, generational ids, preallocated</li>
+      <li>Workers: move, gather Crystal + Gas, haul, build</li>
+      <li>Two resources + supply cap</li>
+      <li>HQ, Depot, Barracks — grid placement, ghost, construction, cancel</li>
+      <li>Production queues, rally points</li>
+      <li>Flow-field pool, 8 slots, LRU</li>
+      <li>Second atlas family + bitmap-font HUD, both generated and hash-tracked</li>
+      <li>New <code>rts</code> CLI subcommand with scripted headless input</li>
+      <li>ADR 013 / 014 / 015, one architecture page, gate + index updates</li>
+    </ul>
+  </div>
+  <div class="card">
+    <h3><span class="tag out">out</span></h3>
+    <ul class="plain" style="margin-bottom:0">
+      <li>Combat, weapons, damage, health, enemy AI — phase 2</li>
+      <li>Zombies in the RTS scene (horde-free by construction)</li>
+      <li>Zoom, minimap, fog of war, save/load, menus, sound</li>
+      <li>Any performance number — <code>no_perf_claim_in_docs</code> still binds</li>
+      <li>Second faction, AI opponent, balance pass</li>
+      <li>Real art — every phase-1 sprite is a deterministic placeholder</li>
+      <li>Cross-platform verification — Linux/Vulkan dev host only</li>
+    </ul>
+  </div>
+</div>
+
+<h2>Assumptions</h2>
+
+<ul class="plain">
+  <li><code>artifacts/</code> (hyphen) is this repo's artefact directory. Repo convention wins over the skill's spelling.</li>
+  <li>Phase-0 contracts stay frozen: <code>MAX_LIVE_AGENTS = 5_000</code>, <code>SpriteInstance</code> at 48 bytes, <code>atlas_count/direction_count/frame_count = 4/8/4</code> for every scenario family, <code>testkit</code> gated out of the shipping binary, no GitHub Actions.</li>
+  <li>New <code>ScenarioSpec</code> fields are <code>#[serde(default)]</code>, so every tracked <code>.ron</code> keeps its exact bytes and its <code>.sha256</code> stays valid. No phase-0 asset is regenerated.</li>
+  <li><code>run</code> and its 24 CLI-contract cases are untouched. RTS ships as a new subcommand with its own parser and stdout contract.</li>
+  <li><code>InputAction</code>/<code>BoundKey</code> are not extended; RTS input is a separate <code>RtsCommand</code> enum, so <code>input_actions_are_stable</code> cannot be perturbed.</li>
+  <li>The phase-0 golden stays byte-identical: with an empty UI layer the scene pass emits exactly the phase-0 draw order.</li>
+  <li>Determinism is same-host, same-binary. <code>f32</code> is not claimed bit-identical across builds.</li>
+  <li>Placeholder art is generated from code — no source image, no third-party licence obligation.</li>
+  <li>Every ticket is mutation-verified in both directions, matching the T30–T33 and T0–T10 standard.</li>
+  <li>Zero-allocation is restated, not weakened. One documented exception: a flow-field <em>miss</em> may grow the reused scratch heap once.</li>
+</ul>
+
+<h2>Dependency graph</h2>
+
+<ul class="legend">
+  <li><span class="dot" style="background:var(--s5)"></span>render / assets</li>
+  <li><span class="dot" style="background:var(--s2)"></span>simulation systems</li>
+  <li><span class="dot" style="background:var(--s1)"></span>app / contract</li>
+  <li><span class="dot" style="background:var(--s3)"></span>close</li>
+</ul>
+
+<div class="figure scroll">
+<svg viewBox="0 0 960 420" width="100%" height="420" role="img"
+     aria-label="Dependency graph of the sixteen tickets, from the placeholder atlas families and the RTS scenario through to the phase close.">
+  <defs>
+    <marker id="ap" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="currentColor"/>
+    </marker>
+  </defs>
+  <style>
+    .n rect { fill: var(--surface-2); stroke-width: 1.5; }
+    .n text.t { font: 600 12px system-ui, sans-serif; fill: var(--ink); }
+    .n text.s { font: 10.5px system-ui, sans-serif; fill: var(--muted); }
+    .e { stroke: var(--edge); stroke-width: 1.4; fill: none; }
+  </style>
+
+  <!-- render / assets column -->
+  <g class="n">
+    <rect x="20"  y="24"  width="150" height="46" rx="7" stroke="var(--s5)"/>
+    <text class="t" x="34" y="44">T1 atlas families</text><text class="s" x="34" y="60">xtask · rts/ + ui/</text>
+
+    <rect x="20"  y="94"  width="150" height="46" rx="7" stroke="var(--s5)"/>
+    <text class="t" x="34" y="114">T2 texture table</text><text class="s" x="34" y="130">9 slots · ScenePass</text>
+
+    <rect x="20"  y="164" width="150" height="46" rx="7" stroke="var(--s5)"/>
+    <text class="t" x="34" y="184">T3 text packer</text><text class="s" x="34" y="200">bitmap font → UI</text>
+
+    <rect x="20"  y="252" width="150" height="46" rx="7" stroke="var(--s5)"/>
+    <text class="t" x="34" y="272">T4 camera</text><text class="s" x="34" y="288">pan · unproject</text>
+  </g>
+
+  <!-- sim column -->
+  <g class="n">
+    <rect x="230" y="252" width="150" height="46" rx="7" stroke="var(--s1)"/>
+    <text class="t" x="244" y="272">T5 rts scenario</text><text class="s" x="244" y="288">horde-free family</text>
+
+    <rect x="230" y="322" width="150" height="46" rx="7" stroke="var(--s2)"/>
+    <text class="t" x="244" y="342">T6 entity store</text><text class="s" x="244" y="358">RtsWorld · tick</text>
+
+    <rect x="420" y="322" width="150" height="46" rx="7" stroke="var(--s2)"/>
+    <text class="t" x="434" y="342">T7 field pool</text><text class="s" x="434" y="358">8 slots · movement</text>
+
+    <rect x="420" y="252" width="150" height="46" rx="7" stroke="var(--s2)"/>
+    <text class="t" x="434" y="272">T8 selection</text><text class="s" x="434" y="288">click · drag box</text>
+
+    <rect x="610" y="322" width="150" height="46" rx="7" stroke="var(--s2)"/>
+    <text class="t" x="624" y="342">T9 gather</text><text class="s" x="624" y="358">crystal + gas</text>
+
+    <rect x="610" y="252" width="150" height="46" rx="7" stroke="var(--s2)"/>
+    <text class="t" x="624" y="272">T10 building</text><text class="s" x="624" y="288">place · construct</text>
+
+    <rect x="610" y="182" width="150" height="46" rx="7" stroke="var(--s2)"/>
+    <text class="t" x="624" y="202">T11 production</text><text class="s" x="624" y="218">queue · supply</text>
+  </g>
+
+  <!-- render back / app column -->
+  <g class="n">
+    <rect x="230" y="94"  width="150" height="46" rx="7" stroke="var(--s5)"/>
+    <text class="t" x="244" y="114">T12 pack frame</text><text class="s" x="244" y="130">world · overlay · ui</text>
+
+    <rect x="420" y="94"  width="150" height="46" rx="7" stroke="var(--s5)"/>
+    <text class="t" x="434" y="114">T13 HUD</text><text class="s" x="434" y="130">resources · menu</text>
+
+    <rect x="610" y="94"  width="150" height="46" rx="7" stroke="var(--s1)"/>
+    <text class="t" x="624" y="114">T14 rts CLI</text><text class="s" x="624" y="130">mouse · script</text>
+
+    <rect x="800" y="94"  width="140" height="46" rx="7" stroke="var(--s1)"/>
+    <text class="t" x="814" y="114">T15 acceptance</text><text class="s" x="814" y="130">end to end</text>
+
+    <rect x="800" y="24"  width="140" height="46" rx="7" stroke="var(--s3)"/>
+    <text class="t" x="814" y="44">T16 close</text><text class="s" x="814" y="60">ADRs · gate</text>
+  </g>
+
+  <g class="e">
+    <path d="M95 70 L95 90"   marker-end="url(#ap)"/>
+    <path d="M95 140 L95 160" marker-end="url(#ap)"/>
+    <path d="M305 298 L305 318" marker-end="url(#ap)"/>
+    <path d="M380 345 L414 345" marker-end="url(#ap)"/>
+    <path d="M570 345 L604 345" marker-end="url(#ap)"/>
+    <path d="M685 322 L685 302" marker-end="url(#ap)"/>
+    <path d="M495 322 L495 302" marker-end="url(#ap)"/>
+    <path d="M170 275 L226 275" marker-end="url(#ap)"/>
+    <path d="M380 335 L400 335 L400 288 L414 288" marker-end="url(#ap)"/>
+    <path d="M685 252 L685 232" marker-end="url(#ap)"/>
+    <path d="M170 117 L226 117" marker-end="url(#ap)"/>
+    <path d="M170 187 L200 187 L200 128 L226 128" marker-end="url(#ap)"/>
+    <path d="M170 265 L192 265 L192 106 L226 106" marker-end="url(#ap)"/>
+    <path d="M610 205 L590 205 L590 150 L340 150 L340 142" marker-end="url(#ap)"/>
+    <path d="M570 265 L586 265 L586 160 L350 160 L350 144" marker-end="url(#ap)"/>
+    <path d="M380 117 L414 117" marker-end="url(#ap)"/>
+    <path d="M570 117 L604 117" marker-end="url(#ap)"/>
+    <path d="M760 117 L794 117" marker-end="url(#ap)"/>
+    <path d="M870 94 L870 74" marker-end="url(#ap)"/>
+  </g>
+</svg>
+<p class="caption">
+  Three roots start in parallel — T1 (assets), T4 (camera) and T5 (scenario) —
+  and everything funnels through T12 → T13 → T14 → T15 → T16.
+</p>
+</div>
+
+<h2>Ticket order</h2>
+
+<div class="scroll">
+<table>
+  <thead><tr><th>ID</th><th>Title</th><th>Depends</th><th>Commit outcome</th></tr></thead>
+  <tbody>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T1_placeholder-atlas-families.md">T1</a></strong></td><td><strong>Placeholder atlas families</strong></td><td class="num">—</td><td><code>xtask atlases --check</code> covers two new tracked families, <code>rts/</code> and <code>ui/</code>.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T2_texture-table-and-scene-pass.md">T2</a></strong></td><td><strong>Renderer texture table + ScenePass</strong></td><td class="num">T1</td><td>Any of 9 texture slots draws, through a world / overlay / UI scene pass. Golden unchanged.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T3_bitmap-text-packer.md">T3</a></strong></td><td><strong>Bitmap text packer</strong></td><td class="num">T2</td><td><code>render::text::push_text</code> turns a <code>&amp;str</code> into UI sprite instances.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T4_camera-and-unprojection.md">T4</a></strong></td><td><strong>Panning camera + unprojection</strong></td><td class="num">—</td><td>Camera pans and clamps; a screen pixel resolves back to its map cell.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T5_rts-scenario-family.md">T5</a></strong></td><td><strong><code>rts_prototype_v1</code> scenario</strong></td><td class="num">—</td><td>A horde-free RTS scene loads, hash-verified, with nodes and an HQ site.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T6_entity-store-and-world.md">T6</a></strong></td><td><strong>Entity store + <code>RtsWorld</code></strong></td><td class="num">T5</td><td>Entities spawn/despawn with stable ids; <code>RtsWorld::tick</code> advances.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T7_field-pool-and-movement.md">T7</a></strong></td><td><strong>Field pool + unit movement</strong></td><td class="num">T6</td><td>A move order routes units over a pooled flow field and they arrive.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T8_selection.md">T8</a></strong></td><td><strong>Selection</strong></td><td class="num">T4, T6</td><td>Click and drag-box select units; the set is queryable and slot-ordered.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T9_gather-loop.md">T9</a></strong></td><td><strong>Gather loop, two resources</strong></td><td class="num">T7</td><td>Workers mine Crystal and Gas, haul to the HQ, and the totals rise.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T10_building-placement.md">T10</a></strong></td><td><strong>Building placement + construction</strong></td><td class="num">T7, T9</td><td>A worker places a Depot on the grid, attends it, and it finishes.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T11_production-and-supply.md">T11</a></strong></td><td><strong>Production + supply</strong></td><td class="num">T10</td><td>HQ makes Workers, Barracks makes Soldiers, supply blocks over-cap queueing.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T12_world-render-packing.md">T12</a></strong></td><td><strong>World render packing</strong></td><td class="num">T2, T4, T8, T11</td><td>The RTS world packs into draw groups and an overlay; the camera lives in the world.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T13_hud.md">T13</a></strong></td><td><strong>HUD</strong></td><td class="num">T3, T12</td><td>Resources, supply, selection and the build menu are drawn on screen.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T14_rts-cli-subcommand.md">T14</a></strong></td><td><strong><code>rts</code> CLI subcommand</strong></td><td class="num">T13</td><td><code>cargo run -- rts</code> runs the scene with scripted mouse and key input.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T15_end-to-end-acceptance.md">T15</a></strong></td><td><strong>End-to-end acceptance</strong></td><td class="num">T14</td><td>One tracked script drives the whole economy loop; it joins the merge gate.</td></tr>
+    <tr><td class="num"><strong><a href="PLAN_2026_08_10_rts-engine-prototype/T16_docs-and-phase-close.md">T16</a></strong></td><td><strong>Docs, ADRs, phase close</strong></td><td class="num">T15</td><td>Phase 1 is recorded, gated and indexed; every claim is falsifiable.</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2>Decisions taken before the first line of code</h2>
+
+<div class="grid2">
+  <div class="card">
+    <h3>Thin vertical slice</h3>
+    <p class="dep">Scope</p>
+    <p>All six systems present, none deep. Building the control layer now and the
+    economy later would leave the phase's actual question unanswered for another
+    phase.</p>
+  </div>
+  <div class="card">
+    <h3>Horde-free scene</h3>
+    <p class="dep">Scenario</p>
+    <p><code>rts_prototype_v1</code> requires <code>hard_agent_count: 0</code>.
+    Combat is phase 2; a zombie that cannot be fought is cost with no payoff.</p>
+  </div>
+  <div class="card">
+    <h3>Two resources + supply</h3>
+    <p class="dep">Economy</p>
+    <p>The 500-population cap is a stated pillar. Supply is what makes it a
+    mechanic rather than a number — and it is reserved at <em>enqueue</em>, or the
+    cap is decoration.</p>
+  </div>
+  <div class="card">
+    <h3>Flow-field pool, not A*</h3>
+    <p class="dep">Navigation</p>
+    <p>8 preallocated fields keyed by destination, LRU. Units sharing a destination
+    share a field — group cohesion for free, one rebuild instead of <em>N</em>.</p>
+  </div>
+  <div class="card">
+    <h3>Texture slots, not more atlases</h3>
+    <p class="dep">Render</p>
+    <p><code>DrawGroup.atlas_id</code> becomes a slot into a flat 9-texture table.
+    One integer changes meaning; the shader, vertex format and 48-byte instance
+    do not.</p>
+  </div>
+  <div class="card">
+    <h3>Pan, not zoom</h3>
+    <p class="dep">Camera</p>
+    <p>Zoom multiplies through the depth normalisation, the cull and every golden,
+    and non-integer tile scales shimmer on pixel art. Deferred, deliberately.</p>
+  </div>
+  <div class="card">
+    <h3>Generated placeholder art</h3>
+    <p class="dep">Assets</p>
+    <p>No source image, no licence obligation, tracked by sha256 and regenerated
+    by <code>xtask atlases --check</code>. Real art later is a generator swap.</p>
+  </div>
+  <div class="card">
+    <h3>Bitmap-font HUD</h3>
+    <p class="dep">UI</p>
+    <p>A prototype whose resources you cannot read is not demonstrable. Lowercase
+    is a fallback box glyph on purpose, so a missed uppercasing is visible.</p>
+  </div>
+</div>
+
+<h2>What every ticket must satisfy</h2>
+
+<ul class="plain">
+  <li><strong>TDD, mandatory.</strong> Red first, named tests, behaviour not implementation.</li>
+  <li><strong>Mutation-verified, both directions.</strong> Each ticket lists its injections; each must redden a named test and green again on revert.</li>
+  <li><strong>The app compiles and the gate passes after every commit.</strong> No ticket leaves a broken path.</li>
+  <li><strong>The horde does not move.</strong> <code>run --agents 5000 --frames 300</code> exit-line <code>hash=</code> is asserted unchanged, ticket by ticket.</li>
+  <li><strong>The golden is compared, never regenerated.</strong> <code>git diff --stat HEAD -- lab/goldens/</code> must be empty.</li>
+  <li><strong>No performance number, anywhere.</strong> <code>no_perf_claim_in_docs</code> and <code>gate_list_has_no_perf_thresholds</code> still bind.</li>
+</ul>
+
+<footer>
+  Index: <code>artifacts/PLAN_2026_08_10_rts-engine-prototype.md</code> ·
+  Tickets: <code>artifacts/PLAN_2026_08_10_rts-engine-prototype/T1…T16</code> ·
+  Decisions: <a href="../docs/ADR/013_ADR_phase1_scope_and_rts_entity_model.md">ADR 013</a>,
+  <a href="../docs/ADR/014_ADR_movable_camera_texture_table_and_ui_layer.md">ADR 014</a>,
+  <a href="../docs/ADR/015_ADR_economy_construction_and_production_determinism.md">ADR 015</a> ·
+  Architecture: <a href="../docs/rts-engine-prototype-architecture.html">RTS engine prototype</a>
+</footer>
+
+</div>
+</body>
+</html>

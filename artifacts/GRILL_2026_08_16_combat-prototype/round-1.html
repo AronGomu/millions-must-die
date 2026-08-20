@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Combat Prototype — what fights, how it dies, what the gate proves</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 1 · All branches — enemy model, weapons, damage, turret, AI, UX, gate</span>
+    <h1>Combat Prototype — what fights, how it dies, what the gate proves</h1>
+    <p class="lede">Twelve decisions, one per open branch of the phase-2 tree. Facts already scouted from the repo (owner column exists, tick order is fixed, sim/ frozen) — only decisions remain. Tick boxes (several per question is fine), add precision where the boxes miss, then Copy answer summary and paste it back.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress"><b>Combat Prototype</b><span class="arrow">→</span><span class="node active">Enemy model</span><span class="node active">Weapons</span><span class="node active">Damage &amp; death</span><span class="node active">Turret</span><span class="node active">Enemy AI</span><span class="node active">Combat UX</span><span class="node active">Win / lose</span><span class="node active">Gate &amp; scene</span></nav>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure role="img" aria-labelledby="fig1-title fig1-desc">
+      <figcaption><b id="fig1-title">Round 1 frontier</b><span id="fig1-desc">Every branch of the phase-2 tree is open and independent — the whole frontier fits in one round.</span></figcaption>
+      <svg viewBox="0 0 440 300">
+        <title>Design tree frontier graph</title>
+        <desc>Root node Combat Prototype connects to eight active branches, each annotated with its question numbers.</desc>
+        <rect class="svg-node active" x="150" y="10" width="140" height="34" rx="8"/>
+        <text class="svg-label" x="220" y="31" text-anchor="middle">Combat Prototype</text>
+        <path class="svg-line" d="M220 44 V64 M220 64 H60 M220 64 H380 M60 64 V84 M164 64 V84 M276 64 V84 M380 64 V84"/>
+        <rect class="svg-node active" x="10" y="84" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="60" y="103" text-anchor="middle">Enemy model</text>
+        <text class="svg-note" x="60" y="120" text-anchor="middle">Q1 · Q7</text>
+        <rect class="svg-node active" x="114" y="84" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="164" y="103" text-anchor="middle">Weapons</text>
+        <text class="svg-note" x="164" y="120" text-anchor="middle">Q2 · Q3</text>
+        <rect class="svg-node active" x="226" y="84" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="276" y="103" text-anchor="middle">Damage/death</text>
+        <text class="svg-note" x="276" y="120" text-anchor="middle">Q4 · Q9</text>
+        <rect class="svg-node active" x="330" y="84" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="380" y="103" text-anchor="middle">Turret</text>
+        <text class="svg-note" x="380" y="120" text-anchor="middle">Q5</text>
+        <path class="svg-line" d="M220 44 V180 M220 180 H60 M220 180 H380 M60 180 V200 M164 180 V200 M276 180 V200 M380 180 V200"/>
+        <rect class="svg-node active" x="10" y="200" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="60" y="219" text-anchor="middle">Enemy AI</text>
+        <text class="svg-note" x="60" y="236" text-anchor="middle">Q6</text>
+        <rect class="svg-node active" x="114" y="200" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="164" y="219" text-anchor="middle">Combat UX</text>
+        <text class="svg-note" x="164" y="236" text-anchor="middle">Q8 · Q11</text>
+        <rect class="svg-node active" x="226" y="200" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="276" y="219" text-anchor="middle">Win / lose</text>
+        <text class="svg-note" x="276" y="236" text-anchor="middle">Q10</text>
+        <rect class="svg-node active" x="330" y="200" width="100" height="46" rx="8"/>
+        <text class="svg-label" x="380" y="219" text-anchor="middle">Gate &amp; scene</text>
+        <text class="svg-note" x="380" y="236" text-anchor="middle">Q12</text>
+        <text class="svg-note" x="220" y="285" text-anchor="middle">All 8 branches open · no branch blocks another this round</text>
+      </svg>
+    </figure>
+    <figure role="img" aria-labelledby="fig2-title fig2-desc">
+      <figcaption><b id="fig2-title">Where combat lands in the fixed tick</b><span id="fig2-desc">RtsWorld::tick runs seven systems in a pinned order; combat inserts as a new numbered step, and the owner column already distinguishes player from neutral.</span></figcaption>
+      <svg viewBox="0 0 440 300">
+        <title>Tick pipeline and entity owner lanes</title>
+        <desc>Pipeline of existing tick systems with a highlighted combat insertion after orders, above lanes for owner ids 0 player, 255 neutral, and a proposed enemy owner.</desc>
+        <text class="svg-note" x="10" y="20">RtsWorld::tick — pinned system order</text>
+        <rect class="svg-node" x="10" y="30" width="90" height="30" rx="6"/><text class="svg-label" x="55" y="49" text-anchor="middle">commands</text>
+        <rect class="svg-node" x="118" y="30" width="90" height="30" rx="6"/><text class="svg-label" x="163" y="49" text-anchor="middle">construction</text>
+        <rect class="svg-node" x="226" y="30" width="90" height="30" rx="6"/><text class="svg-label" x="271" y="49" text-anchor="middle">production</text>
+        <rect class="svg-node" x="334" y="30" width="90" height="30" rx="6"/><text class="svg-label" x="379" y="49" text-anchor="middle">orders</text>
+        <path class="svg-line" d="M100 45 H118 M208 45 H226 M316 45 H334"/>
+        <rect class="svg-node active" x="10" y="80" width="150" height="30" rx="6"/><text class="svg-label" x="85" y="99" text-anchor="middle">combat ⟵ new system</text>
+        <rect class="svg-node" x="178" y="80" width="90" height="30" rx="6"/><text class="svg-label" x="223" y="99" text-anchor="middle">movement</text>
+        <rect class="svg-node" x="286" y="80" width="138" height="30" rx="6"/><text class="svg-label" x="355" y="99" text-anchor="middle">supply · selection</text>
+        <path class="svg-line" d="M379 60 C379 70 85 70 85 80 M160 95 H178 M268 95 H286"/>
+        <text class="svg-note" x="10" y="145">EntityStore — owner column today, one id free for enemies</text>
+        <rect class="svg-node" x="10" y="155" width="130" height="40" rx="8"/>
+        <text class="svg-label" x="75" y="172" text-anchor="middle">OWNER_PLAYER = 0</text>
+        <text class="svg-note" x="75" y="188" text-anchor="middle">worker · soldier · buildings</text>
+        <rect class="svg-node" x="155" y="155" width="130" height="40" rx="8"/>
+        <text class="svg-label" x="220" y="172" text-anchor="middle">OWNER_NEUTRAL = 255</text>
+        <text class="svg-note" x="220" y="188" text-anchor="middle">resource nodes</text>
+        <rect class="svg-node active" x="300" y="155" width="130" height="40" rx="8"/>
+        <text class="svg-label" x="365" y="172" text-anchor="middle">OWNER_ENEMY = ?</text>
+        <text class="svg-note" x="365" y="188" text-anchor="middle">Q1 decides the store</text>
+        <text class="svg-note" x="10" y="225">Standing constraints (not up for vote):</text>
+        <text class="svg-note" x="10" y="243">· no per-frame allocation · no per-enemy pathfinding (pooled flow fields, 8 slots)</text>
+        <text class="svg-note" x="10" y="261">· sim/ horde frozen — 5000-agent exit hash must not move · MAX_ENTITIES = 2048</text>
+        <text class="svg-note" x="10" y="279">· overlay layer stays texture-free · phase-1 scripts, goldens, contracts untouched</text>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+    <fieldset data-question="What is an enemy, in code?">
+      <legend>1. What is an enemy, in code?</legend>
+      <p class="why">Deepest fork of the phase — decides which store, which collision contract, which navigation, and how phase 3 (tens of thousands) later scales on top.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="RTS entities with an enemy owner id"><span><b>RTS entities with an enemy owner id</b><span class="rank">Recommended</span><span class="detail">Reuse EntityStore: add OWNER_ENEMY beside OWNER_PLAYER=0 / OWNER_NEUTRAL=255 — hard bodies, pooled flow fields, state hash and tests for free; scale capped by MAX_ENTITIES=2048, horde scale stays phase 3.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Horde sim/ agents gain HP via scenario-gated knobs"><span><b>Horde sim/ agents gain HP via scenario-gated knobs</b><span class="rank">Second</span><span class="detail">Identity-default knobs could keep the 5000-agent hash still, but this unfreezes sim/, mixes soft-separation walkers into a hard-body fight, and drags phase-0 risk into phase 2.</span></span></label>
+        <label class="choice"><input type="checkbox" value="RTS enemies now plus an explicit written non-goal that the horde is untouched"><span><b>RTS enemies now + explicit written non-goal that the horde is untouched</b><span class="rank">Third</span><span class="detail">Same code as the first option plus a doc fence; only worth naming if you want the phase-3 bridge stated now.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. owner id value, whether enemies may ever share player pop cap, phase-3 bridge expectations"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How does damage travel from weapon to target?">
+      <legend>2. How does damage travel from weapon to target?</legend>
+      <p class="why">Decides the determinism surface, the render work, and whether a projectile is a simulated thing or a drawing.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Instant-hit on cooldown"><span><b>Instant-hit on cooldown</b><span class="rank">Recommended</span><span class="detail">Attack resolves the same tick when target is in range and cooldown expired; the shot is a procedural overlay flash. Cheapest, fully deterministic; no visible travelling bolt.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Projectile entities with travel time"><span><b>Projectile entities with travel time</b><span class="rank">Second</span><span class="detail">Visible shots and dodge micro, but each projectile is simulated state — a preallocated pool, hash entries, and impact rules.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Mixed: instant for soldier, pooled projectiles for turret"><span><b>Mixed: instant for soldier, pooled projectiles for turret</b><span class="rank">Third</span><span class="detail">Visual variety at the cost of two damage paths to test in one prototype.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. cosmetic-only tracer line is fine / projectiles must be dodgeable"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Who fights in this slice?">
+      <legend>3. Who fights in this slice? (additive — tick several)</legend>
+      <p class="why">Fixes the sprite, stat and test surface; every extra combatant kind is stats + sprite + card lines + audio receipts.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Soldier (ranged) + Turret vs one new melee enemy kind"><span><b>Soldier (ranged) + Turret vs one new melee enemy kind</b><span class="rank">Recommended</span><span class="detail">Three weapon shapes — mobile ranged, static ranged, melee — cover the phase goal with minimum content.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Also a ranged enemy kind"><span><b>Also a ranged enemy kind</b><span class="rank">Second</span><span class="detail">Makes turrets and soldiers take fire at range; one more kind to stat and draw.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Worker gets a weak melee attack"><span><b>Worker gets a weak melee attack</b><span class="rank">Third</span><span class="detail">StarCraft fidelity (workers can defend); adds balance noise and another attack path.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. enemy kind names, rough flavor (zombie/bug/raider), sprite expectations (placeholder ok?)"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How deep is the damage model?">
+      <legend>4. How deep is the damage model?</legend>
+      <p class="why">Every stat enters the state hash and the balance pass is explicitly out of scope — depth here is cost without payoff until the economy phase.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Flat HP, flat damage, integer cooldown ticks"><span><b>Flat HP, flat damage, integer cooldown ticks</b><span class="rank">Recommended</span><span class="detail">No armor, no damage types, no regen, no crits. Plain integers, deterministic, trivially hashed.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Plus a flat armor value subtracted per hit"><span><b>Plus a flat armor value subtracted per hit</b><span class="rank">Second</span><span class="detail">SC1-shaped; one more stat per kind and tuning noise before any balance pass exists.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Damage types vs armor classes"><span><b>Damage types vs armor classes</b><span class="rank">Third</span><span class="detail">Full SC1 matrix; premature before there are even three unit kinds.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. rough HP/damage magnitudes you want, or 'pick sane placeholders'"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What is the turret?">
+      <legend>5. What is the turret?</legend>
+      <p class="why">First attacking building — placement, cost and footprint should ride the existing four placement rules unless you want a new rule class.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="New BuildingKind::Turret: worker-built, crystal cost, no supply, auto-fires nearest enemy in range"><span><b>New BuildingKind::Turret — worker-built, crystal cost, no supply, auto-fires nearest enemy in range</b><span class="rank">Recommended</span><span class="detail">Placed like Depot/Barracks under the existing rules; deterministic nearest-target with slot-order tie-break; small footprint.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Turret additionally requires proximity to another building"><span><b>Turret additionally requires proximity to another building (territory/power)</b><span class="rank">Second</span><span class="detail">Stronghold flavor and anti-spam, but introduces a new placement rule class this phase doesn't need.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Turret has limited ammo or decay"><span><b>Turret has limited ammo or decay</b><span class="rank">Third</span><span class="detail">Economy pressure belongs to phase 5; more state now.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. footprint size, range vs soldier range, can it hit adjacent melee?"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What does enemy AI do?">
+      <legend>6. What does enemy AI do?</legend>
+      <p class="why">"No per-enemy pathfinding" stands — whatever the behavior, it must ride shared pooled flow fields (8 slots, LRU).</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="March on the HQ; attack the first player thing in weapon range"><span><b>March on the HQ; attack the first player thing in weapon range</b><span class="rank">Recommended</span><span class="detail">One shared field to one destination for all enemies; the fortress-defense pillar in a single rule; turrets/soldiers/walls become meaningful by standing in the way.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Aggro radius: idle until a player entity comes close, then attack it"><span><b>Aggro radius: idle until a player entity comes close, then attack it</b><span class="rank">Second</span><span class="detail">Enables defensive camps to clear, but needs leash/return rules and per-group idle behavior.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Always attack the globally nearest player entity"><span><b>Always attack the globally nearest player entity</b><span class="rank">Third</span><span class="detail">Every kill can retarget the whole group — churns the 8-slot field pool and reads as swarming noise.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. combine: march on HQ but switch to attacker when hit; retarget rules"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How do enemies enter the scene?">
+      <legend>7. How do enemies enter the scene?</legend>
+      <p class="why">The gate script must be deterministic, so enemy arrival has to be scenario/contract data, not improvisation.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Scenario-declared: pre-placed group plus timed waves from spawn points"><span><b>Scenario-declared: pre-placed group + timed waves from spawn points</b><span class="rank">Recommended</span><span class="detail">Static targets for the first attack tests plus one wave proving the AI marches; all data in the RON scenario.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Pre-placed enemies only, no waves"><span><b>Pre-placed enemies only, no waves</b><span class="rank">Second</span><span class="detail">Simplest; defense-under-pressure goes undemonstrated (phase 4 owns waves anyway).</span></span></label>
+        <label class="choice"><input type="checkbox" value="Script/debug-injected spawns"><span><b>Script/debug-injected spawns</b><span class="rank">Third</span><span class="detail">Flexible for tests but puts world content outside the scenario contract.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. rough counts (a dozen? a hundred?), how many waves on the gate script"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which combat commands does the player get?">
+      <legend>8. Which combat commands does the player get?</legend>
+      <p class="why">The command card is positional 3×3 (QWE/ASD/ZXC) — each command claims a slot, an executor path, and an audio receipt.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Attack (A: click enemy or attack-move to ground) + Stop + right-click enemy attacks"><span><b>Attack (A: click enemy = target, click ground = attack-move) + Stop + right-click on enemy = attack</b><span class="rank">Recommended</span><span class="detail">The SC1 core triad; attack-move is the fortress-defense workhorse.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Also Hold Position"><span><b>Also Hold Position</b><span class="rank">Second</span><span class="detail">Completes the SC1 set; one more card slot and one more order state.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Right-click attack only, no A-move"><span><b>Right-click attack only, no A-move</b><span class="rank">Third</span><span class="detail">Cheaper, but guts the mechanical-RTS pillar this phase exists to prove.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. should idle soldiers auto-acquire enemies in range without any order?"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What happens at 0 HP — and can buildings die?">
+      <legend>9. What happens at 0 HP — and can buildings die?</legend>
+      <p class="why">A dying building must un-stamp its footprint, which invalidates every cached flow field; a dying HQ touches drop-off and the defeat question.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Units despawn; buildings destructible including the HQ, footprint un-stamped on death"><span><b>Units despawn; buildings destructible including the HQ, footprint un-stamped on death</b><span class="rank">Recommended</span><span class="detail">The full loop — enemies can actually threaten the base; death visual is a brief procedural flash, no corpse state.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Buildings damageable but the HQ is indestructible this phase"><span><b>Buildings damageable but the HQ is indestructible this phase</b><span class="rank">Second</span><span class="detail">Dodges defeat handling; the siege on the HQ then never ends, it just grinds.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Only units damageable this phase"><span><b>Only units damageable this phase</b><span class="rank">Third</span><span class="detail">Cheapest, but turrets defending indestructible buildings proves little about fortress defense.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. what happens to a production queue / supply when its building dies"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Is there a defeat or victory state?">
+      <legend>10. Is there a defeat or victory state?</legend>
+      <p class="why">Phase 6 owns the mission framework — but if the HQ can die (Q9), something visible has to happen.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Sandbox: no win/lose screen; kills and losses counted on the exit line"><span><b>Sandbox: no win/lose screen; kills and losses counted on the exit line</b><span class="rank">Recommended</span><span class="detail">The prototype proves mechanics, not missions; play continues HQ-less and the gate asserts the numbers.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Defeat banner when the HQ dies, world keeps running"><span><b>Defeat banner when the HQ dies, world keeps running</b><span class="rank">Second</span><span class="detail">A visible stake for playtesting; UI work outside the combat goal.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Hard defeat: input locks, run ends"><span><b>Hard defeat: input locks, run ends</b><span class="rank">Third</span><span class="detail">Mission-framework territory — phase 6's job.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. victory when all enemies dead? banner text?"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How is HP shown?">
+      <legend>11. How is HP shown?</legend>
+      <p class="why">The overlay layer is texture-free by contract (rings + line instances) — a procedural bar fits it exactly; readability is a core pillar.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Bar over damaged and selected entities, hidden at full HP"><span><b>Bar over damaged + selected entities, hidden at full HP</b><span class="rank">Recommended</span><span class="detail">SC1 behavior; rides the existing texture-free line-instance primitive from the grid/drag-box work.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Always-on bars for every entity"><span><b>Always-on bars for every entity</b><span class="rank">Second</span><span class="detail">Maximum readability, screen clutter at scale.</span></span></label>
+        <label class="choice"><input type="checkbox" value="HP number in the HUD card only"><span><b>HP number in the HUD card only</b><span class="rank">Third</span><span class="detail">Zero in-world feedback during a fight.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. color thresholds green/yellow/red? bar on buildings too?"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Where does combat live on the merge gate?">
+      <legend>12. Where does combat live on the merge gate?</legend>
+      <p class="why">Phase-1 scripts, hashes and goldens are frozen contracts — combat needs enemies in a scene without moving any of them.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="New scenario rts_combat_v1.ron + new tracked script + new exit-line combat tokens"><span><b>New scenario <code>rts_combat_v1.ron</code> + new tracked script + new exit-line combat tokens (kills, losses, …)</b><span class="rank">Recommended</span><span class="detail">The pattern every phase used: one new gate line, phase-1 lines byte-for-byte untouched.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Extend the existing rts_prototype_v1 scene with enemies, add a script"><span><b>Extend the existing <code>rts_prototype_v1</code> scene with enemies, add a script</b><span class="rank">Second</span><span class="detail">Fewer fixtures, but the phase-1 scenario contract now carries enemies — drift risk in a frozen artifact.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Unit and harness tests only, no scripted end-to-end gate run"><span><b>Unit and harness tests only, no scripted end-to-end gate run</b><span class="rank">Third</span><span class="detail">Breaks the phase pattern — every phase so far closed with a scripted end-to-end line.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. which numbers must the exit line assert for you to call combat proven?"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 1 · All branches — enemy model, weapons, damage, turret, AI, UX, gate — Combat Prototype\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>
