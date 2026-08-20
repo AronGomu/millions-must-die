@@ -200,6 +200,9 @@ pub struct EntityStore {
     /// Remaining hit points. `0` for a resource node — indestructible, no HP
     /// semantics (see [`max_hp`]).
     hp: Vec<u32>,
+    /// Ticks until this entity may fire again; `0` means ready, and stays
+    /// `0` for anything unarmed.
+    cooldown: Vec<u32>,
     /// LIFO free list of dead slot indices.
     free: Vec<u32>,
     live: usize,
@@ -228,6 +231,7 @@ impl EntityStore {
             carry_kind: Vec::with_capacity(MAX_ENTITIES),
             carry_amount: Vec::with_capacity(MAX_ENTITIES),
             hp: Vec::with_capacity(MAX_ENTITIES),
+            cooldown: Vec::with_capacity(MAX_ENTITIES),
             free: Vec::with_capacity(MAX_ENTITIES),
             live: 0,
         }
@@ -292,6 +296,7 @@ impl EntityStore {
             self.carry_kind.push(CARRY_NONE);
             self.carry_amount.push(0);
             self.hp.push(0);
+            self.cooldown.push(0);
             i
         } else {
             return None;
@@ -310,6 +315,7 @@ impl EntityStore {
         self.carry_kind[idx] = CARRY_NONE;
         self.carry_amount[idx] = 0;
         self.hp[idx] = max_hp(kind);
+        self.cooldown[idx] = 0;
         self.live += 1;
 
         Some(EntityId {
@@ -462,6 +468,17 @@ impl EntityStore {
         self.hp[slot] = hp;
     }
 
+    /// Ticks until this entity may fire again. `0` means ready.
+    pub fn cooldown(&self, slot: usize) -> u32 {
+        self.assert_live(slot);
+        self.cooldown[slot]
+    }
+
+    pub fn set_cooldown(&mut self, slot: usize, ticks: u32) {
+        self.assert_live(slot);
+        self.cooldown[slot] = ticks;
+    }
+
     /// What this unit is carrying, and how much. `None` when empty-handed.
     pub fn carry(&self, slot: usize) -> Option<(ResourceKind, u32)> {
         self.assert_live(slot);
@@ -521,6 +538,7 @@ impl EntityStore {
             h.update([self.carry_kind[i]]);
             h.update(self.carry_amount[i].to_le_bytes());
             h.update(self.hp[i].to_le_bytes());
+            h.update(self.cooldown[i].to_le_bytes());
         }
     }
 
@@ -528,7 +546,7 @@ impl EntityStore {
     /// hook only: proves the zero-growth contract without exposing the
     /// storage layout to production code.
     #[cfg(feature = "testkit")]
-    pub fn column_capacities(&self) -> [usize; 14] {
+    pub fn column_capacities(&self) -> [usize; 15] {
         [
             self.alive.capacity(),
             self.generation.capacity(),
@@ -544,6 +562,7 @@ impl EntityStore {
             self.carry_kind.capacity(),
             self.carry_amount.capacity(),
             self.hp.capacity(),
+            self.cooldown.capacity(),
         ]
     }
 }

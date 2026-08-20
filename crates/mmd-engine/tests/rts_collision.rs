@@ -293,19 +293,25 @@ fn idle_units_are_collision_bodies() {
 fn all_rts_owners_collide() {
     let mut h = harness(scattered_spawns(1));
     let mover = workers(&h)[0];
-    // A non-player owner: nothing in phase 1 spawns one, and hard collision
-    // must already hold for the enemy units a later phase adds.
+    // A non-player owner: hard collision is owner-blind, and must hold for
+    // the enemy units later phases add.
+    //
+    // Deliberately an **unarmed** kind. The claim under test is about bodies,
+    // not about fire: an armed enemy auto-acquires this mover the moment it
+    // walks into reach and kills it long before 300 ticks are up, which would
+    // make this case fail on a combat fact rather than a collision one. The
+    // two kinds share one body radius, so nothing about the geometry changes.
     const OWNER_ENEMY: u8 = 1;
     assert_ne!(OWNER_ENEMY, OWNER_PLAYER);
     let enemy = h
         .world_mut()
         .entities_mut()
         .spawn(
-            EntityKind::Unit(UnitKind::Soldier),
+            EntityKind::Unit(UnitKind::Worker),
             OWNER_ENEMY,
             [20.5, 20.5],
         )
-        .expect("spawn enemy soldier");
+        .expect("spawn enemy worker");
     let enemy_start = pos(&h, enemy);
     assert!(h.world_mut().force_position_for_test(mover, [10.5, 20.5]));
     assert!(h.world_mut().order_move(mover, Cell { x: 30, y: 20 }));

@@ -2,6 +2,7 @@
 
 mod build;
 mod collision;
+mod combat;
 mod economy;
 mod entity;
 mod formation;
@@ -24,6 +25,7 @@ pub use collision::{
     GATHER_PAIR_ACTIVE, GATHER_SEPARATION_STEP_CELLS, GATHER_SEPARATION_TICKS,
     moving_circle_hits_point, units_overlap,
 };
+pub use combat::{Weapon, weapon};
 pub use economy::{
     GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply, WORKER_CARRY_CAPACITY,
     WORKER_SUPPLY_COST, node_amount, supply_cost,
@@ -66,8 +68,8 @@ pub use minimap::{
     HudHit, MinimapProjection, control_id_from_hud_hit, hud_hit_test, minimap_projection,
 };
 pub use orders::{
-    GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
-    WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
+    GHOUL_SPEED_CELLS_PER_SEC, GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable,
+    SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
 };
 pub use pack::{
     DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DragBox, FramePackOptions,

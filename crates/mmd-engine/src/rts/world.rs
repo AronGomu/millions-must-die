@@ -2,7 +2,7 @@
 
 use sha2::{Digest, Sha256};
 
-use crate::nav::field_pool::{FieldPool, FieldPoolError};
+use crate::nav::field_pool::{FieldPool, FieldPoolError, FieldRef};
 use crate::render::{Camera, IsoView, VIEW_HEIGHT, VIEW_WIDTH, screen_axes_to_cells};
 use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
@@ -15,6 +15,7 @@ use super::collision::{
     GatherCollisionState, concentric_pair_normal, moving_circle_hits_point, pair_byte_exempts,
     pair_byte_is_transition, units_overlap,
 };
+use super::combat::{surface_distance, weapon};
 use super::economy::{
     GATHER_TICKS, Resources, Supply, WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
     supply_cost,
@@ -29,8 +30,9 @@ use super::formation::{
     nearest_body_clear_cell,
 };
 use super::orders::{
-    GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC,
-    adaptive_reach, dist2, entity_approach_cell, rect_distance, step_admissible, unit_speed,
+    GHOUL_SPEED_CELLS_PER_SEC, GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
+    WORKER_SPEED_CELLS_PER_SEC, adaptive_reach, dist2, entity_approach_cell, node_cell,
+    rect_distance, step_admissible, unit_speed,
 };
 use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
 use super::selection::{MAX_SELECTION, Pick, Selection, box_select, footprint_min, pick_at};
@@ -303,6 +305,27 @@ pub struct RtsWorld {
     enemies_spawned: u32,
     /// One production queue and rally point per entity slot.
     production: ProductionTable,
+    /// Per-slot "this unit has a live target in weapon range this tick",
+    /// written by the combat system and read by the movement arms for
+    /// `Attack`/`AttackMove` — a unit that can shoot stands still. Reserved
+    /// to [`MAX_ENTITIES`] so combat never allocates.
+    combat_hold: Vec<bool>,
+    /// Where the enemy faction marches: the approach cell of the current
+    /// objective building. `None` when no player building is left.
+    enemy_objective: Option<Cell>,
+    /// Recompute [`Self::enemy_objective`] before the next enemy-AI pass.
+    /// Set at load and by a player building's death — never per tick.
+    enemy_objective_dirty: bool,
+    /// The starting HQ's centre, kept after its death: the fixed point
+    /// "nearest remaining player building" is measured from.
+    enemy_objective_origin: [f32; 2],
+    /// Enemy entities destroyed by combat fire.
+    kills: u32,
+    /// Player units and buildings destroyed by combat fire.
+    losses: u32,
+    /// Tick index of the first combat shot ever applied; `None` while the
+    /// run is bloodless.
+    first_combat_tick: Option<u32>,
     /// The view every packer projects through. World state, not view state: a
     /// replay that ends looking somewhere else did not reproduce.
     camera: Camera,
@@ -383,6 +406,11 @@ const _: () = assert!(
 const _: () = assert!(
     SOLDIER_SPEED_CELLS_PER_SEC < MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC,
     "the soldier outruns the push chain's endpoint check: raise MAX_PUSH_DEPTH's \
+     cost or lower the speed — see MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC"
+);
+const _: () = assert!(
+    GHOUL_SPEED_CELLS_PER_SEC < MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC,
+    "the ghoul outruns the push chain's endpoint check: raise MAX_PUSH_DEPTH's \
      cost or lower the speed — see MAX_PUSH_SAFE_UNIT_SPEED_CELLS_PER_SEC"
 );
 
@@ -803,6 +831,13 @@ impl RtsWorld {
             enemy_wave_pending: 0,
             enemies_spawned,
             production: ProductionTable::new(),
+            combat_hold: vec![false; MAX_ENTITIES],
+            enemy_objective: None,
+            enemy_objective_dirty: true,
+            enemy_objective_origin: hq_pos,
+            kills: 0,
+            losses: 0,
+            first_combat_tick: None,
             camera,
             keyboard_pan_dir: [0.0, 0.0],
             edge_pan_dir: [0.0, 0.0],
@@ -1011,6 +1046,21 @@ impl RtsWorld {
     /// decremented on death.
     pub fn enemies_spawned(&self) -> u32 {
         self.enemies_spawned
+    }
+
+    /// Enemy entities destroyed by combat fire. An exit token reads this.
+    pub fn kills(&self) -> u32 {
+        self.kills
+    }
+
+    /// Player units and buildings destroyed by combat fire.
+    pub fn losses(&self) -> u32 {
+        self.losses
+    }
+
+    /// Tick index of the first combat shot, `None` while nothing has fired.
+    pub fn first_combat_tick(&self) -> Option<u32> {
+        self.first_combat_tick
     }
 
     /// The starting HQ. `None` only after it is destroyed
@@ -1863,6 +1913,10 @@ impl RtsWorld {
                 if self.start_hq == Some(id) {
                     self.start_hq = None;
                 }
+                if self.entities.owner(slot) == OWNER_PLAYER {
+                    // The enemy faction may have just lost its objective.
+                    self.enemy_objective_dirty = true;
+                }
             }
             EntityKind::Node(_) => unreachable!("apply_damage refuses nodes before death"),
         }
@@ -1874,14 +1928,20 @@ impl RtsWorld {
     /// Systems are added by later tickets and each one runs at a fixed point in
     /// this order, so a reordering is a visible diff rather than an accident:
     /// 1. commands, 2. camera, 3. enemy waves, 4. construction, 5. production,
-    /// 6. orders, 7. movement, 8. supply recount.
+    /// 6. orders, 7. enemy AI, 8. combat, 9. movement, 10. supply recount.
     ///
     /// Today the tick counter, the camera pan (2), the enemy wave spawner
     /// (3), the construction system (4), the production system (5), the
-    /// gather system (6), the movement system (7) and the supply recount (8)
-    /// run, followed by pruning the selection of anything that died this
-    /// tick — last, so a unit that died on this tick is out of the selection
-    /// before anything reads it next tick.
+    /// gather system (6), the enemy AI (7), the combat system (8), the
+    /// movement system (9) and the supply recount (10) run, followed by
+    /// pruning the selection of anything that died this tick — last, so a
+    /// unit that died on this tick is out of the selection before anything
+    /// reads it next tick.
+    ///
+    /// Enemy AI and combat sit between orders and movement on purpose: an
+    /// order issued this tick still fires this tick, and a unit that fires
+    /// has already had [`Self::combat_hold`] written when the movement
+    /// system decides whether to walk it.
     pub fn tick(&mut self) {
         self.tick_index += 1;
         self.entities.collect_live(&mut self.live_scratch);
@@ -1890,6 +1950,8 @@ impl RtsWorld {
         self.construction();
         self.production_system();
         self.gather();
+        self.enemy_ai();
+        self.combat();
         self.movement();
         self.supply_recount();
         self.selection.retain_live(&self.entities);
@@ -1979,7 +2041,7 @@ impl RtsWorld {
     /// sites that reach their target, and clear the orders of workers whose
     /// site just finished.
     ///
-    /// Runs before orders (6) and movement (7), so a site that finishes this
+    /// Runs before orders (6) and movement (9), so a site that finishes this
     /// tick is finished for everything downstream.
     fn construction(&mut self) {
         // Pass A: which sites have an attending worker this tick?
@@ -2190,7 +2252,7 @@ impl RtsWorld {
         true
     }
 
-    /// System 4: advance every finished building's production queue by one
+    /// System 5: advance every finished building's production queue by one
     /// tick, and place the head on the grid — outside every body already
     /// standing there — once it is ready.
     ///
@@ -2283,7 +2345,7 @@ impl RtsWorld {
         }
     }
 
-    /// System 8: recompute `Supply::used` from scratch — live units plus every
+    /// System 10: recompute `Supply::used` from scratch — live units plus every
     /// live production queue's reservations — rather than maintaining it
     /// incrementally, so it can never drift.
     fn supply_recount(&mut self) {
@@ -2302,7 +2364,7 @@ impl RtsWorld {
         self.supply.set_used(used);
     }
 
-    /// System 5: advance every gathering worker's round trip one step.
+    /// System 6: advance every gathering worker's round trip one step.
     ///
     /// Runs before movement, so a phase change decided this tick is walked
     /// on this same tick — otherwise the round trip would lag its own state
@@ -2442,7 +2504,240 @@ impl RtsWorld {
         }
     }
 
-    /// System 6: walk every unit under a `Move` order, or a `Gather` order
+    /// Re-derive the enemy faction's objective from the live world: the
+    /// approach cell of the live player building nearest
+    /// [`Self::enemy_objective_origin`] (ascending scan with a strict `<`,
+    /// so a tie goes to the lower slot), or `None` when no player building
+    /// is left.
+    ///
+    /// The approach cell, not the building's own cell: a finished
+    /// building's footprint is blocked in the inflated centre mask, so a
+    /// pooled field to its own cell cannot be built — the objective must be
+    /// a cell a body can stand on, exactly as a hauler's drop-off leg
+    /// targets one.
+    fn recompute_enemy_objective(&mut self) {
+        self.enemy_objective_dirty = false;
+        let mut best: Option<(f32, usize)> = None;
+        for slot in 0..self.entities.slot_count() {
+            if !self.entities.alive(slot)
+                || self.entities.owner(slot) != OWNER_PLAYER
+                || !matches!(self.entities.kind(slot), EntityKind::Building(_))
+            {
+                continue;
+            }
+            let d = dist2(self.entities.position(slot), self.enemy_objective_origin);
+            if best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, slot));
+            }
+        }
+        let objective = best.map(|(_, slot)| {
+            let id = self.entities.id_at(slot).expect("live building");
+            entity_approach_cell(&self.static_nav, &self.entities, id, UnitKind::Ghoul).0
+        });
+        self.enemy_objective = objective;
+    }
+
+    /// System 7: enemy AI. Every idle enemy unit is sent marching at the
+    /// faction objective, and one already marching somewhere stale is
+    /// re-aimed. Runs immediately before combat so a fresh order can still
+    /// fire this tick.
+    fn enemy_ai(&mut self) {
+        if self.enemy_objective_dirty {
+            self.recompute_enemy_objective();
+        }
+        let Some(obj) = self.enemy_objective else {
+            // Nothing left to march on: marchers stop. A forced `Attack`
+            // (test seam) keeps its target; combat clears it on death.
+            for i in 0..self.live_scratch.len() {
+                let slot = self.live_scratch[i];
+                if self.entities.alive(slot)
+                    && self.entities.owner(slot) == OWNER_ENEMY
+                    && matches!(self.orders.get(slot), Order::AttackMove { .. })
+                {
+                    self.orders.clear(slot);
+                }
+            }
+            return;
+        };
+        // One pooled field for the whole faction, acquired at most once per
+        // tick — hundreds of enemies, one field.
+        let mut field: Option<FieldRef> = None;
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            if !self.entities.alive(slot)
+                || self.entities.owner(slot) != OWNER_ENEMY
+                || !matches!(self.entities.kind(slot), EntityKind::Unit(_))
+            {
+                continue;
+            }
+            let stale = match self.orders.get(slot) {
+                Order::Idle => true,
+                Order::AttackMove { goal, .. } => goal.anchor != obj,
+                _ => false,
+            };
+            if !stale {
+                continue;
+            }
+            let f = match field {
+                Some(f) => f,
+                None => match self.nav.acquire(obj) {
+                    Ok(f) => {
+                        field = Some(f);
+                        f
+                    }
+                    // No field to the objective right now: leave the
+                    // faction idle and retry next tick, rather than order
+                    // half of it.
+                    Err(_) => return,
+                },
+            };
+            self.orders.set(
+                slot,
+                Order::AttackMove {
+                    goal: FormationGoal::at(obj),
+                    field: f,
+                },
+            );
+        }
+    }
+
+    /// The nearest live hostile of `slot`'s owner whose surface is within
+    /// `range` cells — units by centre distance minus body radius,
+    /// buildings by footprint distance, nodes never.
+    ///
+    /// Ties are broken by scan order with a strict `<`, so the first
+    /// candidate at the winning distance keeps the shot. That order is
+    /// `live_scratch`: ascending slot, except that a unit spawned earlier in
+    /// this same tick (a wave Ghoul, a produced unit) was appended and is
+    /// therefore visited last whatever slot it recycled. Fixed either way —
+    /// which is the property that matters, since the buffer is built the same
+    /// way on every run, so two replays of one scene break a tie identically.
+    fn nearest_hostile_in_range(&self, slot: usize, range: f32) -> Option<EntityId> {
+        let p = self.entities.position(slot);
+        let own = self.entities.owner(slot);
+        let mut best: Option<(f32, usize)> = None;
+        for i in 0..self.live_scratch.len() {
+            let t = self.live_scratch[i];
+            if t == slot || !self.entities.alive(t) {
+                continue;
+            }
+            let owner = self.entities.owner(t);
+            if owner == own || owner == OWNER_NEUTRAL {
+                continue;
+            }
+            let Some(d) = surface_distance(&self.entities, p, t) else {
+                continue;
+            };
+            if d <= range && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, t));
+            }
+        }
+        best.map(|(_, t)| self.entities.id_at(t).expect("live target"))
+    }
+
+    /// Whether `target` is live, hostile to `slot`'s owner and within
+    /// `range` of it, by the same surface rule the acquire scan uses.
+    fn target_in_range(&self, slot: usize, target: EntityId, range: f32) -> bool {
+        let Some(t) = self.entities.slot(target) else {
+            return false;
+        };
+        let owner = self.entities.owner(t);
+        if owner == self.entities.owner(slot) || owner == OWNER_NEUTRAL {
+            return false;
+        }
+        surface_distance(&self.entities, self.entities.position(slot), t)
+            .is_some_and(|d| d <= range)
+    }
+
+    /// System 8: instant-hit fire. For every live armed unit, in
+    /// [`Self::live_scratch`] order (see [`Self::nearest_hostile_in_range`]
+    /// for exactly what that order is and why it is deterministic): tick the
+    /// cooldown down, pick a target under the firing rules, and — at
+    /// cooldown 0 — apply the damage and reset the cooldown, so the firing
+    /// period is exactly `cooldown_ticks` and a fresh spawn (cooldown 0)
+    /// fires the first tick it has a target.
+    ///
+    /// Firing rules: `Idle` and `AttackMove` auto-acquire the nearest
+    /// hostile in range and fire in place; `Attack` fires only at its own
+    /// target and walks while out of range; a dead `Attack` target clears
+    /// the order to `Idle` (the enemy AI re-marches an enemy next tick) and
+    /// the unit defends itself under the `Idle` rule the same tick.
+    /// `Move`, `Gather` and `Build` never fire.
+    ///
+    /// Deaths resolve immediately through `apply_damage`, so a later slot
+    /// never shoots a corpse. [`Self::combat_hold`] records who has a live
+    /// target in range; the movement system holds those units in place.
+    fn combat(&mut self) {
+        self.combat_hold.fill(false);
+        let mut despawned = false;
+        for i in 0..self.live_scratch.len() {
+            let slot = self.live_scratch[i];
+            if !self.entities.alive(slot) {
+                continue;
+            }
+            let EntityKind::Unit(kind) = self.entities.kind(slot) else {
+                continue;
+            };
+            let Some(w) = weapon(kind) else {
+                continue;
+            };
+            let cd = self.entities.cooldown(slot);
+            if cd > 0 {
+                self.entities.set_cooldown(slot, cd - 1);
+            }
+            let target = match self.orders.get(slot) {
+                Order::Idle | Order::AttackMove { .. } => {
+                    self.nearest_hostile_in_range(slot, w.range_cells)
+                }
+                Order::Attack { target, .. } => {
+                    if self.entities.contains(target) {
+                        self.target_in_range(slot, target, w.range_cells)
+                            .then_some(target)
+                    } else {
+                        self.orders.clear(slot);
+                        self.nearest_hostile_in_range(slot, w.range_cells)
+                    }
+                }
+                Order::Move { .. } | Order::Gather { .. } | Order::Build { .. } => continue,
+            };
+            let Some(target) = target else {
+                continue;
+            };
+            self.combat_hold[slot] = true;
+            if self.entities.cooldown(slot) != 0 {
+                continue;
+            }
+            let target_owner = {
+                let t = self.entities.slot(target).expect("live target");
+                self.entities.owner(t)
+            };
+            let _ = self.apply_damage(target, w.damage);
+            if self.first_combat_tick.is_none() {
+                self.first_combat_tick = Some(self.tick_index as u32);
+            }
+            if !self.entities.contains(target) {
+                despawned = true;
+                if target_owner == OWNER_ENEMY {
+                    self.kills += 1;
+                } else if target_owner == OWNER_PLAYER {
+                    self.losses += 1;
+                }
+            }
+            self.entities.set_cooldown(slot, w.cooldown_ticks);
+        }
+        if despawned {
+            // [`Self::apply_damage`]'s contract: a slot it despawned stays
+            // in `live_scratch`, and the store's accessors assert liveness.
+            // The supply recount later this tick reads that buffer without a
+            // liveness check, so re-collect rather than leave it holding
+            // corpses. Allocation-free: the buffer is reserved to
+            // [`MAX_ENTITIES`] at load and `collect_live` only clears and
+            // refills it.
+            self.entities.collect_live(&mut self.live_scratch);
+        }
+    }
+
+    /// System 9: walk every unit under a `Move` order, or a `Gather` order
     /// mid-transit (`ToNode` or `Returning`), one step down its field —
     /// **without ever merging two unit bodies**.
     ///
@@ -3335,6 +3630,38 @@ impl RtsWorld {
                 }
                 (goal, field)
             }
+            Order::Attack { target, field } => {
+                let Some(t_slot) = self.entities.slot(target) else {
+                    // Only armed units get their stale Attack cleared by the
+                    // combat system; an unarmed one under the test seam stops here.
+                    self.orders.clear(slot);
+                    return;
+                };
+                if self.combat_hold[slot] {
+                    // In range: combat is firing, the walk pauses.
+                    return;
+                }
+                let cell = match self.entities.kind(t_slot) {
+                    EntityKind::Unit(_) => node_cell(self.entities.position(t_slot)),
+                    EntityKind::Building(_) => {
+                        entity_approach_cell(&self.static_nav, &self.entities, target, kind).0
+                    }
+                    // A node is never a combat target.
+                    EntityKind::Node(_) => {
+                        self.orders.clear(slot);
+                        return;
+                    }
+                };
+                (FormationGoal::at(cell), field)
+            }
+            Order::AttackMove { goal, field } => {
+                if self.combat_hold[slot] {
+                    // In range: hold and let combat fire; descent resumes when
+                    // the target dies.
+                    return;
+                }
+                (goal, field)
+            }
             // Idle, and Mining (a mining worker stands still).
             _ => return,
         };
@@ -3509,8 +3836,11 @@ impl RtsWorld {
     /// ([`GatherCollisionState::hash_into`] — self-framing, so it pins which
     /// unit each pair byte belongs to), then the selection, production queues
     /// and rally points, then the camera centre, then the pending placement
-    /// ghost (one tag byte plus the kind byte), then resources and supply.
-    /// `f32` goes in as raw bits, matching `Simulation::state_hash`.
+    /// ghost (one tag byte plus the kind byte), then resources and supply,
+    /// then the combat counters (kills, losses, first-combat tick as a tag
+    /// byte plus fixed-width payload). `f32` goes in as raw bits, matching
+    /// `Simulation::state_hash`. The per-slot cooldown column needs no
+    /// mention here — [`EntityStore::hash_into`] already carries it.
     ///
     /// The camera is in here because it is world state, not view state: a
     /// replay that ends looking somewhere else did not reproduce.
@@ -3538,6 +3868,18 @@ impl RtsWorld {
         h.update(self.resources.gas.to_le_bytes());
         h.update(self.supply.used().to_le_bytes());
         h.update(self.supply.cap().to_le_bytes());
+        h.update(self.kills.to_le_bytes());
+        h.update(self.losses.to_le_bytes());
+        match self.first_combat_tick {
+            None => {
+                h.update([0u8]);
+                h.update(0u32.to_le_bytes());
+            }
+            Some(t) => {
+                h.update([1u8]);
+                h.update(t.to_le_bytes());
+            }
+        }
         h.finalize().into()
     }
 }

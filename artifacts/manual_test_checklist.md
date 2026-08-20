@@ -804,3 +804,19 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Attempt to drag-box-select across the screen in an area containing both workers and Ghouls — confirm only the player's workers are selected (the selection ring never appears on a Ghoul).
 - [ ] Confirm the supply counter never rises above its initial cap as Ghouls are spawned — the "supply used" figure stays at the player-unit count only.
 - [ ] Confirm Ghouls stand idle (no movement, no pathfinding) — they render using the soldier sheet as a placeholder but do not walk or attack.
+
+## T3 weapons-and-targeting
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron` and confirm no crash or panic — combat, enemy AI and the new order variants run silently on a real window.
+- [ ] Watch the two pre-placed Ghouls for a few seconds and confirm they now **walk** rather than stand idle (T2's checklist said they stood still; that line is superseded here) — they head toward the player's HQ in the south-east.
+- [ ] Confirm every Ghoul on screen walks toward the **same** place — the faction shares one objective; nobody wanders off on a private route.
+- [ ] Let the marching Ghouls reach a starting worker and confirm the Ghoul **stops walking** while it attacks, rather than shoving past its target.
+- [ ] Confirm that worker eventually disappears (dies), and that the Ghoul then **resumes walking** toward the HQ instead of standing where it killed it.
+- [ ] Select a worker, right-click it onto a Ghoul's path, then confirm the worker never fights back — Workers are unarmed, so it just dies or walks on.
+- [ ] Select a worker, send it on a long move across the map straight past a Ghoul, and confirm it keeps walking the whole way — a unit under a move order never stops to shoot.
+- [ ] Send a worker to gather from a node with a Ghoul nearby and confirm the round trip continues uninterrupted — a gathering worker never stops to shoot either.
+- [ ] Let the Ghouls reach the HQ and keep watching: confirm the HQ is eventually destroyed and vanishes from the map.
+- [ ] Immediately after the HQ dies, confirm the remaining Ghouls **stop moving** and stand where they are — no player building is left to march on.
+- [ ] Confirm units can walk over the ground the dead HQ used to occupy — the footprint is released, not left as an invisible wall.
+- [ ] Watch a Ghoul attacking the HQ and confirm the attacks are evenly spaced pulses, not a continuous stream — there is a visible pause between one hit and the next.
+- [ ] Run the same fixture twice, letting each run reach the same tick, and confirm the two fights look identical — same Ghouls dead, same positions.

@@ -14,13 +14,13 @@ use mmd_engine::alloc_guard::{
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
     BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, FramePackOptions, GatherPhase,
-    InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER,
-    Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS,
-    command_slots, hud_hit_test, minimap_projection, modal_hit_test, pack_frame,
-    pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
+    InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_ENEMY,
+    OWNER_PLAYER, Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind,
+    WORKER_PRODUCE_TICKS, command_slots, hud_hit_test, minimap_projection, modal_hit_test,
+    pack_frame, pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
-use mmd_engine::scenario::Cell;
+use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
 use mmd_engine::sim::SpatialGrid;
 use mmd_engine::testkit::{
     COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness, RtsHarness, ScenarioSource,
@@ -1613,5 +1613,113 @@ fn combined_feedback_frame_allocates_nothing() {
         h.world().body_overlap_count(),
         0,
         "the measured window left a collision-policy violation behind"
+    );
+}
+
+/// The combat tick — enemy march AI, targeting, fire and despawn — is under
+/// the same zero-allocation invariant every other per-frame path is.
+///
+/// The pool is warmed *outside* the scope on purpose: the enemy AI's single
+/// `nav.acquire` for the faction objective is a **miss** on tick 1, and that
+/// miss is the one bounded exception the plan grants. Inside the scope the
+/// whole faction rides that one field — an `AttackMove` whose anchor already
+/// equals the objective is never re-issued, so nothing re-acquires.
+///
+/// The two workers standing on the march line are what make the measured
+/// window contain real fire and real despawns rather than a quiet walk: the
+/// assertions bracket the guard, `losses() == 0` going in and `2` coming out.
+#[test]
+fn combat_march_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    const W: u32 = 96;
+    let spec = ScenarioSpec {
+        version: "rts_prototype_v1".to_string(),
+        width: W,
+        height: 96,
+        cell_size_px: 4,
+        sprite_size_px: 48,
+        hard_agent_count: 0,
+        stretch_agent_count: 0,
+        seed: 1,
+        destination: Cell { x: 0, y: 0 },
+        spawn_cells: vec![Cell { x: 4, y: 4 }],
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        collision_radius_q8: 0,
+        separation_strength_q8: 0,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
+        obstacle_cells: vec![],
+        rts: Some(RtsSpec {
+            start_crystal: 300,
+            start_gas: 100,
+            start_supply_cap: 10,
+            hq_cell: Cell { x: 82, y: 82 },
+            crystal_nodes: vec![Cell { x: 94, y: 1 }],
+            gas_nodes: vec![Cell { x: 93, y: 1 }],
+            enemies: None,
+        }),
+    };
+    let mut h = RtsHarness::spec(spec).build().expect("combat harness");
+    let hq = h.world().start_hq().expect("seeded hq");
+
+    // Six ghouls, far enough back that nothing is in reach during warm-up…
+    for i in 0..3 {
+        for x in [52.5_f32, 58.5] {
+            h.world_mut()
+                .entities_mut()
+                .spawn(
+                    EntityKind::Unit(UnitKind::Ghoul),
+                    OWNER_ENEMY,
+                    [x, 56.5 + 6.0 * i as f32],
+                )
+                .expect("store has room");
+        }
+    }
+    // …and two workers parked on the line they march down.
+    for pos in [[76.5_f32, 76.5], [76.5, 82.5]] {
+        h.world_mut()
+            .entities_mut()
+            .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)
+            .expect("store has room");
+    }
+
+    // Warm-up outside the scope: the objective acquire is the miss that
+    // builds the field and settles the scratch heap, and the raw spawns
+    // above arm one overlap-repair pass.
+    h.step_exact(20);
+    assert_eq!(
+        h.world().losses(),
+        0,
+        "nothing may die during warm-up, or the guarded window is not what \
+         contains the deaths"
+    );
+    assert!(
+        h.world()
+            .order_of(h.ids_of_kind(EntityKind::Unit(UnitKind::Ghoul))[0])
+            .is_some_and(|o| matches!(o, Order::AttackMove { .. })),
+        "the faction must already be marching, or this measures an idle sweep"
+    );
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(300);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0, "the RTS combat tick allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        h.world().losses(),
+        2,
+        "both workers must have died inside the measured window"
+    );
+    assert!(
+        h.world().entities().contains(hq),
+        "the HQ must survive the window: its death rebuilds the pooled mask, \
+         which is not what this case is measuring"
     );
 }
