@@ -69,8 +69,11 @@ impl VoiceCue {
             IssuedOrder::Move => Self::Move,
             IssuedOrder::Gather => Self::Gather,
             IssuedOrder::Build => Self::Build,
-            // The attack family voices as Move: no new tracked voice asset.
-            IssuedOrder::Attack | IssuedOrder::AttackMove | IssuedOrder::Stop => Self::Move,
+            // Attack/follow family voices as Move: no new tracked voice asset.
+            IssuedOrder::Attack
+            | IssuedOrder::AttackMove
+            | IssuedOrder::Stop
+            | IssuedOrder::Follow => Self::Move,
         }
     }
 }

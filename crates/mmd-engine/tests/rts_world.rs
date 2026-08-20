@@ -6,9 +6,10 @@
 use std::collections::HashSet;
 
 use mmd_engine::rts::{
-    BuildingKind, EntityKind, EntityStore, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, MAX_MOVE_MARKERS,
-    MOVE_MARKER_TICKS, OWNER_PLAYER, Order, OrderReceiptBuffer, ResourceKind, Resources,
-    RtsWorldError, Supply, UnitKind, unit_speed,
+    BuildingKind, EntityId, EntityKind, EntityStore, FOLLOW_REPATH_CELLS, FORMATION_ARRIVAL_CELLS,
+    MAX_ENTITIES, MAX_MOVE_MARKERS, MOVE_MARKER_TICKS, OWNER_PLAYER, Order, OrderReceiptBuffer,
+    RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, Resources, RtsWorldError, Supply, UnitKind,
+    interaction_reach, unit_speed,
 };
 use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
@@ -1049,5 +1050,229 @@ fn markers_enter_the_state_hash() {
         a.state_hash(),
         b.state_hash(),
         "a planted marker must change the state hash",
+    );
+}
+
+// --- T11: Follow ------------------------------------------------------------
+
+/// A follower's own body is radius [`RTS_UNIT_BODY_RADIUS_CELLS`] and so is its
+/// target's, so "how far apart are they" is only meaningful as a gap between
+/// hulls — which is exactly what the mover's hold test measures.
+/// Two build-square corners the seeded worker cluster has a proven walk to,
+/// and which are two dozen cells apart from each other. Most of this scene's
+/// open ground is fenced off from the spawn by its obstacle lattice, so a
+/// follow test that wants a real approach has to use cells a plain
+/// `Order::Move` is already known to complete against.
+const FOLLOW_HOME: [f32; 2] = [144.5, 176.5];
+const FOLLOW_AWAY: [f32; 2] = [144.5, 152.5];
+
+fn body_gap(h: &RtsHarness, follower: EntityId, target: EntityId) -> f32 {
+    let a = position_of(h, follower);
+    let b = position_of(h, target);
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    (dx * dx + dy * dy).sqrt() - RTS_UNIT_BODY_RADIUS_CELLS
+}
+
+fn follow_anchor(h: &RtsHarness, follower: EntityId) -> Option<Cell> {
+    match h.world().order_of(follower) {
+        Some(Order::Follow { goal, .. }) => Some(goal.anchor),
+        _ => None,
+    }
+}
+
+/// A static Soldier, dropped on one of the two build-square corners the spawn
+/// cluster has a proven walk to (`FOLLOW_HOME` / `FOLLOW_AWAY`), far enough
+/// out that the follower has a real approach to make.
+fn static_target(h: &mut RtsHarness, at: [f32; 2]) -> EntityId {
+    h.world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Soldier), OWNER_PLAYER, at)
+        .expect("spawn a follow target")
+}
+
+#[test]
+fn a_follower_closes_to_interaction_reach_and_holds() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_AWAY);
+    assert!(
+        body_gap(&h, worker, target) > 30.0,
+        "the follower must start well outside reach"
+    );
+
+    assert!(h.world_mut().order_follow(worker, target));
+    h.step_exact(900);
+
+    let reach = interaction_reach(UnitKind::Worker);
+    let closed = body_gap(&h, worker, target);
+    assert!(
+        closed <= reach + 0.01,
+        "follower stopped {closed} cells off its target's hull, reach is {reach}"
+    );
+    assert!(
+        closed >= -0.01,
+        "the follower penetrated its target's body: gap {closed}"
+    );
+    assert!(
+        matches!(h.world().order_of(worker), Some(Order::Follow { .. })),
+        "a Follow order holds; it does not clear itself on arrival"
+    );
+
+    // Hold: with a static target the follower stops stepping entirely, so 120
+    // more ticks must not move it about.
+    let parked = position_of(&h, worker);
+    h.step_exact(120);
+    let after = position_of(&h, worker);
+    let drift = ((after[0] - parked[0]).powi(2) + (after[1] - parked[1]).powi(2)).sqrt();
+    assert!(drift < 0.1, "a parked follower oscillated by {drift} cells");
+    assert!(body_gap(&h, worker, target) <= reach + 0.01);
+}
+
+#[test]
+fn a_follower_repaths_when_its_target_walks_away() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_AWAY);
+    assert!(h.world_mut().order_follow(worker, target));
+    h.step_exact(900);
+
+    let reach = interaction_reach(UnitKind::Worker);
+    assert!(
+        body_gap(&h, worker, target) <= reach + 0.01,
+        "not caught up"
+    );
+    let before_anchor = follow_anchor(&h, worker).expect("following");
+
+    // The target walks away — two dozen cells, far past FOLLOW_REPATH_CELLS.
+    let jump = ((FOLLOW_AWAY[0] - FOLLOW_HOME[0]).powi(2)
+        + (FOLLOW_AWAY[1] - FOLLOW_HOME[1]).powi(2))
+    .sqrt();
+    assert!(
+        jump > FOLLOW_REPATH_CELLS,
+        "the displacement must be past the re-path threshold to prove anything"
+    );
+    let t_slot = h.world().entities().slot(target).expect("live target");
+    h.world_mut()
+        .entities_mut()
+        .set_position(t_slot, FOLLOW_HOME);
+
+    // Tick one at a time and count how often the follower re-paths. The
+    // target is static again from here, so one drift past FOLLOW_REPATH_CELLS
+    // must buy exactly one new field, not one per tick.
+    let mut anchor = before_anchor;
+    let mut repaths = 0;
+    for _ in 0..900 {
+        h.step_exact(1);
+        let now = follow_anchor(&h, worker).expect("still following");
+        if now != anchor {
+            repaths += 1;
+            anchor = now;
+        }
+    }
+    assert_eq!(
+        repaths, 1,
+        "one target displacement must cost exactly one re-path, got {repaths}"
+    );
+    assert_ne!(
+        anchor, before_anchor,
+        "the goal never moved with the target"
+    );
+    let closed = body_gap(&h, worker, target);
+    assert!(
+        closed <= reach + 0.01,
+        "the follower never caught up: gap {closed}"
+    );
+}
+
+#[test]
+fn a_follow_order_dies_with_its_target() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_HOME);
+    assert!(h.world_mut().order_follow(worker, target));
+    h.step_exact(10);
+    assert!(matches!(
+        h.world().order_of(worker),
+        Some(Order::Follow { .. })
+    ));
+
+    assert!(h.world_mut().entities_mut().despawn(target));
+    h.step_exact(1);
+    assert_eq!(
+        h.world().order_of(worker),
+        Some(Order::Idle),
+        "a dead target ends the order on the tick it is noticed"
+    );
+}
+
+#[test]
+fn follow_never_targets_an_enemy_or_itself() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            mmd_engine::rts::OWNER_ENEMY,
+            [200.5, 200.5],
+        )
+        .expect("spawn a ghoul");
+
+    assert!(
+        !h.world_mut().order_follow(worker, ghoul),
+        "an enemy is an attack target, not a follow target"
+    );
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+
+    assert!(
+        !h.world_mut().order_follow(worker, worker),
+        "a unit cannot follow itself"
+    );
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+
+    // And a stale id is refused too.
+    let target = static_target(&mut h, FOLLOW_HOME);
+    assert!(h.world_mut().entities_mut().despawn(target));
+    assert!(!h.world_mut().order_follow(worker, target));
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+}
+
+#[test]
+fn follow_enters_the_state_hash_distinctly() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::FormationGoal;
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_HOME);
+
+    // Same goal, same field handle: only the order's own tag (and the target
+    // it names) can move the hash.
+    let cell = Cell { x: 200, y: 200 };
+    let goal = FormationGoal {
+        anchor: cell,
+        slot: cell,
+    };
+    let field = FieldRef { slot: 0, epoch: 0 };
+
+    assert!(
+        h.world_mut()
+            .force_order_for_test(worker, Order::Move { goal, field })
+    );
+    let moving = h.state_hash();
+    assert!(h.world_mut().force_order_for_test(
+        worker,
+        Order::Follow {
+            target,
+            goal,
+            field,
+        }
+    ));
+    assert_ne!(
+        h.state_hash(),
+        moving,
+        "Follow must not hash like Move at the same goal"
     );
 }

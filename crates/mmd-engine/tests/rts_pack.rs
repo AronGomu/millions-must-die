@@ -12,9 +12,9 @@ use mmd_engine::render::{
 use mmd_engine::rts::{
     BuildingKind, DASH_SEGMENTS, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_BORDER_TINT,
     DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_DASH_LINES,
-    MAX_ENTITIES, MAX_SELECTION_FOR_DASHES, OWNER_PLAYER, Prop, ResourceKind, RtsFrame, UnitKind,
-    building_quad_px, building_uv, ghost_min_corner, node_uv, pack_frame, placement_candidate,
-    prop_uv, unit_slot,
+    MAX_ENTITIES, MAX_SELECTION_FOR_DASHES, OWNER_PLAYER, Prop, RallyTarget, ResourceKind,
+    RtsFrame, UnitKind, building_quad_px, building_uv, ghost_min_corner, node_uv, pack_frame,
+    placement_candidate, prop_uv, unit_slot,
 };
 use mmd_engine::runtime::ring_quad_size_px;
 use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell};
@@ -88,8 +88,11 @@ fn frame_new_reserves_the_documented_groups() {
     }
     assert_eq!(
         frame.overlay.capacity(),
-        4 * MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES + MAX_DASH_LINES,
-        "grid + rings + two bar lines per entity + flashes + dash lines"
+        4 * MAX_ENTITIES
+            + mmd_engine::rts::MAX_GRID_LINES
+            + MAX_DASH_LINES
+            + mmd_engine::rts::MAX_RALLY_DASH_LINES,
+        "grid + rings + two bar lines per entity + flashes + order dashes + rally dashes"
     );
     for g in &frame.ui[..4] {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
@@ -756,7 +759,7 @@ fn a_rally_flag_draws_for_a_selected_building() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
     let cell = Cell { x: 144, y: 176 };
-    assert!(h.world_mut().set_rally(hq, Some(cell)));
+    assert!(h.world_mut().set_rally(hq, Some(RallyTarget::Cell(cell))));
     h.world_mut().selection_mut().insert(hq);
     let iso = h.world().iso_view();
     let ground = iso.project(cell.x as f32 + 0.5, cell.y as f32 + 0.5);
@@ -782,7 +785,10 @@ fn a_rally_flag_draws_for_a_selected_building() {
 fn an_unselected_buildings_rally_is_not_drawn() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     assert!(h.world().selection().is_empty());
 
     let mut frame = RtsFrame::new();
@@ -1850,5 +1856,87 @@ fn a_huge_selection_skips_dashes_entirely() {
         frame_move.overlay.len(),
         frame_idle.overlay.len(),
         "dashes must be suppressed when selection exceeds MAX_SELECTION_FOR_DASHES",
+    );
+}
+
+// --- T11: entity rally flag + the dashed line to it --------------------------
+
+fn overlay_and_props(h: &RtsHarness) -> (usize, Vec<SpriteInstance>) {
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    (frame.overlay.len(), props(&frame).to_vec())
+}
+
+#[test]
+fn a_selected_producer_dashes_to_its_rally_point() {
+    // Baseline: the same selected HQ with no rally at all.
+    let mut base = scene();
+    let base_hq = base.world().start_hq().expect("hq");
+    base.world_mut().selection_mut().insert(base_hq);
+    let (baseline_overlay, baseline_props) = overlay_and_props(&base);
+    assert!(baseline_props.is_empty(), "no rally, no flag");
+
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let cell = Cell { x: 144, y: 176 };
+    assert!(h.world_mut().set_rally(hq, Some(RallyTarget::Cell(cell))));
+    h.world_mut().selection_mut().insert(hq);
+    let (overlay, packed) = overlay_and_props(&h);
+
+    assert_eq!(packed.len(), 1, "one rally flag quad");
+    assert_eq!(
+        overlay,
+        baseline_overlay + DASH_SEGMENTS / 2,
+        "one dashed line = DASH_SEGMENTS/2 diagonal_line pieces",
+    );
+}
+
+#[test]
+fn an_entity_rally_stands_its_flag_on_the_target() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let slot = h.world().entities().slot(crystal).expect("live node");
+    let node_pos = h.world().entities().position(slot);
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(crystal)))
+    );
+    h.world_mut().selection_mut().insert(hq);
+
+    let iso = h.world().iso_view();
+    let ground = iso.project(node_pos[0], node_pos[1]);
+    let (_, packed) = overlay_and_props(&h);
+
+    assert_eq!(packed.len(), 1, "one rally flag quad");
+    assert_eq!(
+        packed[0].uv_rect,
+        prop_uv(Prop::RallyFlag),
+        "the rally flag cell"
+    );
+    assert_eq!(
+        packed[0].pos[1] + packed[0].size[1],
+        ground[1],
+        "the flag stands on the target's own ground point"
+    );
+    assert_eq!(packed[0].pos[0] + packed[0].size[0] * 0.5, ground[0]);
+}
+
+#[test]
+fn a_stale_entity_rally_draws_nothing() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let target = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[1];
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(target)))
+    );
+    h.world_mut().selection_mut().insert(hq);
+    assert_eq!(overlay_and_props(&h).1.len(), 1);
+
+    assert!(h.world_mut().entities_mut().despawn(target));
+    assert!(
+        overlay_and_props(&h).1.is_empty(),
+        "a rally whose entity is gone plants no flag"
     );
 }

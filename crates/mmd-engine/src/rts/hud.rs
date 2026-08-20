@@ -22,7 +22,7 @@ use super::entity::{
 use super::minimap::minimap_projection;
 use super::orders::{GatherPhase, Order};
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
-use super::production::produce_ticks;
+use super::production::{RallyTarget, produce_ticks};
 use super::world::RtsWorld;
 
 /// Every fixed logical-space rect the HUD's chrome occupies.
@@ -1030,6 +1030,7 @@ pub fn order_status_label(world: &RtsWorld, slot: usize) -> &'static str {
         Order::Move { .. } => "MOVING",
         Order::AttackMove { .. } => "MOVING",
         Order::Attack { .. } => "MOVING",
+        Order::Follow { .. } => "FOLLOWING",
         Order::Build { .. } => "BUILDING",
         Order::Gather { node, phase } => {
             let Some(node_slot) = store.slot(node) else {
@@ -1129,7 +1130,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
         EntityKind::Building(b) => {
             let id = store.id_at(slot).expect("live slot");
 
-            // Line 2: READY or BUILDING N%
+            // Line 3: READY or BUILDING N%
             let target = store.progress_target(slot);
             // Not a manual `checked_div`: `target == 0` is the site-vs-finished
             // business branch (READY has no percentage at all), not a guard
@@ -1148,7 +1149,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 3: SUPPLY +N (zero grant still shown)
+            // Line 4: SUPPLY +N (zero grant still shown)
             {
                 let grant = supply_grant(b);
                 let mut cx = x;
@@ -1158,7 +1159,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 4: QUEUE
+            // Line 5: QUEUE
             let queue = world.production_queue(id);
             if let Some(q) = queue
                 && !q.is_empty()
@@ -1182,7 +1183,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 5: PROGRESS (head only; saturated at 100)
+            // Line 6: PROGRESS (head only; saturated at 100)
             if let Some(q) = queue
                 && let Some(head) = q.head()
             {
@@ -1198,18 +1199,31 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 6: RALLY
-            if let Some(cell) = world.rally(id) {
-                let mut cx = x;
-                cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                let s = fmt_u32(&mut buf, cell.x);
-                cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                let s = fmt_u32(&mut buf, cell.y);
-                push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                let _ = cx;
-            } else {
-                push_text(font, "RALLY -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            // Line 7: RALLY
+            match world.rally(id) {
+                Some(RallyTarget::Cell(cell)) => {
+                    let mut cx = x;
+                    cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let s = fmt_u32(&mut buf, cell.x);
+                    cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let s = fmt_u32(&mut buf, cell.y);
+                    push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let _ = cx;
+                }
+                Some(RallyTarget::Entity(eid)) => {
+                    let mut cx = x;
+                    cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let label = store
+                        .slot(eid)
+                        .map(|s| kind_label(store.kind(s)))
+                        .unwrap_or("-");
+                    push_text(font, label, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let _ = cx;
+                }
+                None => {
+                    push_text(font, "RALLY -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                }
             }
         }
         EntityKind::Node(_) => {

@@ -301,9 +301,9 @@ command below except what a browser or a human eye must judge.
 - [ ] Manual: click on a footprint cell below the building sprite — confirm it selects the building
 - [ ] Manual: select HQ with no queue — confirm seven-line card: HQ / HP <cur>/<max> / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
 - [ ] Manual: enqueue Workers at HQ — confirm QUEUE W,W,... and PROGRESS N% update live
-- [ ] Manual: rally flag set — confirm RALLY x,y on line 6
-- [ ] Manual: select Barracks — confirm SUPPLY +0 on line 3
-- [ ] Manual: select an under-construction site — confirm BUILDING N% on line 2, remaining lines explicit
+- [ ] Manual: rally flag set — confirm RALLY x,y on line 7
+- [ ] Manual: select Barracks — confirm SUPPLY +0 on line 4
+- [ ] Manual: select an under-construction site — confirm BUILDING N% on line 3, remaining lines explicit
 
 ## T10 — Assisted placement (snap to nearest valid footprint)
 
@@ -935,3 +935,24 @@ up after three seconds and refunds.
 - [ ] Set a rally point on the HQ and produce a Worker. Confirm the newly produced Worker walks to the rally point and **no** flag is planted for it — rally is not a player ground order.
 - [ ] Select more than 24 units at once (produce enough Soldiers, or box-select the whole army) and right-click open ground. Confirm the flag still appears but **no** dashed lines are drawn at all — dashes are suppressed above 24 selected units rather than drawn for only some of them.
 - [ ] Right-click open ground with a Soldier selected, then immediately press `S` (Stop). Confirm the dashed line disappears with the order while the already-planted flag keeps counting itself down and then vanishes.
+
+## T11 follow-order-and-entity-rally
+
+Follow holds at *hull* distance: a unit body is 3 cells of radius, so "arm's
+length" is roughly half a body-width of daylight between two sprites, never a
+merge and never a shove.
+
+- [ ] Launch `cargo run -- rts`. Select two Workers and right-click a third Worker that is **not** in the selection. Confirm both walk to it and stop with a visible gap — they must not push it, climb onto it, or jitter against it once parked.
+- [ ] With that follow still running, select the target Worker on its own and send it somewhere far. Confirm the two followers set off after it and park at the same gap again, without stuttering or re-deciding every step of the way.
+- [ ] Let an enemy Ghoul kill a followed target while units are following it. Confirm the followers stop where they are and their cards read `IDLE` — no walking to a corpse, no stuck order.
+- [ ] Select a Worker following something and read its card. Confirm the status line reads `FOLLOWING`, and that T9's target ring is drawn around the entity it is following.
+- [ ] With Workers selected, right-click an enemy Ghoul. Confirm this is still the attack gesture (an armed selection attacks, an unarmed one walks over) and never a Follow.
+- [ ] With Workers selected, right-click one of the *already selected* Workers. Confirm this is still a plain ground move to that spot — the flag and the dashed line from T10 appear, and nobody starts following anybody.
+- [ ] Select the HQ, press `C` (command card slot 8, Rally), then left-click a crystal node. Confirm the rally flag stands on the node, a dashed line runs from the HQ to that flag, and the card's last line reads `RALLY CRYSTAL`.
+- [ ] With that node rally set, queue a Worker at the HQ. Confirm the new Worker walks over and starts mining that node by itself, with no second order from you.
+- [ ] Select the HQ, press `C`, then left-click a finished Barracks. Confirm the card reads `RALLY BARRACKS` and the flag stands on the Barracks. Queue a Worker and confirm it walks to the Barracks and parks at arm's length instead of mining.
+- [ ] Set a building's rally onto a Worker, then get that Worker killed. Confirm the card's last line changes to `RALLY -` and the flag disappears, and that producing a unit from that building leaves it standing idle rather than walking off somewhere.
+- [ ] Select the HQ, press `C`, then left-click an enemy Ghoul. Confirm the rally does not move: the old flag stays exactly where it was.
+- [ ] Select **only** the HQ (no units) and right-click a friendly Worker. Confirm nothing at all happens — right-click is not the rally gesture; `C` then a left-click is.
+- [ ] Select a mixed group of Workers and right-click a finished friendly building. Confirm every one of them heads for it and parks around its footprint without any of them walking into the building.
+- [ ] Watch the rally dashed line while panning the camera and while the rally target is a moving unit. Confirm the line keeps both ends attached — building at one end, flag at the other — and never smears across the screen.

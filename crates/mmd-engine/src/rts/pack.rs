@@ -19,6 +19,7 @@ use super::entity::{
     UnitKind, max_hp,
 };
 use super::orders::{GatherPhase, Order};
+use super::production::RallyTarget;
 use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
 use super::world::{DeathEvent, RtsWorld};
 use crate::render::{
@@ -61,6 +62,10 @@ pub const MAX_SELECTION_FOR_DASHES: usize = 24;
 /// Overlay reservation for dashed lines: at most one dash set per mover in the
 /// maximum supported selection, with `DASH_SEGMENTS / 2` pieces each.
 pub const MAX_DASH_LINES: usize = MAX_SELECTION_FOR_DASHES * DASH_SEGMENTS / 2;
+
+/// Worst case for the rally dashes: the same ceiling again, since a selection
+/// of nothing but rallied producers draws one dashed line each.
+pub const MAX_RALLY_DASH_LINES: usize = MAX_DASH_LINES;
 
 /// Grid-line tint (premultiplied). Thin subdued green, nearly transparent.
 pub const GRID_TINT: [f32; 4] = [0.05, 0.08, 0.05, 0.16];
@@ -241,7 +246,9 @@ impl RtsFrame {
                     instances: Vec::with_capacity(MAX_ENTITIES),
                 })
                 .collect(),
-            overlay: Vec::with_capacity(4 * MAX_ENTITIES + MAX_GRID_LINES + MAX_DASH_LINES),
+            overlay: Vec::with_capacity(
+                4 * MAX_ENTITIES + MAX_GRID_LINES + MAX_DASH_LINES + MAX_RALLY_DASH_LINES,
+            ),
             ui: [
                 SLOT_RTS_WORKER,
                 SLOT_RTS_SOLDIER,
@@ -498,11 +505,40 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
 /// wears a target ring, instead of silently inheriting "no ring". A goal-cell
 /// order ([`Order::Move`], [`Order::AttackMove`]) targets ground, not an
 /// entity, and gets nothing.
+/// Push one dashed segment run — `DASH_SEGMENTS / 2` texture-free diagonal
+/// line instances, on for the first half of each segment pair — from `from`
+/// to `to`, both already in projected ground space.
+///
+/// The one place the lerp lives: a mover's line to its formation slot and a
+/// producer's line to its rally flag are the same picture drawn between
+/// different endpoints.
+fn push_dashed_line(frame: &mut RtsFrame, from: [f32; 2], to: [f32; 2]) {
+    for i in 0..(DASH_SEGMENTS / 2) {
+        let t0 = (2 * i) as f32 / DASH_SEGMENTS as f32;
+        let t1 = (2 * i + 1) as f32 / DASH_SEGMENTS as f32;
+        let a = [
+            from[0] + (to[0] - from[0]) * t0,
+            from[1] + (to[1] - from[1]) * t0,
+        ];
+        let b = [
+            from[0] + (to[0] - from[0]) * t1,
+            from[1] + (to[1] - from[1]) * t1,
+        ];
+        frame.overlay.push(SpriteInstance::diagonal_line(
+            a,
+            b,
+            GRID_LINE_PX,
+            SELECTION_TINT,
+        ));
+    }
+}
+
 fn order_ring_target(world: &RtsWorld, id: EntityId) -> Option<EntityId> {
     match world.order_of(id)? {
         Order::Gather { node, .. } => Some(node),
         Order::Build { site, .. } => Some(site),
         Order::Attack { target, .. } => Some(target),
+        Order::Follow { target, .. } => Some(target),
         Order::Idle | Order::Move { .. } | Order::AttackMove { .. } => None,
     }
 }
@@ -737,44 +773,51 @@ fn pack_frame_inner(
             let p = store.position(slot);
             let unit_ground = iso.project(p[0], p[1]);
             let goal_ground = iso.project(goal.slot.x as f32 + 0.5, goal.slot.y as f32 + 0.5);
-            for i in 0..(DASH_SEGMENTS / 2) {
-                let t0 = (2 * i) as f32 / DASH_SEGMENTS as f32;
-                let t1 = (2 * i + 1) as f32 / DASH_SEGMENTS as f32;
-                let a = [
-                    unit_ground[0] + (goal_ground[0] - unit_ground[0]) * t0,
-                    unit_ground[1] + (goal_ground[1] - unit_ground[1]) * t0,
-                ];
-                let b = [
-                    unit_ground[0] + (goal_ground[0] - unit_ground[0]) * t1,
-                    unit_ground[1] + (goal_ground[1] - unit_ground[1]) * t1,
-                ];
-                frame.overlay.push(SpriteInstance::diagonal_line(
-                    a,
-                    b,
-                    GRID_LINE_PX,
-                    SELECTION_TINT,
-                ));
-            }
+            push_dashed_line(frame, unit_ground, goal_ground);
         }
     }
 
-    // 3. UI, depth-off and textured: rally flags, then the placement ghost,
+    // 3. UI, depth-off and textured: rally flags with dashes, then the placement ghost,
     //    then the drag box.
     for &id in world.selection().ids() {
-        let Some(cell) = world.rally(id) else {
+        let Some(rally) = world.rally(id) else {
             continue;
         };
-        let ground = iso.project(cell.x as f32 + 0.5, cell.y as f32 + 0.5);
-        let pos = stand_on(ground, sprite_size);
-        if !quad_is_visible(pos, sprite_size, iso.view_size) {
+        // Resolve the flag's ground point from the rally target.
+        let flag_pos_cells = match rally {
+            RallyTarget::Cell(cell) => [cell.x as f32 + 0.5, cell.y as f32 + 0.5],
+            RallyTarget::Entity(eid) => {
+                let Some(t_slot) = store.slot(eid) else {
+                    continue;
+                };
+                let p = store.position(t_slot);
+                [p[0], p[1]]
+            }
+        };
+        let flag_ground = iso.project(flag_pos_cells[0], flag_pos_cells[1]);
+        let flag_sprite_pos = stand_on(flag_ground, sprite_size);
+        if !quad_is_visible(flag_sprite_pos, sprite_size, iso.view_size) {
             continue;
         }
         frame.prop_group().push(SpriteInstance::new(
-            pos,
+            flag_sprite_pos,
             sprite_size,
             prop_uv(Prop::RallyFlag),
             SpriteInstance::WHITE,
         ));
+        // The user's precision on the rally feedback: a dashed line from the
+        // producing building to the flag, so a rally reads as one gesture
+        // rather than a flag dropped somewhere off-screen. Gated by the same
+        // selection ceiling the mover dashes use, which is what keeps the
+        // overlay reserve above an exact bound.
+        if world.selection().ids().len() <= MAX_SELECTION_FOR_DASHES
+            && let Some(bslot) = store.slot(id)
+            && matches!(store.kind(bslot), EntityKind::Building(_))
+        {
+            let b_pos = store.position(bslot);
+            let b_ground = iso.project(b_pos[0], b_pos[1]);
+            push_dashed_line(frame, b_ground, flag_ground);
+        }
     }
 
     // Move-marker quads: one prop quad per live marker, same pattern as the

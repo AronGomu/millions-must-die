@@ -14,10 +14,10 @@ use mmd_engine::rts::{
     EntityId, EntityKind, HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_ENEMY_DOT_PX,
     MINIMAP_ENEMY_TINT, MINIMAP_MAP_RECT, MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN,
     MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS,
-    PORTRAIT_PX, Prop, ResourceKind, RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY,
-    TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slot_rect, command_slots,
-    fmt_ratio, fmt_u32, hud_hit_test, kind_label, minimap_projection, node_uv, pack_frame,
-    pack_hud, prop_uv,
+    PORTRAIT_PX, Prop, RallyTarget, ResourceKind, RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED,
+    TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slot_rect,
+    command_slots, fmt_ratio, fmt_u32, hud_hit_test, kind_label, minimap_projection, node_uv,
+    pack_frame, pack_hud, prop_uv,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -391,10 +391,13 @@ fn single_selection_draws_portrait_and_full_details() {
 
     // Building, finished, with a rally point.
     let hq = h.world().start_hq().expect("hq");
-    assert!(
-        h.world_mut()
-            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 200, y: 210 }))
-    );
+    assert!(h.world_mut().set_rally(
+        hq,
+        Some(RallyTarget::Cell(mmd_engine::scenario::Cell {
+            x: 200,
+            y: 210
+        }))
+    ));
     h.world_mut().selection_mut().insert(hq);
     let slot = h.world().entities().slot(hq).expect("live hq");
     let mut frame = RtsFrame::new();
@@ -660,10 +663,13 @@ fn pack_hud_does_not_mutate_the_world() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(
-        h.world_mut()
-            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 144, y: 176 }))
-    );
+    assert!(h.world_mut().set_rally(
+        hq,
+        Some(RallyTarget::Cell(mmd_engine::scenario::Cell {
+            x: 144,
+            y: 176
+        }))
+    ));
 
     let before = h.state_hash();
     let mut frame = RtsFrame::new();
@@ -2367,4 +2373,99 @@ fn a_node_card_shows_yield_per_trip() {
         15,
     );
     assert_eq!(yield_line, expected_yield, "line 2 must be YIELD 8");
+}
+
+// --- T11: an entity rally on the card, and FOLLOWING -------------------------
+
+/// Line 7 of a building card, read back as text.
+fn rally_line(h: &RtsHarness) -> String {
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + 6.0 * PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        20,
+    )
+}
+
+#[test]
+fn the_card_names_an_entity_rally() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    h.world_mut().selection_mut().insert(hq);
+
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(crystal)))
+    );
+    assert_eq!(
+        rally_line(&h).trim_end(),
+        format!(
+            "RALLY {}",
+            kind_label(EntityKind::Node(ResourceKind::Crystal))
+        ),
+        "an entity rally is named by its kind, not by a cell"
+    );
+
+    // A cell rally still reads as coordinates.
+    assert!(h.world_mut().set_rally(
+        hq,
+        Some(RallyTarget::Cell(mmd_engine::scenario::Cell {
+            x: 200,
+            y: 210
+        }))
+    ));
+    assert_eq!(rally_line(&h).trim_end(), "RALLY 200,210");
+}
+
+#[test]
+fn a_stale_entity_rally_reads_as_a_dash() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let target = workers(&h)[1];
+    h.world_mut().selection_mut().insert(hq);
+
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(target)))
+    );
+    assert_eq!(
+        rally_line(&h).trim_end(),
+        format!("RALLY {}", kind_label(EntityKind::Unit(UnitKind::Worker)))
+    );
+
+    assert!(h.world_mut().entities_mut().despawn(target));
+    assert_eq!(
+        rally_line(&h).trim_end(),
+        "RALLY -",
+        "a rally whose entity is gone reads as a dash, not as a stale name"
+    );
+}
+
+#[test]
+fn order_status_label_covers_follow() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::{FormationGoal, Order, order_status_label};
+    use mmd_engine::scenario::Cell;
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let target = workers(&h)[1];
+    let slot = h.world().entities().slot(w).expect("live");
+
+    let cell = Cell { x: 1, y: 1 };
+    assert!(h.world_mut().force_order_for_test(
+        w,
+        Order::Follow {
+            target,
+            goal: FormationGoal {
+                anchor: cell,
+                slot: cell,
+            },
+            field: FieldRef { slot: 0, epoch: 0 },
+        }
+    ));
+    assert_eq!(order_status_label(h.world(), slot), "FOLLOWING");
 }

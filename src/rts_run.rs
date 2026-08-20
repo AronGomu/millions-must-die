@@ -83,8 +83,8 @@ use mmd_engine::render::{
 use mmd_engine::rts::{
     CommandReceipt, CommandRejectReason, DeathFlashes, DragBox, EntityId, EntityKind,
     FramePackOptions, MAX_SELECTION, OWNER_ENEMY, OWNER_PLAYER, OrderReceiptBuffer, Pick,
-    Placement, RtsFrame, RtsWorld, RtsWorldError, UnitKind, is_drag, pack_frame_with_options,
-    pick_at, placement_candidate, weapon,
+    Placement, RallyTarget, RtsFrame, RtsWorld, RtsWorldError, UnitKind, is_drag,
+    pack_frame_with_options, pick_at, placement_candidate, weapon,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::{Event, WindowEvent};
@@ -361,6 +361,28 @@ fn selection_has_armed_player_unit(world: &RtsWorld) -> bool {
     })
 }
 
+/// A live, player-owned entity — the ownership half of the right-click
+/// dispatch's friendly test.
+fn is_player_owned(world: &RtsWorld, id: EntityId) -> bool {
+    let store = world.entities();
+    store
+        .slot(id)
+        .is_some_and(|s| store.owner(s) == OWNER_PLAYER)
+}
+
+/// Whether the selection holds anything `cmd_follow` could actually order —
+/// the same live/player/unit test `RtsWorld::orderable_slot` applies. A
+/// building-only selection fails it, so right-clicking keeps doing exactly
+/// what it did before this order existed.
+fn selection_has_orderable_player_unit(world: &RtsWorld) -> bool {
+    let store = world.entities();
+    world.selection().ids().iter().any(|&id| {
+        store.slot(id).is_some_and(|slot| {
+            store.owner(slot) == OWNER_PLAYER && matches!(store.kind(slot), EntityKind::Unit(_))
+        })
+    })
+}
+
 fn selection_is_enemy_only(world: &RtsWorld) -> bool {
     let store = world.entities();
     let ids = world.selection().ids();
@@ -509,10 +531,24 @@ fn activate_world_left(world: &mut RtsWorld, session: &mut RtsSession, p: [f32; 
         resolve_attack_click(world, session, p);
     } else if let Some(building) = session.pending_rally.take() {
         let view = world.iso_view();
-        let width = world.scenario().width();
-        let height = world.scenario().height();
-        let cell = view.cell_at(p[0], p[1], width, height);
-        let _ = world.set_rally(building, cell);
+        // What the rally click landed on decides the target's kind: a node,
+        // a friendly unit or a friendly building becomes an entity rally;
+        // anything else (bare ground, an enemy, off-grid) falls back to the
+        // cell under the cursor, which is what a rally click has always been.
+        // `set_rally` still has the final say and rejects an enemy target.
+        let target = match pick_at(world, &view, p) {
+            Pick::Node(id) => Some(RallyTarget::Entity(id)),
+            Pick::Unit(id) | Pick::Building(id) if is_player_owned(world, id) => {
+                Some(RallyTarget::Entity(id))
+            }
+            _ => {
+                let width = world.scenario().width();
+                let height = world.scenario().height();
+                view.cell_at(p[0], p[1], width, height)
+                    .map(RallyTarget::Cell)
+            }
+        };
+        let _ = world.set_rally(building, target);
     } else if let Placement::Pending { kind } = world.placement() {
         let view = world.iso_view();
         let width = world.scenario().width();
@@ -775,12 +811,35 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
                 session.pending_attack = false;
             } else {
                 let view = world.iso_view();
-                let enemy_unit = match pick_at(world, &view, p) {
+                let pick = pick_at(world, &view, p);
+                let enemy_unit = match pick {
                     Pick::Unit(id)
                         if world
                             .entities()
                             .slot(id)
                             .is_some_and(|s| world.entities().owner(s) == OWNER_ENEMY) =>
+                    {
+                        Some(id)
+                    }
+                    _ => None,
+                };
+                // A player-owned unit or *finished* player building that is
+                // not itself in the selection. Right-clicking a unit that IS
+                // selected stays what it has always been — a ground move to
+                // the cell under the cursor — so the follow branch cannot take
+                // over the commonest click in the game. A site keeps routing
+                // through `issue_context_order_at`, which is where Build
+                // lives, and a node keeps routing there for Gather.
+                let friendly_target: Option<EntityId> = match pick {
+                    Pick::Unit(id)
+                        if is_player_owned(world, id) && !world.selection().contains(id) =>
+                    {
+                        Some(id)
+                    }
+                    Pick::Building(id)
+                        if is_player_owned(world, id)
+                            && !world.is_site(id)
+                            && !world.selection().contains(id) =>
                     {
                         Some(id)
                     }
@@ -793,6 +852,11 @@ pub(crate) fn apply(world: &mut RtsWorld, session: &mut RtsSession, cmd: RtsComm
                     emit_command_feedback(session, receipt);
                 } else if selection_is_enemy_only(world) {
                     session.emit_audio(AudioEvent::Reject);
+                } else if let Some(target) = friendly_target
+                    && selection_has_orderable_player_unit(world)
+                {
+                    let receipt = world.cmd_follow(target, &mut session.receipts);
+                    emit_command_feedback(session, receipt);
                 } else {
                     let result = world.issue_context_order_at(&view, p, &mut session.receipts);
                     let batch = order_cues(session.receipts.as_slice());
@@ -3162,5 +3226,160 @@ mod t4_combat_command_tests {
         // Actually workers ARE orderable and eligible for AttackGround → Move
         // So accepted = 1, order_cues = 1
         assert_eq!(session.audio_counters.order_cues, 1);
+    }
+}
+
+#[cfg(test)]
+mod t11_follow_dispatch_tests {
+    use super::*;
+    use mmd_engine::rts::{EntityId, EntityKind, OWNER_ENEMY, OWNER_PLAYER, Order, UnitKind};
+
+    /// The combat fixture: pre-placed ghouls and two player workers.
+    fn combat_world() -> RtsWorld {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/scenarios/fixtures/fixture_rts_combat_v1.ron");
+        RtsWorld::load(&path).expect("combat fixture loads")
+    }
+
+    fn player_units(world: &RtsWorld) -> Vec<EntityId> {
+        let store = world.entities();
+        (0..store.slot_count())
+            .filter_map(|slot| store.id_at(slot))
+            .filter(|&id| {
+                let slot = store.slot(id).expect("live");
+                matches!(store.kind(slot), EntityKind::Unit(_)) && store.owner(slot) == OWNER_PLAYER
+            })
+            .collect()
+    }
+
+    fn ghoul(world: &RtsWorld) -> EntityId {
+        let store = world.entities();
+        (0..store.slot_count())
+            .filter_map(|slot| store.id_at(slot))
+            .find(|&id| {
+                let slot = store.slot(id).expect("live");
+                store.kind(slot) == EntityKind::Unit(UnitKind::Ghoul)
+                    && store.owner(slot) == OWNER_ENEMY
+            })
+            .expect("the fixture has a ghoul")
+    }
+
+    /// The logical-space point a click must land on to pick `id` — the same
+    /// projection `pack_frame` stands the sprite on.
+    fn screen_of(world: &RtsWorld, id: EntityId) -> [f32; 2] {
+        let slot = world.entities().slot(id).expect("live entity");
+        let p = world.entities().position(slot);
+        world.iso_view().project(p[0], p[1])
+    }
+
+    #[test]
+    fn right_click_on_a_friendly_unit_follows_it() {
+        let mut world = combat_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let units = player_units(&world);
+        assert!(units.len() >= 2, "fixture must hold two player units");
+        let (follower, target) = (units[0], units[1]);
+        assert!(world.select_only(follower));
+
+        let p = screen_of(&world, target);
+        assert_eq!(pick_at(&world, &world.iso_view(), p), Pick::Unit(target));
+        apply(&mut world, &mut session, RtsCommand::RightClick(p));
+
+        assert!(
+            matches!(world.order_of(follower), Some(Order::Follow { target: t, .. }) if t == target),
+            "right-clicking a friendly unit must follow it, got {:?}",
+            world.order_of(follower)
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 1,
+            "one accept receipt, the existing voice_order family"
+        );
+        assert_eq!(session.audio_counters.reject, 0);
+    }
+
+    /// An enemy pick must never reach the follow branch: ownership, not the
+    /// pick kind, is what separates T4's attack from this ticket's follow.
+    ///
+    /// The armed half — that an armed selection really issues `Attack` — is
+    /// T4's own test, in `crates/mmd-engine/tests/rts_combat_commands.rs`.
+    /// The app crate links `mmd-engine` without `testkit`, so there is no way
+    /// to put a Soldier in this fixture from here, and the fixture ships only
+    /// workers.
+    #[test]
+    fn right_click_on_an_enemy_still_attacks() {
+        let mut world = combat_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let worker = player_units(&world)[0];
+        assert!(world.select_only(worker));
+
+        // Pick geometry is depth-ordered, so read back which enemy the click
+        // actually lands on rather than assuming the nearest slot wins.
+        let p = screen_of(&world, ghoul(&world));
+        let Pick::Unit(enemy) = pick_at(&world, &world.iso_view(), p) else {
+            panic!("the click must land on a unit");
+        };
+        let enemy_slot = world.entities().slot(enemy).expect("live");
+        assert_eq!(world.entities().owner(enemy_slot), OWNER_ENEMY);
+        apply(&mut world, &mut session, RtsCommand::RightClick(p));
+
+        assert!(
+            !matches!(world.order_of(worker), Some(Order::Follow { .. })),
+            "an enemy is an attack target, never a follow target, got {:?}",
+            world.order_of(worker)
+        );
+
+        // And the order layer refuses the enemy outright, whoever asks.
+        let mut receipts = OrderReceiptBuffer::new();
+        let receipt = world.cmd_follow(enemy, &mut receipts);
+        assert_eq!(receipt.accepted, 0);
+        assert_eq!(receipt.reason, Some(CommandRejectReason::NoTarget));
+    }
+
+    #[test]
+    fn right_click_on_a_selected_unit_is_still_a_ground_move() {
+        let mut world = combat_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        // The click must land on a unit that is itself selected: the
+        // commonest click in the game must stay a move, not become a
+        // self-follow. Pick geometry is depth-ordered, so select whichever
+        // unit the click really resolves to.
+        let p = screen_of(&world, player_units(&world)[0]);
+        let Pick::Unit(under_cursor) = pick_at(&world, &world.iso_view(), p) else {
+            panic!("the click must land on a unit");
+        };
+        assert!(world.select_only(under_cursor));
+        apply(&mut world, &mut session, RtsCommand::RightClick(p));
+
+        assert!(
+            matches!(
+                world.order_of(under_cursor),
+                Some(Order::Move { .. } | Order::Idle)
+            ),
+            "a click on the selection is a ground order, got {:?}",
+            world.order_of(under_cursor)
+        );
+    }
+
+    #[test]
+    fn a_building_only_selection_keeps_its_right_click() {
+        let mut world = combat_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let hq = world.start_hq().expect("hq");
+        assert!(world.select_only(hq));
+        let rally_before = world.rally(hq);
+
+        let target = player_units(&world)[0];
+        let p = screen_of(&world, target);
+        apply(&mut world, &mut session, RtsCommand::RightClick(p));
+
+        assert_eq!(
+            world.rally(hq),
+            rally_before,
+            "right-click is not the rally gesture; the rally command card slot is"
+        );
+        assert_eq!(
+            session.audio_counters.order_cues, 0,
+            "a building-only selection has nothing to order"
+        );
     }
 }

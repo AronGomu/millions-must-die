@@ -5,7 +5,14 @@ use sha2::{Digest, Sha256};
 use crate::scenario::Cell;
 
 use super::economy::Resources;
-use super::entity::{BuildingKind, MAX_ENTITIES, UnitKind};
+use super::entity::{BuildingKind, EntityId, MAX_ENTITIES, UnitKind};
+
+/// What a building's rally point points at — a fixed cell or a live entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RallyTarget {
+    Cell(Cell),
+    Entity(EntityId),
+}
 
 /// Entries a building may hold, including the one in progress.
 ///
@@ -228,7 +235,7 @@ impl ProductionQueue {
 #[derive(Debug, Clone)]
 pub struct ProductionTable {
     queues: Vec<ProductionQueue>,
-    rally: Vec<Option<Cell>>,
+    rally: Vec<Option<RallyTarget>>,
 }
 
 impl Default for ProductionTable {
@@ -253,12 +260,12 @@ impl ProductionTable {
         &mut self.queues[slot]
     }
 
-    pub fn rally(&self, slot: usize) -> Option<Cell> {
+    pub fn rally(&self, slot: usize) -> Option<RallyTarget> {
         self.rally[slot]
     }
 
-    pub fn set_rally(&mut self, slot: usize, cell: Option<Cell>) {
-        self.rally[slot] = cell;
+    pub fn set_rally(&mut self, slot: usize, target: Option<RallyTarget>) {
+        self.rally[slot] = target;
     }
 
     /// Reset a slot — called when a building is despawned so a reused slot
@@ -281,10 +288,15 @@ impl ProductionTable {
                     h.update(0u32.to_le_bytes());
                     h.update(0u32.to_le_bytes());
                 }
-                Some(c) => {
+                Some(RallyTarget::Cell(c)) => {
                     h.update([1u8]);
                     h.update(c.x.to_le_bytes());
                     h.update(c.y.to_le_bytes());
+                }
+                Some(RallyTarget::Entity(id)) => {
+                    h.update([2u8]);
+                    h.update(id.index.to_le_bytes());
+                    h.update(id.generation.to_le_bytes());
                 }
             }
         }

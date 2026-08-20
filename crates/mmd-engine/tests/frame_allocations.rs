@@ -13,11 +13,12 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DEPOT_BUILD_TICKS, DeathFlashes, DragBox, EntityKind, FramePackOptions,
-    GatherPhase, InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId,
-    OWNER_ENEMY, OWNER_PLAYER, Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind,
-    WORKER_PRODUCE_TICKS, command_slots, hud_hit_test, minimap_projection, modal_hit_test,
-    pack_frame, pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
+    BuildingKind, DASH_SEGMENTS, DEPOT_BUILD_TICKS, DeathFlashes, DragBox, EntityKind,
+    FramePackOptions, GatherPhase, InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot,
+    NumericSettingId, OWNER_ENEMY, OWNER_PLAYER, Order, OrderReceiptBuffer, RallyTarget,
+    ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots, hud_hit_test,
+    minimap_projection, modal_hit_test, pack_frame, pack_frame_with_options, pack_hud,
+    pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
 use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
@@ -430,7 +431,10 @@ fn pack_frame_allocates_nothing() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     let cursor = [960.0, 540.0];
     let drag = Some(DragBox {
@@ -464,10 +468,12 @@ fn pack_frame_allocates_nothing() {
     let packed = frame.instance_count();
     // Since T7 a pending ghost forces the build-square lattice on whatever
     // `show_grid` says, so the 320-cell map's 82 boundary lines ride along.
+    // Since T11 a selected building's rally also draws a dashed line to its
+    // flag, which is `DASH_SEGMENTS / 2` more overlay instances.
     assert_eq!(
         packed,
-        17 + 1 + 2 + 1 + 2 + 5 + 1 + 2 * (320 / 8 + 1),
-        "world, ring, the selected HQ's bar, rally, ghost, drag box, flash, grid"
+        17 + 1 + 2 + 1 + DASH_SEGMENTS / 2 + 2 + 5 + 1 + 2 * (320 / 8 + 1),
+        "world, ring, the selected HQ's bar, rally flag + its dashes, ghost, drag box, flash, grid"
     );
 
     let guard = MeasureGuard::enter();
@@ -508,7 +514,10 @@ fn new_hud_pack_allocates_nothing() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     let cursor = [960.0, 540.0];
 
@@ -1407,7 +1416,10 @@ fn full_building_detail_pack_allocates_nothing() {
     for _ in 0..4 {
         assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     }
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 144, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     let cursor = [960.0, 540.0];
 
     // Warm-up: any first-frame growth settles now.

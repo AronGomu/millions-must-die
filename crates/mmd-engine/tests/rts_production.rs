@@ -4,11 +4,11 @@
 //! `mmd_engine::rts` and `testkit::RtsHarness`.
 
 use mmd_engine::rts::{
-    BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_NEUTRAL,
-    OWNER_PLAYER, Order, PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue,
-    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, SOLDIER_COST,
-    SOLDIER_PRODUCE_TICKS, UnitKind, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce, produce_ticks,
-    unit_cost, units_overlap,
+    BuildingKind, EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_ENEMY,
+    OWNER_NEUTRAL, OWNER_PLAYER, Order, PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, RallyTarget, ResourceKind,
+    SOLDIER_COST, SOLDIER_PRODUCE_TICKS, UnitKind, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce,
+    produce_ticks, unit_cost, units_overlap,
 };
 use mmd_engine::scenario::Cell;
 use mmd_engine::testkit::RtsHarness;
@@ -454,7 +454,10 @@ fn a_produced_unit_walks_to_the_rally() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     let before = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 200, y: 200 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
     assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     h.step_exact(1_200);
     let after = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
@@ -477,8 +480,14 @@ fn rally_defaults_to_none_and_can_be_cleared() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     assert_eq!(h.world().rally(hq), None);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 200, y: 200 })));
-    assert_eq!(h.world().rally(hq), Some(Cell { x: 200, y: 200 }));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
+    assert_eq!(
+        h.world().rally(hq),
+        Some(RallyTarget::Cell(Cell { x: 200, y: 200 }))
+    );
     assert!(h.world_mut().set_rally(hq, None));
     assert_eq!(h.world().rally(hq), None);
 }
@@ -488,10 +497,13 @@ fn set_rally_rejects_a_blocked_cell() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     let valid = Cell { x: 200, y: 200 };
-    assert!(h.world_mut().set_rally(hq, Some(valid)));
+    assert!(h.world_mut().set_rally(hq, Some(RallyTarget::Cell(valid))));
     // Obstacle index 0 of the tracked scene is cell (0, 0) (see rts_build.rs).
-    assert!(!h.world_mut().set_rally(hq, Some(Cell { x: 0, y: 0 })));
-    assert_eq!(h.world().rally(hq), Some(valid));
+    assert!(
+        !h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 0, y: 0 })))
+    );
+    assert_eq!(h.world().rally(hq), Some(RallyTarget::Cell(valid)));
 }
 
 #[test]
@@ -499,7 +511,10 @@ fn set_rally_rejects_an_out_of_bounds_cell() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     let width = h.world().scenario().width();
-    assert!(!h.world_mut().set_rally(hq, Some(Cell { x: width, y: 0 })));
+    assert!(
+        !h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: width, y: 0 })))
+    );
     assert_eq!(h.world().rally(hq), None);
 }
 
@@ -507,7 +522,10 @@ fn set_rally_rejects_an_out_of_bounds_cell() {
 fn set_rally_rejects_a_non_building() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let w0 = first_worker(&h);
-    assert!(!h.world_mut().set_rally(w0, Some(Cell { x: 200, y: 200 })));
+    assert!(
+        !h.world_mut()
+            .set_rally(w0, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
 }
 
 // --- supply recount -------------------------------------------------------------
@@ -676,8 +694,14 @@ fn cancelling_a_site_clears_its_queue_slot() {
         h.world_mut().enqueue_unit(site, UnitKind::Soldier),
         Err(ProduceError::UnderConstruction)
     );
-    assert!(h.world_mut().set_rally(site, Some(Cell { x: 200, y: 200 })));
-    assert_eq!(h.world().rally(site), Some(Cell { x: 200, y: 200 }));
+    assert!(
+        h.world_mut()
+            .set_rally(site, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
+    assert_eq!(
+        h.world().rally(site),
+        Some(RallyTarget::Cell(Cell { x: 200, y: 200 }))
+    );
 
     assert!(h.world_mut().cancel_construction(site));
 
@@ -711,7 +735,10 @@ fn production_is_reproducible() {
     let mut b = RtsHarness::scene().build().expect("b");
     for h in [&mut a, &mut b] {
         let hq = h.world().start_hq().expect("hq");
-        assert!(h.world_mut().set_rally(hq, Some(Cell { x: 200, y: 200 })));
+        assert!(
+            h.world_mut()
+                .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+        );
         assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
         h.step_exact(3_000);
     }
@@ -732,7 +759,10 @@ fn state_hash_sees_a_rally_point() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     let before = h.state_hash();
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 200, y: 200 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
     assert_ne!(h.state_hash(), before);
 }
 
@@ -962,7 +992,10 @@ fn new_spawn_joins_same_tick_collision() {
     let hq = h.world().start_hq().expect("hq");
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     assert_eq!(workers.len(), 6);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 176, y: 192 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 176, y: 192 })))
+    );
     assert!(
         h.world_mut()
             .order_move_group(&workers, Cell { x: 176, y: 192 })
@@ -1028,5 +1061,170 @@ fn production_never_runs_overlap_repair() {
         h.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
         8,
         "both queued workers must have been produced, or this run proved nothing"
+    );
+}
+
+// --- T11: rally onto an entity ----------------------------------------------
+
+/// The one unit `before` did not hold — the unit this production run made.
+fn newly_produced(h: &RtsHarness, kind: UnitKind, before: &[EntityId]) -> EntityId {
+    *h.ids_of_kind(EntityKind::Unit(kind))
+        .iter()
+        .find(|id| !before.contains(id))
+        .expect("production made a new unit")
+}
+
+#[test]
+fn rally_onto_a_cell_still_moves() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    let before = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    h.step_exact(WORKER_PRODUCE_TICKS as u64 + 1);
+
+    let new_id = newly_produced(&h, UnitKind::Worker, &before);
+    assert!(
+        matches!(h.world().order_of(new_id), Some(Order::Move { .. })),
+        "a cell rally is still a Move, got {:?}",
+        h.world().order_of(new_id)
+    );
+}
+
+#[test]
+fn rally_onto_a_node_makes_produced_workers_gather() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let before = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+
+    assert!(h.world_mut().set_rally(hq, Some(RallyTarget::Entity(node))));
+    assert_eq!(h.world().rally(hq), Some(RallyTarget::Entity(node)));
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    h.step_exact(WORKER_PRODUCE_TICKS as u64 + 1);
+
+    let new_id = newly_produced(&h, UnitKind::Worker, &before);
+    assert!(
+        matches!(h.world().order_of(new_id), Some(Order::Gather { node: n, .. }) if n == node),
+        "rallying to a node must gather it, got {:?}",
+        h.world().order_of(new_id)
+    );
+}
+
+#[test]
+fn rally_onto_a_unit_makes_produced_units_follow() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    let barracks = build_and_finish(&mut h, BuildingKind::Barracks, BARRACKS_CORNER, w0);
+    h.world_mut().resources_mut().gas = 100;
+
+    assert!(
+        h.world_mut()
+            .set_rally(barracks, Some(RallyTarget::Entity(w0)))
+    );
+    let before = h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier));
+    assert!(
+        h.world_mut()
+            .enqueue_unit(barracks, UnitKind::Soldier)
+            .is_ok()
+    );
+    h.step_exact(SOLDIER_PRODUCE_TICKS as u64 + 1);
+
+    let new_id = newly_produced(&h, UnitKind::Soldier, &before);
+    assert!(
+        matches!(h.world().order_of(new_id), Some(Order::Follow { target, .. }) if target == w0),
+        "rallying to a unit must follow it, got {:?}",
+        h.world().order_of(new_id)
+    );
+}
+
+#[test]
+fn rally_rejects_an_enemy_target() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    let valid = RallyTarget::Cell(Cell { x: 200, y: 200 });
+    assert!(h.world_mut().set_rally(hq, Some(valid)));
+
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [200.5, 200.5],
+        )
+        .expect("spawn a ghoul");
+    assert!(
+        !h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(ghoul))),
+        "an enemy is not a rally point"
+    );
+    assert_eq!(
+        h.world().rally(hq),
+        Some(valid),
+        "a rejected rally must leave the old one exactly as it was"
+    );
+
+    // A stale id is refused on the same rule.
+    let worker = first_worker(&h);
+    assert!(h.world_mut().entities_mut().despawn(worker));
+    assert!(
+        !h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(worker)))
+    );
+    assert_eq!(h.world().rally(hq), Some(valid));
+}
+
+#[test]
+fn a_stale_entity_rally_is_dropped() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    let target = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[1];
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(target)))
+    );
+
+    // The rally target dies after the rally was accepted.
+    assert!(h.world_mut().entities_mut().despawn(target));
+    let before = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
+    h.step_exact(WORKER_PRODUCE_TICKS as u64 + 1);
+
+    let new_id = newly_produced(&h, UnitKind::Worker, &before);
+    assert_eq!(
+        h.world().order_of(new_id),
+        Some(Order::Idle),
+        "a stale rally is a no-op hand-off, not a crash and not a stray order"
+    );
+    assert_eq!(
+        h.world().rally(hq),
+        Some(RallyTarget::Entity(target)),
+        "the stored rally is untouched; only the hand-off declines it"
+    );
+}
+
+#[test]
+fn cell_and_entity_rallies_hash_differently() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let hq = h.world().start_hq().expect("hq");
+    let worker = first_worker(&h);
+
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 200, y: 200 })))
+    );
+    let as_cell = h.state_hash();
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(worker)))
+    );
+    let as_entity = h.state_hash();
+    assert_ne!(
+        as_cell, as_entity,
+        "a cell rally and an entity rally must never hash alike"
     );
 }

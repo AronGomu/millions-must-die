@@ -31,11 +31,13 @@ use super::formation::{
     nearest_body_clear_cell,
 };
 use super::orders::{
-    GHOUL_SPEED_CELLS_PER_SEC, GatherPhase, Order, OrderTable, SOLDIER_SPEED_CELLS_PER_SEC,
-    WORKER_SPEED_CELLS_PER_SEC, adaptive_reach, dist2, entity_approach_cell, node_cell,
-    rect_distance, step_admissible, unit_speed,
+    FOLLOW_REPATH_CELLS, GHOUL_SPEED_CELLS_PER_SEC, GatherPhase, Order, OrderTable,
+    SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, adaptive_reach, dist2,
+    entity_approach_cell, node_cell, rect_distance, step_admissible, unit_speed,
 };
-use super::production::{ProduceError, ProductionQueue, ProductionTable, can_produce, unit_cost};
+use super::production::{
+    ProduceError, ProductionQueue, ProductionTable, RallyTarget, can_produce, unit_cost,
+};
 use super::selection::{MAX_SELECTION, Pick, Selection, box_select, footprint_min, pick_at};
 use super::static_nav::{StaticNav, circle_clear_of_cell_rect};
 
@@ -49,6 +51,7 @@ pub enum IssuedOrder {
     Attack,
     AttackMove,
     Stop,
+    Follow,
 }
 
 /// What one group command is pointed at — the only thing that differs between
@@ -1568,6 +1571,62 @@ impl RtsWorld {
         }
     }
 
+    /// Issue follow orders for every orderable selected unit toward `target`.
+    ///
+    /// Rejects a stale or enemy target, an empty selection, and self-follow.
+    /// Returns a [`CommandReceipt`] summarising how many succeeded.
+    pub fn cmd_follow(
+        &mut self,
+        target: EntityId,
+        receipts: &mut OrderReceiptBuffer,
+    ) -> CommandReceipt {
+        receipts.clear();
+        let mut scratch = std::mem::take(&mut self.pick_scratch);
+        scratch.clear();
+        scratch.extend_from_slice(self.selection.ids());
+        let selected = scratch
+            .iter()
+            .filter(|&&id| self.orderable_slot(id).is_some())
+            .count();
+
+        if selected == 0 {
+            self.pick_scratch = scratch;
+            return CommandReceipt {
+                accepted: 0,
+                rejected: 0,
+                reason: Some(CommandRejectReason::EmptySelection),
+            };
+        }
+        let target_ok = self
+            .entities
+            .slot(target)
+            .is_some_and(|s| self.entities.owner(s) != OWNER_ENEMY);
+        if !target_ok {
+            self.pick_scratch = scratch;
+            return CommandReceipt {
+                accepted: 0,
+                rejected: selected,
+                reason: Some(CommandRejectReason::NoTarget),
+            };
+        }
+        let mut accepted = 0usize;
+        for &id in &scratch {
+            if id == target {
+                continue;
+            }
+            if self.order_follow(id, target) {
+                receipts.push(id, IssuedOrder::Follow);
+                accepted += 1;
+            }
+        }
+        self.pick_scratch = scratch;
+        CommandReceipt {
+            accepted,
+            rejected: selected - accepted,
+            reason: None,
+        }
+    }
+
     /// Plan and commit one group order, whole or not at all.
     ///
     /// The one path every group command takes — ground move, gather, build,
@@ -1773,6 +1832,43 @@ impl RtsWorld {
         node: EntityId,
     ) -> Result<usize, FormationError> {
         self.order_group(ids, GroupTarget::Node(node), None)
+    }
+
+    /// Order one player-owned unit to follow `target`, holding at interaction
+    /// reach when it arrives. Returns `false` for a stale or ineligible id,
+    /// self-targeting, or an enemy target.
+    pub fn order_follow(&mut self, id: EntityId, target: EntityId) -> bool {
+        let Some(slot) = self.orderable_slot(id) else {
+            return false;
+        };
+        if id == target {
+            return false;
+        }
+        let Some(t_slot) = self.entities.slot(target) else {
+            return false;
+        };
+        if self.entities.owner(t_slot) == OWNER_ENEMY {
+            return false;
+        }
+        let mover_kind = match self.entities.kind(slot) {
+            EntityKind::Unit(k) => k,
+            _ => return false,
+        };
+        let (approach, _dist) =
+            entity_approach_cell(&self.static_nav, &self.entities, target, mover_kind);
+        let Ok(field) = self.nav.acquire(approach) else {
+            return false;
+        };
+        let goal = FormationGoal::at(approach);
+        self.orders.set(
+            slot,
+            Order::Follow {
+                target,
+                goal,
+                field,
+            },
+        );
+        true
     }
 
     /// The nearest live drop-off building owned by the player, by distance
@@ -2124,7 +2220,7 @@ impl RtsWorld {
 
     /// Where units produced here walk after they appear. `None` leaves them
     /// idle.
-    pub fn rally(&self, building: EntityId) -> Option<Cell> {
+    pub fn rally(&self, building: EntityId) -> Option<RallyTarget> {
         let slot = self.entities.slot(building)?;
         if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
             return None;
@@ -2132,26 +2228,38 @@ impl RtsWorld {
         self.production.rally(slot)
     }
 
-    /// Set or clear a rally point. `false` for a stale id or a non-building. A
-    /// rally cell that is out of bounds or blocked is rejected.
-    pub fn set_rally(&mut self, building: EntityId, cell: Option<Cell>) -> bool {
+    /// Set or clear a rally point. Returns `false` for a stale building id,
+    /// a non-building, a stale/enemy entity target, or a cell that is
+    /// out-of-bounds or blocked.
+    pub fn set_rally(&mut self, building: EntityId, target: Option<RallyTarget>) -> bool {
         let Some(slot) = self.entities.slot(building) else {
             return false;
         };
         if !matches!(self.entities.kind(slot), EntityKind::Building(_)) {
             return false;
         }
-        if let Some(c) = cell {
-            let width = self.scenario.width();
-            let height = self.scenario.height();
-            if c.x >= width || c.y >= height {
-                return false;
+        match target {
+            None => {}
+            Some(RallyTarget::Cell(c)) => {
+                let width = self.scenario.width();
+                let height = self.scenario.height();
+                if c.x >= width || c.y >= height {
+                    return false;
+                }
+                if self.nav.blocked()[(c.x + c.y * width) as usize] {
+                    return false;
+                }
             }
-            if self.nav.blocked()[(c.x + c.y * width) as usize] {
-                return false;
+            Some(RallyTarget::Entity(id)) => {
+                let Some(t_slot) = self.entities.slot(id) else {
+                    return false;
+                };
+                if self.entities.owner(t_slot) == OWNER_ENEMY {
+                    return false;
+                }
             }
         }
-        self.production.set_rally(slot, cell);
+        self.production.set_rally(slot, target);
         true
     }
 
@@ -2559,6 +2667,24 @@ impl RtsWorld {
             || dist2(p, goal.slot_center()) <= FORMATION_ARRIVAL_CELLS * FORMATION_ARRIVAL_CELLS
     }
 
+    /// Distance from `p` to the outside of whatever `target_slot` occupies:
+    /// a unit's **body circle**, a building's or node's footprint rectangle.
+    ///
+    /// [`Self::approach_done`] can use the footprint alone because everything
+    /// it measures against is static, and the centre mask already holds a
+    /// mover one body radius clear of it. A follower's target is usually
+    /// another unit, whose footprint is one cell but whose body is radius
+    /// [`RTS_UNIT_BODY_RADIUS_CELLS`]: two such bodies can never close to
+    /// within a one-cell rectangle's reach, so measuring the footprint would
+    /// leave a follower pressing into its own target forever.
+    fn follow_gap(&self, p: [f32; 2], target_slot: usize) -> f32 {
+        let c = self.entities.position(target_slot);
+        match self.entities.kind(target_slot) {
+            EntityKind::Unit(k) => (dist2(p, c).sqrt() - k.body_radius_cells()).max(0.0),
+            other => rect_distance(p, c, other.footprint_cells()),
+        }
+    }
+
     /// Turn the site at `slot` into a finished building — but only if every
     /// body its footprint would swallow can be given a legal place to stand
     /// first. `false` leaves the world **exactly** as it was.
@@ -2740,8 +2866,26 @@ impl RtsWorld {
             // sweep collects it too, so it is a body from this tick on.
             self.live_scratch.push(id.index as usize);
             if let Some(rally) = self.production.rally(slot) {
-                // Ignores its own return; a blocked rally is a no-op.
-                self.order_move(id, rally);
+                // Dispatches on target kind: Cell → move, Entity(node) → gather,
+                // Entity(unit/building) → follow. Ignores the return; a blocked
+                // or stale rally is a no-op, the unit stays idle.
+                match rally {
+                    RallyTarget::Cell(cell) => {
+                        self.order_move(id, cell);
+                    }
+                    RallyTarget::Entity(eid) => {
+                        let target_slot = self.entities.slot(eid);
+                        match target_slot.map(|s| self.entities.kind(s)) {
+                            Some(EntityKind::Node(_)) => {
+                                self.order_gather(id, eid);
+                            }
+                            Some(EntityKind::Unit(_) | EntityKind::Building(_)) => {
+                                self.order_follow(id, eid);
+                            }
+                            None => {}
+                        }
+                    }
+                }
             }
         }
     }
@@ -3152,7 +3296,10 @@ impl RtsWorld {
                             self.nearest_hostile_in_range(slot, w.range_cells)
                         }
                     }
-                    Order::Move { .. } | Order::Gather { .. } | Order::Build { .. } => continue,
+                    Order::Move { .. }
+                    | Order::Gather { .. }
+                    | Order::Build { .. }
+                    | Order::Follow { .. } => continue,
                 },
                 // Buildings have no orders; scan enemies unconditionally.
                 EntityKind::Building(b) => {
@@ -4118,6 +4265,59 @@ impl RtsWorld {
                 if self.combat_hold[slot] {
                     // In range: hold and let combat fire; descent resumes when
                     // the target dies.
+                    return;
+                }
+                (goal, field)
+            }
+            Order::Follow {
+                target,
+                goal,
+                field,
+            } => {
+                let Some(t_slot) = self.entities.slot(target) else {
+                    // A dead or despawned target ends the order on the tick it
+                    // is noticed — the same discipline a mined-out node gets.
+                    self.orders.clear(slot);
+                    return;
+                };
+                // Re-path only once the target has walked more than
+                // FOLLOW_REPATH_CELLS from the goal this follower last pathed
+                // to. Between those moments the cached field is descended as
+                // it stands: a follower never rebuilds a field per tick.
+                let drift = dist2(self.entities.position(t_slot), goal.anchor_center()).sqrt();
+                let (goal, field) = if drift > FOLLOW_REPATH_CELLS {
+                    let (approach, _) =
+                        entity_approach_cell(&self.static_nav, &self.entities, target, kind);
+                    match self.nav.acquire(approach) {
+                        Ok(fresh) => {
+                            let fresh_goal = FormationGoal::at(approach);
+                            self.orders.set(
+                                slot,
+                                Order::Follow {
+                                    target,
+                                    goal: fresh_goal,
+                                    field: fresh,
+                                },
+                            );
+                            (fresh_goal, fresh)
+                        }
+                        // No field can be built to the target any more. Stop,
+                        // rather than keep an order alive nothing can finish.
+                        Err(_) => {
+                            self.orders.clear(slot);
+                            return;
+                        }
+                    }
+                } else {
+                    (goal, field)
+                };
+                // Hold at arm's length, measured to the target's shape rather
+                // than its cell — see `follow_gap`. The order is not cleared:
+                // a follower parks and resumes when its target walks off.
+                let anchor_gap = self.follow_gap(goal.anchor_center(), t_slot);
+                if self.follow_gap(self.entities.position(slot), t_slot)
+                    <= adaptive_reach(kind, anchor_gap)
+                {
                     return;
                 }
                 (goal, field)

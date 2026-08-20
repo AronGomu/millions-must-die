@@ -71,22 +71,23 @@ pub use minimap::{
     HudHit, MinimapProjection, control_id_from_hud_hit, hud_hit_test, minimap_projection,
 };
 pub use orders::{
-    GHOUL_SPEED_CELLS_PER_SEC, GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order, OrderTable,
-    SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
+    FOLLOW_REPATH_CELLS, GHOUL_SPEED_CELLS_PER_SEC, GatherPhase, NAV_CENTER_TOLERANCE_CELLS, Order,
+    OrderTable, SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach,
+    unit_speed,
 };
 pub use pack::{
     DASH_SEGMENTS, DEATH_FLASH_FRAMES, DEATH_FLASH_INNER, DEATH_FLASH_OUTER, DEATH_FLASH_TINT,
     DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DeathFlashes, DragBox,
     FramePackOptions, GHOST_TINT, GRID_LINE_PX, GRID_TINT, HP_BAR_BACKING_TINT, HP_BAR_GREEN_TINT,
     HP_BAR_RAISE_CELLS, HP_BAR_RED_TINT, HP_BAR_YELLOW_TINT, MAX_DASH_LINES, MAX_GRID_LINES,
-    MAX_SELECTION_FOR_DASHES, Prop, RtsFrame, SELECTION_RING_INNER, SELECTION_RING_OUTER,
-    SELECTION_TINT, TARGET_RING_INNER, building_uv, hp_bar_fill_tint, node_uv, pack_frame,
-    pack_frame_with_options, prop_uv, unit_slot,
+    MAX_RALLY_DASH_LINES, MAX_SELECTION_FOR_DASHES, Prop, RtsFrame, SELECTION_RING_INNER,
+    SELECTION_RING_OUTER, SELECTION_TINT, TARGET_RING_INNER, building_uv, hp_bar_fill_tint,
+    node_uv, pack_frame, pack_frame_with_options, prop_uv, unit_slot,
 };
 pub use production::{
-    PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,
-    SOLDIER_PRODUCE_TICKS, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce, produce_ticks,
-    unit_cost,
+    PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, RallyTarget,
+    SOLDIER_COST, SOLDIER_PRODUCE_TICKS, WORKER_COST, WORKER_PRODUCE_TICKS, can_produce,
+    produce_ticks, unit_cost,
 };
 pub use selection::{
     DRAG_MIN_PX, MAX_SELECTION, Pick, RTS_SPRITE_SIZE_PX, Selection, box_select,

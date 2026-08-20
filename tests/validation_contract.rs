@@ -1670,7 +1670,9 @@ const MANUAL_FLOWS: &[(&str, &[&str])] = &[
     ),
     ("world grid", &["grid", "persist"]),
     ("placement", &["snap", "map corner"]),
-    ("building card", &["sprite corner", "six line"]),
+    // Seven since T6 put an HP line under the kind line; the checklist has
+    // said "seven lines" since that ticket, and this token had not followed.
+    ("building card", &["sprite corner", "seven line"]),
     ("commands", &["positional", "right-click"]),
     (
         "gather collision",
