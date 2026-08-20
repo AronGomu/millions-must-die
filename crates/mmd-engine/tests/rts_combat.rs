@@ -14,6 +14,16 @@ use mmd_engine::rts::{
 use mmd_engine::scenario::{Cell, EnemySpec, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{FIXTURE_RTS_COMBAT_V1, RtsHarness, fixture_path};
 
+/// The enemy-free twin of the tracked scene, for horizons that cross its
+/// first wave tick (3000): `fixture_rts_baseline_v1.ron` is a byte-identical
+/// copy taken immediately before the combat gate scripted enemies into the
+/// scene, so every pinned number below keeps its meaning.
+fn baseline_scene() -> RtsHarness {
+    RtsHarness::path(fixture_path("fixture_rts_baseline_v1"))
+        .build()
+        .expect("baseline scene harness")
+}
+
 fn first_worker(h: &RtsHarness) -> EntityId {
     h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0]
 }
@@ -204,7 +214,7 @@ fn a_unit_dies_at_zero_hp_and_its_slot_frees() {
 
 #[test]
 fn building_death_unstamps_its_footprint() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let depot = build_and_finish(&mut h, BuildingKind::Depot, DEPOT_CORNER, w0);
     let edge = BuildingKind::Depot.footprint_cells();
@@ -234,7 +244,7 @@ fn building_death_unstamps_its_footprint() {
 
 #[test]
 fn building_death_cancels_its_queue_without_refund() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let barracks = build_and_finish(&mut h, BuildingKind::Barracks, BARRACKS_CORNER, w0);
     let used_before = h.world().supply().used();
@@ -265,7 +275,7 @@ fn building_death_cancels_its_queue_without_refund() {
 
 #[test]
 fn building_death_revokes_its_supply_grant() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let depot = build_and_finish(&mut h, BuildingKind::Depot, DEPOT_CORNER, w0);
     let cap_with_depot = h.world().supply().cap();
@@ -981,7 +991,7 @@ fn the_ghoul_is_the_slowest_unit() {
 
 #[test]
 fn death_events_drain_once() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let depot = build_and_finish(&mut h, BuildingKind::Depot, DEPOT_CORNER, w0);
     h.step_exact(1); // settle: any event this setup produced is cleared

@@ -956,3 +956,22 @@ merge and never a shove.
 - [ ] Select **only** the HQ (no units) and right-click a friendly Worker. Confirm nothing at all happens — right-click is not the rally gesture; `C` then a left-click is.
 - [ ] Select a mixed group of Workers and right-click a finished friendly building. Confirm every one of them heads for it and parks around its footprint without any of them walking into the building.
 - [ ] Watch the rally dashed line while panning the camera and while the rally target is a moving unit. Confirm the line keeps both ends attached — building at one end, flag at the other — and never smears across the screen.
+
+## T12 combat-gate
+
+The gate scene now scripts a real invasion: 400 Ghouls across four waves, from
+the two far south corners, first wave at tick 3000. Nothing offscreen can tell
+you whether a horde walking at you *reads* as a horde walking at you — that is
+what this pass is for. `cargo run -- rts` alone puts you on that scene, and the
+first wave is about fifty seconds in.
+
+- [ ] Launch `cargo run -- rts` and just watch the minimap for the first minute. Confirm that around the fifty-second mark red enemy dots appear together at the bottom-left corner, and that they then crawl steadily up and to the left as one loose group rather than teleporting or snapping between positions.
+- [ ] Follow that first wave with the camera the whole way in. Confirm the Ghouls read as marching — a continuous walk with their sprites animating — and that they pick a route around the terrain instead of grinding against an obstacle edge.
+- [ ] Leave a single Worker parked well out on the route the wave walks, then let the wave reach it. Confirm you can see it being attacked (its HP bar drops in visible steps), that it dies with a death flash, and that its supply is given back on the HUD.
+- [ ] Build a Turret forward of the base, on the route, and let the wave reach it. Confirm the Turret opens fire before the Ghouls are on top of it, that each hit is legible as a hit, and that Ghouls actually die rather than simply losing HP forever.
+- [ ] With two Soldiers rallied behind that Turret, confirm the idle one starts shooting by itself when a Ghoul comes into its range — you should not have to give it an order for it to defend itself.
+- [ ] Select one Soldier, press `A` and left-click ground down the route. Confirm it walks that way and engages what it meets on the way, and that its card status reads as an attack-move rather than a plain move.
+- [ ] Watch the HUD while the fight is on. Confirm enemy Ghouls show a hostile-coloured HP bar, that your own units' bars are visibly different from theirs, and that clicking an enemy gives you a read-only card you cannot issue orders from.
+- [ ] Let the later hordes (150 + 150 + 88 Ghouls) spawn and watch the frame pacing and the minimap with hundreds of enemies alive at once. Confirm the picture stays readable — no flicker, no dots vanishing, no audio dropouts — and note anything that feels wrong, since no gate command measures this.
+- [ ] Play a round where you deliberately let the wave through to the HQ. Confirm the HQ takes visible damage, and that if you let it die the game does not crash or freeze — this is a sandbox, so there is no win or lose screen, and that is expected.
+- [ ] Run `cargo run -- rts --frames 4500 --inject-input-file assets/scenarios/rts_combat_v1.script` in a real window and watch it play itself. Confirm what you see matches what the exit line says: enemies spawned, something of yours died, something of theirs died, and the HQ survived.

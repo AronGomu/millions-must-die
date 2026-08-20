@@ -1097,14 +1097,29 @@ fn enemy_baseline_block_is_valid() {
 
 #[test]
 fn enemy_block_optional_old_scenes_parse() {
-    // `load_verified` re-checks the tracked sidecar, so passing at all
-    // proves the scene's bytes did not move under the schema change.
-    let scene = Scenario::load_verified(rts_scene_path())
-        .expect("tracked rts scene still loads hash-verified");
+    // The pre-combat scene shape, preserved byte-for-byte as the baseline
+    // fixture: parses hash-verified with no enemies.
+    let baseline = Scenario::load_verified(fixture_path("fixture_rts_baseline_v1"))
+        .expect("baseline fixture loads hash-verified");
     assert!(
-        scene.rts().expect("rts block").enemies.is_none(),
+        baseline.rts().expect("rts block").enemies.is_none(),
         "a scene written before combat must parse with no enemies"
     );
+
+    // The gate scene itself now scripts the combat invasion (T12): waves
+    // only, exactly the numbers the acceptance run pins.
+    let scene = Scenario::load_verified(rts_scene_path())
+        .expect("tracked rts scene still loads hash-verified");
+    let enemies = scene
+        .rts()
+        .expect("rts block")
+        .enemies
+        .as_ref()
+        .expect("the combat gate scene scripts enemies");
+    assert!(enemies.pre_placed.is_empty(), "waves-only by design (T12)");
+    assert_eq!(enemies.spawn_points.len(), 2);
+    assert_eq!(enemies.waves.iter().map(|w| w.count).sum::<u32>(), 400);
+    assert_eq!(enemies.waves.first().map(|w| w.at_tick), Some(3000));
 }
 
 #[test]

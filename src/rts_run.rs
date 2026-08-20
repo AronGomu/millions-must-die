@@ -23,7 +23,8 @@
 //!      supply=<used>/<cap> units=<n> buildings=<n> nodes=<n> selected=<n> \
 //!      camera=<cx>,<cy> body_overlaps=<n> ui_page=<p> music_starts=<n> \
 //!      voice_select=<n> voice_order=<n> voice_reject=<n> sfx_ui=<n> \
-//!      keyboard_pan=<n> settings_scroll_px=<n> show_grid=<bool>                    (f)
+//!      keyboard_pan=<n> settings_scroll_px=<n> show_grid=<bool> kills=<n> \
+//!      losses=<n> enemies_spawned=<n> first_combat_tick=<n|none> hq_alive=<0|1>  (f)
 //! ```
 //!
 //! - (a) absent when a scripted quit lands on frame 1.
@@ -53,7 +54,11 @@
 //!   `voice_select` (Select cues), `voice_order` (accepted Move/Gather/Build
 //!   cues), `voice_reject`, `sfx_ui` — and finally the live
 //!   `keyboard_pan` speed in cells/s, which a settings edit can move
-//!   mid-run.
+//!   mid-run, and then the combat gate's five tokens (`T12`): `kills`/`losses`
+//!   from the world's combat counters, `enemies_spawned` (cumulative spawn
+//!   odometer — pre-placed plus waves, never decremented on death),
+//!   `first_combat_tick` (`none` while the run is bloodless), and `hq_alive`
+//!   — whether the scene's starting HQ is still alive.
 //!
 //! The `frame0` and `clean exit` lines are strictly `key=value` separated by
 //! single spaces, with no spaces inside a value.
@@ -2078,12 +2083,24 @@ fn finish(
     // run that never looked away from its own base did not exercise it.
     let center = world.camera().center();
 
+    let first_combat = world
+        .first_combat_tick()
+        .map_or_else(|| "none".to_string(), |t| t.to_string());
+    // The *starting* HQ's liveness: its id survives the building's death and
+    // `contains` is generation-checked, so a reused slot cannot lie.
+    let hq_alive = u8::from(
+        world
+            .start_hq()
+            .is_some_and(|id| world.entities().contains(id)),
+    );
+
     println!(
         "rts: clean exit mode={mode} backend={backend} tick={} frames={} hash={} quit={} \
          paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
          camera={},{} body_overlaps={} ui_page={} music_starts={} voice_select={} \
          voice_order={} voice_reject={} sfx_ui={} keyboard_pan={} settings_scroll_px={} \
-         show_grid={}",
+         show_grid={} kills={} losses={} enemies_spawned={} first_combat_tick={} \
+         hq_alive={}",
         world.tick_index(),
         state.frames,
         hex::encode(final_hash),
@@ -2109,6 +2126,11 @@ fn finish(
         session.settings.camera.keyboard_pan,
         session.ui.settings_scroll_px.round() as u32,
         session.settings.gameplay.show_grid,
+        world.kills(),
+        world.losses(),
+        world.enemies_spawned(),
+        first_combat,
+        hq_alive,
     );
     Ok(())
 }
@@ -3051,10 +3073,27 @@ mod exit_line_tests {
          paused={} crystal={} gas={} supply={}/{} units={} buildings={} nodes={} selected={} \
          camera={},{} body_overlaps={} ui_page={} music_starts={} voice_select={} \
          voice_order={} voice_reject={} sfx_ui={} keyboard_pan={} settings_scroll_px={} \
-         show_grid={}";
+         show_grid={} kills={} losses={} enemies_spawned={} first_combat_tick={} \
+         hq_alive={}";
+        for token in [
+            "show_grid={}",
+            "kills={}",
+            "losses={}",
+            "enemies_spawned={}",
+            "first_combat_tick={}",
+            "hq_alive={}",
+        ] {
+            assert!(
+                format_str.contains(token),
+                "exit line format must include {token}"
+            );
+        }
         assert!(
-            format_str.contains("show_grid={}"),
-            "exit line format must include show_grid token"
+            format_str.ends_with(
+                "kills={} losses={} enemies_spawned={} first_combat_tick={} \
+         hq_alive={}"
+            ),
+            "the five combat tokens must close the exit line"
         );
     }
 }

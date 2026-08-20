@@ -64,6 +64,7 @@ cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
+cargo run -- rts --frames 4500 --inject-input-file assets/scenarios/rts_combat_v1.script
 ```
 
 ### Developer tools (not gates)

@@ -111,6 +111,7 @@ cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
+cargo run -- rts --frames 4500 --inject-input-file assets/scenarios/rts_combat_v1.script
 ```
 
 `./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA` is the offline DCO
@@ -127,7 +128,7 @@ candidate (empty range) exits zero. Legacy history on `main` is **not**
 revalidated and must not be rewritten to satisfy this gate.
 `required_gate_contains_dco_check` keeps the command on this list.
 
-The last command is the interactive RTS smoke: one tracked script selects the
+The second-to-last command is the interactive RTS smoke: one tracked script selects the
 starting workers, puts them on a crystal and a gas node by clicking the visible
 sprite, builds a Depot and a Barracks through the command card, produces a
 Worker and a Soldier, jumps the camera from the minimap, opens the pause menu
@@ -136,6 +137,20 @@ asserts behaviour, an exit line and an exit code — it consumes no measurement
 number, and a scripted event that never fires fails it. The frame budget is
 part of the contract: `required_gate_keeps_phase_smokes` refuses a shortened
 run or an untracked script.
+
+The last command is the combat gate (`T12`): the same shipped binary, the same
+gate scene — which now scripts 400 Ghouls across four waves from its two far
+south corners — driven by `assets/scenarios/rts_combat_v1.script`. It opens an
+economy, builds a forward Turret and a Barracks through the command card,
+rallies two Soldiers, attack-moves one of them down the route the wave walks,
+and leaves one worker out on that route with nothing in range to save it. No
+enemy starts within reach of anything: the first wave fires at tick 3000 and
+the nearest Ghoul is then ~186 cells from every player entity, so the exit
+line's `first_combat_tick` being strictly greater than 3000 is the proof that
+combat had to be walked into. `tests/rts_acceptance.rs` pins the five combat
+tokens exactly, compares two processes' whole exit lines, and asserts that both
+phase-1 scripts — which end long before tick 3000 — still report
+`kills=0 losses=0 enemies_spawned=0 first_combat_tick=none hq_alive=1`.
 
 A second tracked script, `assets/scenarios/rts_feedback_polish_v1.script`,
 drives the chrome path the canonical run deliberately does not carry: select

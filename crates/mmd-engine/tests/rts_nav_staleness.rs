@@ -12,7 +12,17 @@ use mmd_engine::rts::{
     RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind, units_overlap,
 };
 use mmd_engine::scenario::Cell;
-use mmd_engine::testkit::RtsHarness;
+use mmd_engine::testkit::{RtsHarness, fixture_path};
+
+/// The enemy-free twin of the tracked scene, for horizons that cross its
+/// first wave tick (3000): `fixture_rts_baseline_v1.ron` is a byte-identical
+/// copy taken immediately before the combat gate scripted enemies into the
+/// scene, so every pinned number below keeps its meaning.
+fn baseline_scene() -> RtsHarness {
+    RtsHarness::path(fixture_path("fixture_rts_baseline_v1"))
+        .build()
+        .expect("baseline scene harness")
+}
 
 /// The scene is 320 x 320 cells.
 const GRID: u32 = 320;
@@ -120,7 +130,7 @@ fn arrived(p: [f32; 2], dest: Cell) -> bool {
 /// one of them must re-path around the new wall, not grind into it.
 #[test]
 fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     // Far enough that even at the tripled worker speed the walker is still
     // in flight when the Depot's build timer lands the stamp, not already
     // idle at its destination.
@@ -184,7 +194,7 @@ fn a_walking_unit_re_paths_when_a_building_blocks_its_route() {
 /// `Gather` used to fall through on a bottomed-out field and hang forever.
 #[test]
 fn an_evicted_field_does_not_hang_a_gather() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let worker = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
     let node = crystal_node(&h);
     assert!(h.world_mut().order_gather(worker, node));
@@ -206,7 +216,7 @@ fn an_evicted_field_does_not_hang_a_gather() {
 /// the *preferred* eviction victim — and used to hang, resources sunk.
 #[test]
 fn an_evicted_field_does_not_hang_a_build() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let (depot, _) = place_depot(&mut h);
     evict_every_field(&mut h);
 
@@ -329,7 +339,7 @@ fn a_unit_caught_in_a_finished_footprint_escapes() {
 #[test]
 fn a_parked_body_plugs_the_single_file_depot_corridor() {
     // (a) Corridor plugged by the builder that raised the Depot.
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let (depot, builder) = place_depot(&mut h);
     for _ in 0..1_000 {
         h.step_exact(1);
@@ -371,7 +381,7 @@ fn a_parked_body_plugs_the_single_file_depot_corridor() {
 
     // (b) The identical walk, with the corridor clear, arrives. This is what
     // makes (a) a statement about bodies and not about the mask.
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let (depot, builder) = place_depot(&mut h);
     for _ in 0..1_000 {
         h.step_exact(1);
@@ -398,7 +408,7 @@ fn a_parked_body_plugs_the_single_file_depot_corridor() {
 /// moving.
 #[test]
 fn a_unit_caught_in_a_finished_footprint_can_still_gather() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let caught = spawn_worker(&mut h, DEPOT_CENTER);
     let (depot, _) = place_depot(&mut h);
     for _ in 0..1_000 {

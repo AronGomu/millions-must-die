@@ -34,6 +34,16 @@ const FOCUSED_SCRIPT: &str = "assets/scenarios/rts_feedback_polish_v1.script";
 /// Frame budget for the focused script. It quits at frame 72.
 const FOCUSED_FRAMES: &str = "300";
 
+/// The tracked combat script (`T12`), relative to the crate root.
+const COMBAT_SCRIPT: &str = "assets/scenarios/rts_combat_v1.script";
+/// Frame budget the merge gate gives it. The script quits at frame 4460.
+const COMBAT_FRAMES: &str = "4500";
+/// Tick the gate scene's first enemy wave fires on (first `at_tick` in
+/// `assets/scenarios/rts_prototype_v1.ron`).
+const FIRST_SPAWN_TICK: u32 = 3000;
+/// Every enemy the gate scene scripts, across all four waves.
+const TOTAL_ENEMIES: u32 = 400;
+
 /// Serializes every subprocess this file spawns against the real GPU — the
 /// same reason `tests/rts_cli_contract.rs` does it: enough thousand-frame runs
 /// overlapping on one physical device trips `VK_ERROR_DEVICE_LOST`.
@@ -103,6 +113,16 @@ impl Cli {
         let hash = self.exit_field("hash").to_string();
         assert_eq!(hash.len(), 64, "{self}\nstate hash is not 32 bytes of hex");
         hash
+    }
+
+    /// The `first_combat_tick` exit token: `none`, or the tick number.
+    fn exit_first_combat(&self) -> Option<u32> {
+        match self.exit_field("first_combat_tick") {
+            "none" => None,
+            raw => Some(raw.parse().unwrap_or_else(|e| {
+                panic!("{self}\n`first_combat_tick={raw}` is neither `none` nor a number: {e}")
+            })),
+        }
     }
 
     /// The `T17` joined observation of one run, in exit-line field order.
@@ -246,6 +266,40 @@ fn focused_run() -> Cli {
     ])
 }
 
+/// The tracked combat run, as the merge gate lists it (`T12`).
+fn combat_run() -> Cli {
+    rts(&[
+        "--frames",
+        COMBAT_FRAMES,
+        "--inject-input-file",
+        COMBAT_SCRIPT,
+    ])
+}
+
+/// One combat run, shared by every case that only reads its exit line — same
+/// device-serialisation reason as [`shared_acceptance_run`], and this one is
+/// the longest process the suite spends.
+fn shared_combat_run(case: &str) -> Option<&'static Cli> {
+    static RUN: OnceLock<Option<Cli>> = OnceLock::new();
+    RUN.get_or_init(|| or_skip("the tracked combat run", combat_run()))
+        .as_ref()
+        .or_else(|| {
+            eprintln!("SKIP {case}: no GPU device on this host");
+            None
+        })
+}
+
+/// A *second*, independent combat process, for the determinism case.
+fn second_combat_run(case: &str) -> Option<&'static Cli> {
+    static RUN: OnceLock<Option<Cli>> = OnceLock::new();
+    RUN.get_or_init(|| or_skip("a second tracked combat run", combat_run()))
+        .as_ref()
+        .or_else(|| {
+            eprintln!("SKIP {case}: no GPU device on this host");
+            None
+        })
+}
+
 /// A *second*, independent canonical process, shared by the two determinism
 /// cases below.
 ///
@@ -300,7 +354,11 @@ fn shared_acceptance_run(case: &str) -> Option<&'static Cli> {
         })
 }
 
-const RUN_DEADLINE: Duration = Duration::from_secs(120);
+/// Wall-clock ceiling for one spawned run. Generous because the `T12` combat
+/// run renders 4500 frames — about 2.8x the canonical 1600-frame run that used
+/// to set this budget — and a hard kill would be reported as "a frame budget
+/// stopped being honoured" rather than as the slow host it actually is.
+const RUN_DEADLINE: Duration = Duration::from_secs(300);
 
 fn run_to_completion(mut cmd: Command, label: String) -> Cli {
     let _guard = gpu_guard();
@@ -1073,4 +1131,222 @@ fn the_focused_run_fires_every_entry() {
     short
         .assert_actionable_failure()
         .assert_says(&["never fired"]);
+}
+
+// ---------------------------------------------------------------------------
+// T12: the combat gate run
+// ---------------------------------------------------------------------------
+
+/// The tracked combat script drives the shipped binary from an empty base
+/// through an economy opening, a Barracks, two Soldiers and a Turret, into the
+/// scene's first enemy wave — and exits cleanly.
+#[test]
+fn the_combat_script_runs_clean() {
+    let Some(cli) = shared_combat_run("the_combat_script_runs_clean") else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(
+        cli.stdout
+            .lines()
+            .filter(|l| l.starts_with("rts: clean exit"))
+            .count(),
+        1,
+        "{cli}\nexactly one clean-exit line"
+    );
+    assert_eq!(
+        cli.exit_field("quit"),
+        "true",
+        "{cli}\nthe script must quit"
+    );
+    assert!(
+        !cli.combined().contains("never fired"),
+        "{cli}\nan entry of the tracked combat script never fired"
+    );
+}
+
+/// The five combat tokens close the exit line, in exactly the documented
+/// order. Position is the contract: a reader that splits on whitespace and
+/// counts must keep working.
+#[test]
+fn combat_tokens_close_the_exit_line_in_order() {
+    let Some(cli) = shared_combat_run("combat_tokens_close_the_exit_line_in_order") else {
+        return;
+    };
+    let tokens: Vec<&str> = cli.exit_line().split_whitespace().collect();
+    let at = |prefix: &str| {
+        tokens
+            .iter()
+            .position(|t| t.starts_with(prefix))
+            .unwrap_or_else(|| panic!("{cli}\nexit line has no `{prefix}`"))
+    };
+    let base = at("show_grid=");
+    for (offset, prefix) in [
+        "kills=",
+        "losses=",
+        "enemies_spawned=",
+        "first_combat_tick=",
+        "hq_alive=",
+    ]
+    .iter()
+    .enumerate()
+    {
+        assert_eq!(
+            at(prefix),
+            base + 1 + offset,
+            "{cli}\n`{prefix}` out of pinned order"
+        );
+    }
+    assert_eq!(
+        base + 6,
+        tokens.len(),
+        "{cli}\nhq_alive must end the exit line"
+    );
+}
+
+/// The point of the scene's wave table: no enemy starts in contact range, so
+/// the first shot is only possible after they marched. `first_combat_tick`
+/// strictly after the first spawn tick is what proves it.
+#[test]
+fn combat_begins_by_marching() {
+    let Some(cli) = shared_combat_run("combat_begins_by_marching") else {
+        return;
+    };
+    cli.assert_success();
+    let first = cli
+        .exit_first_combat()
+        .unwrap_or_else(|| panic!("{cli}\nthe combat run never fought"));
+    assert!(
+        first > FIRST_SPAWN_TICK,
+        "{cli}\nfirst combat at tick {first} is not after the first spawn at \
+         {FIRST_SPAWN_TICK}: something started already in range"
+    );
+    assert_eq!(
+        cli.exit_u32("enemies_spawned"),
+        TOTAL_ENEMIES,
+        "{cli}\nthe scene's four waves must all have fired"
+    );
+    assert!(
+        cli.exit_u32("kills") >= 1,
+        "{cli}\nnothing died to the player"
+    );
+    assert!(
+        cli.exit_u32("losses") >= 1,
+        "{cli}\nnothing died to the enemy"
+    );
+    assert_eq!(
+        cli.exit_u32("hq_alive"),
+        1,
+        "{cli}\nthe base was supposed to hold"
+    );
+}
+
+/// Anti-vacuity for the combat run's clean exit: the same script under a
+/// budget that ends before its last entry must fail.
+#[test]
+fn the_combat_run_fires_every_entry() {
+    let Some(cli) = shared_combat_run("the_combat_run_fires_every_entry") else {
+        return;
+    };
+    cli.assert_success();
+    let Some(short) = or_skip(
+        "the_combat_run_fires_every_entry",
+        rts(&["--frames", "30", "--inject-input-file", COMBAT_SCRIPT]),
+    ) else {
+        return;
+    };
+    short
+        .assert_actionable_failure()
+        .assert_says(&["never fired"]);
+}
+
+/// The combat tokens, pinned to the values a verified run produced. The
+/// invariants above say what the run must *mean*; this says it has not
+/// drifted. A change here is a real behaviour change and wants a reviewed
+/// re-baseline, not a silent edit.
+#[test]
+fn combat_tokens_exact() {
+    let Some(cli) = shared_combat_run("combat_tokens_exact") else {
+        return;
+    };
+    cli.assert_success();
+    assert_eq!(cli.exit_u32("kills"), 2, "{cli}");
+    assert_eq!(cli.exit_u32("losses"), 5, "{cli}");
+    assert_eq!(cli.exit_u32("enemies_spawned"), TOTAL_ENEMIES, "{cli}");
+    assert_eq!(cli.exit_first_combat(), Some(3691), "{cli}");
+    assert_eq!(cli.exit_u32("hq_alive"), 1, "{cli}");
+    assert_eq!(
+        cli.exit_u32("body_overlaps"),
+        0,
+        "{cli}\nADR 021 holds under combat"
+    );
+    assert_eq!(
+        cli.exit_u32("frames"),
+        4459,
+        "{cli}\nthe script quits at 4460"
+    );
+    assert_eq!(
+        cli.exit_u32("tick"),
+        4459,
+        "{cli}\nnothing in this script pauses"
+    );
+}
+
+/// Two processes running the combat script agree on the whole exit line —
+/// one string compare that covers the state hash and every counter, so a
+/// token added later is compared for free.
+#[test]
+fn combat_run_is_cross_process_deterministic() {
+    let Some(a) = shared_combat_run("combat_run_is_cross_process_deterministic") else {
+        return;
+    };
+    let Some(b) = second_combat_run("combat_run_is_cross_process_deterministic") else {
+        return;
+    };
+    a.assert_success();
+    b.assert_success();
+    assert_eq!(
+        a.exit_line(),
+        b.exit_line(),
+        "{a}\n{b}\ntwo processes running the combat script disagreed"
+    );
+}
+
+/// The teeth of the `T12` re-baseline: the two phase-1 scripts run entirely
+/// before the gate scene's first wave tick, so putting enemies into that
+/// scene must have moved nothing about them. Both runs stay bloodless.
+#[test]
+fn phase1_scripts_report_bloodless_combat_tokens() {
+    fn assert_bloodless(cli: &Cli, label: &str) {
+        cli.assert_success();
+        assert_eq!(cli.exit_u32("kills"), 0, "{cli}\n{label} run drew blood");
+        assert_eq!(
+            cli.exit_u32("losses"),
+            0,
+            "{cli}\n{label} run lost something"
+        );
+        assert_eq!(
+            cli.exit_u32("enemies_spawned"),
+            0,
+            "{cli}\n{label} run ends before the first wave tick {FIRST_SPAWN_TICK}"
+        );
+        assert_eq!(
+            cli.exit_first_combat(),
+            None,
+            "{cli}\n{label} run must be combat-free"
+        );
+        assert_eq!(
+            cli.exit_u32("hq_alive"),
+            1,
+            "{cli}\n{label} run lost its HQ"
+        );
+    }
+
+    let case = "phase1_scripts_report_bloodless_combat_tokens";
+    if let Some(cli) = shared_acceptance_run(case) {
+        assert_bloodless(cli, "canonical");
+    }
+    if let Some(cli) = shared_focused_run(case) {
+        assert_bloodless(cli, "focused");
+    }
 }

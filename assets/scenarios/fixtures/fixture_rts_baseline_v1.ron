@@ -96,18 +96,5 @@
       (x: 136, y: 168),
       (x: 196, y: 168),
     ],
-    enemies: Some((
-      pre_placed: [],
-      spawn_points: [
-        (x: 14, y: 304),
-        (x: 306, y: 304),
-      ],
-      waves: [
-        (at_tick: 3000, count: 12, spawn_point: 0),
-        (at_tick: 4100, count: 150, spawn_point: 0),
-        (at_tick: 4160, count: 150, spawn_point: 1),
-        (at_tick: 4220, count: 88, spawn_point: 1),
-      ],
-    )),
   )),
 )

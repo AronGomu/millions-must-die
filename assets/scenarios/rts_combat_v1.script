@@ -1,0 +1,79 @@
+# Phase-2 combat gate: economy -> army -> waves -> fight -> deaths, on the
+# shared gate scene (waves at ticks 3000/4100/4160/4220 from the far south
+# corners). Frames are 1-based; nothing here pauses, so tick = frame - 1.
+#
+# Coordinates are screen pixels at the starting camera, which sits on the HQ
+# centre (172,172) after the T7 build-grid re-cut: the *centre* of ground cell
+# (x,y) maps to (960 + 4*(x-y), 542 + 2*(x + y - 344)). Resource nodes are
+# clicked on their visible sprite quad instead, which sits above their ground
+# point — the pixel below is the one the phase-1.1 script already proved.
+#
+# Every world coordinate here was solved offline against the scene's own
+# obstacle lattice: each building footprint is checked clear of terrain, nodes
+# and the HQ, each body position is checked against the radius-3 clearance
+# rule, and the sacrifice/attack-move cells sit on the flow-field route the
+# south-west wave actually walks (which swings east, not up the west flank).
+#
+# Positional keys are deliberate (the pointer-card rule was the phase-1.1
+# script's own): E = worker slot 2 (Barracks), A = worker slot 3 (Turret) /
+# armed slot 3 (Attack), C = producer slot 8 (Set Rally), Q = slot 0.
+
+1:move:960,540
+5:drag:800,530,900,600         # box-select the six starting workers (spawn row y=190)
+10:rclick:897,387              # all six gather the NW crystal node (140,150) - war chest
+
+# Each specialist is detached and given its whole job in one burst, while the
+# group is still near the spawn cells: a worker re-selected later is a worker
+# standing inside some building's pick shape, and a building wins that pick.
+#
+# Turret first (75c of the starting 300), and deliberately FORWARD of the base.
+# The whole faction marches at one cell - the HQ's approach cell (160,156),
+# which `entity_approach_cell`'s ring scan puts on the HQ's north face - and
+# the walk from the south-west corner is ~250 cells at 0.3 cells/tick, i.e.
+# ~830 ticks. A turret at the base would therefore only get ~250 ticks of fire
+# before the run ends; at (144,224) it opens fire around tick 3425 and gets
+# ~1000, which is what turns contact into corpses.
+12:lclick:860,564              # worker over spawn cell (165,190): the turret builder
+14:key:a                       # worker card slot 3 = Turret ghost (75c, 8 cells = 1x1)
+16:move:640,606
+17:lclick:640,606              # cursor cell (148,228) -> min corner (144,224), square-aligned
+18:rclick:640,606              # send the selected worker onto its own site
+
+# The sacrifice walks to (94,259): on the wave's own route, 62 cells from the
+# turret and 69 from the rally, so it is outside both turret range 36 and
+# soldier range 24 and nothing can save it. It sits on route step 80 of 220,
+# ahead of the turret's own first-contact step 104.
+22:lclick:868,568              # worker over spawn cell (167,190): the sacrifice
+24:rclick:300,560              # walk it down the corridor to (94,259)
+
+# Barracks, built by a third worker (150c / 25g).
+28:lclick:848,558              # worker over spawn cell (162,190): the Barracks builder
+30:key:e                       # worker card slot 2 = Barracks ghost (16 cells = 2x2)
+32:move:896,494
+33:lclick:896,494              # cursor cell (152,168) -> min corner (144,160), square-aligned
+34:rclick:896,494              # send the selected worker onto its own site
+
+# Army: rally first, then two Soldiers (supply 6 + 2x2 = 10 = the cap).
+# Frame 900 is the phase-1.1 script's own proven "the Barracks has finished"
+# beat, not an estimate.
+900:lclick:896,494             # select the finished Barracks (centre cell 152,168)
+902:key:c                      # producer slot 8 = Set Rally
+904:lclick:688,582             # rally at (148,216), 12 cells behind the turret
+906:key:q                      # queue Soldier 1 (50c / 25g)
+910:key:q                      # queue Soldier 2
+
+# Ordered engagement: one soldier attack-moves down the corridor the wave
+# walks; the other stays Idle at the rally (the auto-acquire class, in range
+# 24 of that same stretch of route).
+1900:lclick:688,582            # select one soldier at the rally post
+1902:key:a                     # armed card slot 3 = Attack (arms A-mode)
+1904:lclick:544,606            # A-move to (136,240): 17 cells forward of the
+# turret, so the ordered engagement still fights under turret cover.
+
+# Waves fire at ticks 3000/4100/4160/4220. Wave 1 (12 ghouls) reaches the
+# sacrificed worker at route step 80, kills it, walks into turret range at step
+# 104 (~tick 3425) and dies there to the turret + the A-moved soldier + the
+# idle soldier. The hordes (388) spawn before the exit and are still hundreds
+# of ticks of marching short of the base when it comes.
+4440:key:f1                    # overlay on for the final frames
+4460:quit

@@ -11,7 +11,17 @@ use mmd_engine::rts::{
     produce_ticks, unit_cost, units_overlap,
 };
 use mmd_engine::scenario::Cell;
-use mmd_engine::testkit::RtsHarness;
+use mmd_engine::testkit::{RtsHarness, fixture_path};
+
+/// The enemy-free twin of the tracked scene, for horizons that cross its
+/// first wave tick (3000): `fixture_rts_baseline_v1.ron` is a byte-identical
+/// copy taken immediately before the combat gate scripted enemies into the
+/// scene, so every pinned number below keeps its meaning.
+fn baseline_scene() -> RtsHarness {
+    RtsHarness::path(fixture_path("fixture_rts_baseline_v1"))
+        .build()
+        .expect("baseline scene harness")
+}
 
 mod common;
 use common::{ONE_FREE_CENTRE, one_free_centre_spec};
@@ -225,7 +235,7 @@ fn enqueue_rejects_a_soldier_at_the_hq() {
 
 #[test]
 fn enqueue_rejects_a_worker_at_a_barracks() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     h.world_mut().resources_mut().crystal = 10_000;
     h.world_mut().resources_mut().gas = 10_000;
@@ -256,7 +266,7 @@ fn enqueue_rejects_a_site() {
 
 #[test]
 fn enqueue_rejects_a_full_queue() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let hq = h.world().start_hq().expect("hq");
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     // Raise the supply cap first: the default cap 10 with 6 already used only
@@ -343,7 +353,7 @@ fn enqueue_reserves_supply_immediately() {
 
 #[test]
 fn queueing_cannot_exceed_the_cap() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     assert_eq!(h.world().supply().cap(), 10);
     assert_eq!(h.world().supply().used(), 6);
@@ -552,7 +562,7 @@ fn supply_used_counts_reservations() {
 
 #[test]
 fn reserved_supply_reports_the_queues() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w2 = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0];
     let barracks = build_and_finish(&mut h, BuildingKind::Barracks, BARRACKS_CORNER, w2);
     let hq = h.world().start_hq().expect("hq");
@@ -568,7 +578,7 @@ fn reserved_supply_reports_the_queues() {
 
 #[test]
 fn a_barracks_produces_a_soldier() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let barracks = build_and_finish(&mut h, BuildingKind::Barracks, BARRACKS_CORNER, w0);
     // Reset gas after the Barracks's own construction cost so the assertion
@@ -626,7 +636,7 @@ fn production_stops_when_the_store_is_full() {
 /// from completion because public enqueue correctly rejects ordinary sites.
 #[test]
 fn a_barracks_can_be_queued_the_tick_it_finishes() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     h.world_mut().resources_mut().crystal = 10_000;
     h.world_mut().resources_mut().gas = 10_000;
@@ -1116,7 +1126,7 @@ fn rally_onto_a_node_makes_produced_workers_gather() {
 
 #[test]
 fn rally_onto_a_unit_makes_produced_units_follow() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let barracks = build_and_finish(&mut h, BuildingKind::Barracks, BARRACKS_CORNER, w0);
     h.world_mut().resources_mut().gas = 100;
