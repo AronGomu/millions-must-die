@@ -1854,3 +1854,138 @@ fn control_id_from_grid_hit_returns_grid_control() {
         Some(ControlId::Grid)
     );
 }
+
+// ─── T4: armed card + enemy card tests ───────────────────────────────────────
+
+#[test]
+fn card_shows_attack_stop_for_armed() {
+    // (a) Soldier selected
+    {
+        let mut h = scene();
+        let soldier = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [100.5, 100.5],
+            )
+            .expect("spawn soldier");
+        h.world_mut().selection_mut().clear();
+        h.world_mut().selection_mut().insert(soldier);
+        let slots = command_slots(h.world());
+        assert_eq!(slots[3].command, Some(CommandId::Attack));
+        assert!(slots[3].enabled);
+        assert_eq!(slots[4].command, Some(CommandId::Stop));
+        assert!(slots[4].enabled);
+        for i in [0, 1, 2, 5, 6, 7, 8] {
+            assert!(
+                slots[i].command.is_none(),
+                "slot {i} must be empty for armed-only card"
+            );
+        }
+    }
+    // (b) Soldier + Worker selected: Attack/Stop still shown
+    {
+        let mut h = scene();
+        let soldier = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [100.5, 100.5],
+            )
+            .expect("spawn soldier");
+        let ww = workers(&h);
+        h.world_mut().selection_mut().clear();
+        h.world_mut().selection_mut().insert(soldier);
+        h.world_mut().selection_mut().insert(ww[0]);
+        let slots = command_slots(h.world());
+        assert_eq!(slots[3].command, Some(CommandId::Attack));
+        assert_eq!(slots[4].command, Some(CommandId::Stop));
+    }
+    // (c) workers only: slots 0/1/2 build, 3/4 None
+    {
+        let mut h = scene();
+        let ww = workers(&h);
+        h.world_mut().selection_mut().clear();
+        h.world_mut().selection_mut().insert(ww[0]);
+        let slots = command_slots(h.world());
+        assert!(
+            slots[3].command.is_none(),
+            "slot 3 must be empty for worker-only"
+        );
+        assert!(
+            slots[4].command.is_none(),
+            "slot 4 must be empty for worker-only"
+        );
+        assert!(slots[0].command.is_some(), "worker card has slot 0");
+    }
+}
+
+#[test]
+fn enemy_selection_shows_no_commands() {
+    use mmd_engine::rts::OWNER_ENEMY;
+    let mut h = scene();
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [60.5, 60.5])
+        .expect("spawn ghoul");
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(ghoul);
+    let slots = command_slots(h.world());
+    for (i, slot) in slots.iter().enumerate() {
+        assert!(
+            slot.command.is_none(),
+            "slot {i} must be None for enemy selection"
+        );
+    }
+}
+
+#[test]
+fn enemy_card_two_lines_kind_and_hp() {
+    use mmd_engine::rts::OWNER_ENEMY;
+    let mut h = scene();
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [60.5, 60.5])
+        .expect("spawn ghoul");
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(ghoul);
+
+    // Line 1: kind
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    let line1 = text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10);
+    assert_eq!(line1, kind_label(EntityKind::Unit(UnitKind::Ghoul)));
+
+    // Line 2: HP 30/30 (undamaged)
+    let hp_line = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        12,
+    );
+    assert!(
+        hp_line.contains("30/30"),
+        "expected HP 30/30, got: {hp_line:?}"
+    );
+
+    // After 6 damage: armor=0 → hp = 30 - 6 = 24 → HP 24/30
+    h.world_mut().apply_damage(ghoul, 6);
+    let mut frame2 = RtsFrame::new();
+    pack_hud(h.world(), &mut frame2);
+    let hp_line2 = text_at(
+        &frame2,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        12,
+    );
+    assert!(
+        hp_line2.contains("24/30"),
+        "expected HP 24/30 after 6 damage, got: {hp_line2:?}"
+    );
+}

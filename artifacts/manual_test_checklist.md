@@ -820,3 +820,20 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Confirm units can walk over the ground the dead HQ used to occupy — the footprint is released, not left as an invisible wall.
 - [ ] Watch a Ghoul attacking the HQ and confirm the attacks are evenly spaced pulses, not a continuous stream — there is a visible pause between one hit and the next.
 - [ ] Run the same fixture twice, letting each run reach the same tick, and confirm the two fights look identical — same Ghouls dead, same positions.
+
+## T4 player-combat-commands
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron`. Produce a Soldier from the Barracks (or wait for one to arrive). Select the Soldier — confirm slots **A** (Attack) and **S** (Stop) appear in the command card with colored icons, and slots Q/W/E/Z/X/C remain empty.
+- [ ] With a Worker selected (no Soldier), confirm the command card shows only the three build buttons (Q=HQ, W=Depot, E=Barracks) and **no** Attack or Stop buttons.
+- [ ] Left-click a Ghoul on screen — confirm its card appears in the detail panel showing `GHOUL` on line 1 and `HP <cur>/<max>` on line 2. Confirm **no** command buttons are visible.
+- [ ] With the Ghoul still selected, right-click anywhere on open ground — confirm a **reject sound** plays and the Ghoul stays selected (no order is issued).
+- [ ] Select a Soldier. Press **A** (arm attack-targeting mode). Without clicking, press **Escape** — confirm no order was issued, the Pause Menu did **not** open, and the attack mode is cancelled (pressing A again re-arms it).
+- [ ] Select a Soldier. Press **A**. Right-click on empty ground — confirm a **reject beep** is *not* heard (right-click cancels the mode silently, same as placement ghost).
+- [ ] Select a Soldier. Press **A**. Left-click on an empty ground cell — confirm the Soldier begins walking toward that cell and a **voice order sound** plays (attack-move).
+- [ ] Select a Soldier. Press **A**. Left-click directly on a Ghoul's sprite — confirm the Soldier closes on that specific Ghoul and fires when in range (targeted attack), and a voice sound plays.
+- [ ] Select a Soldier. **Right-click** directly on a Ghoul without pressing A first — confirm the Soldier immediately begins attacking that Ghoul (direct attack shortcut), and a voice sound plays.
+- [ ] With a Soldier on an attack order (chasing a Ghoul), press **S** (Stop) — confirm the Soldier halts immediately and a voice order sound plays; it should resume auto-attacking nearby Ghouls from its new idle position.
+- [ ] Select a mixed group (Worker + Soldier). Press **A** and click on a Ghoul — confirm the Soldier attacks the Ghoul and the Worker walks to a position near it (formation) rather than fighting.
+- [ ] Select a mixed group (Worker + Soldier). Press **S** — confirm both units idle and a single voice batch plays (not two separate sounds).
+- [ ] Shift-click a Ghoul while a Worker is selected — confirm the Worker is **deselected** and only the Ghoul appears in the selection panel (no owner-mixing).
+- [ ] Drag-box across a group of Workers and Ghouls — confirm only the Workers end up selected; the Ghouls are excluded from the box selection.

@@ -13,7 +13,11 @@
 use crate::render::{DrawGroup, GLYPH_H_PX, GLYPH_W_PX, SpriteInstance, frame_uv_rect, push_text};
 
 use super::build::supply_grant;
-use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
+use super::combat::weapon;
+use super::entity::{
+    BuildingKind, EntityId, EntityKind, EntityStore, OWNER_ENEMY, OWNER_PLAYER, ResourceKind,
+    UnitKind, max_hp,
+};
 use super::minimap::minimap_projection;
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
 use super::production::produce_ticks;
@@ -671,6 +675,8 @@ pub enum CommandId {
     TrainWorker,
     TrainSoldier,
     SetRally,
+    Attack,
+    Stop,
 }
 
 /// One cell of the 3x3 command grid.
@@ -694,6 +700,8 @@ fn command_icon(cmd: CommandId) -> Prop {
         CommandId::TrainWorker => Prop::IconTrainWorker,
         CommandId::TrainSoldier => Prop::IconTrainSoldier,
         CommandId::SetRally => Prop::IconSetRally,
+        CommandId::Attack => Prop::IconAttack,
+        CommandId::Stop => Prop::IconStop,
     }
 }
 
@@ -713,6 +721,7 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
     let store = world.entities();
 
     let mut worker_count = 0u32;
+    let mut armed_count = 0u32;
     let mut building_count = 0u32;
     let mut disqualified = false;
     let mut finished_building: Option<BuildingKind> = None;
@@ -721,8 +730,15 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
         let Some(slot) = store.slot(id) else {
             continue; // stale — not counted either way
         };
+        if store.owner(slot) != OWNER_PLAYER {
+            // The read-only enemy card offers no command at all.
+            disqualified = true;
+            continue;
+        }
         match store.kind(slot) {
             EntityKind::Unit(UnitKind::Worker) => worker_count += 1,
+            EntityKind::Unit(kind) if weapon(kind).is_some() => armed_count += 1,
+            EntityKind::Unit(_) => disqualified = true,
             EntityKind::Building(kind) => {
                 building_count += 1;
                 if store.progress_target(slot) == 0 {
@@ -737,7 +753,17 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
 
     let mut out = [EMPTY_SLOT; 9];
 
-    if worker_count > 0 && building_count == 0 && !disqualified {
+    if armed_count > 0 && building_count == 0 && !disqualified {
+        // Slot 3 = key A, slot 4 = key S (row-major QWE/ASD/ZXC).
+        out[3] = CommandSlot {
+            command: Some(CommandId::Attack),
+            enabled: true,
+        };
+        out[4] = CommandSlot {
+            command: Some(CommandId::Stop),
+            enabled: true,
+        };
+    } else if worker_count > 0 && building_count == 0 && !disqualified {
         out[0] = CommandSlot {
             command: Some(CommandId::BuildHq),
             enabled: true,
@@ -750,7 +776,7 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
             command: Some(CommandId::BuildBarracks),
             enabled: true,
         };
-    } else if worker_count == 0 && building_count == 1 && !disqualified {
+    } else if worker_count == 0 && armed_count == 0 && building_count == 1 && !disqualified {
         let produce = match finished_building {
             Some(BuildingKind::Hq) => Some(CommandId::TrainWorker),
             Some(BuildingKind::Barracks) => Some(CommandId::TrainSoldier),
@@ -954,6 +980,15 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
     let kind = store.kind(slot);
     push_text(font, kind_label(kind), [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
     y += PANEL_LINE_PX;
+
+    // Read-only enemy card: exactly two lines — the kind and HP cur/max.
+    if store.owner(slot) == OWNER_ENEMY {
+        let mut cx = x;
+        cx += push_text(font, "HP ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+        let s = fmt_ratio(&mut buf, store.hp(slot), max_hp(kind));
+        push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+        return;
+    }
 
     match kind {
         EntityKind::Unit(UnitKind::Worker) => match store.carry(slot) {

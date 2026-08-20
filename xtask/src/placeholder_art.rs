@@ -69,6 +69,8 @@ const ICON_BUILD_BARRACKS_COLOR: [u8; 4] = [150, 110, 60, 255];
 const ICON_TRAIN_WORKER_COLOR: [u8; 4] = [60, 150, 220, 255];
 const ICON_TRAIN_SOLDIER_COLOR: [u8; 4] = [190, 70, 60, 255];
 const ICON_SET_RALLY_COLOR: [u8; 4] = [240, 200, 60, 255];
+const ICON_ATTACK_COLOR: [u8; 4] = [220, 60, 40, 255];
+const ICON_STOP_COLOR: [u8; 4] = [200, 200, 210, 255];
 
 /// Tracked placeholder set manifest (one per family).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -315,6 +317,8 @@ fn draw_props_cell(tile: &mut [u8], row: u32, col: u32) {
         (3, 1) => draw_hud_icon(tile, ICON_TRAIN_WORKER_COLOR),
         (3, 2) => draw_hud_icon(tile, ICON_TRAIN_SOLDIER_COLOR),
         (3, 3) => draw_hud_icon(tile, ICON_SET_RALLY_COLOR),
+        (4, 0) => draw_hud_icon(tile, ICON_ATTACK_COLOR),
+        (4, 1) => draw_hud_icon(tile, ICON_STOP_COLOR),
         _ => {}
     }
 }
@@ -919,8 +923,13 @@ mod tests {
         }
         let props = encode_rts_png(3).expect("props");
         let (w2, _h2, px2) = decode_png(&props);
+        // Row 4 col 0 = IconAttack, col 1 = IconStop — not transparent.
+        let used_in_row4: &[(u32, u32)] = &[(4, 0), (4, 1)];
         for row in 4..RTS_FRAMES_Y {
             for col in 0..RTS_FRAMES_X {
+                if used_in_row4.contains(&(row, col)) {
+                    continue;
+                }
                 let cell = extract_cell(&px2, w2, col, row);
                 assert!(
                     cell.chunks_exact(4).all(|p| p == [0, 0, 0, 0]),

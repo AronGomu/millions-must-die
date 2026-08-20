@@ -45,6 +45,9 @@ pub enum IssuedOrder {
     Move,
     Gather,
     Build,
+    Attack,
+    AttackMove,
+    Stop,
 }
 
 /// What one group command is pointed at — the only thing that differs between
@@ -59,6 +62,8 @@ enum GroupTarget {
     /// A building under construction: workers attend it, anything else is
     /// rejected outright.
     Site(EntityId),
+    /// Attack-move: armed members fight on the way, unarmed members just walk.
+    AttackGround(Cell),
 }
 
 /// One unit's outcome from a context-order click.
@@ -96,6 +101,37 @@ pub struct ContextOrderResult {
     pub accepted: usize,
     pub rejected: usize,
     pub reason: Option<ContextOrderReason>,
+}
+
+/// Why a [`RtsWorld::cmd_attack_target`], [`RtsWorld::cmd_attack_move`] or
+/// [`RtsWorld::cmd_stop`] was refused whole. Every variant leaves the world
+/// untouched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommandRejectReason {
+    /// The selection holds no live player-owned unit.
+    EmptySelection,
+    /// Attack-target needs at least one armed unit in the selection.
+    NoArmedUnits,
+    /// The attack target is stale, dead, or not enemy-owned.
+    NoTarget,
+    /// No navigation field could be built to the command's anchor cell.
+    Unreachable,
+    /// Fewer legal formation slots than the walking members need —
+    /// whole-order refusal, the same rule Move has always had.
+    NoFormationSpace,
+}
+
+/// The outcome of one [`RtsWorld::cmd_attack_target`],
+/// [`RtsWorld::cmd_attack_move`] or [`RtsWorld::cmd_stop`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CommandReceipt {
+    /// Orders actually written — one receipt each in the caller's buffer,
+    /// ascending by entity slot.
+    pub accepted: usize,
+    /// Selected orderable units this command left unordered.
+    pub rejected: usize,
+    /// Set exactly when the whole command was refused (`accepted == 0`).
+    pub reason: Option<CommandRejectReason>,
 }
 
 /// Reusable per-call receipt buffer for [`RtsWorld::issue_context_order_at`].
@@ -1173,7 +1209,19 @@ impl RtsWorld {
         let pick = pick_at(self, view, screen);
         match pick {
             Pick::Unit(id) | Pick::Building(id) | Pick::Node(id) => {
-                self.selection.toggle(id);
+                let enemy = |eid: EntityId| {
+                    self.entities
+                        .slot(eid)
+                        .is_some_and(|s| self.entities.owner(s) == OWNER_ENEMY)
+                };
+                // An enemy selection is read-only and always exactly one: additive
+                // refinement never mixes owners, in either direction.
+                if enemy(id) || self.selection.ids().iter().any(|&sel| enemy(sel)) {
+                    self.selection.clear();
+                    self.selection.insert(id);
+                } else {
+                    self.selection.toggle(id);
+                }
             }
             Pick::Nothing => {}
         }
@@ -1241,6 +1289,198 @@ impl RtsWorld {
         self.order_group(ids, GroupTarget::Ground(dest), None)
     }
 
+    /// Player command: attack-move the current selection to `cell`.
+    ///
+    /// Armed members take [`Order::AttackMove`], unarmed ones a plain
+    /// [`Order::Move`]; lattice, shared anchor field and the whole-or-nothing
+    /// `NoFormationSpace` rule are exactly Move's.
+    pub fn cmd_attack_move(
+        &mut self,
+        cell: Cell,
+        receipts: &mut OrderReceiptBuffer,
+    ) -> CommandReceipt {
+        let mut scratch = std::mem::take(&mut self.pick_scratch);
+        scratch.clear();
+        scratch.extend_from_slice(self.selection.ids());
+        let selected = scratch
+            .iter()
+            .filter(|&&id| self.orderable_slot(id).is_some())
+            .count();
+        let outcome = self.order_group(&scratch, GroupTarget::AttackGround(cell), Some(receipts));
+        self.pick_scratch = scratch;
+        match outcome {
+            Ok(n) => CommandReceipt {
+                accepted: n,
+                rejected: selected - n,
+                reason: None,
+            },
+            Err(e) => CommandReceipt {
+                accepted: 0,
+                rejected: selected,
+                reason: Some(match e {
+                    FormationError::NoUnits | FormationError::NoTarget => {
+                        CommandRejectReason::EmptySelection
+                    }
+                    FormationError::Unreachable => CommandRejectReason::Unreachable,
+                    FormationError::NoFormationSpace => CommandRejectReason::NoFormationSpace,
+                }),
+            },
+        }
+    }
+
+    /// Player command: every selected armed player unit chases and attacks
+    /// `target`; unarmed selected units walk to a formation slot at the
+    /// target's cell instead.
+    pub fn cmd_attack_target(
+        &mut self,
+        target: EntityId,
+        receipts: &mut OrderReceiptBuffer,
+    ) -> CommandReceipt {
+        receipts.clear();
+        let mut scratch = std::mem::take(&mut self.pick_scratch);
+        scratch.clear();
+        scratch.extend_from_slice(self.selection.ids());
+        let selected = scratch
+            .iter()
+            .filter(|&&id| self.orderable_slot(id).is_some())
+            .count();
+        let reject = |reason| CommandReceipt {
+            accepted: 0,
+            rejected: selected,
+            reason: Some(reason),
+        };
+
+        if selected == 0 {
+            self.pick_scratch = scratch;
+            return reject(CommandRejectReason::EmptySelection);
+        }
+        let target_ok = self
+            .entities
+            .slot(target)
+            .is_some_and(|s| self.entities.owner(s) == OWNER_ENEMY);
+        if !target_ok {
+            self.pick_scratch = scratch;
+            return reject(CommandRejectReason::NoTarget);
+        }
+
+        let mut armed_count = 0usize;
+        self.formation.begin();
+        for slot in 0..self.entities.slot_count() {
+            let Some(id) = self.entities.id_at(slot) else {
+                continue;
+            };
+            if !scratch.contains(&id) || self.orderable_slot(id).is_none() {
+                continue;
+            }
+            if matches!(self.entities.kind(slot), EntityKind::Unit(k) if weapon(k).is_some()) {
+                armed_count += 1;
+            } else {
+                self.formation.push_unit(id);
+            }
+        }
+        if armed_count == 0 {
+            self.pick_scratch = scratch;
+            return reject(CommandRejectReason::NoArmedUnits);
+        }
+
+        let target_slot = self.entities.slot(target).expect("checked live above");
+        let pos = self.entities.position(target_slot);
+        let target_cell = Cell {
+            x: pos[0] as u32,
+            y: pos[1] as u32,
+        };
+        let Some(anchor) = nearest_body_clear_cell(&self.static_nav, target_cell) else {
+            self.pick_scratch = scratch;
+            return reject(CommandRejectReason::Unreachable);
+        };
+        let Ok(field) = self.nav.acquire(anchor) else {
+            self.pick_scratch = scratch;
+            return reject(CommandRejectReason::Unreachable);
+        };
+        if self.formation.len() > 0
+            && let Err(e) = self.formation.plan(
+                &self.static_nav,
+                &self.entities,
+                &self.nav,
+                field.slot,
+                anchor,
+            )
+        {
+            self.pick_scratch = scratch;
+            return reject(match e {
+                FormationError::NoFormationSpace => CommandRejectReason::NoFormationSpace,
+                _ => CommandRejectReason::Unreachable,
+            });
+        }
+
+        let mut accepted = 0usize;
+        let mut walker = 0usize;
+        for slot in 0..self.entities.slot_count() {
+            let Some(id) = self.entities.id_at(slot) else {
+                continue;
+            };
+            if !scratch.contains(&id) || self.orderable_slot(id).is_none() {
+                continue;
+            }
+            let armed =
+                matches!(self.entities.kind(slot), EntityKind::Unit(k) if weapon(k).is_some());
+            let (order, issued) = if armed {
+                (Order::Attack { target, field }, IssuedOrder::Attack)
+            } else {
+                debug_assert_eq!(self.formation.unit(walker), id, "plan order is push order");
+                let goal = FormationGoal {
+                    anchor,
+                    slot: self.formation.slot(walker),
+                };
+                walker += 1;
+                (Order::Move { goal, field }, IssuedOrder::Move)
+            };
+            self.orders.set(slot, order);
+            receipts.push(id, issued);
+            accepted += 1;
+        }
+        self.pick_scratch = scratch;
+        CommandReceipt {
+            accepted,
+            rejected: selected - accepted,
+            reason: None,
+        }
+    }
+
+    /// Player command: every selected player unit stops — [`Order::Idle`],
+    /// cancelling gather, build, move and both attack orders in place.
+    pub fn cmd_stop(&mut self, receipts: &mut OrderReceiptBuffer) -> CommandReceipt {
+        receipts.clear();
+        let mut scratch = std::mem::take(&mut self.pick_scratch);
+        scratch.clear();
+        scratch.extend_from_slice(self.selection.ids());
+        let mut accepted = 0usize;
+        for slot in 0..self.entities.slot_count() {
+            let Some(id) = self.entities.id_at(slot) else {
+                continue;
+            };
+            if !scratch.contains(&id) || self.orderable_slot(id).is_none() {
+                continue;
+            }
+            self.orders.clear(slot);
+            receipts.push(id, IssuedOrder::Stop);
+            accepted += 1;
+        }
+        self.pick_scratch = scratch;
+        if accepted == 0 {
+            return CommandReceipt {
+                accepted: 0,
+                rejected: 0,
+                reason: Some(CommandRejectReason::EmptySelection),
+            };
+        }
+        CommandReceipt {
+            accepted,
+            rejected: 0,
+            reason: None,
+        }
+    }
+
     /// Plan and commit one group order, whole or not at all.
     ///
     /// The one path every group command takes — ground move, gather, build,
@@ -1306,6 +1546,17 @@ impl RtsWorld {
             let slot = self.entities.slot(id).expect("a planned unit is live");
             let is_worker = matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker));
             let (order, issued) = match target {
+                GroupTarget::AttackGround(_) => {
+                    let armed = matches!(
+                        self.entities.kind(slot),
+                        EntityKind::Unit(k) if weapon(k).is_some()
+                    );
+                    if armed {
+                        (Order::AttackMove { goal, field }, IssuedOrder::AttackMove)
+                    } else {
+                        (Order::Move { goal, field }, IssuedOrder::Move)
+                    }
+                }
                 GroupTarget::Ground(_) => (Order::Move { goal, field }, IssuedOrder::Move),
                 GroupTarget::Node(node) if is_worker => (
                     Order::Gather {
@@ -1334,7 +1585,7 @@ impl RtsWorld {
     /// [`entity_approach_cell`] has always produced.
     fn group_anchor(&self, target: GroupTarget) -> Result<Cell, FormationError> {
         match target {
-            GroupTarget::Ground(cell) => {
+            GroupTarget::Ground(cell) | GroupTarget::AttackGround(cell) => {
                 if cell.x >= self.scenario.width() || cell.y >= self.scenario.height() {
                     return Err(FormationError::Unreachable);
                 }
@@ -1370,7 +1621,7 @@ impl RtsWorld {
     fn eligible_for(&self, slot: usize, target: GroupTarget) -> bool {
         let is_worker = matches!(self.entities.kind(slot), EntityKind::Unit(UnitKind::Worker));
         match target {
-            GroupTarget::Ground(_) => true,
+            GroupTarget::Ground(_) | GroupTarget::AttackGround(_) => true,
             // A depleted node is nothing to mine: a worker is rejected, and
             // anything else still walks over.
             GroupTarget::Node(node) => {

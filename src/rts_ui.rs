@@ -448,6 +448,8 @@ pub fn owner_for_point(world: &RtsWorld, ui: &RtsUiState, point: [f32; 2]) -> Po
 /// resources, no supply) is a no-op here exactly as it always was —
 /// `RtsWorld::begin_placement`/`enqueue_unit` already validate and refuse.
 pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: CommandId) {
+    // Any card command supersedes a pending attack-targeting mode.
+    session.pending_attack = false;
     match id {
         CommandId::BuildHq => {
             let _ = world.begin_placement(BuildingKind::Hq);
@@ -472,6 +474,14 @@ pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: Comma
             // Arms a pending action rather than acting immediately: the next
             // world left-click (not one over the HUD) sets the cell.
             session.pending_rally = world.selection().primary();
+        }
+        CommandId::Attack => {
+            world.cancel_placement();
+            session.pending_rally = None;
+            session.pending_attack = true;
+        }
+        CommandId::Stop => {
+            crate::rts_run::execute_stop(world, session);
         }
     }
 }

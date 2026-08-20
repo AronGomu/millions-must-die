@@ -825,3 +825,118 @@ fn an_exact_shape_beats_a_building_sprite_quad() {
         "an exact node quad beats a building's sprite quad however deep the building"
     );
 }
+
+// ─── T4 enemy-pick + selection-invariant tests ───────────────────────────────
+
+use mmd_engine::rts::OWNER_ENEMY;
+
+#[test]
+fn enemy_unit_is_pickable_and_click_selects_exactly_one() {
+    let mut h = RtsHarness::scene().build().expect("scene");
+    let ghoul_pos = [50.5f32, 50.5];
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, ghoul_pos)
+        .expect("spawn ghoul");
+
+    let v = view();
+    // Project the ghoul's ground point to screen space.
+    let screen = v.project(ghoul_pos[0], ghoul_pos[1]);
+    let pick = pick_at(h.world(), &v, screen);
+    assert_eq!(pick, Pick::Unit(ghoul), "ghoul must be pickable");
+
+    // click_select replaces selection with the ghoul
+    h.world_mut().click_select(&v, screen);
+    assert_eq!(h.world().selection().ids(), &[ghoul]);
+
+    // With a player worker selected, clicking the ghoul replaces
+    let workers_v = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(workers_v[0]);
+    h.world_mut().click_select(&v, screen);
+    assert_eq!(h.world().selection().ids(), &[ghoul]);
+}
+
+#[test]
+fn shift_click_never_mixes_enemy_and_player() {
+    let mut h = RtsHarness::scene().build().expect("scene");
+    let ghoul_pos = [50.5f32, 50.5];
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, ghoul_pos)
+        .expect("spawn ghoul");
+
+    let v = view();
+    let workers_v = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let worker = workers_v[0];
+    let worker_pos = h
+        .world()
+        .entities()
+        .position(h.world().entities().slot(worker).unwrap());
+    let worker_screen = v.project(worker_pos[0], worker_pos[1]);
+    let ghoul_screen = v.project(ghoul_pos[0], ghoul_pos[1]);
+
+    // Player worker selected, shift-click ghoul → selection = [ghoul] only
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(worker);
+    h.world_mut().shift_click_select(&v, ghoul_screen);
+    assert_eq!(h.world().selection().len(), 1);
+    assert_eq!(
+        h.world().entities().owner(
+            h.world()
+                .entities()
+                .slot(h.world().selection().ids()[0])
+                .unwrap()
+        ),
+        OWNER_ENEMY
+    );
+
+    // Ghoul selected, shift-click worker → selection = [worker] only
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(ghoul);
+    h.world_mut().shift_click_select(&v, worker_screen);
+    assert_eq!(h.world().selection().len(), 1);
+    assert_eq!(
+        h.world().entities().owner(
+            h.world()
+                .entities()
+                .slot(h.world().selection().ids()[0])
+                .unwrap()
+        ),
+        OWNER_PLAYER
+    );
+}
+
+#[test]
+fn drag_box_still_excludes_enemies() {
+    let mut h = RtsHarness::scene().build().expect("scene");
+    let worker_ids = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let worker = worker_ids[0];
+    let worker_pos = h
+        .world()
+        .entities()
+        .position(h.world().entities().slot(worker).unwrap());
+    // Spawn a ghoul right next to the worker
+    let ghoul_pos = [worker_pos[0] + 7.0, worker_pos[1]];
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, ghoul_pos)
+        .expect("spawn ghoul");
+
+    let v = view();
+    // Drag box covering both
+    let a = v.project(worker_pos[0] - 10.0, worker_pos[1] - 10.0);
+    let b = v.project(ghoul_pos[0] + 10.0, ghoul_pos[1] + 10.0);
+
+    use mmd_engine::rts::{EntityId as EId, box_select};
+    let mut out: Vec<EId> = Vec::new();
+    box_select(h.world(), &v, a, b, &mut out);
+    assert!(out.contains(&worker), "worker must be in box");
+    assert!(
+        !out.contains(&ghoul),
+        "ghoul must not be in box (drag excludes enemies)"
+    );
+}
