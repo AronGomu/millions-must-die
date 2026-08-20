@@ -18,7 +18,7 @@ use super::entity::{
     BuildingKind, EntityId, EntityKind, MAX_ENTITIES, RTS_UNIT_BODY_DIAMETER_CELLS, ResourceKind,
     UnitKind, max_hp,
 };
-use super::orders::Order;
+use super::orders::{GatherPhase, Order};
 use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
 use super::world::{DeathEvent, RtsWorld};
 use crate::render::{
@@ -53,6 +53,15 @@ pub const MAX_GRID_LINES: usize = 2 * (RTS_MAX_MAP_EDGE as usize / BUILD_SQUARE_
 /// Grid-line stroke width in screen pixels.
 pub const GRID_LINE_PX: f32 = 1.0;
 
+/// Alternating dash / gap count per dashed move-route line.
+pub const DASH_SEGMENTS: usize = 12;
+/// Maximum selection size for which dashed lines are drawn; beyond this limit
+/// all dashes are suppressed (a partial picture is worse than none).
+pub const MAX_SELECTION_FOR_DASHES: usize = 24;
+/// Overlay reservation for dashed lines: at most one dash set per mover in the
+/// maximum supported selection, with `DASH_SEGMENTS / 2` pieces each.
+pub const MAX_DASH_LINES: usize = MAX_SELECTION_FOR_DASHES * DASH_SEGMENTS / 2;
+
 /// Grid-line tint (premultiplied). Thin subdued green, nearly transparent.
 pub const GRID_TINT: [f32; 4] = [0.05, 0.08, 0.05, 0.16];
 
@@ -79,6 +88,7 @@ pub enum Prop {
     IconAttack = 16,
     IconStop = 17,
     IconBuildTurret = 18,
+    MoveMarker = 19,
 }
 
 /// UV rect of a prop cell. `(row, col) = (i / 4, i % 4)`.
@@ -231,7 +241,7 @@ impl RtsFrame {
                     instances: Vec::with_capacity(MAX_ENTITIES),
                 })
                 .collect(),
-            overlay: Vec::with_capacity(4 * MAX_ENTITIES + MAX_GRID_LINES),
+            overlay: Vec::with_capacity(4 * MAX_ENTITIES + MAX_GRID_LINES + MAX_DASH_LINES),
             ui: [
                 SLOT_RTS_WORKER,
                 SLOT_RTS_SOLDIER,
@@ -704,6 +714,50 @@ fn pack_frame_inner(
     }
     frame.scratch = scratch;
 
+    // 2e. Dashed lines: one set of `DASH_SEGMENTS / 2` diagonal_line pieces
+    //     per selected mover, from its ground point to its formation slot.
+    //     Suppressed entirely when the selection exceeds MAX_SELECTION_FOR_DASHES
+    //     (a partial picture is worse than none, and the overlay reserve stays
+    //     honest). Texture-free, so the overlay is the correct layer.
+    if world.selection().ids().len() <= MAX_SELECTION_FOR_DASHES {
+        for &id in world.selection().ids() {
+            let goal = match world.order_of(id) {
+                Some(Order::Move { goal, .. }) => goal,
+                Some(Order::Build { goal, .. }) => goal,
+                Some(Order::Gather {
+                    phase: GatherPhase::ToNode { goal, .. },
+                    ..
+                }) => goal,
+                Some(Order::AttackMove { goal, .. }) => goal,
+                _ => continue,
+            };
+            let Some(slot) = store.slot(id) else {
+                continue;
+            };
+            let p = store.position(slot);
+            let unit_ground = iso.project(p[0], p[1]);
+            let goal_ground = iso.project(goal.slot.x as f32 + 0.5, goal.slot.y as f32 + 0.5);
+            for i in 0..(DASH_SEGMENTS / 2) {
+                let t0 = (2 * i) as f32 / DASH_SEGMENTS as f32;
+                let t1 = (2 * i + 1) as f32 / DASH_SEGMENTS as f32;
+                let a = [
+                    unit_ground[0] + (goal_ground[0] - unit_ground[0]) * t0,
+                    unit_ground[1] + (goal_ground[1] - unit_ground[1]) * t0,
+                ];
+                let b = [
+                    unit_ground[0] + (goal_ground[0] - unit_ground[0]) * t1,
+                    unit_ground[1] + (goal_ground[1] - unit_ground[1]) * t1,
+                ];
+                frame.overlay.push(SpriteInstance::diagonal_line(
+                    a,
+                    b,
+                    GRID_LINE_PX,
+                    SELECTION_TINT,
+                ));
+            }
+        }
+    }
+
     // 3. UI, depth-off and textured: rally flags, then the placement ghost,
     //    then the drag box.
     for &id in world.selection().ids() {
@@ -719,6 +773,22 @@ fn pack_frame_inner(
             pos,
             sprite_size,
             prop_uv(Prop::RallyFlag),
+            SpriteInstance::WHITE,
+        ));
+    }
+
+    // Move-marker quads: one prop quad per live marker, same pattern as the
+    // rally flag. Textured, depth-off — must go in the prop group, not overlay.
+    for (cell, _) in world.move_markers() {
+        let ground = iso.project(cell.x as f32 + 0.5, cell.y as f32 + 0.5);
+        let pos = stand_on(ground, sprite_size);
+        if !quad_is_visible(pos, sprite_size, iso.view_size) {
+            continue;
+        }
+        frame.prop_group().push(SpriteInstance::new(
+            pos,
+            sprite_size,
+            prop_uv(Prop::MoveMarker),
             SpriteInstance::WHITE,
         ));
     }

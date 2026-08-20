@@ -299,7 +299,7 @@ command below except what a browser or a human eye must judge.
 - [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (26 tests)
 - [ ] Manual: click on the top/side of a building sprite (above the footprint) — confirm it selects the building
 - [ ] Manual: click on a footprint cell below the building sprite — confirm it selects the building
-- [ ] Manual: select HQ with no queue — confirm six-line card: HQ / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
+- [ ] Manual: select HQ with no queue — confirm seven-line card: HQ / HP <cur>/<max> / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
 - [ ] Manual: enqueue Workers at HQ — confirm QUEUE W,W,... and PROGRESS N% update live
 - [ ] Manual: rally flag set — confirm RALLY x,y on line 6
 - [ ] Manual: select Barracks — confirm SUPPLY +0 on line 3
@@ -709,7 +709,7 @@ Run `cargo run -- rts` on the development host, with sound on and a real pointer
 
 - [ ] Click the top of an HQ sprite corner, well above its footprint: the building is selected,
       not the worker standing next to it.
-- [ ] Read the card: exactly six lines — kind, READY/BUILDING %, SUPPLY, QUEUE, PROGRESS, RALLY.
+- [ ] Read the card: exactly seven lines — kind, HP, READY/BUILDING %, SUPPLY, QUEUE, PROGRESS, RALLY.
       Queue entries read oldest first.
 
 **Commands**
@@ -920,3 +920,18 @@ up after three seconds and refunds.
 - [ ] Issue an Attack-move command to a Soldier onto open ground. Confirm the status line reads `MOVING` and nothing on the map wears a target ring: attack-move aims at a cell, not an entity.
 - [ ] Send a Worker to build a Depot. Confirm the card reads `BUILDING` while the worker attends the site, and the site itself wears the thin green target ring for as long as that worker is selected.
 - [ ] Select an enemy Ghoul. Confirm its read-only card still stops after the kind label and the `HP` line — no status line is added to an enemy card.
+
+## T10 move-marker-and-path-line
+
+- [ ] Launch `cargo run -- rts`. Box-select two or three Workers, then right-click open ground well away from them. Confirm exactly **one** green pennant flag appears at the clicked cell — one flag per order, not one per selected unit.
+- [ ] While the group walks, confirm each selected Worker draws a **dashed** green line from its own body to its own destination — the lines fan out to each unit's formation slot, they do not all end on the same point.
+- [ ] Keep watching without touching anything: the flag disappears on its own about a second and a half after the click (90 ticks at 60 Hz), while the units are still walking. The dashed lines stay for as long as the units still have the order.
+- [ ] Confirm the flag renders as an opaque pennant sprite (staff + triangle), not as a black or garbled square — a wrong draw layer would sample the zombie atlas instead.
+- [ ] Click empty ground to deselect the walking group. Confirm every dashed line disappears immediately even though the units keep walking: dashes are drawn for the current selection only.
+- [ ] Re-select one of those still-walking Workers. Confirm its dashed line comes back on its own, from its current body position to its goal.
+- [ ] Right-click a crystal node with a Worker selected. Confirm no flag is planted at the node (that is an entity target, and T9's thin target ring is what marks it) but the walk phase still draws dashes toward the node.
+- [ ] Send a Worker to build a Depot. Confirm the walk to the site draws dashes to the site.
+- [ ] Spam right-click on open ground more than eight times in quick succession. Confirm at most eight flags are ever visible at once, that the oldest ones drop off first, and that nothing stutters or leaks.
+- [ ] Set a rally point on the HQ and produce a Worker. Confirm the newly produced Worker walks to the rally point and **no** flag is planted for it — rally is not a player ground order.
+- [ ] Select more than 24 units at once (produce enough Soldiers, or box-select the whole army) and right-click open ground. Confirm the flag still appears but **no** dashed lines are drawn at all — dashes are suppressed above 24 selected units rather than drawn for only some of them.
+- [ ] Right-click open ground with a Soldier selected, then immediately press `S` (Stop). Confirm the dashed line disappears with the order while the already-planted flag keeps counting itself down and then vanishes.

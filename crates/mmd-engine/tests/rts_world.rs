@@ -6,8 +6,9 @@
 use std::collections::HashSet;
 
 use mmd_engine::rts::{
-    BuildingKind, EntityKind, EntityStore, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_PLAYER,
-    Order, ResourceKind, Resources, RtsWorldError, Supply, UnitKind, unit_speed,
+    BuildingKind, EntityKind, EntityStore, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, MAX_MOVE_MARKERS,
+    MOVE_MARKER_TICKS, OWNER_PLAYER, Order, OrderReceiptBuffer, ResourceKind, Resources,
+    RtsWorldError, Supply, UnitKind, unit_speed,
 };
 use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
@@ -955,4 +956,98 @@ fn state_hash_sees_an_order() {
     let before = h.state_hash();
     assert!(h.world_mut().order_move(worker, Cell { x: 200, y: 200 }));
     assert_ne!(h.state_hash(), before, "an order must reach the state hash");
+}
+
+// --- T10: ground-order markers --------------------------------------------------
+
+#[test]
+fn a_ground_order_plants_one_marker() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    h.world_mut().selection_mut().insert(worker);
+
+    let iso = h.world().iso_view();
+    // Cell (200, 200) is open ground in the tracked scene.
+    let screen = iso.project(200.5, 200.5);
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&iso, screen, &mut receipts);
+    assert!(result.accepted > 0, "order must be accepted: {result:?}");
+    assert_eq!(
+        h.world().move_markers().count(),
+        1,
+        "exactly one marker per order, not one per unit",
+    );
+    let (cell, _) = h.world().move_markers().next().unwrap();
+    assert_eq!(cell.x, 200);
+    assert_eq!(cell.y, 200);
+}
+
+#[test]
+fn a_marker_expires_on_schedule() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    h.world_mut().push_move_marker(Cell { x: 10, y: 10 });
+
+    // Present through MOVE_MARKER_TICKS - 1 complete ticks.
+    h.step_exact((MOVE_MARKER_TICKS - 1) as u64);
+    assert_eq!(
+        h.world().move_markers().count(),
+        1,
+        "marker must still be present at tick MOVE_MARKER_TICKS - 1",
+    );
+    // Gone after the MOVE_MARKER_TICKS-th tick.
+    h.step_exact(1);
+    assert_eq!(
+        h.world().move_markers().count(),
+        0,
+        "marker must be gone at tick MOVE_MARKER_TICKS",
+    );
+}
+
+#[test]
+fn markers_are_bounded_and_drop_oldest_first() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    for i in 0..12u32 {
+        h.world_mut().push_move_marker(Cell { x: i, y: i });
+    }
+    let markers: Vec<_> = h.world().move_markers().collect();
+    assert_eq!(markers.len(), MAX_MOVE_MARKERS);
+    // The 8 most recent: cells (4,4) through (11,11).
+    for (j, &(cell, _)) in markers.iter().enumerate() {
+        let expected = 4 + j as u32;
+        assert_eq!(
+            cell,
+            Cell {
+                x: expected,
+                y: expected
+            }
+        );
+    }
+}
+
+#[test]
+fn a_rallied_unit_plants_no_marker() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    // order_move is the same call the rally-from-production path uses.
+    assert!(h.world_mut().order_move(worker, Cell { x: 200, y: 200 }));
+    assert_eq!(
+        h.world().move_markers().count(),
+        0,
+        "order_move must not plant a marker",
+    );
+}
+
+#[test]
+fn markers_enter_the_state_hash() {
+    let mut a = RtsHarness::scene().build().expect("a");
+    let b = RtsHarness::scene().build().expect("b");
+    assert_eq!(a.state_hash(), b.state_hash());
+    a.world_mut().push_move_marker(Cell { x: 50, y: 50 });
+    assert_ne!(
+        a.state_hash(),
+        b.state_hash(),
+        "a planted marker must change the state hash",
+    );
 }

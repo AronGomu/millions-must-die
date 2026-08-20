@@ -10,10 +10,11 @@ use mmd_engine::render::{
     SpriteInstance, frame_uv_rect, quad_is_visible, screen_axes_to_cells,
 };
 use mmd_engine::rts::{
-    BuildingKind, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT,
-    DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_ENTITIES, OWNER_PLAYER, Prop,
-    ResourceKind, RtsFrame, UnitKind, building_quad_px, building_uv, ghost_min_corner, node_uv,
-    pack_frame, placement_candidate, prop_uv, unit_slot,
+    BuildingKind, DASH_SEGMENTS, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_BORDER_TINT,
+    DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_DASH_LINES,
+    MAX_ENTITIES, MAX_SELECTION_FOR_DASHES, OWNER_PLAYER, Prop, ResourceKind, RtsFrame, UnitKind,
+    building_quad_px, building_uv, ghost_min_corner, node_uv, pack_frame, placement_candidate,
+    prop_uv, unit_slot,
 };
 use mmd_engine::runtime::ring_quad_size_px;
 use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell};
@@ -87,8 +88,8 @@ fn frame_new_reserves_the_documented_groups() {
     }
     assert_eq!(
         frame.overlay.capacity(),
-        4 * MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES,
-        "grid + rings + two bar lines per entity + flashes"
+        4 * MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES + MAX_DASH_LINES,
+        "grid + rings + two bar lines per entity + flashes + dash lines"
     );
     for g in &frame.ui[..4] {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
@@ -122,6 +123,7 @@ fn prop_uv_maps_to_the_published_cells() {
         Prop::IconAttack,
         Prop::IconStop,
         Prop::IconBuildTurret,
+        Prop::MoveMarker,
     ];
     for (i, p) in all.into_iter().enumerate() {
         let i = i as u32;
@@ -138,6 +140,7 @@ fn prop_uv_maps_to_the_published_cells() {
     assert_eq!(prop_uv(Prop::RallyFlag), frame_uv_rect(0, 3));
     assert_eq!(prop_uv(Prop::PanelFill), frame_uv_rect(1, 3));
     assert_eq!(prop_uv(Prop::IconBuildTurret), frame_uv_rect(4, 2));
+    assert_eq!(prop_uv(Prop::MoveMarker), frame_uv_rect(4, 3));
 }
 
 #[test]
@@ -1741,5 +1744,111 @@ fn an_attacking_unit_rings_its_target() {
         target_rings.len(),
         1,
         "an attack order rings the thing being attacked"
+    );
+}
+
+// --- T10: move marker and dash packing ---------------------------------------
+
+#[test]
+fn the_marker_packs_one_quad_per_live_marker() {
+    let mut h = scene();
+    h.world_mut().push_move_marker(Cell { x: 50, y: 50 });
+    h.world_mut().push_move_marker(Cell { x: 60, y: 60 });
+    h.world_mut().push_move_marker(Cell { x: 70, y: 70 });
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let marker_uv = prop_uv(Prop::MoveMarker);
+    let marker_count = props(&frame)
+        .iter()
+        .filter(|inst| inst.uv_rect == marker_uv)
+        .count();
+    assert_eq!(marker_count, 3);
+}
+
+#[test]
+fn a_selected_mover_draws_a_dashed_line_to_its_goal() {
+    // Frame with a selected mover.
+    let mut h = scene();
+    let w = workers(&h)[0];
+    h.world_mut().selection_mut().insert(w);
+    assert!(h.world_mut().order_move(w, Cell { x: 200, y: 200 }));
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    // Baseline: same worker selected, Idle order.
+    let mut h2 = scene();
+    let w2 = workers(&h2)[0];
+    h2.world_mut().selection_mut().insert(w2);
+    let mut frame_idle = RtsFrame::new();
+    pack_frame(h2.world(), CURSOR, None, &mut frame_idle);
+
+    assert_eq!(
+        frame.overlay.len(),
+        frame_idle.overlay.len() + DASH_SEGMENTS / 2,
+        "one dashed line = DASH_SEGMENTS/2 diagonal_line pieces",
+    );
+}
+
+#[test]
+fn an_unselected_mover_draws_nothing() {
+    // Mover but not selected: no dashes.
+    let mut h = scene();
+    let w = workers(&h)[0];
+    assert!(h.world_mut().order_move(w, Cell { x: 200, y: 200 }));
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    // Baseline: same worker, no selection, Idle.
+    let h2 = scene();
+    let mut frame_idle = RtsFrame::new();
+    pack_frame(h2.world(), CURSOR, None, &mut frame_idle);
+
+    assert_eq!(frame.overlay.len(), frame_idle.overlay.len());
+}
+
+#[test]
+fn a_huge_selection_skips_dashes_entirely() {
+    // Build two identical worlds with > MAX_SELECTION_FOR_DASHES selected units.
+    // In one, they all have Move orders. In the other, they are Idle.
+    // The overlay must be equal (no dashes emitted).
+    let make = || {
+        let mut h = scene();
+        let ws = workers(&h);
+        let mut ids: Vec<_> = ws.clone();
+        while ids.len() <= MAX_SELECTION_FOR_DASHES {
+            if let Some(id) = h.world_mut().entities_mut().spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [50.0 + ids.len() as f32 * 4.0, 50.0],
+            ) {
+                ids.push(id);
+            } else {
+                break;
+            }
+        }
+        assert!(ids.len() > MAX_SELECTION_FOR_DASHES, "need > 24 entities");
+        for &id in &ids {
+            h.world_mut().selection_mut().insert(id);
+        }
+        (h, ids)
+    };
+
+    let (mut h_move, ids_move) = make();
+    for &id in &ids_move {
+        let _ = h_move.world_mut().order_move(id, Cell { x: 200, y: 200 });
+    }
+    let (h_idle, _) = make();
+
+    let mut frame_move = RtsFrame::new();
+    let mut frame_idle = RtsFrame::new();
+    pack_frame(h_move.world(), CURSOR, None, &mut frame_move);
+    pack_frame(h_idle.world(), CURSOR, None, &mut frame_idle);
+
+    assert_eq!(
+        frame_move.overlay.len(),
+        frame_idle.overlay.len(),
+        "dashes must be suppressed when selection exceeds MAX_SELECTION_FOR_DASHES",
     );
 }

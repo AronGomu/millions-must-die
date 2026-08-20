@@ -182,6 +182,11 @@ pub const NODE_CRYSTAL_AMOUNT: u32 = 1_500;
 /// Starting amount in a freshly seeded Gas node.
 pub const NODE_GAS_AMOUNT: u32 = 2_500;
 
+/// Maximum number of live ground-order markers tracked at once.
+pub const MAX_MOVE_MARKERS: usize = 8;
+/// Ticks a ground-order marker lives before it decays away (1.5 s at 60 Hz).
+pub const MOVE_MARKER_TICKS: u32 = 90;
+
 /// Failures building an [`RtsWorld`].
 #[derive(Debug, thiserror::Error)]
 pub enum RtsWorldError {
@@ -402,6 +407,11 @@ pub struct RtsWorld {
     /// tick and bounded by [`MAX_ENTITIES`], so an offscreen run that never
     /// drains costs nothing and accumulates nothing.
     death_events: Vec<DeathEvent>,
+    /// Ground-order markers: where the player last sent someone, and for how
+    /// much longer to say so. Bounded and overwritten oldest-first, so a player
+    /// spamming move orders cannot grow this.
+    move_markers: [(Cell, u32); MAX_MOVE_MARKERS],
+    move_marker_len: usize,
     /// The view every packer projects through. World state, not view state: a
     /// replay that ends looking somewhere else did not reproduce.
     camera: Camera,
@@ -917,6 +927,8 @@ impl RtsWorld {
             losses: 0,
             first_combat_tick: None,
             death_events: Vec::with_capacity(MAX_ENTITIES),
+            move_markers: [(Cell { x: 0, y: 0 }, 0); MAX_MOVE_MARKERS],
+            move_marker_len: 0,
             camera,
             keyboard_pan_dir: [0.0, 0.0],
             edge_pan_dir: [0.0, 0.0],
@@ -1146,6 +1158,38 @@ impl RtsWorld {
     /// ([`Self::apply_damage`]).
     pub fn start_hq(&self) -> Option<EntityId> {
         self.start_hq
+    }
+
+    /// Iterator over live ground-order markers: `(cell, ticks_remaining)`.
+    pub fn move_markers(&self) -> impl Iterator<Item = (Cell, u32)> + '_ {
+        self.move_markers[..self.move_marker_len].iter().copied()
+    }
+
+    /// Plant a ground-order marker at `cell`. When the ring buffer is full,
+    /// the oldest marker is overwritten — call from the player-command layer
+    /// only, not from [`Self::order_move`] (which the rally and production
+    /// paths also invoke and must not plant markers).
+    pub fn push_move_marker(&mut self, cell: Cell) {
+        if self.move_marker_len < MAX_MOVE_MARKERS {
+            self.move_markers[self.move_marker_len] = (cell, MOVE_MARKER_TICKS);
+            self.move_marker_len += 1;
+        } else {
+            self.move_markers.copy_within(1.., 0);
+            self.move_markers[MAX_MOVE_MARKERS - 1] = (cell, MOVE_MARKER_TICKS);
+        }
+    }
+
+    /// Decay live markers by one tick, compacting out any that reach zero.
+    fn move_marker_decay(&mut self) {
+        let mut write = 0;
+        for i in 0..self.move_marker_len {
+            let (cell, ticks) = self.move_markers[i];
+            if ticks > 1 {
+                self.move_markers[write] = (cell, ticks - 1);
+                write += 1;
+            }
+        }
+        self.move_marker_len = write;
     }
 
     /// The navigation pool. Buildings stamp obstacles into it (T10).
@@ -1981,6 +2025,14 @@ impl RtsWorld {
         };
 
         let outcome = self.order_group(&scratch, target, Some(receipts));
+        // Plant a marker only for successful ground orders from the player
+        // command layer. Rally and production use order_move directly, so
+        // neither reaches this site.
+        if let (GroupTarget::Ground(cell), Ok(n)) = (target, outcome)
+            && n > 0
+        {
+            self.push_move_marker(cell);
+        }
         self.pick_scratch = scratch;
 
         let (accepted, reason) = match outcome {
@@ -2246,15 +2298,16 @@ impl RtsWorld {
     /// Systems are added by later tickets and each one runs at a fixed point in
     /// this order, so a reordering is a visible diff rather than an accident:
     /// 1. commands, 2. camera, 3. enemy waves, 4. construction, 5. production,
-    /// 6. orders, 7. enemy AI, 8. combat, 9. movement, 10. supply recount.
+    /// 6. orders, 7. enemy AI, 8. combat, 9. movement, 10. marker decay,
+    /// 11. supply recount.
     ///
     /// Today the tick counter, the camera pan (2), the enemy wave spawner
     /// (3), the construction system (4), the production system (5), the
     /// gather system (6), the enemy AI (7), the combat system (8), the
-    /// movement system (9) and the supply recount (10) run, followed by
-    /// pruning the selection of anything that died this tick — last, so a
-    /// unit that died on this tick is out of the selection before anything
-    /// reads it next tick.
+    /// movement system (9), the marker decay (10) and the supply recount (11)
+    /// run, followed by pruning the selection of anything that died this tick
+    /// — last, so a unit that died on this tick is out of the selection before
+    /// anything reads it next tick.
     ///
     /// Enemy AI and combat sit between orders and movement on purpose: an
     /// order issued this tick still fires this tick, and a unit that fires
@@ -2274,6 +2327,7 @@ impl RtsWorld {
         self.enemy_ai();
         self.combat();
         self.movement();
+        self.move_marker_decay();
         self.supply_recount();
         self.selection.retain_live(&self.entities);
     }
@@ -4285,6 +4339,13 @@ impl RtsWorld {
                 h.update([1u8]);
                 h.update(t.to_le_bytes());
             }
+        }
+        h.update((self.move_marker_len as u32).to_le_bytes());
+        for i in 0..self.move_marker_len {
+            let (cell, ticks) = self.move_markers[i];
+            h.update(cell.x.to_le_bytes());
+            h.update(cell.y.to_le_bytes());
+            h.update(ticks.to_le_bytes());
         }
         h.finalize().into()
     }

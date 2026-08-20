@@ -72,6 +72,7 @@ const ICON_SET_RALLY_COLOR: [u8; 4] = [240, 200, 60, 255];
 const ICON_ATTACK_COLOR: [u8; 4] = [220, 60, 40, 255];
 const ICON_STOP_COLOR: [u8; 4] = [200, 200, 210, 255];
 const ICON_BUILD_TURRET_COLOR: [u8; 4] = [120, 90, 160, 255];
+const MOVE_MARKER_COLOR: [u8; 4] = [80, 220, 120, 255];
 
 /// Tracked placeholder set manifest (one per family).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -323,6 +324,18 @@ fn draw_props_cell(tile: &mut [u8], row: u32, col: u32) {
         (4, 0) => draw_hud_icon(tile, ICON_ATTACK_COLOR),
         (4, 1) => draw_hud_icon(tile, ICON_STOP_COLOR),
         (4, 2) => draw_hud_icon(tile, ICON_BUILD_TURRET_COLOR),
+        (4, 3) => {
+            // 2-px staff, full tile height.
+            blit_rect(tile, RTS_FRAME_SIZE_PX, 14, 4, 16, 27, [200, 200, 200, 255]);
+            // Triangular pennant pointing right from the staff top.
+            for y in 5..=14u32 {
+                for x in 17..=26u32 {
+                    if (y as i64 - 5) <= (26 - x as i64) {
+                        set_px(tile, RTS_FRAME_SIZE_PX, x, y, MOVE_MARKER_COLOR);
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -928,7 +941,7 @@ mod tests {
         let props = encode_rts_png(3).expect("props");
         let (w2, _h2, px2) = decode_png(&props);
         // Row 4 col 0 = IconAttack, col 1 = IconStop, col 2 = IconBuildTurret — not transparent.
-        let used_in_row4: &[(u32, u32)] = &[(4, 0), (4, 1), (4, 2)];
+        let used_in_row4: &[(u32, u32)] = &[(4, 0), (4, 1), (4, 2), (4, 3)];
         for row in 4..RTS_FRAMES_Y {
             for col in 0..RTS_FRAMES_X {
                 if used_in_row4.contains(&(row, col)) {

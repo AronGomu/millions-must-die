@@ -75,12 +75,13 @@ pub use orders::{
     SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
 };
 pub use pack::{
-    DEATH_FLASH_FRAMES, DEATH_FLASH_INNER, DEATH_FLASH_OUTER, DEATH_FLASH_TINT,
+    DASH_SEGMENTS, DEATH_FLASH_FRAMES, DEATH_FLASH_INNER, DEATH_FLASH_OUTER, DEATH_FLASH_TINT,
     DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DeathFlashes, DragBox,
     FramePackOptions, GHOST_TINT, GRID_LINE_PX, GRID_TINT, HP_BAR_BACKING_TINT, HP_BAR_GREEN_TINT,
-    HP_BAR_RAISE_CELLS, HP_BAR_RED_TINT, HP_BAR_YELLOW_TINT, MAX_GRID_LINES, Prop, RtsFrame,
-    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, TARGET_RING_INNER, building_uv,
-    hp_bar_fill_tint, node_uv, pack_frame, pack_frame_with_options, prop_uv, unit_slot,
+    HP_BAR_RAISE_CELLS, HP_BAR_RED_TINT, HP_BAR_YELLOW_TINT, MAX_DASH_LINES, MAX_GRID_LINES,
+    MAX_SELECTION_FOR_DASHES, Prop, RtsFrame, SELECTION_RING_INNER, SELECTION_RING_OUTER,
+    SELECTION_TINT, TARGET_RING_INNER, building_uv, hp_bar_fill_tint, node_uv, pack_frame,
+    pack_frame_with_options, prop_uv, unit_slot,
 };
 pub use production::{
     PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,
@@ -96,6 +97,7 @@ pub use selection::{
 pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
     CommandReceipt, CommandRejectReason, ContextOrderReason, ContextOrderResult,
-    DEFAULT_CAMERA_PAN_SPEED, DamageResult, DeathEvent, IssuedOrder, NODE_CRYSTAL_AMOUNT,
-    NODE_GAS_AMOUNT, OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError, UnitOrderReceipt,
+    DEFAULT_CAMERA_PAN_SPEED, DamageResult, DeathEvent, IssuedOrder, MAX_MOVE_MARKERS,
+    MOVE_MARKER_TICKS, NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT, OrderReceiptBuffer, RtsWorld,
+    RtsWorldError, TickError, UnitOrderReceipt,
 };
