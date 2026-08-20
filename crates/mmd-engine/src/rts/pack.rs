@@ -73,6 +73,7 @@ pub enum Prop {
     IconSetRally = 15,
     IconAttack = 16,
     IconStop = 17,
+    IconBuildTurret = 18,
 }
 
 /// UV rect of a prop cell. `(row, col) = (i / 4, i % 4)`.

@@ -160,6 +160,10 @@ fn footprints_come_from_the_scenario_constants() {
         EntityKind::Building(BuildingKind::Barracks).footprint_cells(),
         10
     );
+    assert_eq!(
+        EntityKind::Building(BuildingKind::Turret).footprint_cells(),
+        6
+    );
     assert_eq!(EntityKind::Unit(UnitKind::Worker).footprint_cells(), 1);
     assert_eq!(EntityKind::Node(ResourceKind::Crystal).footprint_cells(), 1);
 }
@@ -169,6 +173,7 @@ fn only_the_hq_takes_a_drop_off() {
     assert!(BuildingKind::Hq.is_drop_off());
     assert!(!BuildingKind::Depot.is_drop_off());
     assert!(!BuildingKind::Barracks.is_drop_off());
+    assert!(!BuildingKind::Turret.is_drop_off());
 }
 
 #[test]
@@ -180,11 +185,12 @@ fn kind_tags_are_distinct() {
         EntityKind::Building(BuildingKind::Hq),
         EntityKind::Building(BuildingKind::Depot),
         EntityKind::Building(BuildingKind::Barracks),
+        EntityKind::Building(BuildingKind::Turret),
         EntityKind::Node(ResourceKind::Crystal),
         EntityKind::Node(ResourceKind::Gas),
     ];
     let tags: HashSet<u8> = kinds.iter().map(|k| k.tag()).collect();
-    assert_eq!(tags.len(), 8, "every kind must have a distinct tag byte");
+    assert_eq!(tags.len(), 9, "every kind must have a distinct tag byte");
 }
 
 #[test]

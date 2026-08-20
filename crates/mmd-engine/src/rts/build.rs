@@ -34,6 +34,10 @@ pub const BARRACKS_COST: Resources = Resources {
     crystal: 150,
     gas: 25,
 };
+pub const TURRET_COST: Resources = Resources {
+    crystal: 75,
+    gas: 0,
+};
 
 /// Cost of a building kind.
 pub fn building_cost(kind: BuildingKind) -> Resources {
@@ -41,6 +45,7 @@ pub fn building_cost(kind: BuildingKind) -> Resources {
         BuildingKind::Hq => HQ_COST,
         BuildingKind::Depot => DEPOT_COST,
         BuildingKind::Barracks => BARRACKS_COST,
+        BuildingKind::Turret => TURRET_COST,
     }
 }
 
@@ -48,6 +53,9 @@ pub fn building_cost(kind: BuildingKind) -> Resources {
 pub const HQ_BUILD_TICKS: u32 = 600;
 pub const DEPOT_BUILD_TICKS: u32 = 180;
 pub const BARRACKS_BUILD_TICKS: u32 = 300;
+/// Deliberately the Depot's duration: the turret is phase-2 placeholder
+/// pacing, not balance (see `DEPOT_BUILD_TICKS`).
+pub const TURRET_BUILD_TICKS: u32 = 180;
 
 /// Attended construction time of a building kind, in ticks.
 pub fn build_ticks(kind: BuildingKind) -> u32 {
@@ -55,6 +63,7 @@ pub fn build_ticks(kind: BuildingKind) -> u32 {
         BuildingKind::Hq => HQ_BUILD_TICKS,
         BuildingKind::Depot => DEPOT_BUILD_TICKS,
         BuildingKind::Barracks => BARRACKS_BUILD_TICKS,
+        BuildingKind::Turret => TURRET_BUILD_TICKS,
     }
 }
 
@@ -62,6 +71,7 @@ pub fn build_ticks(kind: BuildingKind) -> u32 {
 pub const HQ_SUPPLY_GRANT: u32 = 10;
 pub const DEPOT_SUPPLY_GRANT: u32 = 10;
 pub const BARRACKS_SUPPLY_GRANT: u32 = 0;
+pub const TURRET_SUPPLY_GRANT: u32 = 0;
 
 /// Supply cap a finished building of `kind` grants.
 pub fn supply_grant(kind: BuildingKind) -> u32 {
@@ -69,6 +79,7 @@ pub fn supply_grant(kind: BuildingKind) -> u32 {
         BuildingKind::Hq => HQ_SUPPLY_GRANT,
         BuildingKind::Depot => DEPOT_SUPPLY_GRANT,
         BuildingKind::Barracks => BARRACKS_SUPPLY_GRANT,
+        BuildingKind::Turret => TURRET_SUPPLY_GRANT,
     }
 }
 

@@ -100,6 +100,8 @@ pub const HQ_FOOTPRINT_CELLS: u32 = 12;
 pub const DEPOT_FOOTPRINT_CELLS: u32 = 8;
 /// Footprint edge of the Barracks, in cells.
 pub const BARRACKS_FOOTPRINT_CELLS: u32 = 10;
+/// Footprint edge of the Turret, in cells.
+pub const TURRET_FOOTPRINT_CELLS: u32 = 6;
 
 /// Largest starting stock a scene may grant, per resource. Generous, but not
 /// "the whole slice is already paid for".

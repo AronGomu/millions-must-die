@@ -55,6 +55,9 @@ pub enum BuildingKind {
     Hq = 0,
     Depot = 1,
     Barracks = 2,
+    /// Phase-2 static defence. The first armed building; fires on its own,
+    /// takes no orders.
+    Turret = 3,
 }
 
 /// Harvestable resource kinds.
@@ -101,6 +104,7 @@ impl BuildingKind {
             Self::Hq => scenario::HQ_FOOTPRINT_CELLS,
             Self::Depot => scenario::DEPOT_FOOTPRINT_CELLS,
             Self::Barracks => scenario::BARRACKS_FOOTPRINT_CELLS,
+            Self::Turret => scenario::TURRET_FOOTPRINT_CELLS,
         }
     }
 
@@ -120,6 +124,8 @@ pub const HQ_MAX_HP: u32 = 400;
 pub const DEPOT_MAX_HP: u32 = 150;
 /// See [`WORKER_MAX_HP`].
 pub const BARRACKS_MAX_HP: u32 = 200;
+/// See [`WORKER_MAX_HP`].
+pub const TURRET_MAX_HP: u32 = 150;
 
 /// Flat damage reduction per kind — a hit deals `max(1, damage - armor)`.
 pub const WORKER_ARMOR: u32 = 0;
@@ -131,6 +137,8 @@ pub const HQ_ARMOR: u32 = 2;
 pub const DEPOT_ARMOR: u32 = 1;
 /// See [`WORKER_ARMOR`].
 pub const BARRACKS_ARMOR: u32 = 1;
+/// See [`WORKER_ARMOR`].
+pub const TURRET_ARMOR: u32 = 1;
 
 /// Hit points a full-health entity of `kind` spawns with.
 ///
@@ -146,6 +154,7 @@ pub fn max_hp(kind: EntityKind) -> u32 {
         EntityKind::Building(BuildingKind::Hq) => HQ_MAX_HP,
         EntityKind::Building(BuildingKind::Depot) => DEPOT_MAX_HP,
         EntityKind::Building(BuildingKind::Barracks) => BARRACKS_MAX_HP,
+        EntityKind::Building(BuildingKind::Turret) => TURRET_MAX_HP,
         EntityKind::Node(_) => 0,
     }
 }
@@ -159,6 +168,7 @@ pub fn armor(kind: EntityKind) -> u32 {
         EntityKind::Building(BuildingKind::Hq) => HQ_ARMOR,
         EntityKind::Building(BuildingKind::Depot) => DEPOT_ARMOR,
         EntityKind::Building(BuildingKind::Barracks) => BARRACKS_ARMOR,
+        EntityKind::Building(BuildingKind::Turret) => TURRET_ARMOR,
         EntityKind::Node(_) => 0,
     }
 }

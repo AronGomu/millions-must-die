@@ -5,7 +5,7 @@
 //! is the per-kind weapon table and the surface-distance rule both the
 //! system and its tests share.
 
-use super::entity::{EntityKind, EntityStore, UnitKind};
+use super::entity::{BuildingKind, EntityKind, EntityStore, UnitKind};
 use super::orders::{dist2, rect_distance};
 
 /// An instant-hit weapon: no projectile entity, the damage lands on the
@@ -39,6 +39,23 @@ pub fn weapon(kind: UnitKind) -> Option<Weapon> {
             cooldown_ticks: 30,
             range_cells: 8.0,
         }),
+    }
+}
+
+/// Weapon of a building kind. Only the Turret is armed.
+///
+/// A `None` building never enters the combat scan as a firer, and an
+/// armed building fires only once **finished** (`progress_target == 0`)
+/// — a construction site has no working weapon. Buildings are static
+/// firers: no order, no chase; the scan alone decides.
+pub fn building_weapon(kind: BuildingKind) -> Option<Weapon> {
+    match kind {
+        BuildingKind::Turret => Some(Weapon {
+            damage: 10,
+            cooldown_ticks: 20,
+            range_cells: 36.0,
+        }),
+        BuildingKind::Hq | BuildingKind::Depot | BuildingKind::Barracks => None,
     }
 }
 

@@ -837,3 +837,18 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Select a mixed group (Worker + Soldier). Press **S** — confirm both units idle and a single voice batch plays (not two separate sounds).
 - [ ] Shift-click a Ghoul while a Worker is selected — confirm the Worker is **deselected** and only the Ghoul appears in the selection panel (no owner-mixing).
 - [ ] Drag-box across a group of Workers and Ghouls — confirm only the Workers end up selected; the Ghouls are excluded from the box selection.
+
+## T5 turret
+
+- [ ] Launch `cargo run -- rts`. Select a Worker and confirm the command card now shows a **fourth** build button in the middle-left slot, keyed **A**, with its own colored icon — Q=HQ, W=Depot, E=Barracks, A=Turret.
+- [ ] With the Worker still selected, press **A** and confirm a placement ghost appears under the cursor and follows it — the ghost is a small square, visibly smaller than the Depot and Barracks ghosts.
+- [ ] Move the ghost over the map edge and over a crystal/gas node, and confirm it reads as invalid there; move it back onto open ground and confirm it reads as valid again.
+- [ ] Left-click on valid open ground and confirm 75 crystal is deducted immediately, a construction site appears, and the Worker walks over and starts building it.
+- [ ] Watch the site while it is still under construction with a Ghoul standing close by, and confirm the **site never shoots** — an unfinished turret is inert.
+- [ ] Confirm the site finishes into a different-looking finished sprite (no longer the hatched under-construction look) and that the supply cap number in the HUD is **unchanged** by the turret.
+- [ ] Click the finished turret and confirm its detail card reads `TURRET` with an HP line.
+- [ ] Order a unit to walk straight through the finished turret and confirm it paths **around** it — the finished footprint is solid.
+- [ ] Let a Ghoul wander into the turret's reach and confirm the turret fires on its own, without any order from you, and that the Ghoul takes damage.
+- [ ] Confirm the turret fires in evenly spaced pulses at one target at a time, and note for the record that turret fire is **silent and unanimated** this phase (no muzzle flash, no SFX) — that is expected, not a bug.
+- [ ] Let a large group of Ghouls swarm a single turret and confirm the turret is eventually destroyed, disappears, and the ground it stood on becomes walkable again.
+- [ ] Build a turret right next to a crystal node, then send a Worker to gather from that node, and confirm the Worker hauls its cargo back to the **HQ** and never to the turret.

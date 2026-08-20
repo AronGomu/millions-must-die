@@ -595,10 +595,11 @@ pub const MENU_TEXT_POS: [f32; 2] = [1840.0, 20.0];
 /// worse than no menu. This slice's command grid does not draw these letters
 /// (that lands with the interactive menu, `T13`); the table stays the single
 /// source both sides read.
-pub const BUILD_MENU: [(u8, BuildingKind); 3] = [
+pub const BUILD_MENU: [(u8, BuildingKind); 4] = [
     (b'Q', BuildingKind::Hq),
     (b'W', BuildingKind::Depot),
     (b'E', BuildingKind::Barracks),
+    (b'A', BuildingKind::Turret),
 ];
 
 /// Longest decimal a `u32` needs, plus room for a `/` pair.
@@ -661,6 +662,7 @@ pub fn kind_label(kind: EntityKind) -> &'static str {
         EntityKind::Building(BuildingKind::Hq) => "HQ",
         EntityKind::Building(BuildingKind::Depot) => "DEPOT",
         EntityKind::Building(BuildingKind::Barracks) => "BARRACKS",
+        EntityKind::Building(BuildingKind::Turret) => "TURRET",
         EntityKind::Node(ResourceKind::Crystal) => "CRYSTAL",
         EntityKind::Node(ResourceKind::Gas) => "GAS",
     }
@@ -677,6 +679,7 @@ pub enum CommandId {
     SetRally,
     Attack,
     Stop,
+    BuildTurret,
 }
 
 /// One cell of the 3x3 command grid.
@@ -702,6 +705,7 @@ fn command_icon(cmd: CommandId) -> Prop {
         CommandId::SetRally => Prop::IconSetRally,
         CommandId::Attack => Prop::IconAttack,
         CommandId::Stop => Prop::IconStop,
+        CommandId::BuildTurret => Prop::IconBuildTurret,
     }
 }
 
@@ -774,6 +778,10 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
         };
         out[2] = CommandSlot {
             command: Some(CommandId::BuildBarracks),
+            enabled: true,
+        };
+        out[3] = CommandSlot {
+            command: Some(CommandId::BuildTurret),
             enabled: true,
         };
     } else if worker_count == 0 && armed_count == 0 && building_count == 1 && !disqualified {

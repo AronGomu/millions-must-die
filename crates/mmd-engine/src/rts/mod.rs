@@ -18,14 +18,15 @@ mod world;
 pub use build::{
     BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, DEPOT_BUILD_TICKS, DEPOT_COST,
     DEPOT_SUPPLY_GRANT, EXTRA_BUILDERS_SPEED_UP, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
-    Placement, PlacementCandidate, PlacementError, build_ticks, building_cost, footprint_cells,
-    ghost_min_corner, placement_candidate, placement_valid, supply_grant,
+    Placement, PlacementCandidate, PlacementError, TURRET_BUILD_TICKS, TURRET_COST,
+    TURRET_SUPPLY_GRANT, build_ticks, building_cost, footprint_cells, ghost_min_corner,
+    placement_candidate, placement_valid, supply_grant,
 };
 pub use collision::{
     GATHER_PAIR_ACTIVE, GATHER_SEPARATION_STEP_CELLS, GATHER_SEPARATION_TICKS,
     moving_circle_hits_point, units_overlap,
 };
-pub use combat::{Weapon, weapon};
+pub use combat::{Weapon, building_weapon, weapon};
 pub use economy::{
     GATHER_TICKS, Resources, SOLDIER_SUPPLY_COST, Supply, WORKER_CARRY_CAPACITY,
     WORKER_SUPPLY_COST, node_amount, supply_cost,
@@ -34,7 +35,8 @@ pub use entity::{
     BARRACKS_ARMOR, BARRACKS_MAX_HP, BuildingKind, CARRY_NONE, DEPOT_ARMOR, DEPOT_MAX_HP, EntityId,
     EntityKind, EntityStore, HQ_ARMOR, HQ_MAX_HP, MAX_ENTITIES, OWNER_ENEMY, OWNER_NEUTRAL,
     OWNER_PLAYER, RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind,
-    SOLDIER_ARMOR, SOLDIER_MAX_HP, UnitKind, WORKER_ARMOR, WORKER_MAX_HP, armor, max_hp,
+    SOLDIER_ARMOR, SOLDIER_MAX_HP, TURRET_ARMOR, TURRET_MAX_HP, UnitKind, WORKER_ARMOR,
+    WORKER_MAX_HP, armor, max_hp,
 };
 pub use formation::{
     FORMATION_ARRIVAL_CELLS, FORMATION_CAPTURE_MARGIN_CELLS, FORMATION_SPACING_CELLS,

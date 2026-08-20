@@ -118,6 +118,9 @@ fn prop_uv_maps_to_the_published_cells() {
         Prop::IconTrainWorker,
         Prop::IconTrainSoldier,
         Prop::IconSetRally,
+        Prop::IconAttack,
+        Prop::IconStop,
+        Prop::IconBuildTurret,
     ];
     for (i, p) in all.into_iter().enumerate() {
         let i = i as u32;
@@ -133,6 +136,7 @@ fn prop_uv_maps_to_the_published_cells() {
     assert_eq!(prop_uv(Prop::SelectionRing), frame_uv_rect(0, 0));
     assert_eq!(prop_uv(Prop::RallyFlag), frame_uv_rect(0, 3));
     assert_eq!(prop_uv(Prop::PanelFill), frame_uv_rect(1, 3));
+    assert_eq!(prop_uv(Prop::IconBuildTurret), frame_uv_rect(4, 2));
 }
 
 #[test]
@@ -150,6 +154,11 @@ fn building_uv_switches_row_on_construction() {
         building_uv(BuildingKind::Barracks, true),
         frame_uv_rect(1, 2)
     );
+    assert_eq!(
+        building_uv(BuildingKind::Turret, false),
+        frame_uv_rect(0, 3)
+    );
+    assert_eq!(building_uv(BuildingKind::Turret, true), frame_uv_rect(1, 3));
 }
 
 #[test]

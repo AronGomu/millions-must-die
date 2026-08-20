@@ -33,5 +33,6 @@ fn ghost_name(kind: BuildingKind) -> &'static str {
         BuildingKind::Hq => "hq",
         BuildingKind::Depot => "depot",
         BuildingKind::Barracks => "barracks",
+        BuildingKind::Turret => "turret",
     }
 }

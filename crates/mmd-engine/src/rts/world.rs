@@ -15,7 +15,7 @@ use super::collision::{
     GatherCollisionState, concentric_pair_normal, moving_circle_hits_point, pair_byte_exempts,
     pair_byte_is_transition, units_overlap,
 };
-use super::combat::{surface_distance, weapon};
+use super::combat::{building_weapon, surface_distance, weapon};
 use super::economy::{
     GATHER_TICKS, Resources, Supply, WORKER_CARRY_CAPACITY, WORKER_SUPPLY_COST, node_amount,
     supply_cost,
@@ -2886,6 +2886,38 @@ impl RtsWorld {
         best.map(|(_, t)| self.entities.id_at(t).expect("live target"))
     }
 
+    /// Nearest live enemy unit within `range` of a building firer at `slot`.
+    ///
+    /// Effective distance = `rect_distance(unit_pos, building_pos, edge) −
+    /// unit_body_radius` — range from the building's footprint face to the
+    /// unit's hull. Buildings only target enemy *units*; the enemy faction
+    /// cannot own buildings (T2's schema spawns only Ghouls), so a building–
+    /// building path would be dead code.
+    fn building_nearest_hostile(&self, slot: usize, edge: u32, range: f32) -> Option<EntityId> {
+        use super::orders::rect_distance;
+        let p = self.entities.position(slot);
+        let own = self.entities.owner(slot);
+        let mut best: Option<(f32, usize)> = None;
+        for i in 0..self.live_scratch.len() {
+            let t = self.live_scratch[i];
+            if t == slot || !self.entities.alive(t) {
+                continue;
+            }
+            let owner = self.entities.owner(t);
+            if owner == own || owner == OWNER_NEUTRAL {
+                continue;
+            }
+            let EntityKind::Unit(k) = self.entities.kind(t) else {
+                continue;
+            };
+            let d = rect_distance(self.entities.position(t), p, edge) - k.body_radius_cells();
+            if d <= range && best.is_none_or(|(bd, _)| d < bd) {
+                best = Some((d, t));
+            }
+        }
+        best.map(|(_, t)| self.entities.id_at(t).expect("live target"))
+    }
+
     /// Whether `target` is live, hostile to `slot`'s owner and within
     /// `range` of it, by the same surface rule the acquire scan uses.
     fn target_in_range(&self, slot: usize, target: EntityId, range: f32) -> bool {
@@ -2926,30 +2958,42 @@ impl RtsWorld {
             if !self.entities.alive(slot) {
                 continue;
             }
-            let EntityKind::Unit(kind) = self.entities.kind(slot) else {
-                continue;
+            let w = match self.entities.kind(slot) {
+                EntityKind::Unit(kind) => weapon(kind),
+                // A finished building may be armed; a site never scans.
+                EntityKind::Building(b) if self.entities.progress_target(slot) == 0 => {
+                    building_weapon(b)
+                }
+                _ => None,
             };
-            let Some(w) = weapon(kind) else {
+            let Some(w) = w else {
                 continue;
             };
             let cd = self.entities.cooldown(slot);
             if cd > 0 {
                 self.entities.set_cooldown(slot, cd - 1);
             }
-            let target = match self.orders.get(slot) {
-                Order::Idle | Order::AttackMove { .. } => {
-                    self.nearest_hostile_in_range(slot, w.range_cells)
-                }
-                Order::Attack { target, .. } => {
-                    if self.entities.contains(target) {
-                        self.target_in_range(slot, target, w.range_cells)
-                            .then_some(target)
-                    } else {
-                        self.orders.clear(slot);
+            let target = match self.entities.kind(slot) {
+                EntityKind::Unit(_) => match self.orders.get(slot) {
+                    Order::Idle | Order::AttackMove { .. } => {
                         self.nearest_hostile_in_range(slot, w.range_cells)
                     }
+                    Order::Attack { target, .. } => {
+                        if self.entities.contains(target) {
+                            self.target_in_range(slot, target, w.range_cells)
+                                .then_some(target)
+                        } else {
+                            self.orders.clear(slot);
+                            self.nearest_hostile_in_range(slot, w.range_cells)
+                        }
+                    }
+                    Order::Move { .. } | Order::Gather { .. } | Order::Build { .. } => continue,
+                },
+                // Buildings have no orders; scan enemies unconditionally.
+                EntityKind::Building(b) => {
+                    self.building_nearest_hostile(slot, b.footprint_cells(), w.range_cells)
                 }
-                Order::Move { .. } | Order::Gather { .. } | Order::Build { .. } => continue,
+                EntityKind::Node(_) => continue,
             };
             let Some(target) = target else {
                 continue;

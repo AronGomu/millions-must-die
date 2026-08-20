@@ -558,9 +558,10 @@ fn worker_card_uses_stable_three_build_slots() {
     assert_eq!(slots[0].command, Some(CommandId::BuildHq));
     assert_eq!(slots[1].command, Some(CommandId::BuildDepot));
     assert_eq!(slots[2].command, Some(CommandId::BuildBarracks));
-    assert!(slots[0].enabled && slots[1].enabled && slots[2].enabled);
+    assert_eq!(slots[3].command, Some(CommandId::BuildTurret));
+    assert!(slots[0].enabled && slots[1].enabled && slots[2].enabled && slots[3].enabled);
     for (i, s) in slots.iter().enumerate() {
-        if !(0..=2).contains(&i) {
+        if !(0..=3).contains(&i) {
             assert_eq!(s.command, None, "slot {i} must be empty");
         }
     }
@@ -1905,16 +1906,18 @@ fn card_shows_attack_stop_for_armed() {
         assert_eq!(slots[3].command, Some(CommandId::Attack));
         assert_eq!(slots[4].command, Some(CommandId::Stop));
     }
-    // (c) workers only: slots 0/1/2 build, 3/4 None
+    // (c) workers only: slots 0/1/2/3 build, 4 None. Slot 3 is Attack only
+    // on an armed card — a worker card spends it on the Turret build.
     {
         let mut h = scene();
         let ww = workers(&h);
         h.world_mut().selection_mut().clear();
         h.world_mut().selection_mut().insert(ww[0]);
         let slots = command_slots(h.world());
-        assert!(
-            slots[3].command.is_none(),
-            "slot 3 must be empty for worker-only"
+        assert_eq!(
+            slots[3].command,
+            Some(CommandId::BuildTurret),
+            "worker-only slot 3 is the turret build, never Attack"
         );
         assert!(
             slots[4].command.is_none(),
