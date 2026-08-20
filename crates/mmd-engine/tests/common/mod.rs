@@ -424,6 +424,7 @@ fn pocket_spec(
             // legal centre.
             crystal_nodes: vec![Cell { x: 17, y: 9 }],
             gas_nodes: vec![Cell { x: 18, y: 10 }],
+            enemies: None,
         }),
     }
 }

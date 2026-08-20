@@ -69,6 +69,7 @@ fn collision_spec(spawns: Vec<Cell>, obstacle_cells: Vec<u32>) -> ScenarioSpec {
             },
             crystal_nodes: vec![Cell { x: 1, y: H - 2 }],
             gas_nodes: vec![Cell { x: 1, y: H - 3 }],
+            enemies: None,
         }),
     }
 }
@@ -1768,6 +1769,7 @@ fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
         // body can stand there anyway, so they add and remove no centre.
         crystal_nodes: vec![Cell { x: 17, y: 9 }],
         gas_nodes: vec![Cell { x: 18, y: 10 }],
+        enemies: None,
     });
     RtsHarness::spec(spec)
         .build()

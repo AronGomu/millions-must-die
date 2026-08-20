@@ -4,9 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    COLLISION_SCENE_V1, Cell, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, HQ_FOOTPRINT_CELLS,
-    MAX_COLLISION_RADIUS_Q8, MAX_LIVE_AGENTS, MAX_SEPARATION_STRENGTH_Q8, MAX_START_RESOURCE,
-    MAX_SUPPLY_CAP, RTS_PROTOTYPE_V1, RtsSpec, Scenario, ScenarioError, ScenarioSpec,
+    COLLISION_SCENE_V1, Cell, EnemySpec, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS, HQ_FOOTPRINT_CELLS,
+    MAX_COLLISION_RADIUS_Q8, MAX_ENEMIES, MAX_LIVE_AGENTS, MAX_SEPARATION_STRENGTH_Q8,
+    MAX_START_RESOURCE, MAX_SUPPLY_CAP, RTS_PROTOTYPE_V1, RtsSpec, Scenario, ScenarioError,
+    ScenarioSpec, WaveSpec,
 };
 use mmd_engine::testkit::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, fixture_path,
@@ -1049,6 +1050,7 @@ fn rts_spec() -> ScenarioSpec {
             hq_cell: Cell { x: 200, y: 200 },
             crystal_nodes: vec![Cell { x: 5, y: 5 }],
             gas_nodes: vec![Cell { x: 6, y: 6 }],
+            enemies: None,
         }),
     }
 }
@@ -1061,6 +1063,99 @@ fn expect_invalid_rts(spec: ScenarioSpec, needle: &str) {
         ),
         other => panic!("expected InvalidRts containing {needle:?}, got {other:?}"),
     }
+}
+
+/// `rts_spec()` with a small, fully legal enemy block. 320x320, no
+/// obstacles, HQ at (200, 200), nodes at (5, 5)/(6, 6).
+fn combat_rts_spec() -> ScenarioSpec {
+    let mut spec = rts_spec();
+    let rts = spec.rts.as_mut().expect("rts block");
+    rts.enemies = Some(EnemySpec {
+        pre_placed: vec![Cell { x: 20, y: 20 }],
+        spawn_points: vec![Cell { x: 100, y: 100 }],
+        waves: vec![
+            WaveSpec {
+                at_tick: 10,
+                count: 5,
+                spawn_point: 0,
+            },
+            WaveSpec {
+                at_tick: 20,
+                count: 5,
+                spawn_point: 0,
+            },
+        ],
+    });
+    spec
+}
+
+#[test]
+fn enemy_baseline_block_is_valid() {
+    // Guards the negative cases below: each mutates exactly one thing.
+    Scenario::from_spec(combat_rts_spec()).expect("baseline enemy block must validate");
+}
+
+#[test]
+fn enemy_block_optional_old_scenes_parse() {
+    // `load_verified` re-checks the tracked sidecar, so passing at all
+    // proves the scene's bytes did not move under the schema change.
+    let scene = Scenario::load_verified(rts_scene_path())
+        .expect("tracked rts scene still loads hash-verified");
+    assert!(
+        scene.rts().expect("rts block").enemies.is_none(),
+        "a scene written before combat must parse with no enemies"
+    );
+}
+
+#[test]
+fn enemy_spec_validates_cells_and_totals() {
+    let with = |f: fn(&mut EnemySpec)| {
+        let mut spec = combat_rts_spec();
+        f(spec.rts.as_mut().unwrap().enemies.as_mut().unwrap());
+        spec
+    };
+
+    // Out of bounds (width is 320).
+    expect_invalid_rts(
+        with(|e| e.spawn_points = vec![Cell { x: 320, y: 10 }]),
+        "out of bounds",
+    );
+    // Blocked: obstacle exactly under the pre-placed cell (20, 20).
+    let mut spec = combat_rts_spec();
+    spec.obstacle_cells = vec![20 + 20 * 320];
+    expect_invalid_rts(spec, "blocked");
+    // Unreachable: 4-connected ring seals (20, 20) off from the destination.
+    let mut spec = combat_rts_spec();
+    spec.obstacle_cells = vec![
+        19 + 19 * 320,
+        20 + 19 * 320,
+        21 + 19 * 320,
+        19 + 20 * 320,
+        21 + 20 * 320,
+        19 + 21 * 320,
+        20 + 21 * 320,
+        21 + 21 * 320,
+    ];
+    expect_invalid_rts(spec, "unreachable");
+    // On a resource node (rts_spec puts crystal at (5, 5)).
+    expect_invalid_rts(
+        with(|e| e.pre_placed = vec![Cell { x: 5, y: 5 }]),
+        "resource node",
+    );
+    // Inside the HQ footprint (min corner (200, 200), edge 12).
+    expect_invalid_rts(
+        with(|e| e.pre_placed = vec![Cell { x: 205, y: 205 }]),
+        "HQ footprint",
+    );
+    // Wave names a spawn point that does not exist.
+    expect_invalid_rts(with(|e| e.waves[0].spawn_point = 1), "spawn_point");
+    // A zero wave is authoring noise.
+    expect_invalid_rts(with(|e| e.waves[0].count = 0), "count");
+    // Waves must be sorted non-decreasing by at_tick.
+    expect_invalid_rts(with(|e| e.waves[0].at_tick = 30), "sorted");
+    // 1 pre-placed + 1195 + 5 = 1201 > MAX_ENEMIES.
+    let _ = MAX_ENEMIES; // confirm the const is in scope
+    expect_invalid_rts(with(|e| e.waves[0].count = 1_195), "exceeds");
 }
 
 fn sha256_hex_of(bytes: &[u8]) -> String {
@@ -1286,6 +1381,7 @@ fn a_phase0_family_with_an_rts_block_is_rejected() {
             hq_cell: Cell { x: 0, y: 0 },
             crystal_nodes: vec![Cell { x: 4, y: 4 }],
             gas_nodes: vec![Cell { x: 5, y: 5 }],
+            enemies: None,
         }),
         ..fixture_spec()
     };

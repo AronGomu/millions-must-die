@@ -102,9 +102,13 @@ pub fn node_uv(kind: ResourceKind, depleted: bool) -> [f32; 4] {
 
 /// Texture slot a unit kind draws from.
 pub fn unit_slot(kind: UnitKind) -> u32 {
+    #[allow(clippy::match_same_arms)]
     match kind {
         UnitKind::Worker => SLOT_RTS_WORKER,
         UnitKind::Soldier => SLOT_RTS_SOLDIER,
+        // Enemy art is out of this slice's scope: the Ghoul draws from the
+        // soldier sheet until a dedicated sheet exists.
+        UnitKind::Ghoul => SLOT_RTS_SOLDIER,
     }
 }
 

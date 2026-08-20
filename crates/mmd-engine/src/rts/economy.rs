@@ -121,5 +121,7 @@ pub fn supply_cost(kind: UnitKind) -> u32 {
     match kind {
         UnitKind::Worker => WORKER_SUPPLY_COST,
         UnitKind::Soldier => SOLDIER_SUPPLY_COST,
+        // Enemies never enter Supply::used; the recount also filters by owner.
+        UnitKind::Ghoul => 0,
     }
 }

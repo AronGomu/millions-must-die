@@ -24,6 +24,9 @@ pub fn unit_speed(kind: UnitKind) -> f32 {
     match kind {
         UnitKind::Worker => WORKER_SPEED_CELLS_PER_SEC,
         UnitKind::Soldier => SOLDIER_SPEED_CELLS_PER_SEC,
+        // T3's march AI owns the real Ghoul speed; until then a Ghoul only
+        // ever stands Idle, and an Idle unit is never stepped.
+        UnitKind::Ghoul => 0.0,
     }
 }
 

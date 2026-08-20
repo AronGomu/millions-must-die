@@ -20,8 +20,9 @@ use super::economy::{
     supply_cost,
 };
 use super::entity::{
-    BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
-    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind, armor,
+    BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_ENEMY, OWNER_NEUTRAL,
+    OWNER_PLAYER, RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
+    armor,
 };
 use super::formation::{
     FORMATION_ARRIVAL_CELLS, FormationError, FormationGoal, FormationScratch,
@@ -289,6 +290,17 @@ pub struct RtsWorld {
     /// [`MAX_ENTITIES`].
     evac_units: Vec<usize>,
     evac_to: Vec<[f32; 2]>,
+    /// Index of the first scenario enemy wave not yet fully spawned.
+    enemy_wave_cursor: usize,
+    /// Ghouls the wave at [`Self::enemy_wave_cursor`] still owes the world —
+    /// nonzero exactly while a wave is mid-deferral (store full, or no legal
+    /// free centre). Bounded state, not a queue: waves drain strictly in
+    /// list order, so one pending count is the whole backlog.
+    enemy_wave_pending: u32,
+    /// Cumulative Ghouls ever spawned (pre-placed + waves). Never
+    /// decremented on death — the combat gate's exit token reads it as a
+    /// spawn odometer, not a head-count.
+    enemies_spawned: u32,
     /// One production queue and rally point per entity slot.
     production: ProductionTable,
     /// The view every packer projects through. World state, not view state: a
@@ -706,6 +718,28 @@ impl RtsWorld {
             worker_count += 1;
         }
 
+        // 5. Pre-placed Ghouls, in scenario order, through the same body-safe
+        //    search the workers used, against the bodies already seeded.
+        //    Enemies charge no supply. Failure is fatal here, exactly as it is
+        //    for a worker: a scene that cannot seed its own script is broken,
+        //    and the wave spawner's bounded deferral is a runtime behaviour,
+        //    not a construction one.
+        let mut enemies_spawned: u32 = 0;
+        if let Some(enemies) = rts.enemies.as_ref() {
+            for c in &enemies.pre_placed {
+                let preferred = [c.x as f32 + 0.5, c.y as f32 + 0.5];
+                let pos = nearest_free_body_center(&static_nav, &placed, None, None, preferred)
+                    .ok_or(RtsWorldError::NoFreeUnitPosition)?;
+                entities
+                    .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, pos)
+                    .ok_or_else(|| RtsWorldError::StoreFull {
+                        what: "ghoul".to_string(),
+                    })?;
+                placed.push(pos);
+                enemies_spawned += 1;
+            }
+        }
+
         let resources = Resources {
             crystal: rts.start_crystal,
             gas: rts.start_gas,
@@ -765,6 +799,9 @@ impl RtsWorld {
             body_scratch: Vec::with_capacity(MAX_ENTITIES),
             evac_units: Vec::with_capacity(MAX_ENTITIES),
             evac_to: Vec::with_capacity(MAX_ENTITIES),
+            enemy_wave_cursor: 0,
+            enemy_wave_pending: 0,
+            enemies_spawned,
             production: ProductionTable::new(),
             camera,
             keyboard_pan_dir: [0.0, 0.0],
@@ -968,6 +1005,12 @@ impl RtsWorld {
 
     pub fn tick_index(&self) -> u64 {
         self.tick_index
+    }
+
+    /// Cumulative Ghouls ever spawned (pre-placed + waves). Never
+    /// decremented on death.
+    pub fn enemies_spawned(&self) -> u32 {
+        self.enemies_spawned
     }
 
     /// The starting HQ. `None` only after it is destroyed
@@ -1830,18 +1873,20 @@ impl RtsWorld {
     ///
     /// Systems are added by later tickets and each one runs at a fixed point in
     /// this order, so a reordering is a visible diff rather than an accident:
-    /// 1. commands, 2. camera, 3. construction, 4. production, 5. orders,
-    /// 6. movement, 7. supply recount.
+    /// 1. commands, 2. camera, 3. enemy waves, 4. construction, 5. production,
+    /// 6. orders, 7. movement, 8. supply recount.
     ///
-    /// Today the tick counter, the camera pan (2), the construction system (3),
-    /// the production system (4), the gather system (5), the movement system
-    /// (6) and the supply recount (7) run, followed by pruning the selection of
-    /// anything that died this tick — last, so a unit that died on this tick is
-    /// out of the selection before anything reads it next tick.
+    /// Today the tick counter, the camera pan (2), the enemy wave spawner
+    /// (3), the construction system (4), the production system (5), the
+    /// gather system (6), the movement system (7) and the supply recount (8)
+    /// run, followed by pruning the selection of anything that died this
+    /// tick — last, so a unit that died on this tick is out of the selection
+    /// before anything reads it next tick.
     pub fn tick(&mut self) {
         self.tick_index += 1;
         self.entities.collect_live(&mut self.live_scratch);
         self.camera_system();
+        self.enemy_wave_system();
         self.construction();
         self.production_system();
         self.gather();
@@ -1865,11 +1910,76 @@ impl RtsWorld {
         self.camera.pan_cells(dx * TICK_DT, dy * TICK_DT);
     }
 
-    /// System 3: advance every attended construction site by one tick, finish
+    /// System 3: spawn scheduled enemy waves at their exact tick.
+    ///
+    /// Waves drain strictly in list order: [`Self::enemy_wave_cursor`] names
+    /// the first wave not fully spawned, [`Self::enemy_wave_pending`] how
+    /// many of its Ghouls still owe the world a body. Placement is
+    /// [`nearest_free_body_center`] around the wave's spawn point — the same
+    /// deterministic planner every other body placement uses — with each
+    /// spawn's centre added to the obstacle set before the next. A spawn
+    /// that cannot be honoured this tick (no legal free centre anywhere, or
+    /// the store is full) leaves the remainder pending and is retried next
+    /// tick: a scheduled enemy is deferred, never dropped.
+    fn enemy_wave_system(&mut self) {
+        loop {
+            // Copy the current wave and its origin out (`WaveSpec` and
+            // `Cell` are `Copy`) so no borrow of the owned scenario
+            // outlives the mutations below.
+            let (wave, point) = {
+                let Some(enemies) = self.scenario.rts().and_then(|r| r.enemies.as_ref()) else {
+                    return;
+                };
+                let Some(&wave) = enemies.waves.get(self.enemy_wave_cursor) else {
+                    return;
+                };
+                // In range by validation: spawn_point < spawn_points.len().
+                (wave, enemies.spawn_points[wave.spawn_point as usize])
+            };
+            if self.tick_index < u64::from(wave.at_tick) {
+                return;
+            }
+            if self.enemy_wave_pending == 0 {
+                self.enemy_wave_pending = wave.count;
+            }
+            let preferred = [point.x as f32 + 0.5, point.y as f32 + 0.5];
+            self.collect_unit_bodies_into_scratch();
+            while self.enemy_wave_pending > 0 {
+                let Some(pos) = nearest_free_body_center(
+                    &self.static_nav,
+                    &self.body_scratch,
+                    None,
+                    None,
+                    preferred,
+                ) else {
+                    // No legal free centre on the whole grid: remainder waits.
+                    return;
+                };
+                let Some(id) =
+                    self.entities
+                        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, pos)
+                else {
+                    // Store full: same wait, same reason.
+                    return;
+                };
+                self.body_scratch.push(pos);
+                // `live_scratch` was collected at the top of the tick; make
+                // this Ghoul a body for every later system this same tick,
+                // exactly as the production system does for its unit.
+                self.live_scratch.push(id.index as usize);
+                self.enemies_spawned += 1;
+                self.enemy_wave_pending -= 1;
+            }
+            // Wave fully spawned; the next wave may share this very tick.
+            self.enemy_wave_cursor += 1;
+        }
+    }
+
+    /// System 4: advance every attended construction site by one tick, finish
     /// sites that reach their target, and clear the orders of workers whose
     /// site just finished.
     ///
-    /// Runs before orders (5) and movement (6), so a site that finishes this
+    /// Runs before orders (6) and movement (7), so a site that finishes this
     /// tick is finished for everything downstream.
     fn construction(&mut self) {
         // Pass A: which sites have an attending worker this tick?
@@ -2173,13 +2283,17 @@ impl RtsWorld {
         }
     }
 
-    /// System 7: recompute `Supply::used` from scratch — live units plus every
+    /// System 8: recompute `Supply::used` from scratch — live units plus every
     /// live production queue's reservations — rather than maintaining it
     /// incrementally, so it can never drift.
     fn supply_recount(&mut self) {
         let mut used = 0u32;
         for i in 0..self.live_scratch.len() {
             let slot = self.live_scratch[i];
+            // Enemies never enter Supply::used — supply is a player economy.
+            if self.entities.owner(slot) != OWNER_PLAYER {
+                continue;
+            }
             if let EntityKind::Unit(k) = self.entities.kind(slot) {
                 used += supply_cost(k);
             }
@@ -3467,6 +3581,7 @@ mod tests {
                 hq_cell: Cell { x: 51, y: 51 },
                 crystal_nodes: vec![Cell { x: 1, y: 62 }],
                 gas_nodes: vec![Cell { x: 1, y: 61 }],
+                enemies: None,
             }),
         };
         RtsWorld::from_scenario(scenario::Scenario::from_spec(spec).expect("valid spec"))

@@ -795,3 +795,12 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Using the harness (e.g., `cargo test -p mmd-engine --test rts_combat -- hp_enters_the_state_hash`):
       confirm the test passes, proving a damaged entity produces a different state hash from an
       undamaged twin.
+
+## T2 enemy-faction-and-waves
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron` (or any RTS run) and confirm no crash or panic on startup — the enemy pre-placement ran silently.
+- [ ] In the fixture scene, let the simulation advance past tick 50 and confirm the enemy count visually increases on screen (Ghouls appear near spawn point 0 at (76, 76) in cell space).
+- [ ] Advance past tick 120 and confirm a second batch of enemies appears near spawn point 1 at (20, 76).
+- [ ] Attempt to drag-box-select across the screen in an area containing both workers and Ghouls — confirm only the player's workers are selected (the selection ring never appears on a Ghoul).
+- [ ] Confirm the supply counter never rises above its initial cap as Ghouls are spawned — the "supply used" figure stays at the player-unit count only.
+- [ ] Confirm Ghouls stand idle (no movement, no pathfinding) — they render using the soldier sheet as a placeholder but do not walk or attack.

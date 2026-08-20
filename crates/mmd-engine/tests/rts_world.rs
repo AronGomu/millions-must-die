@@ -176,6 +176,7 @@ fn kind_tags_are_distinct() {
     let kinds = [
         EntityKind::Unit(UnitKind::Worker),
         EntityKind::Unit(UnitKind::Soldier),
+        EntityKind::Unit(UnitKind::Ghoul),
         EntityKind::Building(BuildingKind::Hq),
         EntityKind::Building(BuildingKind::Depot),
         EntityKind::Building(BuildingKind::Barracks),
@@ -183,7 +184,7 @@ fn kind_tags_are_distinct() {
         EntityKind::Node(ResourceKind::Gas),
     ];
     let tags: HashSet<u8> = kinds.iter().map(|k| k.tag()).collect();
-    assert_eq!(tags.len(), 7, "every kind must have a distinct tag byte");
+    assert_eq!(tags.len(), 8, "every kind must have a distinct tag byte");
 }
 
 #[test]
@@ -556,6 +557,7 @@ fn rts_spec(obstacles: Vec<u32>, spawns: Vec<Cell>, destination: Cell) -> Scenar
             hq_cell: Cell { x: 100, y: 100 },
             crystal_nodes: vec![Cell { x: 100, y: 50 }],
             gas_nodes: vec![Cell { x: 101, y: 50 }],
+            enemies: None,
         }),
     }
 }

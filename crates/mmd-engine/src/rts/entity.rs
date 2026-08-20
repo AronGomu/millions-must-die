@@ -15,6 +15,8 @@ pub const MAX_ENTITIES: usize = 2_048;
 
 /// Owner id of the human player.
 pub const OWNER_PLAYER: u8 = 0;
+/// Owner id of the enemy faction.
+pub const OWNER_ENEMY: u8 = 1;
 /// Owner id of unowned world objects (resource nodes).
 pub const OWNER_NEUTRAL: u8 = 255;
 
@@ -29,6 +31,8 @@ pub const RTS_UNIT_BODY_DIAMETER_CELLS: f32 = 6.0;
 pub enum UnitKind {
     Worker = 0,
     Soldier = 1,
+    /// Phase-2 melee enemy. Never player-producible, never supply-counted.
+    Ghoul = 2,
 }
 
 impl UnitKind {
@@ -39,6 +43,7 @@ impl UnitKind {
         match self {
             Self::Worker => RTS_UNIT_BODY_RADIUS_CELLS,
             Self::Soldier => RTS_UNIT_BODY_RADIUS_CELLS,
+            Self::Ghoul => RTS_UNIT_BODY_RADIUS_CELLS,
         }
     }
 }
@@ -137,6 +142,7 @@ pub fn max_hp(kind: EntityKind) -> u32 {
     match kind {
         EntityKind::Unit(UnitKind::Worker) => WORKER_MAX_HP,
         EntityKind::Unit(UnitKind::Soldier) => SOLDIER_MAX_HP,
+        EntityKind::Unit(UnitKind::Ghoul) => 30,
         EntityKind::Building(BuildingKind::Hq) => HQ_MAX_HP,
         EntityKind::Building(BuildingKind::Depot) => DEPOT_MAX_HP,
         EntityKind::Building(BuildingKind::Barracks) => BARRACKS_MAX_HP,
@@ -149,6 +155,7 @@ pub fn armor(kind: EntityKind) -> u32 {
     match kind {
         EntityKind::Unit(UnitKind::Worker) => WORKER_ARMOR,
         EntityKind::Unit(UnitKind::Soldier) => SOLDIER_ARMOR,
+        EntityKind::Unit(UnitKind::Ghoul) => 0,
         EntityKind::Building(BuildingKind::Hq) => HQ_ARMOR,
         EntityKind::Building(BuildingKind::Depot) => DEPOT_ARMOR,
         EntityKind::Building(BuildingKind::Barracks) => BARRACKS_ARMOR,

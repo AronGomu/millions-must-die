@@ -29,6 +29,7 @@ pub fn unit_cost(kind: UnitKind) -> Resources {
     match kind {
         UnitKind::Worker => WORKER_COST,
         UnitKind::Soldier => SOLDIER_COST,
+        UnitKind::Ghoul => unreachable!("Ghoul is not producible; can_produce rejects it"),
     }
 }
 
@@ -41,6 +42,7 @@ pub fn produce_ticks(kind: UnitKind) -> u32 {
     match kind {
         UnitKind::Worker => WORKER_PRODUCE_TICKS,
         UnitKind::Soldier => SOLDIER_PRODUCE_TICKS,
+        UnitKind::Ghoul => unreachable!("Ghoul is not producible; can_produce rejects it"),
     }
 }
 

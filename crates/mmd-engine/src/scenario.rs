@@ -108,6 +108,12 @@ pub const MAX_START_RESOURCE: u32 = 2_000;
 pub const MAX_SUPPLY_CAP: u32 = 500;
 /// Most resource nodes a scene may declare, per kind.
 pub const MAX_RESOURCE_NODES: usize = 64;
+/// Most enemies a scene may script in total: pre-placed plus every wave.
+///
+/// Chosen under the 2 048-entity store with room left for the 500-supply
+/// player army, its buildings and the scene's nodes; the wave spawner's
+/// bounded deferral absorbs a store that is momentarily fuller.
+pub const MAX_ENEMIES: u32 = 1_200;
 
 /// Grid cell coordinate (cell space, not pixels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -134,6 +140,38 @@ pub struct RtsSpec {
     pub crystal_nodes: Vec<Cell>,
     /// Gas node cells. At least one.
     pub gas_nodes: Vec<Cell>,
+    /// Scripted enemy content. Absent on every scene shipped before combat.
+    ///
+    /// `#[serde(default)]` is load-bearing: it is what keeps every tracked
+    /// RTS `.ron` byte-identical, and therefore its `.sha256` sidecar valid,
+    /// across this change.
+    #[serde(default)]
+    pub enemies: Option<EnemySpec>,
+}
+
+/// Scripted enemy content of an RTS scene: pre-placed Ghouls, wave
+/// origins and a finite timed wave list. Validated by
+/// [`validate_rts_block`]; capped by [`MAX_ENEMIES`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct EnemySpec {
+    /// Ghoul positions seeded at world construction (tick 0).
+    pub pre_placed: Vec<Cell>,
+    /// Wave origins, indexed by [`WaveSpec::spawn_point`].
+    pub spawn_points: Vec<Cell>,
+    /// Timed waves, sorted non-decreasing by `at_tick`.
+    pub waves: Vec<WaveSpec>,
+}
+
+/// One timed enemy wave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct WaveSpec {
+    /// Tick the wave fires on, compared against the post-increment tick
+    /// counter: the first tick after construction is tick 1.
+    pub at_tick: u32,
+    /// Ghouls in the wave. At least 1.
+    pub count: u32,
+    /// Index into [`EnemySpec::spawn_points`].
+    pub spawn_point: u8,
 }
 
 /// Immutable validated scenario.
@@ -927,6 +965,81 @@ fn validate_rts_block(
             return Err(ScenarioError::InvalidRts(format!(
                 "spawn ({}, {}) lies inside the HQ footprint",
                 sp.x, sp.y
+            )));
+        }
+    }
+
+    // Enemy block: every cell it names must be ground an enemy could
+    // actually stand on and walk out of, and the whole scripted invasion
+    // must stay under the entity budget.
+    if let Some(enemies) = rts.enemies.as_ref() {
+        let enemy_cell_ok = |cell: &Cell, what: &str| -> Result<(), ScenarioError> {
+            let idx = cell_index(*cell, doc.width, doc.height).ok_or_else(|| {
+                ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) is out of bounds",
+                    cell.x, cell.y
+                ))
+            })?;
+            if blocked[idx] {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) is blocked",
+                    cell.x, cell.y
+                )));
+            }
+            if !reachable[idx] {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) is unreachable from the destination",
+                    cell.x, cell.y
+                )));
+            }
+            if in_hq_footprint(*cell) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) lies inside the HQ footprint",
+                    cell.x, cell.y
+                )));
+            }
+            if all_nodes.iter().any(|n| **n == *cell) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) sits on a resource node",
+                    cell.x, cell.y
+                )));
+            }
+            Ok(())
+        };
+        for c in &enemies.pre_placed {
+            enemy_cell_ok(c, "enemy pre_placed cell")?;
+        }
+        for c in &enemies.spawn_points {
+            enemy_cell_ok(c, "enemy spawn_point cell")?;
+        }
+
+        let mut total = enemies.pre_placed.len() as u64;
+        let mut prev_tick: Option<u32> = None;
+        for (i, w) in enemies.waves.iter().enumerate() {
+            if w.count == 0 {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "wave {i}: count must be >= 1"
+                )));
+            }
+            if (w.spawn_point as usize) >= enemies.spawn_points.len() {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "wave {i}: spawn_point {} out of range ({} spawn points)",
+                    w.spawn_point,
+                    enemies.spawn_points.len()
+                )));
+            }
+            if prev_tick.is_some_and(|p| w.at_tick < p) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "wave {i}: at_tick {} is not sorted non-decreasing",
+                    w.at_tick
+                )));
+            }
+            prev_tick = Some(w.at_tick);
+            total += u64::from(w.count);
+        }
+        if total > u64::from(MAX_ENEMIES) {
+            return Err(ScenarioError::InvalidRts(format!(
+                "enemy total {total} exceeds cap {MAX_ENEMIES}"
             )));
         }
     }

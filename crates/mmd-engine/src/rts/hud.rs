@@ -653,6 +653,7 @@ pub fn kind_label(kind: EntityKind) -> &'static str {
     match kind {
         EntityKind::Unit(UnitKind::Worker) => "WORKER",
         EntityKind::Unit(UnitKind::Soldier) => "SOLDIER",
+        EntityKind::Unit(UnitKind::Ghoul) => "GHOUL",
         EntityKind::Building(BuildingKind::Hq) => "HQ",
         EntityKind::Building(BuildingKind::Depot) => "DEPOT",
         EntityKind::Building(BuildingKind::Barracks) => "BARRACKS",
@@ -913,6 +914,10 @@ fn portrait_source(store: &EntityStore, slot: usize) -> (PortraitTarget, [f32; 4
             PortraitTarget::Soldier,
             frame_uv_rect(PORTRAIT_DIR, PORTRAIT_FRAME),
         ),
+        EntityKind::Unit(UnitKind::Ghoul) => (
+            PortraitTarget::Soldier,
+            frame_uv_rect(PORTRAIT_DIR, PORTRAIT_FRAME),
+        ),
         EntityKind::Building(kind) => (
             PortraitTarget::Building,
             building_uv(kind, store.progress_target(slot) > 0),
@@ -979,6 +984,9 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
         EntityKind::Unit(UnitKind::Soldier) => {
             push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
         }
+        EntityKind::Unit(UnitKind::Ghoul) => {
+            push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+        }
         EntityKind::Building(b) => {
             let id = store.id_at(slot).expect("live slot");
 
@@ -1025,6 +1033,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                     let label = match kind {
                         UnitKind::Worker => "W",
                         UnitKind::Soldier => "S",
+                        UnitKind::Ghoul => "G",
                     };
                     cx += push_text(font, label, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 }
