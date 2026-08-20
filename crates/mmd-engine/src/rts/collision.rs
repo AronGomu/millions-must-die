@@ -135,14 +135,13 @@ impl GatherCollisionState {
     /// from: the head of the movement pass, before any gate or oracle reads a
     /// pair byte.
     ///
-    /// That placement leaves exactly one window, and it is not reachable from
-    /// the game: a *unit* slot has to be recycled and then read before the
-    /// next tick syncs it. Nothing in a shipping build despawns a unit at all
-    /// (the only despawn is a cancelled building site, whose slot never
-    /// carried a pair byte — only unit pairs are ever written), so reaching it
-    /// takes a raw `testkit` despawn/respawn followed by a `state_hash` or
-    /// `body_overlap_count` call with no tick in between. Deterministic even
-    /// then, and cleared by the next tick.
+    /// That placement leaves exactly one window: a *unit* slot has to be
+    /// recycled and then read before the next tick syncs it. Since combat,
+    /// `RtsWorld::apply_damage` can despawn a unit, so the window is reached
+    /// by killing a unit and spawning into its slot with a `state_hash` or
+    /// `body_overlap_count` call and no tick in between. Deterministic even
+    /// then, and cleared by the next tick's sync before any movement gate
+    /// reads a pair byte.
     pub(crate) fn sync_slot(&mut self, id: EntityId) {
         let slot = id.index as usize;
         if self.generations[slot] == id.generation {

@@ -737,3 +737,61 @@ Run `cargo run -- rts` on the development host, with sound on and a real pointer
 
 - [ ] Open `docs/rts-feedback-polish-architecture.html` in a browser: the badge reads LANDED,
       the evidence table resolves, and both footer links open.
+
+## T1 combat-data-model
+
+These items cannot be verified by the automated gate — they confirm the data model
+behaves as expected in a running session where a human can observe world state.
+
+**HP and armor stats visible in a debugger / logging session**
+
+- [ ] Start `cargo run -- rts`, open the dev console or attach a debugger to a breakpoint in
+      `apply_damage`. Fire a shot at a Worker (25 HP, 0 armor): confirm the first hit deals
+      exactly the requested damage, reducing HP below 25.
+- [ ] Fire a shot at the HQ (400 HP, 2 armor) with damage value 1: confirm the actual dealt
+      damage floors to 1 and HP drops to 399, not 400 and not 398.
+- [ ] Fire a shot at a resource Crystal node: confirm the call returns `Indestructible` and the
+      node's amount is unchanged.
+
+**Unit death**
+
+- [ ] Kill a Worker with exactly 25 damage in a running session. Confirm the worker sprite
+      disappears from the scene on the same frame, and any selection ring that was on it also
+      disappears on the next tick.
+- [ ] Confirm the entity count visible in any debug overlay drops by 1 after the kill.
+
+**Building death — footprint cleared**
+
+- [ ] Build a Depot and kill it with `apply_damage`. Confirm you can now place a new building in
+      the cells the Depot occupied — the footprint is gone and no phantom solid remains.
+- [ ] Confirm worker pathfinding can now route through those cells (units walk straight through
+      the gap left by the dead building).
+
+**Building death — supply grant revoked**
+
+- [ ] Note the supply cap with a Depot alive. Kill the Depot. Confirm the cap number decreases
+      by 10 (the Depot's supply grant).
+
+**Building death — production queue cancelled without refund**
+
+- [ ] Enqueue a Soldier in a Barracks, then destroy the Barracks. Confirm the Soldier never
+      spawns and the resources spent to enqueue it are not refunded — the stock stays at the
+      post-enqueue value.
+
+**HQ death**
+
+- [ ] While a worker is hauling resources back to the HQ, kill the HQ mid-trip. Confirm the
+      worker immediately stops heading to the HQ and goes idle on the same tick as the kill —
+      it does not walk at the dead building's former location for even one extra frame.
+
+**Site death**
+
+- [ ] Cancel (destroy) a construction site while a worker is walking toward it. Confirm the
+      worker goes `Idle` on the same tick as the site disappears, and the cost of the site is
+      not refunded.
+
+**State hash**
+
+- [ ] Using the harness (e.g., `cargo test -p mmd-engine --test rts_combat -- hp_enters_the_state_hash`):
+      confirm the test passes, proving a damaged entity produces a different state hash from an
+      undamaged twin.

@@ -29,8 +29,10 @@ pub use economy::{
     WORKER_SUPPLY_COST, node_amount, supply_cost,
 };
 pub use entity::{
-    BuildingKind, CARRY_NONE, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL,
-    OWNER_PLAYER, RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
+    BARRACKS_ARMOR, BARRACKS_MAX_HP, BuildingKind, CARRY_NONE, DEPOT_ARMOR, DEPOT_MAX_HP, EntityId,
+    EntityKind, EntityStore, HQ_ARMOR, HQ_MAX_HP, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, SOLDIER_ARMOR,
+    SOLDIER_MAX_HP, UnitKind, WORKER_ARMOR, WORKER_MAX_HP, armor, max_hp,
 };
 pub use formation::{
     FORMATION_ARRIVAL_CELLS, FORMATION_CAPTURE_MARGIN_CELLS, FORMATION_SPACING_CELLS,
@@ -86,7 +88,7 @@ pub use selection::{
 };
 pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
-    ContextOrderReason, ContextOrderResult, DEFAULT_CAMERA_PAN_SPEED, IssuedOrder,
+    ContextOrderReason, ContextOrderResult, DEFAULT_CAMERA_PAN_SPEED, DamageResult, IssuedOrder,
     NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT, OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError,
     UnitOrderReceipt,
 };

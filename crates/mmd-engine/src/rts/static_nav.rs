@@ -241,6 +241,26 @@ impl StaticNav {
         }
     }
 
+    /// Clear a destroyed building's footprint from the solid masks — the
+    /// exact inverse of [`Self::stamp_finished_building`]. Placement validity
+    /// keeps a footprint clear of terrain, resource nodes and other
+    /// buildings, so clearing these cells cannot erase anyone else's solid.
+    /// Does not recompute [`Self::center_blocked`] — call
+    /// [`Self::rebuild_center_blocked`] afterward, same contract as stamping.
+    pub fn unstamp_finished_building(&mut self, min: Cell, edge: u32) {
+        for dy in 0..edge {
+            for dx in 0..edge {
+                let x = min.x + dx;
+                let y = min.y + dy;
+                if x < self.width && y < self.height {
+                    let idx = (x + y * self.width) as usize;
+                    self.solids[idx] = false;
+                    self.placement_solids[idx] = false;
+                }
+            }
+        }
+    }
+
     /// Test-only: build directly from a raw solid mask, skipping the
     /// scenario/entity-store plumbing [`Self::new`] needs. `radius` seeds
     /// [`Self::center_blocked`] the same way [`Self::new`] does.

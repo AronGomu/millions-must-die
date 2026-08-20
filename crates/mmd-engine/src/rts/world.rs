@@ -21,7 +21,7 @@ use super::economy::{
 };
 use super::entity::{
     BuildingKind, EntityId, EntityKind, EntityStore, MAX_ENTITIES, OWNER_NEUTRAL, OWNER_PLAYER,
-    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind,
+    RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, UnitKind, armor,
 };
 use super::formation::{
     FORMATION_ARRIVAL_CELLS, FormationError, FormationGoal, FormationScratch,
@@ -186,6 +186,21 @@ pub enum TickError {
     /// tick retries it and re-reports for as long as it really is a failure.
     #[error("a merged unit body could not be repaired: no legal free position exists")]
     UnrepairableOverlap,
+}
+
+/// What [`RtsWorld::apply_damage`] did to its target.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DamageResult {
+    /// The hit landed and the target survives with this much HP left.
+    Damaged { remaining_hp: u32 },
+    /// The hit reduced the target to 0 HP; it died and was despawned
+    /// inside this call.
+    Killed,
+    /// The target is a resource node. Nodes are indestructible; nothing
+    /// changed.
+    Indestructible,
+    /// The id names no live entity; nothing changed.
+    NoTarget,
 }
 
 /// The phase-1 RTS game state.
@@ -955,8 +970,8 @@ impl RtsWorld {
         self.tick_index
     }
 
-    /// The starting HQ. `None` only after it is destroyed, which nothing in
-    /// phase 1 can do.
+    /// The starting HQ. `None` only after it is destroyed
+    /// ([`Self::apply_damage`]).
     pub fn start_hq(&self) -> Option<EntityId> {
         self.start_hq
     }
@@ -1713,6 +1728,102 @@ impl RtsWorld {
             }
         }
         total
+    }
+
+    /// Deal one hit to `target`: subtract `max(1, damage - armor(kind))`
+    /// from its HP, resolving death inside this same call at 0.
+    ///
+    /// The one damage seam of the combat slice — turrets, unit attacks and
+    /// scripted tests all enter here, so the death rules cannot diverge per
+    /// caller:
+    ///
+    /// - a **unit** despawns; its order row is cleared for slot reuse. The
+    ///   selection is pruned by the tick's existing last step, not here.
+    /// - a **finished building** is un-stamped from [`StaticNav`], the
+    ///   pooled blocked mask is replaced (invalidating every cached field —
+    ///   the same all-or-nothing rule stamping obeys), its supply grant is
+    ///   revoked, its production queue dies with **no refund**, and workers
+    ///   hauling cargo back to it go [`Order::Idle`] in this call.
+    /// - a **site** despawns and its attending builders go idle. No refund:
+    ///   destruction is not [`Self::cancel_construction`].
+    /// - a **resource node** is indestructible: the call is a no-op.
+    ///
+    /// A caller inside [`Self::tick`] must run before any system that
+    /// consumes `live_scratch`, or re-collect it: a slot despawned here
+    /// stays in that buffer until the next collect, and the store's
+    /// accessors assert liveness. Nothing calls this from inside a tick in
+    /// this slice.
+    pub fn apply_damage(&mut self, target: EntityId, damage: u32) -> DamageResult {
+        let Some(slot) = self.entities.slot(target) else {
+            return DamageResult::NoTarget;
+        };
+        let kind = self.entities.kind(slot);
+        if matches!(kind, EntityKind::Node(_)) {
+            return DamageResult::Indestructible;
+        }
+        let dealt = damage.saturating_sub(armor(kind)).max(1);
+        let hp = self.entities.hp(slot);
+        if dealt < hp {
+            self.entities.set_hp(slot, hp - dealt);
+            return DamageResult::Damaged {
+                remaining_hp: hp - dealt,
+            };
+        }
+        self.apply_death(target, slot, kind);
+        DamageResult::Killed
+    }
+
+    /// Resolve a death [`Self::apply_damage`] decided. `kind` is `slot`'s
+    /// kind and is never a node.
+    fn apply_death(&mut self, id: EntityId, slot: usize, kind: EntityKind) {
+        match kind {
+            EntityKind::Unit(_) => {
+                self.orders.clear(slot);
+            }
+            EntityKind::Building(b) => {
+                // Only a finished building was ever stamped or granted
+                // supply; a site was neither.
+                if self.entities.progress_target(slot) == 0 {
+                    let edge = b.footprint_cells();
+                    let min = footprint_min(self.entities.position(slot), edge);
+                    self.static_nav.unstamp_finished_building(min, edge);
+                    self.static_nav
+                        .rebuild_center_blocked(RTS_UNIT_BODY_RADIUS_CELLS);
+                    let replaced = self
+                        .nav
+                        .replace_blocked_mask(self.static_nav.center_blocked());
+                    debug_assert!(
+                        replaced.is_ok(),
+                        "pool and static_nav grids must agree in size"
+                    );
+                    self.supply.revoke_cap(supply_grant(b));
+                }
+                self.production.clear(slot);
+                self.orders.clear(slot);
+                // Orders that named this building die with it, in this same
+                // call: a hauler bound for a dead drop-off and a builder
+                // attending a dead site go idle now rather than walking at a
+                // ghost until their own system notices next tick.
+                for s in 0..self.entities.slot_count() {
+                    if s == slot || !self.entities.alive(s) {
+                        continue;
+                    }
+                    match self.orders.get(s) {
+                        Order::Build { site, .. } if site == id => self.orders.clear(s),
+                        Order::Gather {
+                            phase: GatherPhase::Returning { drop_off, .. },
+                            ..
+                        } if drop_off == id => self.orders.clear(s),
+                        _ => {}
+                    }
+                }
+                if self.start_hq == Some(id) {
+                    self.start_hq = None;
+                }
+            }
+            EntityKind::Node(_) => unreachable!("apply_damage refuses nodes before death"),
+        }
+        self.entities.despawn(id);
     }
 
     /// Advance one fixed 1/60 s step.
@@ -3279,7 +3390,7 @@ impl RtsWorld {
     ///
     /// Covers `tick_index`, live entity count, then every live slot in
     /// ascending order (kind tag, owner, x bits, y bits, dir, frame, progress,
-    /// progress_target, amount, carry kind, carry amount), then every live
+    /// progress_target, amount, carry kind, carry amount, hp), then every live
     /// slot's order, then the gather-collision pair table
     /// ([`GatherCollisionState::hash_into`] — self-framing, so it pins which
     /// unit each pair byte belongs to), then the selection, production queues

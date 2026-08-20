@@ -105,6 +105,57 @@ impl BuildingKind {
     }
 }
 
+/// Full hit points per kind — phase-2 placeholder stats, not balance.
+pub const WORKER_MAX_HP: u32 = 25;
+/// See [`WORKER_MAX_HP`].
+pub const SOLDIER_MAX_HP: u32 = 40;
+/// See [`WORKER_MAX_HP`].
+pub const HQ_MAX_HP: u32 = 400;
+/// See [`WORKER_MAX_HP`].
+pub const DEPOT_MAX_HP: u32 = 150;
+/// See [`WORKER_MAX_HP`].
+pub const BARRACKS_MAX_HP: u32 = 200;
+
+/// Flat damage reduction per kind — a hit deals `max(1, damage - armor)`.
+pub const WORKER_ARMOR: u32 = 0;
+/// See [`WORKER_ARMOR`].
+pub const SOLDIER_ARMOR: u32 = 0;
+/// See [`WORKER_ARMOR`].
+pub const HQ_ARMOR: u32 = 2;
+/// See [`WORKER_ARMOR`].
+pub const DEPOT_ARMOR: u32 = 1;
+/// See [`WORKER_ARMOR`].
+pub const BARRACKS_ARMOR: u32 = 1;
+
+/// Hit points a full-health entity of `kind` spawns with.
+///
+/// `0` for a resource node: nodes are indestructible and carry no HP
+/// semantics at all — damage refuses them by kind, never by reading this.
+/// The exhaustive match forces a future kind to decide its own value
+/// instead of silently inheriting one.
+pub fn max_hp(kind: EntityKind) -> u32 {
+    match kind {
+        EntityKind::Unit(UnitKind::Worker) => WORKER_MAX_HP,
+        EntityKind::Unit(UnitKind::Soldier) => SOLDIER_MAX_HP,
+        EntityKind::Building(BuildingKind::Hq) => HQ_MAX_HP,
+        EntityKind::Building(BuildingKind::Depot) => DEPOT_MAX_HP,
+        EntityKind::Building(BuildingKind::Barracks) => BARRACKS_MAX_HP,
+        EntityKind::Node(_) => 0,
+    }
+}
+
+/// Flat damage reduction of `kind`: one hit deals `max(1, damage - armor)`.
+pub fn armor(kind: EntityKind) -> u32 {
+    match kind {
+        EntityKind::Unit(UnitKind::Worker) => WORKER_ARMOR,
+        EntityKind::Unit(UnitKind::Soldier) => SOLDIER_ARMOR,
+        EntityKind::Building(BuildingKind::Hq) => HQ_ARMOR,
+        EntityKind::Building(BuildingKind::Depot) => DEPOT_ARMOR,
+        EntityKind::Building(BuildingKind::Barracks) => BARRACKS_ARMOR,
+        EntityKind::Node(_) => 0,
+    }
+}
+
 /// Sentinel in the `carry_kind` column meaning "carrying nothing".
 ///
 /// A separate byte rather than `Option<ResourceKind>` so the column stays a
@@ -139,6 +190,9 @@ pub struct EntityStore {
     amount: Vec<u32>,
     carry_kind: Vec<u8>,
     carry_amount: Vec<u32>,
+    /// Remaining hit points. `0` for a resource node — indestructible, no HP
+    /// semantics (see [`max_hp`]).
+    hp: Vec<u32>,
     /// LIFO free list of dead slot indices.
     free: Vec<u32>,
     live: usize,
@@ -166,6 +220,7 @@ impl EntityStore {
             amount: Vec::with_capacity(MAX_ENTITIES),
             carry_kind: Vec::with_capacity(MAX_ENTITIES),
             carry_amount: Vec::with_capacity(MAX_ENTITIES),
+            hp: Vec::with_capacity(MAX_ENTITIES),
             free: Vec::with_capacity(MAX_ENTITIES),
             live: 0,
         }
@@ -229,6 +284,7 @@ impl EntityStore {
             self.amount.push(0);
             self.carry_kind.push(CARRY_NONE);
             self.carry_amount.push(0);
+            self.hp.push(0);
             i
         } else {
             return None;
@@ -246,6 +302,7 @@ impl EntityStore {
         self.amount[idx] = 0;
         self.carry_kind[idx] = CARRY_NONE;
         self.carry_amount[idx] = 0;
+        self.hp[idx] = max_hp(kind);
         self.live += 1;
 
         Some(EntityId {
@@ -386,6 +443,18 @@ impl EntityStore {
         self.amount[slot] = amount;
     }
 
+    /// Remaining hit points; `0` for a resource node, which has no HP
+    /// semantics.
+    pub fn hp(&self, slot: usize) -> u32 {
+        self.assert_live(slot);
+        self.hp[slot]
+    }
+
+    pub fn set_hp(&mut self, slot: usize, hp: u32) {
+        self.assert_live(slot);
+        self.hp[slot] = hp;
+    }
+
     /// What this unit is carrying, and how much. `None` when empty-handed.
     pub fn carry(&self, slot: usize) -> Option<(ResourceKind, u32)> {
         self.assert_live(slot);
@@ -444,6 +513,7 @@ impl EntityStore {
             h.update(self.amount[i].to_le_bytes());
             h.update([self.carry_kind[i]]);
             h.update(self.carry_amount[i].to_le_bytes());
+            h.update(self.hp[i].to_le_bytes());
         }
     }
 
@@ -451,7 +521,7 @@ impl EntityStore {
     /// hook only: proves the zero-growth contract without exposing the
     /// storage layout to production code.
     #[cfg(feature = "testkit")]
-    pub fn column_capacities(&self) -> [usize; 13] {
+    pub fn column_capacities(&self) -> [usize; 14] {
         [
             self.alive.capacity(),
             self.generation.capacity(),
@@ -466,6 +536,7 @@ impl EntityStore {
             self.amount.capacity(),
             self.carry_kind.capacity(),
             self.carry_amount.capacity(),
+            self.hp.capacity(),
         ]
     }
 }

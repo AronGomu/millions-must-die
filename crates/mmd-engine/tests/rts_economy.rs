@@ -113,7 +113,7 @@ fn carry_columns_are_reserved() {
             .expect("spawn");
     }
     let caps = store.column_capacities();
-    assert_eq!(caps.len(), 13);
+    assert_eq!(caps.len(), 14);
     for cap in caps {
         assert_eq!(cap, MAX_ENTITIES, "no column may grow past its reservation");
     }
