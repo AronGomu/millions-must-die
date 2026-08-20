@@ -88,4 +88,15 @@ Accepted phase-2 (combat prototype) decisions:
     — waves-only enemies on the tracked scene, first spawn after every pinned
     window, exit-line combat tokens.
 
+Accepted phase-2 (feedback round 2) decisions:
+
+24. [Visible build grid, footprint re-cut + placement snap](024_ADR_build_grid_and_placement_snap.md)
+    — an 8-cell build square for buildings only (units keep the true float cell
+    grid); footprints re-cut to whole squares; alignment validated at load; the
+    phase's single re-authoring of scripted coordinates and pinned counts.
+25. [Order feedback, follow orders + entity rally](025_ADR_order_feedback_follow_and_entity_rally.md)
+    — target rings and status text derived per frame from the live order;
+    bounded hashed ground-order markers; `Order::Follow`; rally points that
+    name a cell or an entity; one ownership-discriminated right-click.
+
 New decision → new ADR. Changed decision → superseding ADR; do not rewrite history silently.

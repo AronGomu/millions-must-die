@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feedback round 2 — where it lands, how deep it cuts</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .why code, .detail code { background:#100d08; border:1px solid var(--line); border-radius:5px; padding:0 4px; font-size:.9em; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    .facts { margin:0 0 32px; padding:18px 22px; border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:12px; background:var(--panel); }
+    .facts h2 { font-size:1rem; margin-bottom:10px; }
+    .facts ul { margin:0; padding-left:18px; color:var(--muted); font-size:.9rem; }
+    .facts li { margin:5px 0; }
+    .facts code { background:#100d08; border:1px solid var(--line); border-radius:5px; padding:0 4px; font-size:.9em; color:var(--text); }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 1 · Feedback intake, grid re-cut, plan shape</span>
+    <h1>Feedback round 2 — where it lands, how deep it cuts</h1>
+    <p class="lede">Seven feedback items land on a codebase where rally points, selection rings, node cards and builder evacuation <em>already exist</em>. This round settles what is actually new, how the build grid is re-cut, and whether the work joins the combat plan or forks its own. Tick answers, add precision, hit copy, paste back.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress">
+    <span class="node active">Plan shape</span><span class="arrow">→</span>
+    <span class="node active">Build grid</span><span class="arrow">→</span>
+    <span class="node active">Order feedback</span><span class="arrow">→</span>
+    <span class="node active">Rally / follow</span><span class="arrow">→</span>
+    <span class="node active">Builder trap</span><span class="arrow">→</span>
+    <span class="node active">Sandbox scene</span><span class="arrow">→</span>
+    <span class="node">Ticket cut</span><span class="arrow">→</span>
+    <span class="node">Re-baseline budget</span>
+  </nav>
+
+  <section class="facts" aria-label="Scout facts">
+    <h2>Facts read from the tree before asking (not questions — answers)</h2>
+    <ul>
+      <li><b>Rally already ships.</b> <code>CommandId::SetRally</code>, <code>Prop::RallyFlag</code>, <code>production.rally[slot]</code>, produced units get <code>order_move(rally)</code> (<code>world.rs:2043</code>), HUD prints <code>RALLY x,y</code>. Missing from item 6: rally onto an <em>entity</em>, and any follow behaviour.</li>
+      <li><b>Selection rings already ship</b> for every selected entity including neutral nodes (<code>pack.rs:400-430</code>, green <code>SELECTION_TINT</code>), and left-click already selects units, buildings <em>and</em> nodes (<code>Pick::Node</code>, <code>world.rs:1052</code>). Node card prints <code>REMAINING n</code>. Item 3 is largely done — the open part is which extra stats to show.</li>
+      <li><b>Builder evacuation already ships.</b> <code>finish_site</code> (<code>world.rs:1910</code>) plans a destination for every body the footprint covers, and if one evacuee has nowhere to go the site holds at <code>build_ticks - 1</code> and stays walkable. Item 4's bug is therefore a <em>failure mode</em> of that planner, not a missing feature — likely a permanently stalled site or a body sealed after the stamp.</li>
+      <li><b>Footprints today:</b> <code>HQ_FOOTPRINT_CELLS = 12</code>, <code>DEPOT = 8</code>, <code>BARRACKS = 10</code>; map 320×320 cells, <code>cell_size_px = 4</code>, unit body radius <code>3.0</code> cells (6-cell diameter). Ghost centres on the cursor cell, snaps to nothing.</li>
+      <li><b>A cell-lattice grid overlay already exists</b> (<code>pack_grid</code>, <code>FramePackOptions::show_grid</code>, a settings toggle) — it draws one line per <em>cell</em>, not per build square.</li>
+      <li><b>Worker card shows only <code>CARRYING …</code></b>. Soldier card is hard-coded <code>IDLE</code>. No status taxonomy, no order-target marker, no move marker, no path line anywhere.</li>
+      <li><b>The scenario is hash-pinned:</b> <code>rts_prototype_v1.sha256</code> verified at load; <code>tests/rts_acceptance.rs</code> pins exact exit-line counts for both tracked scripts. Any footprint or scene change forces the same re-baseline the combat plan (T7) already budgets once.</li>
+      <li><b>Combat is planned, not built:</b> no <code>combat.rs</code>, no HP/damage/enemy anywhere in history. Item 7's scenario needs combat plan T1–T3 to exist first.</li>
+    </ul>
+  </section>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>Two grids, one world</b>Item 1: movement keeps the true float coordinate space; placement snaps to a coarse build square.</figcaption>
+      <svg viewBox="0 0 380 240" role="img" aria-labelledby="g1t g1d">
+        <title id="g1t">Fine cell grid with a coarse build-square lattice overlaid</title>
+        <desc id="g1d">A fine 4-pixel cell grid carries unit positions as floats; a coarser lattice of 8-cell build squares carries buildings, with a depot filling one square, a barracks two by two, and an HQ three by three.</desc>
+        <g stroke="#4a3b25" stroke-width="0.5" opacity="0.55">
+          <path class="svg-line" stroke-width="0.5" d="M20 30H360M20 40H360M20 50H360M20 60H360M20 70H360M20 80H360M20 90H360M20 100H360M20 110H360M20 120H360M20 130H360M20 140H360M20 150H360M20 160H360M20 170H360M20 180H360M20 190H360M20 200H360"/>
+          <path class="svg-line" stroke-width="0.5" d="M20 30V200M30 30V200M40 30V200M50 30V200M60 30V200M70 30V200M80 30V200M90 30V200M100 30V200M110 30V200M120 30V200M130 30V200M140 30V200M150 30V200M160 30V200M170 30V200M180 30V200M190 30V200M200 30V200M210 30V200M220 30V200M230 30V200M240 30V200M250 30V200M260 30V200M270 30V200M280 30V200M290 30V200M300 30V200M310 30V200M320 30V200M330 30V200M340 30V200M350 30V200M360 30V200"/>
+        </g>
+        <g stroke="#fbbf24" stroke-width="1.4" opacity="0.85" fill="none">
+          <path d="M20 30H360M20 70H360M20 110H360M20 150H360M20 190H360"/>
+          <path d="M20 30V200M60 30V200M100 30V200M140 30V200M180 30V200M220 30V200M260 30V200M300 30V200M340 30V200"/>
+        </g>
+        <rect x="60" y="70" width="40" height="40" fill="#fb923c" opacity="0.35" stroke="#fb923c" stroke-width="2"/>
+        <text class="svg-label" x="64" y="94">Depot</text>
+        <text class="svg-note" x="64" y="105">1×1</text>
+        <rect x="140" y="70" width="80" height="80" fill="#fb923c" opacity="0.25" stroke="#fb923c" stroke-width="2"/>
+        <text class="svg-label" x="152" y="106">Barracks</text>
+        <text class="svg-note" x="152" y="117">2×2</text>
+        <rect x="240" y="30" width="120" height="120" fill="#fb923c" opacity="0.18" stroke="#fb923c" stroke-width="2"/>
+        <text class="svg-label" x="278" y="86">HQ</text>
+        <text class="svg-note" x="278" y="97">3×3</text>
+        <circle cx="45" cy="175" r="9" fill="#22c55e" opacity="0.5" stroke="#22c55e" stroke-width="2"/>
+        <text class="svg-note" x="62" y="179">unit body r=3 cells — free float, ignores build squares</text>
+        <text class="svg-note" x="20" y="222">fine lines = true coordinate cells · amber lines = visible build squares (Q2 sets their size)</text>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Frontier: what is new vs already shipped</b>Amber = new build. Grey = exists, only extended.</figcaption>
+      <svg viewBox="0 0 380 240" role="img" aria-labelledby="g2t g2d">
+        <title id="g2t">Feedback items mapped to new versus existing engine work</title>
+        <desc id="g2d">Items one, two, four, five and seven require new systems; items three and six extend systems that already exist in the codebase.</desc>
+        <g>
+          <rect class="svg-node active" x="10" y="14" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="20" y="30">1 · Build grid</text><text class="svg-note" x="20" y="42">new: snap + re-cut</text>
+          <rect class="svg-node active" x="10" y="58" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="20" y="74">2 · Target ring</text><text class="svg-note" x="20" y="86">new: status lines</text>
+          <rect class="svg-node" x="10" y="102" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="20" y="118">3 · Any-entity pick</text><text class="svg-note" x="20" y="130">exists · stats only</text>
+          <rect class="svg-node active" x="10" y="146" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="20" y="162">4 · Builder trap</text><text class="svg-note" x="20" y="174">bug in finish_site</text>
+          <rect class="svg-node active" x="10" y="190" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="20" y="206">5 · Move marker</text><text class="svg-note" x="20" y="218">new: flag + line</text>
+          <rect class="svg-node" x="146" y="58" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="156" y="74">6 · Rally</text><text class="svg-note" x="156" y="86">exists · +follow</text>
+          <rect class="svg-node active" x="146" y="146" width="112" height="34" rx="8"/>
+          <text class="svg-label" x="156" y="162">7 · Sandbox scene</text><text class="svg-note" x="156" y="174">needs combat T1–T3</text>
+          <rect class="svg-node active" x="278" y="102" width="92" height="34" rx="8"/>
+          <text class="svg-label" x="288" y="118">Re-baseline</text><text class="svg-note" x="288" y="130">once, or twice</text>
+        </g>
+        <g class="svg-line">
+          <path d="M122 31H278V108"/><path d="M122 163h24v-17"/><path d="M258 163h20v-30"/><path d="M258 75h20v30"/>
+        </g>
+        <text class="svg-note" x="278" y="152">Q1 + Q12 decide</text>
+        <text class="svg-note" x="278" y="164">whether the scene</text>
+        <text class="svg-note" x="278" y="176">is re-pinned once</text>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+
+    <fieldset data-question="Where does this feedback land relative to the combat plan?">
+      <legend>1. Where does this feedback land relative to the combat plan?</legend>
+      <p class="why">Nothing of phase 2 is implemented yet, so tickets can still be renumbered freely — but item 7 needs combat, and item 1 forces the same scene re-baseline combat T7 already budgets.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Extend the existing combat plan: renumber into one plan, feedback tickets inserted before the gate ticket"><span><b>One plan — extend <code>PLAN_2026_08_17_combat-prototype</code>, insert feedback tickets before the gate/close tickets</b><span class="rank">Recommended</span><span class="detail">One re-baseline, one close doc, sandbox scene built on top of combat; the plan title stops matching its content.</span></span></label>
+        <label class="choice"><input type="checkbox" value="New separate plan for items 1-6, combat plan untouched, item 7 becomes a combat-plan ticket"><span><b>Two plans — feedback items 1–6 in a new plan, item 7 folded into the combat plan</b><span class="rank">Second</span><span class="detail">Clean titles and independent shipping order; costs a second scene re-baseline and a second close doc.</span></span></label>
+        <label class="choice"><input type="checkbox" value="New separate plan for all 7 items, sequenced after the whole combat plan"><span><b>Two plans, strictly sequential — feedback plan runs after combat closes</b><span class="rank">Third</span><span class="detail">Simplest to reason about; you play with no move markers or grid until all of phase 2 ships.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. one plan, but I want the sandbox scenario playable before the gate ticket"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How big is one visible build square, and how are the three footprints re-cut?">
+      <legend>2. How big is one visible build square, and how are the three footprints re-cut?</legend>
+      <p class="why">Item 1 fixes two ratios — smallest building = 1 square, barracks = 2×2 — but not the absolute size; today's footprints are 12 / 8 / 10 cells and a unit body is 6 cells across, so a square below 6 cells makes buildings smaller than the units walking past them.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Build square = 8 cells: Depot 8 (1x1), Barracks 16 (2x2), HQ 24 (3x3)"><span><b>Square = 8 cells · Depot 8 (1×1), Barracks 16 (2×2), HQ 24 (3×3)</b><span class="rank">Recommended</span><span class="detail">Depot keeps today's size, every footprint is a clean multiple, HQ at (160,160) stays aligned and still clears every resource node; barracks and HQ get visibly bigger.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Build square = 6 cells: Depot 6 (1x1), Barracks 12 (2x2), HQ 18 (3x3)"><span><b>Square = 6 cells · Depot 6, Barracks 12, HQ 18</b><span class="rank">Second</span><span class="detail">Square exactly one unit-diameter wide, smaller base sprawl; HQ (160,160) is not a multiple of 6, so the seeded HQ cell moves.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Build square = 5 cells: Depot 5 (1x1), Barracks 10 (2x2) unchanged, HQ 15 (3x3)"><span><b>Square = 5 cells · Depot 5, Barracks 10 (unchanged), HQ 15</b><span class="rank">Third</span><span class="detail">Least churn on the barracks; depot ends up narrower than a unit is wide, which reads badly next to a body.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Build square = 4 cells: Depot 4 (1x1), Barracks 8 (2x2), HQ 12 (3x3) unchanged"><span><b>Square = 4 cells · Depot 4, Barracks 8, HQ 12 (unchanged)</b><span class="rank">Fourth</span><span class="detail">HQ never moves and the map divides evenly; a depot two-thirds the width of one worker looks like a crate.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. square = 8, but keep HQ at 2x2 squares instead of 3x3"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="When is the visible build grid drawn?">
+      <legend>3. When is the visible build grid drawn?</legend>
+      <p class="why">A cell-lattice overlay already exists behind a settings toggle; the build grid is a coarser lattice and needs its own visibility rule.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Build grid drawn only while a placement ghost is pending; existing cell lattice stays as its own toggle"><span><b>Only while placing a building</b><span class="rank">Recommended</span><span class="detail">Zero clutter in normal play, exactly when the grid is decision-relevant; you cannot pre-plan a base layout with the grid off.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Build grid replaces the cell lattice on the existing show_grid toggle, always on when enabled, plus always shown while placing"><span><b>Replace the cell lattice on the existing toggle, and always show it while placing</b><span class="rank">Second</span><span class="detail">One grid concept, one toggle, always available; loses the fine cell lattice as a debugging aid.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Both grids independently toggleable in settings, build grid also forced on while placing"><span><b>Two independent toggles, build grid forced on while placing</b><span class="rank">Third</span><span class="detail">Keeps the debug lattice; a second settings row plus a second persisted setting to migrate.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. only near the cursor — a radius of squares, not the whole map"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What exactly snaps to the build grid?">
+      <legend>4. What exactly snaps to the build grid?</legend>
+      <p class="why">Snapping the ghost changes what "valid placement" means and whether the seeded HQ and any future scenario building must sit on a square boundary.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Ghost snaps to square boundaries and every scenario-declared building must be square-aligned, validated at load"><span><b>Ghost snaps to squares <em>and</em> scenario buildings must be aligned — enforced by the scenario validator</b><span class="rank">Recommended</span><span class="detail">One invariant, provable at load, no way to author a misaligned base; forces the sandbox scene and any future scene onto the lattice.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Ghost snaps to square boundaries; scenario-declared buildings may sit anywhere"><span><b>Only the interactive ghost snaps; scenario files stay free</b><span class="rank">Second</span><span class="detail">Smaller change, no validator work; a hand-authored scene can produce a base that the player could never have built.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. also snap the rally point and the move destination to squares"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Which orders show a target ring, and for how long?">
+      <legend>5. Which orders show a target ring, and for how long?</legend>
+      <p class="why">Item 2 wants a persistent green circle on whatever a selected unit is heading toward, surviving deselect/reselect — that means reading it from the order, not from a click event.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Ring on the order target of every selected unit: gather node, build site, follow/attack target; derived from the Order each frame"><span><b>Any entity-targeting order of a selected unit — gather node, build site, later follow/attack target</b><span class="rank">Recommended</span><span class="detail">Purely derived from live order state, so reselect always re-shows it and nothing extra enters the state hash.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Ring on gather and build targets only this slice; follow/attack targets added with the combat tickets"><span><b>Gather and build targets only for now; combat targets added by the combat tickets</b><span class="rank">Second</span><span class="detail">Smaller ticket, no dependency on the follow/attack work; two tickets touch the same packer.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. dimmer or dashed ring for a target, so it never reads as 'this is selected'"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What is the exact worker status taxonomy on the selection card?">
+      <legend>6. What is the exact worker status taxonomy on the selection card?</legend>
+      <p class="why">Feedback names six worker states; the card today prints only <code>CARRYING …</code> and a hard-coded <code>IDLE</code> for soldiers. Exact strings become test assertions, so they get pinned here.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="MOVING TO MINERAL/GAS, COLLECTING MINERAL/GAS, RETURNING MINERAL/GAS, plus MOVING, BUILDING, IDLE; carry amount stays on its own line"><span><b><code>MOVING TO MINERAL</code> · <code>COLLECTING MINERAL</code> · <code>RETURNING MINERAL</code> (same for GAS) + <code>MOVING</code> / <code>BUILDING</code> / <code>IDLE</code>, carry line kept</b><span class="rank">Recommended</span><span class="detail">Matches the feedback wording one-to-one and keeps the existing carry readout as a second line.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Same six states, but the status line replaces the carry line to keep the card at its current height"><span><b>Same six states, status line <em>replaces</em> the carry line</b><span class="rank">Second</span><span class="detail">Card height unchanged, one fact per line; you lose the exact carried amount at a glance.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Generic order-derived status for every unit kind: IDLE / MOVING / GATHERING / RETURNING / BUILDING, no resource kind in the string"><span><b>Generic per-order status, no resource kind in the string</b><span class="rank">Third</span><span class="detail">One code path for every unit kind including future combat kinds; less specific than the feedback asked for.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. use CRYSTAL instead of MINERAL — the codebase already calls it crystal"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Item 3 is mostly shipped — what stats are actually missing from the card?">
+      <legend>7. Item 3 is mostly shipped — what stats are actually missing from the card?</legend>
+      <p class="why">Clicking a building, node or unit already selects it, rings it green and shows a card; the open question is what the card should add.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Add HP (once combat lands) and node yield-per-trip; otherwise the current card is accepted as-is"><span><b>Add HP once combat lands, plus a node's yield-per-trip; otherwise accept today's card</b><span class="rank">Recommended</span><span class="detail">Smallest honest delta given what already exists; the card stays sparse until there is a real stat to show.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Also add cost/build-time for buildings and speed/armor/damage for units — a full stat block"><span><b>Full stat block — cost, build time, speed, damage, armor</b><span class="rank">Second</span><span class="detail">Reads like a real RTS card; several of those numbers are placeholder balance values that will churn.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Nothing missing — item 3 is already satisfied, log it as shipped and skip the ticket"><span><b>Nothing missing — log item 3 as already shipped</b><span class="rank">Third</span><span class="detail">Zero work, zero risk; if your report came from a case where a click did <em>not</em> select, that case goes uninvestigated.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. I clicked a gas geyser and nothing was selected — repro that first"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How is the trapped-builder bug fixed, given evacuation already exists?">
+      <legend>8. How is the trapped-builder bug fixed, given evacuation already exists?</legend>
+      <p class="why"><code>finish_site</code> already ejects every body the footprint covers, and refuses to finish the building at all if one body has nowhere to go — so your barracks either never finished, or the worker was stamped in by a later change. The fix depends on which.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Repro first: a failing test that reproduces the stuck worker, then fix whatever it exposes; the phasing exemption is the fallback design"><span><b>Repro-first ticket — write the failing test that reproduces the trapped worker, then fix what it exposes</b><span class="rank">Recommended</span><span class="detail">A bug this specific deserves a pinned repro; the ticket carries the phasing design as the fallback if the repro shows evacuation genuinely failing.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Implement the phasing grace period as specified: builder ignores the new building's collision for N ticks after completion, then regains it"><span><b>Implement the phasing grace period as written — builder ignores the finished footprint for N ticks, then regains collision</b><span class="rank">Second</span><span class="detail">Directly matches the feedback and mirrors the existing gather-pair exemption; risks adding a second mechanism where the first one only had a hole.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Both: repro test plus the phasing exemption shipped unconditionally as belt-and-braces"><span><b>Both — repro test <em>and</em> ship phasing unconditionally</b><span class="rank">Third</span><span class="detail">Highest confidence the symptom dies; two overlapping safety nets to keep deterministic and hashed forever.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. it was a barracks I placed on top of the worker, the site never showed READY"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What form do the move marker and path line take?">
+      <legend>9. What form do the move marker and path line take?</legend>
+      <p class="why">Item 5 asks for an animation, a flag and a dashed path line; the renderer has texture-free line instances and a props sheet, but no animated-prop path and no per-unit path polyline.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Static move-flag prop at the destination for N ticks, plus a dashed straight line from each selected unit to its goal"><span><b>Move-flag prop at the destination, auto-clearing after N ticks · dashed straight line from each selected unit to its goal</b><span class="rank">Recommended</span><span class="detail">Uses the existing props sheet and line instances, stays allocation-free and deterministic; the line is a bearing, not the real path around obstacles.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Same, but the flag persists for as long as the Move order is live rather than for a fixed number of ticks"><span><b>Flag persists for the whole life of the Move order</b><span class="rank">Second</span><span class="detail">Always tells you where a selected unit is going; more clutter with many groups moving at once.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Animated marker: multi-frame prop played once on click, plus the dashed line"><span><b>Animated multi-frame marker played once on click</b><span class="rank">Third</span><span class="detail">Closest to a shipped RTS's feel; needs new animation frames in the generated props sheet and a per-marker animation clock in the hash.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Dashed line follows the actual flow-field path, sampled every few cells"><span><b>Dashed line traces the real flow-field route, not a straight bearing</b><span class="rank">Fourth</span><span class="detail">Shows the true remaining path around terrain; costs a per-frame field walk per selected unit and a bounded polyline budget.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. flag only for the last click, not one per unit in the group"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How far does the rally upgrade and the new follow behaviour go?">
+      <legend>10. How far does the rally upgrade and the new follow behaviour go?</legend>
+      <p class="why">Cell rally already works end to end. The new parts are rally onto an entity, and a Move order that tracks a moving target — a new <code>Order</code> variant that every hash, test and save path must carry.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Add Order::Follow{target} plus entity rally: rallying onto a node makes produced workers gather it, onto a unit or building makes them follow it"><span><b><code>Order::Follow { target }</code> + entity rally — rally onto a node ⇒ produced workers gather it; onto a unit/building ⇒ they follow it</b><span class="rank">Recommended</span><span class="detail">Matches the feedback and the SC1 behaviour players expect from a rallied mineral patch; one new order variant to keep deterministic.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Entity rally only (gather-on-node, move-to-entity-once), no persistent follow order"><span><b>Entity rally only — produced units walk to the entity once; no persistent following</b><span class="rank">Second</span><span class="detail">No new order variant, no re-path loop; a rallied unit stops where the target <em>was</em>.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Follow order for player commands too: right-clicking a friendly unit with units selected makes them follow it"><span><b>Also bind follow to right-clicking a friendly unit with units selected</b><span class="rank">Third</span><span class="detail">Completes the command set the feedback describes; overlaps the combat plan's right-click-enemy-attacks binding and must be resolved with it.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. follow should keep a fixed stand-off distance, not stack on the target"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="What exactly is in the untimed manual sandbox scenario?">
+      <legend>11. What exactly is in the untimed manual sandbox scenario?</legend>
+      <p class="why">Item 7 is the scenario you asked about earlier: a pre-built base with soldiers and enemies walking in, for hands-on play rather than a timed gate run.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="New tracked scenario rts_sandbox_v1.ron: HQ + depot + barracks finished, 6 workers on nodes, 8 soldiers, repeating enemy waves marching on the base; run with no --frames"><span><b>New tracked <code>rts_sandbox_v1.ron</code> — finished HQ + Depot + Barracks, ~6 workers already gathering, ~8 soldiers, enemy waves marching in; launched with no <code>--frames</code></b><span class="rank">Recommended</span><span class="detail">One self-contained file, never on the timed gate, still load-validated and hash-pinned so it cannot silently rot.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Same contents, plus a --sandbox CLI flag that selects it without typing a scenario path"><span><b>Same, plus a <code>--sandbox</code> shortcut flag so you never type the path</b><span class="rank">Second</span><span class="detail">One-keystroke playtest launch; a second way to say the same thing, and one more CLI surface under contract test.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Endless waves: the sandbox keeps spawning enemies on a repeating schedule until you quit"><span><b>Endless spawner — waves keep coming until you quit</b><span class="rank">Third</span><span class="detail">Best for stress-playing combat feel; the combat plan deliberately scoped waves as a finite list, so this widens it.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. I also want a few pre-built turrets, and enemies that only start marching after ~30 seconds"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How many scene re-baselines are you willing to spend?">
+      <legend>12. How many scene re-baselines are you willing to spend?</legend>
+      <p class="why">Re-cutting footprints changes the pinned scene hash and both tracked scripts' asserted counts — the same one-time cost the combat plan already budgets in its gate ticket. Doing them together is cheaper; doing them apart ships playable feedback sooner.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="One re-baseline: sequence the grid re-cut before the combat gate ticket so a single ticket re-pins scene, sidecar and both script baselines"><span><b>Exactly one — sequence the grid re-cut <em>before</em> the combat gate ticket so one ticket re-pins everything</b><span class="rank">Recommended</span><span class="detail">Half the churn and one place where the old numbers die; the grid work must then land before the gate, fixing ticket order.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Two re-baselines: ship the grid re-cut immediately with its own re-pin, combat re-pins again later"><span><b>Two — ship the grid re-cut now with its own re-pin, combat re-pins again later</b><span class="rank">Second</span><span class="detail">You get the new grid in your hands sooner and tickets stay independent; two rounds of regenerating hashes and script counts.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Zero for now: defer the whole grid re-cut until after the combat phase closes"><span><b>Zero for now — defer the grid re-cut until after combat closes</b><span class="rank">Third</span><span class="detail">Keeps phase 2 exactly as planned and un-touched; item 1 waits the longest of all seven.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. I don't care about churn, optimise purely for what I can play soonest"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 1 · Feedback intake, grid re-cut, plan shape — Feedback round 2 — where it lands, how deep it cuts\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>
