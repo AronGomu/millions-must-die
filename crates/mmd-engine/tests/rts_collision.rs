@@ -2112,3 +2112,87 @@ fn gather_exit_state_reproduces_cross_process() {
         "a bounded exit must reproduce its state hash across processes"
     );
 }
+
+// --- T8: the builder-trap fix does not widen the overlap policy ----------------
+
+/// T8 changed how a *stalled* site resolves, and nothing else: it added no
+/// collision exemption, no phasing, no relaxed body placement. So the repro
+/// scenario that fix was written against must still end every single tick with
+/// ADR 021's policy claim intact — `body_overlap_count() == 0` — including the
+/// tick a 16-cell Barracks becomes solid on top of five bodies at once.
+#[test]
+fn the_builder_fix_does_not_widen_the_overlap_policy() {
+    // Same plot, builder and boxing ring as
+    // `rts_build::a_builder_is_never_trapped_by_the_building_it_finished`.
+    const BARRACKS_MIN: Cell = Cell { x: 136, y: 152 };
+    const BARRACKS_CENTER: [f32; 2] = [144.0, 160.0];
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let builder = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Worker),
+            OWNER_PLAYER,
+            BARRACKS_CENTER,
+        )
+        .expect("spawn the builder");
+    let ring = 2.0 * RADIUS + 0.5;
+    for [dx, dy] in [[ring, 0.0], [-ring, 0.0], [0.0, ring], [0.0, -ring]] {
+        h.world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Worker),
+                OWNER_PLAYER,
+                [BARRACKS_CENTER[0] + dx, BARRACKS_CENTER[1] + dy],
+            )
+            .expect("spawn a boxing worker");
+    }
+    assert!(h.world_mut().begin_placement(BuildingKind::Barracks));
+    let site = h
+        .world_mut()
+        .confirm_placement(BARRACKS_MIN, builder)
+        .expect("Barracks placement refused");
+
+    for tick in 1..=600u64 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick} ended with a merged pair"
+        );
+    }
+    // A site that cancelled itself never stamped anything, so the tick this
+    // case exists to sample would never have happened.
+    let site_slot = h
+        .world()
+        .entities()
+        .slot(site)
+        .expect("the Barracks cancelled itself instead of finishing");
+    assert_eq!(
+        h.world().entities().progress_target(site_slot),
+        0,
+        "the Barracks never finished, so the completion tick was never sampled"
+    );
+
+    // The bodies are legal geometry too, not merely un-merged by policy.
+    let store = h.world().entities();
+    let bodies: Vec<(usize, [f32; 2])> = (0..store.slot_count())
+        .filter(|&s| store.alive(s) && matches!(store.kind(s), EntityKind::Unit(_)))
+        .map(|s| (s, store.position(s)))
+        .collect();
+    for &(slot, p) in &bodies {
+        assert!(
+            h.world().static_nav().position_clear(p, RADIUS),
+            "slot {slot} stands at {p:?}, inside static geometry"
+        );
+    }
+    for (i, &(sa, a)) in bodies.iter().enumerate() {
+        for &(sb, b) in &bodies[i + 1..] {
+            assert!(
+                !units_overlap(a, RADIUS, b, RADIUS),
+                "slots {sa} and {sb} are merged at {a:?} and {b:?}"
+            );
+        }
+    }
+}

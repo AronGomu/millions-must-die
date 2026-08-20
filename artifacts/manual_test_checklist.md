@@ -62,8 +62,8 @@
 - [ ] Queue two units back to back at one building with a crowded exit: confirm they come out one after the other, each on its own free spot, and none of them is ever drawn overlapping another.
 - [ ] Place a Depot so its footprint covers two or three of your own idle workers and let it finish: confirm every covered worker is moved clear on the completion tick, all to different spots, none of them left standing inside the finished building.
 - [ ] Watch the same completion closely: confirm the workers move *at the moment* the building becomes solid — not a beat later, and never visibly standing inside a finished building for a frame.
-- [ ] Box a worker into a dead-end pocket that a Depot's own footprint would fill entirely, and build that Depot with that worker: confirm the build bar reaches the end and **holds** just short of finishing (the site stays walkable, the supply cap does not rise) instead of finishing on top of the worker.
-- [ ] Walk that trapped worker out of the pocket (or cancel the site): confirm the site finishes normally on the following tick once its bodies can be moved clear.
+- [ ] Box a worker into a dead-end pocket that a Depot's own footprint would fill entirely, and build that Depot with that worker: confirm the build bar reaches the end and **holds** just short of finishing (the site stays walkable, the supply cap does not rise) instead of finishing on top of the worker. Since T8 the hold is bounded — keep watching and the site cancels itself and refunds after about three seconds (see the T8 section).
+- [ ] Walk that trapped worker out of the pocket **within those three seconds**: confirm the site finishes normally on the following tick once its bodies can be moved clear.
 - [ ] Finish two buildings on nearly the same tick with workers standing between them: confirm no worker is left inside either finished footprint, and no two workers end up merged.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole gather → build Depot → produce Worker → build Barracks → produce Soldier flow still completes visibly, with the produced units appearing clear of every other body.
 
@@ -881,3 +881,27 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Select a Worker and walk it around: confirm movement is still smooth and continuous — units are **not** snapped to the build grid, only buildings are.
 - [ ] Run `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` in a window and watch it: confirm the whole select -> gather -> build Depot -> produce Worker -> build Barracks -> produce Soldier -> minimap -> menu flow still plays out visibly and ends in a clean quit.
 - [ ] Confirm `git status --porcelain -- assets/scenarios` is clean after that run — the scripts and the scene are inputs, never outputs.
+
+## T8 builder-trap-repro-and-fix
+
+The reported bug ("a worker building a barrack is blocked because the barrack
+spawned over it, and I cannot move the worker anymore") did **not** reproduce
+through the completion path — a finished building already evacuates every body
+its footprint covers to a legal, distinct spot, and clears the builder's build
+order. The first four items exist to confirm that on a real window; the rest
+cover the one genuine permanent freeze this ticket did fix — a site that can
+never evacuate used to hold one tick short of complete forever, and now gives
+up after three seconds and refunds.
+
+- [ ] Launch `cargo run -- rts`. Select one Worker, press **E** (Barracks) and drop the ghost so the 2 x 2-square footprint is centred **on that same Worker**. Confirm the site appears under the Worker and the Worker starts building it.
+- [ ] Watch the moment the Barracks finishes: confirm the Worker is moved **outside** the finished building on that same frame — never left standing inside it, never sliding out a beat later.
+- [ ] Immediately after the finish, right-click open ground about twenty cells away: confirm the Worker accepts the order and starts walking within a fraction of a second. It must not sit still with an order showing.
+- [ ] Repeat with several Workers packed around the plot (walk five or six of them onto the square first, then drop the Barracks over one of them and build it): confirm every covered Worker ends up outside the finished building, on its own spot, none merged into another, and each answers a move order.
+- [ ] Now the bounded-stall path. Wall a single Worker into a dead-end pocket exactly the size of a Depot footprint (use terrain plus other finished buildings), and have that Worker build a Depot filling the pocket. Confirm the build bar reaches the end and **holds** just short of complete.
+- [ ] Keep watching that held site for about **three seconds** without touching anything: confirm it then disappears on its own, the full Depot cost (100 crystal) is refunded in the HUD, and the supply cap does not change.
+- [ ] Confirm the Worker that was trapped in that pocket is still alive, is not inside any building, and answers a move/gather order after the cancel.
+- [ ] Confirm the Worker's command card goes back to its idle state after the cancel — no build order left pointing at a site that no longer exists.
+- [ ] Repeat the pocket case but free the Worker (walk it out, or cancel the site yourself) **before** the three seconds are up: confirm the site finishes normally instead of cancelling.
+- [ ] Build several ordinary buildings in open ground during one session and confirm **none** of them ever cancels itself — the three-second give-up must only ever fire when evacuation is genuinely impossible.
+- [ ] Run `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` in a window and confirm the whole scripted flow still plays out visibly and ends in a clean quit.
+- [ ] Confirm `git status --porcelain -- assets/scenarios` is clean after that run.

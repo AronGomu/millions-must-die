@@ -83,6 +83,22 @@ pub fn build_ticks(kind: BuildingKind) -> u32 {
     }
 }
 
+/// Consecutive ticks a site may fail to evacuate the bodies its footprint
+/// covers before it gives up, cancels itself and refunds the player.
+///
+/// Three seconds at 60 Hz — the same order as [`DEPOT_BUILD_TICKS`], so the
+/// escape hatch is never mistaken for build time.
+///
+/// A completion is planned whole or not at all (see `RtsWorld::finish_site`),
+/// and a plan that cannot place every covered body is simply not applied. That
+/// is right for the transient case — a body is standing on the one free centre
+/// this tick and walks off it the next — but *unbounded* retrying turns the
+/// permanent case into a silent freeze: the site sits one tick short of
+/// complete forever, the player's resources are spent, nothing on screen ever
+/// changes, and no message explains it. Bounding the retry converts that into
+/// an outcome a player can see and a test can assert.
+pub const STALLED_SITE_TICKS: u32 = 180;
+
 /// Supply ceiling a finished building grants.
 pub const HQ_SUPPLY_GRANT: u32 = 10;
 pub const DEPOT_SUPPLY_GRANT: u32 = 10;

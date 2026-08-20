@@ -8,7 +8,8 @@ use crate::scenario::{self, Cell, Scenario};
 use crate::sim::{TICK_DT, dir_from_vector};
 
 use super::build::{
-    Placement, PlacementError, build_ticks, building_cost, placement_valid, supply_grant,
+    Placement, PlacementError, STALLED_SITE_TICKS, build_ticks, building_cost, placement_valid,
+    supply_grant,
 };
 use super::collision::{
     GATHER_PAIR_ACTIVE, GATHER_SEPARATION_STEP_CELLS, GATHER_SEPARATION_TICKS,
@@ -334,6 +335,24 @@ pub struct RtsWorld {
     /// Sites that finished this tick, reused every tick. Reserved to
     /// [`MAX_ENTITIES`] so construction never allocates.
     finished: Vec<EntityId>,
+    /// Per-slot count of consecutive ticks a site's completion plan was
+    /// discarded because it could not evacuate every body its footprint
+    /// covers. Reset when the site makes progress, finishes, is cancelled, or
+    /// the slot is handed to a new site; frozen (not reset) while the site is
+    /// unattended, since an unattended site plans nothing to discard. Reaching
+    /// [`STALLED_SITE_TICKS`] cancels the site. Sized to [`MAX_ENTITIES`] so
+    /// construction never allocates.
+    ///
+    /// Deliberately **not** in [`Self::state_hash`]: this is a retry counter,
+    /// not a decision. Everything it can ever produce — a despawned site,
+    /// refunded resources, a cleared `Order::Build` — is hashed on the tick it
+    /// happens, so a divergence cannot hide here, and keeping it out leaves
+    /// the hash byte stream (and every golden pinned to it) unmoved.
+    site_stall: Vec<u32>,
+    /// Sites this tick's construction pass decided to cancel, drained after
+    /// the pass so a cancellation never despawns a slot the pass is still
+    /// iterating. Reserved to [`MAX_ENTITIES`].
+    stalled_cancels: Vec<EntityId>,
     /// Body positions one placement plan must avoid: every live body a plan
     /// does not move, plus the positions that plan has already handed out.
     /// Reserved to [`MAX_ENTITIES`] so a blocked production spawn or a
@@ -881,6 +900,8 @@ impl RtsWorld {
             placement: Placement::None,
             build_attend: vec![false; MAX_ENTITIES],
             finished: Vec::with_capacity(MAX_ENTITIES),
+            site_stall: vec![0; MAX_ENTITIES],
+            stalled_cancels: Vec::with_capacity(MAX_ENTITIES),
             body_scratch: Vec::with_capacity(MAX_ENTITIES),
             evac_units: Vec::with_capacity(MAX_ENTITIES),
             evac_to: Vec::with_capacity(MAX_ENTITIES),
@@ -1809,6 +1830,9 @@ impl RtsWorld {
         };
         let site_slot = self.entities.slot(site).expect("just spawned");
         self.entities.set_progress(site_slot, 0, build_ticks(kind));
+        // A recycled slot must not inherit the stall count of whatever stood
+        // here before it.
+        self.site_stall[site_slot] = 0;
 
         let debited = self.resources.try_debit(cost);
         debug_assert!(debited, "affordability was just checked above");
@@ -2335,8 +2359,9 @@ impl RtsWorld {
     }
 
     /// System 4: advance every attended construction site by one tick, finish
-    /// sites that reach their target, and clear the orders of workers whose
-    /// site just finished.
+    /// sites that reach their target, cancel sites that have been unable to
+    /// finish for [`STALLED_SITE_TICKS`] consecutive ticks, and clear the
+    /// orders of workers whose site just finished.
     ///
     /// Runs before orders (6) and movement (9), so a site that finishes this
     /// tick is finished for everything downstream.
@@ -2391,12 +2416,40 @@ impl RtsWorld {
             let p = self.entities.progress(slot) + 1;
             if p < target {
                 self.entities.set_progress(slot, p, target);
+                self.site_stall[slot] = 0;
             } else if self.finish_site(slot, b) {
+                self.site_stall[slot] = 0;
                 self.finished.push(self.entities.id_at(slot).expect("live"));
+            } else {
+                // A completion that could not evacuate every body it covers is
+                // simply not applied: progress stays one tick short of its
+                // target, the site stays walkable, and the attempt is repeated
+                // next tick — but only for a bounded number of ticks. Past
+                // that the obstruction is not traffic, it is geometry, and
+                // retrying forever is a silent freeze rather than an outcome.
+                self.site_stall[slot] += 1;
+                if self.site_stall[slot] >= STALLED_SITE_TICKS {
+                    self.site_stall[slot] = 0;
+                    self.stalled_cancels
+                        .push(self.entities.id_at(slot).expect("live"));
+                }
             }
-            // A completion that could not evacuate every body it covers is
-            // simply not applied: progress stays one tick short of its target,
-            // the site stays walkable, and the attempt is repeated next tick.
+        }
+        // Drained here, not inside the pass: cancelling despawns the site and
+        // rewrites orders, and the pass above is still walking `live_scratch`.
+        if !self.stalled_cancels.is_empty() {
+            for i in 0..self.stalled_cancels.len() {
+                let id = self.stalled_cancels[i];
+                let cancelled = self.cancel_construction(id);
+                debug_assert!(cancelled, "a stalled site is unfinished, so cancellable");
+            }
+            self.stalled_cancels.clear();
+            // `live_scratch` was collected at the top of the tick and every
+            // later system reads it without an aliveness check. A slot this
+            // pass just despawned has to leave it, in place, before system 5
+            // asks the store what kind of entity stands there.
+            let store = &self.entities;
+            self.live_scratch.retain(|&slot| store.alive(slot));
         }
         // Each finish above rebuilt the inflated centre mask for itself (a
         // later completion on the same tick has to see an earlier one as
@@ -2475,10 +2528,22 @@ impl RtsWorld {
     ///    is not in [`StaticNav`] yet, and with every centre already handed
     ///    out in this plan counted as occupied;
     /// 3. one evacuee with nowhere to go discards the whole plan, and the site
-    ///    holds at `build_ticks - 1` and stays walkable;
+    ///    holds at `build_ticks - 1` and stays walkable. The caller counts
+    ///    consecutive discards and cancels the site outright once they reach
+    ///    [`STALLED_SITE_TICKS`], so "holds" is bounded, never forever;
     /// 4. only a complete plan is committed — and then, in the same tick, the
     ///    building is marked finished, stamped into the static masks, and its
     ///    supply granted.
+    ///
+    /// There is deliberately no "finish anyway and shove the leftovers inside
+    /// the new walls" relaxation. Dropping the footprint from the destination
+    /// search only ever yields centres the stamp is about to make illegal:
+    /// post-stamp legality *is* `!center_blocked && clear of the footprint`,
+    /// which is exactly what the strict search already tests, so within one
+    /// connected region a relaxed search can only return a body position that
+    /// penetrates static geometry — forbidden since T4 — or one merged with
+    /// another body — forbidden by ADR 021. A bounded cancel-and-refund is
+    /// the only escape that keeps both.
     ///
     /// The centre mask is rebuilt here, per completed building rather than
     /// once for the tick's batch, because two sites can finish on the same

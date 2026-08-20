@@ -18,9 +18,9 @@ mod world;
 pub use build::{
     BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, DEPOT_BUILD_TICKS, DEPOT_COST,
     DEPOT_SUPPLY_GRANT, EXTRA_BUILDERS_SPEED_UP, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
-    Placement, PlacementCandidate, PlacementError, TURRET_BUILD_TICKS, TURRET_COST,
-    TURRET_SUPPLY_GRANT, build_ticks, building_cost, footprint_cells, ghost_min_corner,
-    placement_candidate, placement_valid, snap_to_build_square, supply_grant,
+    Placement, PlacementCandidate, PlacementError, STALLED_SITE_TICKS, TURRET_BUILD_TICKS,
+    TURRET_COST, TURRET_SUPPLY_GRANT, build_ticks, building_cost, footprint_cells,
+    ghost_min_corner, placement_candidate, placement_valid, snap_to_build_square, supply_grant,
 };
 pub use collision::{
     GATHER_PAIR_ACTIVE, GATHER_SEPARATION_STEP_CELLS, GATHER_SEPARATION_TICKS,

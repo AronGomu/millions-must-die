@@ -1257,7 +1257,10 @@ fn blocked_transitions_allocate_nothing() {
         "the production head must be ready and blocked before measuring"
     );
 
-    // B. A site whose completion can never evacuate its own builder.
+    // B. A site whose completion can never evacuate its own builder. The
+    //    measured window is long enough to cover both halves of that story:
+    //    the discarded-plan retries, and the bounded cancel that ends them at
+    //    `STALLED_SITE_TICKS`.
     let mut build = RtsHarness::spec(sealed_site_spec())
         .build()
         .expect("sealed-site scene");
@@ -1280,18 +1283,24 @@ fn blocked_transitions_allocate_nothing() {
     assert_eq!(
         guard.allocations(),
         0,
-        "a blocked production or completion retry allocated"
+        "a blocked production or completion retry, or the bounded cancel that \
+         ends it, allocated"
     );
     guard.assert_zero();
     drop(guard);
 
-    // ...and both really did stay blocked for the whole measured window.
+    // ...and each really did do what it was measured doing: the head stayed
+    // blocked for the whole window, and the sealed site took the bounded
+    // escape rather than finishing on top of its builder.
     assert_eq!(
         prod.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
         1,
         "the blocked head produced a unit after all"
     );
-    assert!(build.world().is_site(site), "the sealed site finished");
+    assert!(
+        build.world().entities().slot(site).is_none(),
+        "the sealed site must resolve by cancelling, not by finishing"
+    );
 }
 
 /// T17: one *joined* phase-1.1 frame — the whole per-frame surface the
