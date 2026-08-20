@@ -824,7 +824,7 @@ behaves as expected in a running session where a human can observe world state.
 ## T4 player-combat-commands
 
 - [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron`. Produce a Soldier from the Barracks (or wait for one to arrive). Select the Soldier — confirm slots **A** (Attack) and **S** (Stop) appear in the command card with colored icons, and slots Q/W/E/Z/X/C remain empty.
-- [ ] With a Worker selected (no Soldier), confirm the command card shows only the three build buttons (Q=HQ, W=Depot, E=Barracks) and **no** Attack or Stop buttons.
+- [ ] With a Worker selected (no Soldier), confirm the command card shows only the four build buttons (Q=HQ, W=Depot, E=Barracks, A=Turret) and **no** Attack or Stop buttons.
 - [ ] Left-click a Ghoul on screen — confirm its card appears in the detail panel showing `GHOUL` on line 1 and `HP <cur>/<max>` on line 2. Confirm **no** command buttons are visible.
 - [ ] With the Ghoul still selected, right-click anywhere on open ground — confirm a **reject sound** plays and the Ghoul stays selected (no order is issued).
 - [ ] Select a Soldier. Press **A** (arm attack-targeting mode). Without clicking, press **Escape** — confirm no order was issued, the Pause Menu did **not** open, and the attack mode is cancelled (pressing A again re-arms it).
@@ -852,3 +852,16 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Confirm the turret fires in evenly spaced pulses at one target at a time, and note for the record that turret fire is **silent and unanimated** this phase (no muzzle flash, no SFX) — that is expected, not a bug.
 - [ ] Let a large group of Ghouls swarm a single turret and confirm the turret is eventually destroyed, disappears, and the ground it stood on becomes walkable again.
 - [ ] Build a turret right next to a crystal node, then send a Worker to gather from that node, and confirm the Worker hauls its cargo back to the **HQ** and never to the turret.
+
+## T6 combat-feedback
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron`. Let the Ghouls march toward the HQ without intervening. Confirm that green HP bars appear above damaged Ghouls as they take fire from the turret or any placed unit.
+- [ ] Click a Ghoul before it takes any damage and confirm a **full green bar** appears above it (selected, full HP = bar shown, full width, green).
+- [ ] Damage a unit or building down to about 50 % health (yellow band) and confirm the bar turns **yellow**; damage it further below one-third and confirm it turns **red**.
+- [ ] Watch a Ghoul die and confirm a brief **red-orange ring flash** expands at the point of death for roughly half a second (12 rendered frames) then disappears cleanly.
+- [ ] Watch a finished building (e.g., Turret) get destroyed and confirm its death flash ring is **visibly wider** than a unit's death flash (building ring sized to half the footprint, unit ring sized to its body radius).
+- [ ] Click the finished HQ — confirm the detail panel shows `HP <cur>/<max>` as the second line (immediately below the kind label), and that the values match the HQ's current state.
+- [ ] Click a resource node — confirm the detail panel shows **no** HP line (nodes have no HP).
+- [ ] Observe the minimap while Ghouls are alive on the map — confirm each Ghoul appears as a small **red dot** on the minimap in the correct relative position.
+- [ ] Kill all Ghouls (or wait for them to die) — confirm the red dots disappear from the minimap once no enemy units remain.
+- [ ] Confirm that nothing in `git status --porcelain -- assets/scenarios` shows a tracked scenario asset as modified.

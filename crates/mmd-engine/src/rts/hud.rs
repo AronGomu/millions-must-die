@@ -877,6 +877,13 @@ pub const CAMERA_POLY_TINT: [f32; 4] = [0.95, 0.85, 0.30, 1.0];
 /// renderer), not a single line primitive.
 pub const CAMERA_POLY_PX: f32 = 2.0;
 
+/// Enemy-unit dot tint on the minimap — a red claimed by nothing else on
+/// the minimap or its chrome (the camera polygon is yellow, panels are
+/// atlas-tinted white, blocked text is a muted `[0.75, 0.28, 0.24]`).
+pub const MINIMAP_ENEMY_TINT: [f32; 4] = [0.90, 0.12, 0.10, 1.0];
+/// Enemy dot edge, in pixels — the camera polygon's stamp size.
+pub const MINIMAP_ENEMY_DOT_PX: f32 = 2.0;
+
 /// Stamp one polygon edge (`a` to `b`, minimap-local, offset onto screen by
 /// the caller) as a run of [`CAMERA_POLY_PX`] squares.
 fn push_camera_edge(props: &mut Vec<SpriteInstance>, a: [f32; 2], b: [f32; 2]) {
@@ -901,10 +908,11 @@ fn push_camera_edge(props: &mut Vec<SpriteInstance>, a: [f32; 2], b: [f32; 2]) {
 
 /// Section: the minimap frame, its map area, and the camera's footprint.
 ///
-/// Draws no entities, resources, fog or terrain detail (`T12`'s scope): only
-/// the map diamond's chrome and a projected outline of what the camera can
-/// currently see. Clicking/dragging the minimap is the app's pointer router,
-/// not this packer — see `mmd_engine::rts::hud_hit_test`.
+/// Draws the map diamond's chrome, one dot per live enemy unit, and a
+/// projected outline of what the camera can currently see — still no player
+/// entities, resources, fog or terrain detail. Clicking/dragging the minimap
+/// is the app's pointer router, not this packer — see
+/// `mmd_engine::rts::hud_hit_test`.
 fn push_minimap(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
     push_panel(props, HudLayout::MINIMAP_PANEL, PANEL_TINT);
     props.push(SpriteInstance::new(
@@ -916,6 +924,30 @@ fn push_minimap(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
 
     let projection = minimap_projection(world);
     let origin = [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]];
+
+    // Enemy units, as dots: "where is the attack coming from" at a glance.
+    // Same projection as the camera polygon, drawn before it so the camera
+    // frame stays the minimap's top element.
+    let store = world.entities();
+    for slot in 0..store.slot_count() {
+        if !store.alive(slot)
+            || store.owner(slot) != OWNER_ENEMY
+            || !matches!(store.kind(slot), EntityKind::Unit(_))
+        {
+            continue;
+        }
+        let p = projection.map_to_minimap(store.position(slot));
+        props.push(SpriteInstance::new(
+            [
+                origin[0] + p[0] - MINIMAP_ENEMY_DOT_PX * 0.5,
+                origin[1] + p[1] - MINIMAP_ENEMY_DOT_PX * 0.5,
+            ],
+            [MINIMAP_ENEMY_DOT_PX, MINIMAP_ENEMY_DOT_PX],
+            prop_uv(Prop::PanelFill),
+            MINIMAP_ENEMY_TINT,
+        ));
+    }
+
     let corners = projection.camera_polygon(&world.iso_view());
     for i in 0..corners.len() {
         let a = corners[i];
@@ -989,12 +1021,19 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
     push_text(font, kind_label(kind), [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
     y += PANEL_LINE_PX;
 
-    // Read-only enemy card: exactly two lines — the kind and HP cur/max.
-    if store.owner(slot) == OWNER_ENEMY {
+    // HP line: one line for every entity that has HP (units, buildings,
+    // enemies). Nodes have max_hp == 0 and are excluded.
+    let mhp = max_hp(kind);
+    if mhp > 0 {
         let mut cx = x;
         cx += push_text(font, "HP ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-        let s = fmt_ratio(&mut buf, store.hp(slot), max_hp(kind));
+        let s = fmt_ratio(&mut buf, store.hp(slot), mhp);
         push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+        y += PANEL_LINE_PX;
+    }
+
+    // Read-only enemy card stops after the kind + HP lines.
+    if store.owner(slot) == OWNER_ENEMY {
         return;
     }
 

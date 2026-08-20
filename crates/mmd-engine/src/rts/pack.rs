@@ -7,18 +7,21 @@
 //!
 //! The three layers of a [`ScenePass`] are not interchangeable. `overlay` is
 //! drawn with texture slot 0 bound and is only honest for texture-free
-//! procedural instances: selection rings ([`SpriteInstance::ring`]) and world
-//! grid lines ([`SpriteInstance::diagonal_line`]). Every *textured* depth-off
+//! procedural instances: selection rings and death flashes ([`SpriteInstance::ring`]) and world
+//! grid lines and HP bars ([`SpriteInstance::diagonal_line`]). Every *textured* depth-off
 //! instance — the placement ghost, the rally flags, the drag box — goes in
 //! `ui` instead, or it would sample the wrong sheet. A textured instance in
 //! the overlay layer is always a bug.
 
 use super::build::{Placement, PlacementCandidate, placement_candidate};
-use super::entity::{BuildingKind, EntityKind, MAX_ENTITIES, ResourceKind, UnitKind};
+use super::entity::{
+    BuildingKind, EntityKind, MAX_ENTITIES, RTS_UNIT_BODY_DIAMETER_CELLS, ResourceKind, UnitKind,
+    max_hp,
+};
 use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
-use super::world::RtsWorld;
+use super::world::{DeathEvent, RtsWorld};
 use crate::render::{
-    DrawGroup, FrameUniforms, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER,
+    DrawGroup, FrameUniforms, IsoView, SLOT_RTS_BUILDINGS, SLOT_RTS_PROPS, SLOT_RTS_SOLDIER,
     SLOT_RTS_WORKER, SLOT_UI_FONT, ScenePass, SpriteInstance, frame_uv_rect, quad_is_visible,
 };
 use crate::runtime::ring_quad_size_px;
@@ -135,6 +138,36 @@ pub const DRAG_BOX_BORDER_TINT: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
 /// colour and the alpha.
 pub const GHOST_TINT: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
+/// HP-bar backing tint — near-black, premultiplied, slightly translucent
+/// so the world reads through the empty part of a bar.
+pub const HP_BAR_BACKING_TINT: [f32; 4] = [0.02, 0.02, 0.02, 0.85];
+/// HP-bar fill strictly above 2/3 health.
+pub const HP_BAR_GREEN_TINT: [f32; 4] = [0.05, 0.80, 0.10, 1.0];
+/// HP-bar fill between 1/3 and 2/3 health, both boundaries included.
+pub const HP_BAR_YELLOW_TINT: [f32; 4] = [0.85, 0.75, 0.10, 1.0];
+/// HP-bar fill strictly below 1/3 health.
+pub const HP_BAR_RED_TINT: [f32; 4] = [0.85, 0.10, 0.08, 1.0];
+/// How far above the sprite quad's top edge a bar's centreline sits, in
+/// multiples of the isometric tile height (1.5 cells).
+pub const HP_BAR_RAISE_CELLS: f32 = 1.5;
+
+/// The fill tint for `hp` of `max` remaining health.
+///
+/// Integer thresholds, never a float ratio: green strictly above 2/3,
+/// red strictly below 1/3, yellow between — both exact boundaries land
+/// yellow, so a threshold can never flicker on rounding. `max` is never
+/// 0 here: nodes are excluded before any bar is packed.
+pub fn hp_bar_fill_tint(hp: u32, max: u32) -> [f32; 4] {
+    let (hp3, max_u) = (3 * u64::from(hp), u64::from(max));
+    if hp3 > 2 * max_u {
+        HP_BAR_GREEN_TINT
+    } else if hp3 < max_u {
+        HP_BAR_RED_TINT
+    } else {
+        HP_BAR_YELLOW_TINT
+    }
+}
+
 /// Per-frame packing options forwarded by the app.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FramePackOptions {
@@ -150,7 +183,7 @@ pub struct FramePackOptions {
 pub struct RtsFrame {
     /// Depth-tested world groups, in slot order 4, 5, 6.
     pub world: Vec<DrawGroup>,
-    /// Texture-free procedural instances: world grid lines, then selection rings.
+    /// Texture-free procedural instances: world grid lines, selection rings, HP bars, then the app-appended death-flash rings.
     pub overlay: Vec<SpriteInstance>,
     /// Depth-off textured groups, texture slots [`SLOT_RTS_WORKER`] through
     /// [`SLOT_UI_FONT`] in order: worker, soldier, building, props, font.
@@ -192,7 +225,7 @@ impl RtsFrame {
                     instances: Vec::with_capacity(MAX_ENTITIES),
                 })
                 .collect(),
-            overlay: Vec::with_capacity(MAX_ENTITIES + MAX_GRID_LINES),
+            overlay: Vec::with_capacity(4 * MAX_ENTITIES + MAX_GRID_LINES),
             ui: [
                 SLOT_RTS_WORKER,
                 SLOT_RTS_SOLDIER,
@@ -270,6 +303,98 @@ pub struct DragBox {
     pub b: [f32; 2],
 }
 
+/// Death-flash lifetime, in rendered frames.
+pub const DEATH_FLASH_FRAMES: u8 = 12;
+/// Death-flash ring tint — premultiplied ember red-orange.
+pub const DEATH_FLASH_TINT: [f32; 4] = [0.95, 0.30, 0.10, 0.80];
+/// Death-flash outer radius in normalised quad units (`0.5` = quad edge).
+pub const DEATH_FLASH_OUTER: f32 = 0.5;
+/// Death-flash inner radius — twice the selection ring's band, so a
+/// flash reads as an event, not as a selection.
+pub const DEATH_FLASH_INNER: f32 = DEATH_FLASH_OUTER - 1.0 / 12.0;
+
+/// App-owned render feedback: the death flashes currently on screen.
+///
+/// Not world state — the world only surfaces [`DeathEvent`]s, and how
+/// long a flash lingers is a property of rendered frames, which only the
+/// app counts. Both buffers are reserved once at construction and reused
+/// every frame; nothing here allocates after `new`.
+#[derive(Debug)]
+pub struct DeathFlashes {
+    /// Live flashes with their remaining frame counts.
+    active: Vec<(DeathEvent, u8)>,
+    /// Drain buffer handed to [`RtsWorld::drain_death_events`].
+    events: Vec<DeathEvent>,
+}
+
+impl Default for DeathFlashes {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl DeathFlashes {
+    /// Reserve both buffers at [`MAX_ENTITIES`].
+    pub fn new() -> Self {
+        Self {
+            active: Vec::with_capacity(MAX_ENTITIES),
+            events: Vec::with_capacity(MAX_ENTITIES),
+        }
+    }
+
+    /// Pull this tick's deaths out of `world` and start a
+    /// [`DEATH_FLASH_FRAMES`]-frame flash for each. Bounded: with
+    /// [`MAX_ENTITIES`] flashes already live, a further event is dropped
+    /// rather than grown into.
+    pub fn absorb(&mut self, world: &mut RtsWorld) {
+        world.drain_death_events(&mut self.events);
+        for &event in &self.events {
+            if self.active.len() < MAX_ENTITIES {
+                self.active.push((event, DEATH_FLASH_FRAMES));
+            }
+        }
+    }
+
+    /// Append one procedural ring per live flash to `frame.overlay`,
+    /// culled by the same visibility test every packed quad obeys.
+    pub fn pack(&self, iso: &IsoView, frame: &mut RtsFrame) {
+        for &(event, _) in &self.active {
+            let radius_cells = match event.kind {
+                EntityKind::Unit(u) => u.body_radius_cells(),
+                EntityKind::Building(b) => b.footprint_cells() as f32 * 0.5,
+                EntityKind::Node(_) => continue,
+            };
+            let size = ring_quad_size_px(iso.tile_w, iso.tile_h, radius_cells);
+            let ground = iso.project(event.center[0], event.center[1]);
+            let pos = [ground[0] - size[0] * 0.5, ground[1] - size[1] * 0.5];
+            if !quad_is_visible(pos, size, iso.view_size) {
+                continue;
+            }
+            frame.overlay.push(SpriteInstance::ring(
+                pos,
+                size,
+                DEATH_FLASH_INNER,
+                DEATH_FLASH_OUTER,
+                DEATH_FLASH_TINT,
+            ));
+        }
+    }
+
+    /// Age every flash by one rendered frame, dropping the expired in
+    /// place (`Vec::retain` compacts without allocating).
+    pub fn age(&mut self) {
+        for f in &mut self.active {
+            f.1 -= 1;
+        }
+        self.active.retain(|&(_, left)| left > 0);
+    }
+
+    /// Live flash count — the observability seam tests read.
+    pub fn active_count(&self) -> usize {
+        self.active.len()
+    }
+}
+
 /// Pack the isometric world-grid lattice into `frame.overlay`.
 ///
 /// Two families of boundary lines: `x = 0..=width` projected as column edges,
@@ -309,7 +434,7 @@ fn pack_grid(world: &RtsWorld, frame: &mut RtsFrame) {
 /// it does fix the packed byte order, and a frame is compared byte for byte in
 /// tests.
 ///
-/// The overlay is ordered: grid lines (if enabled), then selection rings.
+/// The overlay is ordered: grid lines (if enabled), selection rings, then HP bars; the app appends death-flash rings after this returns.
 pub fn pack_frame_with_options(
     world: &RtsWorld,
     cursor: [f32; 2],
@@ -436,6 +561,56 @@ fn pack_frame_inner(
             SELECTION_TINT,
         ));
     }
+
+    // 2c. Overlay: HP bars — two texture-free line instances per shown
+    //    entity, after the rings so a bar paints over its own ring. Shown =
+    //    live, not a node, and damaged (hp < max) ∪ selected. Render-side
+    //    derivation only: a bar can no more enter the world hash than a
+    //    grid line can.
+    let scratch = std::mem::take(&mut frame.scratch);
+    for &slot in &scratch {
+        let kind = store.kind(slot);
+        let (width_cells, quad) = match kind {
+            EntityKind::Unit(_) => (RTS_UNIT_BODY_DIAMETER_CELLS, sprite_size),
+            EntityKind::Building(b) => {
+                let edge = b.footprint_cells();
+                (edge as f32, building_quad_px(edge, iso.tile_w, iso.tile_h))
+            }
+            // A node has no HP semantics: no bar, selected or not.
+            EntityKind::Node(_) => continue,
+        };
+        let hp = store.hp(slot);
+        let max = max_hp(kind);
+        let selected = store
+            .id_at(slot)
+            .is_some_and(|id| world.selection().contains(id));
+        if hp >= max && !selected {
+            continue;
+        }
+        let p = store.position(slot);
+        let ground = iso.project(p[0], p[1]);
+        let width = width_cells * iso.tile_w;
+        let y = ground[1] - quad[1] - HP_BAR_RAISE_CELLS * iso.tile_h;
+        let left = ground[0] - width * 0.5;
+        let t = DRAG_BOX_THICKNESS_PX;
+        if !quad_is_visible([left, y - t * 0.5], [width, t], iso.view_size) {
+            continue;
+        }
+        frame.overlay.push(SpriteInstance::diagonal_line(
+            [left, y],
+            [left + width, y],
+            t,
+            HP_BAR_BACKING_TINT,
+        ));
+        let fill = width * (hp as f32 / max as f32);
+        frame.overlay.push(SpriteInstance::diagonal_line(
+            [left, y],
+            [left + fill, y],
+            t,
+            hp_bar_fill_tint(hp, max),
+        ));
+    }
+    frame.scratch = scratch;
 
     // 3. UI, depth-off and textured: rally flags, then the placement ghost,
     //    then the drag box.

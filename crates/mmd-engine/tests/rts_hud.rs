@@ -11,12 +11,13 @@ use mmd_engine::render::{
 };
 use mmd_engine::rts::{
     BuildingKind, COMMAND_GRID_RECT, COMMAND_SLOT_KEYS, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y,
-    EntityId, EntityKind, HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT,
-    MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER,
-    PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, ResourceKind, RtsFrame, TEXT_TINT,
-    TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv,
-    command_slot_rect, command_slots, fmt_ratio, fmt_u32, hud_hit_test, kind_label,
-    minimap_projection, node_uv, pack_frame, pack_hud,
+    EntityId, EntityKind, HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_ENEMY_DOT_PX,
+    MINIMAP_ENEMY_TINT, MINIMAP_MAP_RECT, MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN,
+    MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS,
+    PORTRAIT_PX, Prop, ResourceKind, RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY,
+    TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slot_rect, command_slots,
+    fmt_ratio, fmt_u32, hud_hit_test, kind_label, minimap_projection, node_uv, pack_frame,
+    pack_hud, prop_uv,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -348,7 +349,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
@@ -380,7 +381,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -413,7 +414,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -422,7 +423,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 5.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 6.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
@@ -1669,53 +1670,54 @@ fn building_details_use_exact_six_line_contract() {
         text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10),
         kind_label(EntityKind::Building(BuildingKind::Hq))
     );
-    // Line 2: READY (no construction in progress)
-    assert_eq!(
-        text_at(
-            &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            10
-        ),
-        "READY"
-    );
-    // Line 3: SUPPLY +N
-    let mut buf = [0u8; NUM_BUF];
-    let expected_supply = format!("SUPPLY +{}", fmt_u32(&mut buf, HQ_SUPPLY_GRANT));
+    // Line 2: HP (added by T6)
+    // Line 3: READY (no construction in progress)
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
-            20
+            10
         ),
-        expected_supply
+        "READY"
     );
-    // Line 4: QUEUE - (no entries)
+    // Line 4: SUPPLY +N
+    let mut buf = [0u8; NUM_BUF];
+    let expected_supply = format!("SUPPLY +{}", fmt_u32(&mut buf, HQ_SUPPLY_GRANT));
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
-            10
+            20
         ),
-        "QUEUE -"
+        expected_supply
     );
-    // Line 5: PROGRESS - (no head)
+    // Line 5: QUEUE - (no entries)
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
-            12
+            10
         ),
-        "PROGRESS -"
+        "QUEUE -"
     );
-    // Line 6: RALLY - (no rally set)
+    // Line 6: PROGRESS - (no head)
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 5.0 * PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12
+        ),
+        "PROGRESS -"
+    );
+    // Line 7: RALLY - (no rally set)
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 6.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -1745,7 +1747,7 @@ fn queue_entries_render_oldest_first() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             20
         ),
@@ -1800,7 +1802,7 @@ fn zero_supply_and_empty_queue_are_explicit() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             15
         ),
@@ -1809,7 +1811,7 @@ fn zero_supply_and_empty_queue_are_explicit() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -1818,7 +1820,7 @@ fn zero_supply_and_empty_queue_are_explicit() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 5.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             12
         ),
@@ -1991,4 +1993,138 @@ fn enemy_card_two_lines_kind_and_hp() {
         hp_line2.contains("24/30"),
         "expected HP 24/30 after 6 damage, got: {hp_line2:?}"
     );
+}
+
+// --- T6: HP line in single-selection card ------------------------------------
+
+#[test]
+fn the_card_shows_hp_for_every_hp_bearing_kind() {
+    // A damaged Worker must show an HP line.
+    {
+        let mut h = scene();
+        let w = workers(&h)[0];
+        let slot = h.world().entities().slot(w).expect("live");
+        h.world_mut().entities_mut().set_hp(slot, 10);
+        h.world_mut().selection_mut().insert(w);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let hp_line = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12,
+        );
+        assert!(
+            hp_line.contains("10/25"),
+            "damaged worker must show HP 10/25, got: {hp_line:?}"
+        );
+    }
+    // A damaged Barracks must show an HP line.
+    {
+        let mut h = scene();
+        let barracks = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Building(BuildingKind::Barracks),
+                OWNER_PLAYER,
+                [203.0, 181.0],
+            )
+            .expect("spawn barracks");
+        let slot = h.world().entities().slot(barracks).expect("live");
+        h.world_mut().entities_mut().set_hp(slot, 50);
+        h.world_mut().selection_mut().insert(barracks);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let hp_line = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12,
+        );
+        assert!(
+            hp_line.contains("50/"),
+            "damaged barracks must show HP, got: {hp_line:?}"
+        );
+    }
+    // A Ghoul (enemy) must show an HP line.
+    {
+        use mmd_engine::rts::OWNER_ENEMY;
+        let mut h = scene();
+        let ghoul = h
+            .world_mut()
+            .entities_mut()
+            .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [60.5, 60.5])
+            .expect("spawn ghoul");
+        h.world_mut().selection_mut().insert(ghoul);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let hp_line = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12,
+        );
+        assert!(
+            hp_line.contains("30/30"),
+            "ghoul must show HP 30/30, got: {hp_line:?}"
+        );
+    }
+    // A resource node must not show an HP line.
+    {
+        let mut h = scene();
+        let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+        h.world_mut().selection_mut().insert(node);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let line2 = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            25,
+        );
+        assert!(
+            !line2.contains("HP"),
+            "resource node must not show any HP line, got: {line2:?}"
+        );
+    }
+}
+
+// --- T6: minimap enemy dots ---------------------------------------------------
+
+#[test]
+fn minimap_draws_enemy_dots() {
+    let h = RtsHarness::path(mmd_engine::testkit::fixture_path(
+        mmd_engine::testkit::FIXTURE_RTS_COMBAT_V1,
+    ))
+    .build()
+    .expect("combat fixture loads hash-verified");
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    pack_hud(h.world(), &mut frame);
+
+    let projection = minimap_projection(h.world());
+    let origin = [MINIMAP_MAP_RECT[0], MINIMAP_MAP_RECT[1]];
+    let dots: Vec<_> = props(&frame)
+        .iter()
+        .filter(|i| i.tint == MINIMAP_ENEMY_TINT)
+        .collect();
+    assert_eq!(dots.len(), 2, "two pre-placed ghouls, two dots");
+    for (dot, cell) in dots.iter().zip([[20.5_f32, 20.5], [26.5, 20.5]]) {
+        let p = projection.map_to_minimap(cell);
+        assert_eq!(
+            dot.pos,
+            [
+                origin[0] + p[0] - MINIMAP_ENEMY_DOT_PX * 0.5,
+                origin[1] + p[1] - MINIMAP_ENEMY_DOT_PX * 0.5
+            ],
+            "same projection as the camera polygon, centred"
+        );
+        assert_eq!(dot.size, [MINIMAP_ENEMY_DOT_PX, MINIMAP_ENEMY_DOT_PX]);
+        assert_eq!(
+            dot.uv_rect,
+            prop_uv(Prop::PanelFill),
+            "a dot is a tinted panel-fill stamp, like the camera polygon"
+        );
+    }
 }

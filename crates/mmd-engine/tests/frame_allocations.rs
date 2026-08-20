@@ -13,9 +13,9 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, FramePackOptions, GatherPhase,
-    InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_ENEMY,
-    OWNER_PLAYER, Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind,
+    BuildingKind, DEPOT_BUILD_TICKS, DeathFlashes, DragBox, EntityKind, FramePackOptions,
+    GatherPhase, InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId,
+    OWNER_ENEMY, OWNER_PLAYER, Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind,
     WORKER_PRODUCE_TICKS, command_slots, hud_hit_test, minimap_projection, modal_hit_test,
     pack_frame, pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
 };
@@ -438,21 +438,41 @@ fn pack_frame_allocates_nothing() {
         b: [110.0, 60.0],
     });
 
+    // One live death flash rides the measured loop, so the flash pack and
+    // the (empty) event drain are measured beside the frame pack. Spawn and
+    // kill a sacrifice: the live count is back to the base scene's 17.
+    let victim = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [170.5, 166.5],
+        )
+        .expect("store has room");
+    let _ = h.world_mut().apply_damage(victim, 1_000);
+    let mut flashes = DeathFlashes::new();
+    flashes.absorb(h.world_mut());
+    let iso = h.world().iso_view();
+
     // Warm-up outside the scope: whatever the first pack would grow, it grows
     // now. `RtsFrame::new` itself allocates — that is construction, not a
     // frame.
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), cursor, drag, &mut frame);
+    flashes.pack(&iso, &mut frame);
     let packed = frame.instance_count();
     assert_eq!(
         packed,
-        17 + 1 + 1 + 65 + 5,
-        "the warm-up must exercise all three layers: world, ring, UI"
+        17 + 1 + 2 + 1 + 65 + 5 + 1,
+        "world, ring, the selected HQ's bar, rally, ghost, drag box, flash"
     );
 
     let guard = MeasureGuard::enter();
     for _ in 0..600 {
         pack_frame(h.world(), cursor, drag, &mut frame);
+        flashes.absorb(h.world_mut());
+        flashes.pack(&iso, &mut frame);
         std::hint::black_box(frame.instance_count());
     }
     assert_eq!(guard.allocations(), 0, "packing an RTS frame allocated");

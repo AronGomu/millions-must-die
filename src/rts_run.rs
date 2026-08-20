@@ -81,10 +81,10 @@ use mmd_engine::render::{
     VIEW_WIDTH, edge_pan_dir,
 };
 use mmd_engine::rts::{
-    CommandReceipt, CommandRejectReason, DragBox, EntityId, EntityKind, FramePackOptions,
-    MAX_SELECTION, OWNER_ENEMY, OWNER_PLAYER, OrderReceiptBuffer, Pick, Placement, RtsFrame,
-    RtsWorld, RtsWorldError, UnitKind, is_drag, pack_frame_with_options, pick_at,
-    placement_candidate, weapon,
+    CommandReceipt, CommandRejectReason, DeathFlashes, DragBox, EntityId, EntityKind,
+    FramePackOptions, MAX_SELECTION, OWNER_ENEMY, OWNER_PLAYER, OrderReceiptBuffer, Pick,
+    Placement, RtsFrame, RtsWorld, RtsWorldError, UnitKind, is_drag, pack_frame_with_options,
+    pick_at, placement_candidate, weapon,
 };
 use mmd_engine::scenario::ScenarioError;
 use sdl3::event::{Event, WindowEvent};
@@ -833,6 +833,9 @@ fn point_in_rect(point: [f32; 2], rect: [f32; 4]) -> bool {
 struct Scratch {
     frame_buf: RtsFrame,
     cmd_buf: Vec<RtsCommand>,
+    /// Death flashes currently on screen — per-run feedback state, absorbed
+    /// after every tick and aged after every rendered frame.
+    flashes: DeathFlashes,
 }
 
 /// Everything the exit line reports, accumulated as the run proceeds.
@@ -1190,6 +1193,7 @@ pub fn run(opts: RtsOptions) -> Result<(), RunError> {
     let mut scratch = Scratch {
         frame_buf: RtsFrame::new(),
         cmd_buf: Vec::with_capacity(8),
+        flashes: DeathFlashes::new(),
     };
 
     let mut state = RunState {
@@ -1767,6 +1771,7 @@ where
 {
     let frame_buf = &mut scratch.frame_buf;
     let cmd_buf = &mut scratch.cmd_buf;
+    let flashes = &mut scratch.flashes;
 
     let frame = state.frames + 1;
     cmd_buf.clear();
@@ -1787,6 +1792,10 @@ where
     if !session.ui.sim_paused() {
         world.tick();
     }
+    // Deaths → flashes before the pack: a kill on this tick flashes on this
+    // very frame. A paused frame drains nothing (the last tick's events were
+    // absorbed the frame they happened) but still ages below.
+    flashes.absorb(world);
 
     pack_frame_with_options(
         world,
@@ -1798,8 +1807,10 @@ where
         frame_buf,
     );
     crate::rts_ui::pack_hud(world, session, frame_buf);
+    flashes.pack(&world.iso_view(), frame_buf);
 
     draw(frame_buf.scene())?;
+    flashes.age();
 
     // Per-rendered-frame sink upkeep (music refill in `T16`); never emits,
     // so it cannot change what a run heard.
@@ -2542,6 +2553,7 @@ mod tests {
         Scratch {
             frame_buf: RtsFrame::new(),
             cmd_buf: Vec::with_capacity(8),
+            flashes: DeathFlashes::new(),
         }
     }
 

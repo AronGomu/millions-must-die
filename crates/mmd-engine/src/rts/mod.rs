@@ -49,21 +49,21 @@ pub use hud::{
     CONTROL_TINT_IDLE, CONTROL_TINT_PRESSED, CONTROL_TINT_SELECTED, CommandId, CommandSlot,
     ControlId, ControlVisualState, DETAIL_TEXT_X, DETAIL_TEXT_Y, EDGE_PAN_TRACK, FOCUS_CHECKBOX,
     FOCUS_CONTROL_RECT, GRID_CHECKBOX, GRID_CONTROL_RECT, HudLayout, ICON_PX, InteractionSnapshot,
-    KEYBOARD_PAN_TRACK, MASTER_TRACK, MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT,
-    MINIMAP_PANEL_RECT, MULTI_ICON_CAP, MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN,
-    MULTI_ICON_PX, MULTI_ICON_ROWS, MUSIC_TRACK, MUTE_LABEL_H, MUTE_LABEL_RECTS, MUTE_LABEL_W,
-    MUTE_LABELS, MUTE_LABELS_MUTED, ModalHit, ModalPage, ModalSnapshot, NUM_BUF,
-    NUMERIC_SETTING_SPECS, NumericSettingId, NumericSettingSpec, PAN_MAX, PAN_MIN, PAN_STEP,
-    PANEL_LINE_PX, PANEL_TEXT_SCALE, PANEL_TINT, PORTRAIT_POS, PORTRAIT_PX, SELECTION_PANEL_RECT,
-    SETTINGS_CONTENT_HEIGHT_PX, SETTINGS_SCROLL_STEP_PX, SETTINGS_SCROLLBAR_MIN_THUMB_PX,
-    SFX_TRACK, SLIDER_FILL_TINT, SLIDER_THUMB_OVERHANG_PX, SLIDER_THUMB_TINT, SLIDER_THUMB_W_PX,
-    SLIDER_TRACK_TINT, TEXT_TINT, TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT,
-    TOP_TEXT_SCALE, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X, VOICE_TRACK, VOLUME_MAX,
-    VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, WINDOW_MODE_LABELS, clamp_settings_scroll,
-    clamp_snap, clip_sprite_to_rect, command_slot_rect, command_slots, control_id_from_modal_hit,
-    control_tint, control_visual_state, fmt_ratio, fmt_u32, kind_label, modal_hit_test,
-    mute_label_rect, numeric_id_from_field_control, numeric_id_from_slider_control, pack_hud,
-    pack_hud_interactive, pack_modal, pack_modal_interactive, settings_max_scroll,
+    KEYBOARD_PAN_TRACK, MASTER_TRACK, MENU_RECT, MENU_TEXT_POS, MINIMAP_ENEMY_DOT_PX,
+    MINIMAP_ENEMY_TINT, MINIMAP_MAP_RECT, MINIMAP_PANEL_RECT, MULTI_ICON_CAP, MULTI_ICON_COLS,
+    MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, MULTI_ICON_ROWS, MUSIC_TRACK,
+    MUTE_LABEL_H, MUTE_LABEL_RECTS, MUTE_LABEL_W, MUTE_LABELS, MUTE_LABELS_MUTED, ModalHit,
+    ModalPage, ModalSnapshot, NUM_BUF, NUMERIC_SETTING_SPECS, NumericSettingId, NumericSettingSpec,
+    PAN_MAX, PAN_MIN, PAN_STEP, PANEL_LINE_PX, PANEL_TEXT_SCALE, PANEL_TINT, PORTRAIT_POS,
+    PORTRAIT_PX, SELECTION_PANEL_RECT, SETTINGS_CONTENT_HEIGHT_PX, SETTINGS_SCROLL_STEP_PX,
+    SETTINGS_SCROLLBAR_MIN_THUMB_PX, SFX_TRACK, SLIDER_FILL_TINT, SLIDER_THUMB_OVERHANG_PX,
+    SLIDER_THUMB_TINT, SLIDER_THUMB_W_PX, SLIDER_TRACK_TINT, TEXT_TINT, TEXT_TINT_BLOCKED,
+    TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, VALUE_FIELD_H, VALUE_FIELD_W, VALUE_FIELD_X,
+    VOICE_TRACK, VOLUME_MAX, VOLUME_MIN, VOLUME_STEP, WINDOW_MODE_BUTTONS, WINDOW_MODE_LABELS,
+    clamp_settings_scroll, clamp_snap, clip_sprite_to_rect, command_slot_rect, command_slots,
+    control_id_from_modal_hit, control_tint, control_visual_state, fmt_ratio, fmt_u32, kind_label,
+    modal_hit_test, mute_label_rect, numeric_id_from_field_control, numeric_id_from_slider_control,
+    pack_hud, pack_hud_interactive, pack_modal, pack_modal_interactive, settings_max_scroll,
     settings_scrollbar_thumb, slider_thumb_rect, snap_numeric_at_x, snap_track, value_field_rect,
 };
 pub use minimap::{
@@ -74,10 +74,12 @@ pub use orders::{
     SOLDIER_SPEED_CELLS_PER_SEC, WORKER_SPEED_CELLS_PER_SEC, interaction_reach, unit_speed,
 };
 pub use pack::{
-    DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DragBox, FramePackOptions,
-    GHOST_TINT, GRID_LINE_PX, GRID_TINT, MAX_GRID_LINES, Prop, RtsFrame, SELECTION_RING_INNER,
-    SELECTION_RING_OUTER, SELECTION_TINT, building_uv, node_uv, pack_frame,
-    pack_frame_with_options, prop_uv, unit_slot,
+    DEATH_FLASH_FRAMES, DEATH_FLASH_INNER, DEATH_FLASH_OUTER, DEATH_FLASH_TINT,
+    DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DeathFlashes, DragBox,
+    FramePackOptions, GHOST_TINT, GRID_LINE_PX, GRID_TINT, HP_BAR_BACKING_TINT, HP_BAR_GREEN_TINT,
+    HP_BAR_RAISE_CELLS, HP_BAR_RED_TINT, HP_BAR_YELLOW_TINT, MAX_GRID_LINES, Prop, RtsFrame,
+    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, hp_bar_fill_tint,
+    node_uv, pack_frame, pack_frame_with_options, prop_uv, unit_slot,
 };
 pub use production::{
     PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,
@@ -93,6 +95,6 @@ pub use selection::{
 pub use static_nav::{StaticNav, StaticNavError};
 pub use world::{
     CommandReceipt, CommandRejectReason, ContextOrderReason, ContextOrderResult,
-    DEFAULT_CAMERA_PAN_SPEED, DamageResult, IssuedOrder, NODE_CRYSTAL_AMOUNT, NODE_GAS_AMOUNT,
-    OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError, UnitOrderReceipt,
+    DEFAULT_CAMERA_PAN_SPEED, DamageResult, DeathEvent, IssuedOrder, NODE_CRYSTAL_AMOUNT,
+    NODE_GAS_AMOUNT, OrderReceiptBuffer, RtsWorld, RtsWorldError, TickError, UnitOrderReceipt,
 };

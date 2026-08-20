@@ -7,9 +7,9 @@
 
 use mmd_engine::rts::{
     BARRACKS_ARMOR, BARRACKS_MAX_HP, BuildingKind, DEPOT_ARMOR, DEPOT_MAX_HP, DEPOT_SUPPLY_GRANT,
-    DamageResult, EntityId, EntityKind, FormationGoal, GHOUL_SPEED_CELLS_PER_SEC, GatherPhase,
-    HQ_ARMOR, HQ_MAX_HP, OWNER_ENEMY, OWNER_PLAYER, Order, ResourceKind, SOLDIER_ARMOR,
-    SOLDIER_MAX_HP, UnitKind, WORKER_ARMOR, WORKER_MAX_HP, armor, max_hp, weapon,
+    DamageResult, DeathEvent, EntityId, EntityKind, FormationGoal, GHOUL_SPEED_CELLS_PER_SEC,
+    GatherPhase, HQ_ARMOR, HQ_MAX_HP, MAX_ENTITIES, OWNER_ENEMY, OWNER_PLAYER, Order, ResourceKind,
+    SOLDIER_ARMOR, SOLDIER_MAX_HP, UnitKind, WORKER_ARMOR, WORKER_MAX_HP, armor, max_hp, weapon,
 };
 use mmd_engine::scenario::{Cell, EnemySpec, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::{FIXTURE_RTS_COMBAT_V1, RtsHarness, fixture_path};
@@ -972,4 +972,86 @@ fn the_ghoul_is_the_slowest_unit() {
     assert_eq!(GHOUL_SPEED_CELLS_PER_SEC, 18.0);
     assert!(weapon(UnitKind::Worker).is_none());
     assert_eq!(weapon(UnitKind::Ghoul).expect("armed").range_cells, 8.0);
+}
+
+// --- T6: the death-event buffer ------------------------------------------
+
+#[test]
+fn death_events_drain_once() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let w0 = first_worker(&h);
+    let depot = build_and_finish(&mut h, BuildingKind::Depot, DEPOT_CORNER, w0);
+    h.step_exact(1); // settle: any event this setup produced is cleared
+    // Raw spawn after the last tick, so its position stays exact.
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [30.5, 30.5])
+        .expect("store has room");
+
+    assert_eq!(
+        h.world_mut().apply_damage(ghoul, OVERKILL),
+        DamageResult::Killed
+    );
+    assert_eq!(
+        h.world_mut().apply_damage(depot, OVERKILL),
+        DamageResult::Killed
+    );
+
+    let mut out = Vec::with_capacity(MAX_ENTITIES);
+    h.world_mut().drain_death_events(&mut out);
+    assert_eq!(out.len(), 2, "two kills, two events, in kill order");
+    assert_eq!(
+        out[0],
+        DeathEvent {
+            kind: EntityKind::Unit(UnitKind::Ghoul),
+            owner: OWNER_ENEMY,
+            center: [30.5, 30.5],
+        }
+    );
+    assert_eq!(
+        out[1],
+        DeathEvent {
+            kind: EntityKind::Building(BuildingKind::Depot),
+            owner: OWNER_PLAYER,
+            // DEPOT_CORNER (180, 176) + edge 8 / 2.
+            center: [184.0, 180.0],
+        }
+    );
+    h.world_mut().drain_death_events(&mut out);
+    assert!(out.is_empty(), "a second drain must find nothing");
+
+    // An undrained event does not survive the next tick: offscreen runs
+    // that never drain cost nothing and accumulate nothing.
+    assert_eq!(
+        h.world_mut().apply_damage(w0, OVERKILL),
+        DamageResult::Killed
+    );
+    h.step_exact(1);
+    h.world_mut().drain_death_events(&mut out);
+    assert!(out.is_empty(), "the tick must clear an unconsumed buffer");
+}
+
+#[test]
+fn death_events_never_enter_the_state_hash() {
+    let mut a = RtsHarness::scene().build().expect("rts scene harness");
+    let mut b = RtsHarness::scene().build().expect("rts scene harness");
+    let wa = first_worker(&a);
+    let wb = first_worker(&b);
+    assert_eq!(
+        a.world_mut().apply_damage(wa, OVERKILL),
+        DamageResult::Killed
+    );
+    assert_eq!(
+        b.world_mut().apply_damage(wb, OVERKILL),
+        DamageResult::Killed
+    );
+    let mut out = Vec::with_capacity(MAX_ENTITIES);
+    a.world_mut().drain_death_events(&mut out);
+    assert_eq!(out.len(), 1);
+    assert_eq!(
+        a.state_hash(),
+        b.state_hash(),
+        "a drained and an undrained buffer must hash identically"
+    );
 }

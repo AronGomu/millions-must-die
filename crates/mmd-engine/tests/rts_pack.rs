@@ -87,7 +87,8 @@ fn frame_new_reserves_the_documented_groups() {
     }
     assert_eq!(
         frame.overlay.capacity(),
-        MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES
+        4 * MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES,
+        "grid + rings + two bar lines per entity + flashes"
     );
     for g in &frame.ui[..4] {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
@@ -489,10 +490,12 @@ fn selection_rings_are_procedural() {
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), CURSOR, None, &mut frame);
 
-    assert_eq!(frame.overlay.len(), 3);
+    // 3 rings, then 3 selected full-HP bars at 2 line instances each.
+    assert_eq!(frame.overlay.len(), 9);
+    assert_eq!(frame.overlay.iter().filter(|i| i.is_ring()).count(), 3);
     for inst in &frame.overlay {
         assert!(
-            inst.is_ring(),
+            inst.is_ring() || inst.is_diagonal_line(),
             "a textured instance in the overlay would sample slot 0, not the \
              sheet it was packed for: {inst:?}"
         );
@@ -517,7 +520,12 @@ fn a_selected_building_gets_a_ring_sized_to_its_footprint() {
 
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), CURSOR, None, &mut frame);
-    assert_eq!(frame.overlay.len(), 1);
+    assert_eq!(
+        frame.overlay.len(),
+        3,
+        "one ring, then the selected bar's two lines"
+    );
+    assert!(frame.overlay[0].is_ring(), "rings pack before bars");
     assert_eq!(
         frame.overlay[0].size,
         ring_quad_size_px(iso.tile_w, iso.tile_h, 6.0),
@@ -1167,7 +1175,7 @@ fn grid_toggle_does_not_change_world_hash() {
 
 #[test]
 fn grid_capacity_covers_max_map_and_selection() {
-    // MAX_GRID_LINES + MAX_ENTITIES is the overlay ceiling.
+    // MAX_GRID_LINES + 4 * MAX_ENTITIES is the overlay ceiling.
     // Simply confirm the constant is large enough for a 512×512 map.
     let max_lines = MAX_GRID_LINES;
     assert!(
@@ -1194,4 +1202,268 @@ fn grid_follows_camera_projection() {
     );
     let end = [first.pos[0] + first.size[0], first.pos[1] + first.size[1]];
     assert_eq!(end, expected_b, "first line must end at project(0,height)");
+}
+
+// ── T6: HP bars and death flashes ────────────────────────────────────────────
+
+use mmd_engine::rts::{
+    DEATH_FLASH_TINT, DeathFlashes, HP_BAR_BACKING_TINT, HP_BAR_GREEN_TINT, HP_BAR_RED_TINT,
+    HP_BAR_YELLOW_TINT, OWNER_ENEMY, RTS_SPRITE_SIZE_PX, hp_bar_fill_tint,
+};
+
+#[test]
+fn bar_hidden_at_full_hp() {
+    let mut h = scene();
+    // A live, visible, undamaged, unselected soldier: no ring, no bar.
+    h.world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [166.5, 170.5],
+        )
+        .expect("store has room");
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    assert!(
+        frame.overlay.is_empty(),
+        "full HP and unselected must draw nothing in the overlay"
+    );
+}
+
+#[test]
+fn bar_shown_damaged_and_selected() {
+    let mut h = scene();
+    let iso = h.world().iso_view();
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [162.5, 166.5],
+        )
+        .expect("room");
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [170.5, 166.5],
+        )
+        .expect("room");
+    h.world_mut().selection_mut().insert(soldier);
+    // 5 damage through 0 armor: the ghoul sits at 25/30.
+    let _ = h.world_mut().apply_damage(ghoul, 5);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    // 1 ring (selected soldier), then 2 bars in ascending slot order:
+    // the soldier (selected, full HP) and the ghoul (damaged).
+    assert_eq!(frame.overlay.len(), 5);
+    assert!(frame.overlay[0].is_ring());
+    let bars = &frame.overlay[1..];
+    for inst in bars {
+        assert!(
+            inst.is_diagonal_line(),
+            "a bar line is texture-free: {inst:?}"
+        );
+        assert_eq!(
+            inst.uv_rect[1], DRAG_BOX_THICKNESS_PX,
+            "bar thickness is the drag-box constant"
+        );
+        assert_eq!(inst.size[1], 0.0, "a bar is screen-horizontal");
+    }
+    // Unit bar width: body diameter (6 cells) at tile_w px per cell.
+    let width = 6.0 * iso.tile_w;
+    assert_eq!(bars[0].tint, HP_BAR_BACKING_TINT);
+    assert_eq!(bars[0].size[0], width);
+    assert_eq!(
+        bars[1].tint, HP_BAR_GREEN_TINT,
+        "selected full HP fills green"
+    );
+    assert_eq!(bars[1].size[0], width, "full HP fills the whole width");
+    assert_eq!(bars[2].tint, HP_BAR_BACKING_TINT);
+    assert_eq!(bars[2].size[0], width);
+    assert_eq!(bars[3].tint, HP_BAR_GREEN_TINT, "25/30 is above 2/3");
+    assert_eq!(bars[3].size[0], width * (25.0 / 30.0));
+    // Placement: centred over the soldier, 1.5 cells above its sprite top.
+    let ground = iso.project(162.5, 166.5);
+    assert_eq!(
+        bars[0].pos,
+        [
+            ground[0] - width * 0.5,
+            ground[1] - RTS_SPRITE_SIZE_PX[1] - 1.5 * iso.tile_h
+        ]
+    );
+}
+
+#[test]
+fn bar_color_thresholds() {
+    // 70 % / 50 % / 20 % of a Soldier's 40 max HP: green, yellow, red.
+    assert_eq!(hp_bar_fill_tint(28, 40), HP_BAR_GREEN_TINT);
+    assert_eq!(hp_bar_fill_tint(20, 40), HP_BAR_YELLOW_TINT);
+    assert_eq!(hp_bar_fill_tint(8, 40), HP_BAR_RED_TINT);
+    // Both exact boundaries land yellow — no flicker on a threshold.
+    assert_eq!(hp_bar_fill_tint(100, 150), HP_BAR_YELLOW_TINT);
+    assert_eq!(hp_bar_fill_tint(50, 150), HP_BAR_YELLOW_TINT);
+
+    // …and through a packed frame, not only the table.
+    let mut h = scene();
+    for (i, hp) in [(0u32, 28u32), (1, 20), (2, 8)] {
+        let id = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [160.5 + 4.0 * i as f32, 166.5],
+            )
+            .expect("room");
+        let slot = h.world().entities().slot(id).expect("live");
+        h.world_mut().entities_mut().set_hp(slot, hp);
+    }
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    assert_eq!(frame.overlay.len(), 6, "three bars, two lines each");
+    assert_eq!(frame.overlay[1].tint, HP_BAR_GREEN_TINT);
+    assert_eq!(frame.overlay[3].tint, HP_BAR_YELLOW_TINT);
+    assert_eq!(frame.overlay[5].tint, HP_BAR_RED_TINT);
+}
+
+#[test]
+fn building_bar_spans_footprint() {
+    let mut h = scene();
+    let iso = h.world().iso_view();
+    // Raw-spawned finished turret; nav stamping is irrelevant to a pack.
+    let turret = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Turret),
+            OWNER_PLAYER,
+            [180.0, 180.0],
+        )
+        .expect("room");
+    let slot = h.world().entities().slot(turret).expect("live");
+    // 75/150: damaged, and squarely inside the yellow band.
+    h.world_mut().entities_mut().set_hp(slot, 75);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    assert_eq!(frame.overlay.len(), 2, "one bar: backing + fill");
+    let quad = building_quad_px(6, iso.tile_w, iso.tile_h);
+    let width = 6.0 * iso.tile_w;
+    assert_eq!(
+        frame.overlay[0].size[0], width,
+        "the bar spans the 6-cell footprint edge"
+    );
+    assert_eq!(
+        frame.overlay[0].size[0], quad[0],
+        "footprint edge px = the building quad's own width"
+    );
+    assert_eq!(frame.overlay[1].size[0], width * (75.0 / 150.0));
+    assert_eq!(frame.overlay[1].tint, HP_BAR_YELLOW_TINT);
+    let ground = iso.project(180.0, 180.0);
+    assert_eq!(
+        frame.overlay[0].pos,
+        [
+            ground[0] - width * 0.5,
+            ground[1] - quad[1] - 1.5 * iso.tile_h
+        ],
+        "the bar sits 1.5 cells above the building quad's top"
+    );
+}
+
+#[test]
+fn flash_lasts_twelve_frames() {
+    let mut h = scene();
+    let w0 = workers(&h)[0];
+    let slot = h.world().entities().slot(w0).expect("live");
+    let center = h.world().entities().position(slot);
+    let iso = h.world().iso_view();
+    // 25 damage through 0 armor: exactly lethal for a full-HP worker.
+    let _ = h.world_mut().apply_damage(w0, 25);
+
+    let mut flashes = DeathFlashes::new();
+    flashes.absorb(h.world_mut());
+    assert_eq!(flashes.active_count(), 1);
+
+    let mut frame = RtsFrame::new();
+    let expect_size = ring_quad_size_px(iso.tile_w, iso.tile_h, 3.0);
+    let ground = iso.project(center[0], center[1]);
+    for frame_i in 0..12 {
+        pack_frame(h.world(), CURSOR, None, &mut frame);
+        flashes.pack(&iso, &mut frame);
+        let rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+        assert_eq!(rings.len(), 1, "frame {frame_i}: the flash must be present");
+        assert_eq!(
+            rings[0].size, expect_size,
+            "radius = the unit's body radius"
+        );
+        assert_eq!(rings[0].tint, DEATH_FLASH_TINT);
+        assert_eq!(
+            rings[0].pos,
+            [
+                ground[0] - expect_size[0] * 0.5,
+                ground[1] - expect_size[1] * 0.5
+            ],
+            "centred on the death position"
+        );
+        flashes.age();
+    }
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    flashes.pack(&iso, &mut frame);
+    assert_eq!(
+        frame.overlay.iter().filter(|i| i.is_ring()).count(),
+        0,
+        "frame 12: gone"
+    );
+    assert_eq!(flashes.active_count(), 0);
+}
+
+#[test]
+fn flash_radius_units_body_buildings_half_footprint() {
+    let mut h = scene();
+    let iso = h.world().iso_view();
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [170.5, 166.5],
+        )
+        .expect("room");
+    let depot = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Depot),
+            OWNER_PLAYER,
+            [180.0, 180.0],
+        )
+        .expect("room");
+    let _ = h.world_mut().apply_damage(ghoul, 1_000);
+    let _ = h.world_mut().apply_damage(depot, 1_000);
+
+    let mut flashes = DeathFlashes::new();
+    flashes.absorb(h.world_mut());
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    flashes.pack(&iso, &mut frame);
+    let rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+    assert_eq!(rings.len(), 2, "two deaths, two flashes, in event order");
+    assert_eq!(
+        rings[0].size,
+        ring_quad_size_px(iso.tile_w, iso.tile_h, 3.0),
+        "unit: body radius"
+    );
+    assert_eq!(
+        rings[1].size,
+        ring_quad_size_px(iso.tile_w, iso.tile_h, 4.0),
+        "Depot edge 8: half the footprint"
+    );
 }

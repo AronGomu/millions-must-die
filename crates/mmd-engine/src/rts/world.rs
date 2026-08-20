@@ -242,6 +242,22 @@ pub enum DamageResult {
     NoTarget,
 }
 
+/// One entity death, surfaced for render-side feedback (the death flash).
+///
+/// Not world state: the buffer holding these clears at the start of every
+/// tick and never enters [`RtsWorld::state_hash`] — two worlds that agree
+/// on their entities agree on their digest whether or not anyone drained
+/// the events. `center` is the entity's position at the moment it died.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DeathEvent {
+    /// What died.
+    pub kind: EntityKind,
+    /// Who owned it (`OWNER_PLAYER` / `OWNER_ENEMY`).
+    pub owner: u8,
+    /// Where it stood, in cell space.
+    pub center: [f32; 2],
+}
+
 /// The phase-1 RTS game state.
 #[derive(Debug)]
 pub struct RtsWorld {
@@ -362,6 +378,11 @@ pub struct RtsWorld {
     /// Tick index of the first combat shot ever applied; `None` while the
     /// run is bloodless.
     first_combat_tick: Option<u32>,
+    /// Deaths since the start of the current tick, for the render side to
+    /// drain ([`Self::drain_death_events`]). Cleared at the top of every
+    /// tick and bounded by [`MAX_ENTITIES`], so an offscreen run that never
+    /// drains costs nothing and accumulates nothing.
+    death_events: Vec<DeathEvent>,
     /// The view every packer projects through. World state, not view state: a
     /// replay that ends looking somewhere else did not reproduce.
     camera: Camera,
@@ -874,6 +895,7 @@ impl RtsWorld {
             kills: 0,
             losses: 0,
             first_combat_tick: None,
+            death_events: Vec::with_capacity(MAX_ENTITIES),
             camera,
             keyboard_pan_dir: [0.0, 0.0],
             edge_pan_dir: [0.0, 0.0],
@@ -2120,6 +2142,15 @@ impl RtsWorld {
     /// Resolve a death [`Self::apply_damage`] decided. `kind` is `slot`'s
     /// kind and is never a node.
     fn apply_death(&mut self, id: EntityId, slot: usize, kind: EntityKind) {
+        // Surface the death before any routing mutates the slot. Bounded: a
+        // caller that kills without ever ticking cannot grow the buffer.
+        if self.death_events.len() < MAX_ENTITIES {
+            self.death_events.push(DeathEvent {
+                kind,
+                owner: self.entities.owner(slot),
+                center: self.entities.position(slot),
+            });
+        }
         match kind {
             EntityKind::Unit(_) => {
                 self.orders.clear(slot);
@@ -2174,6 +2205,18 @@ impl RtsWorld {
         self.entities.despawn(id);
     }
 
+    /// Move every death recorded since the current tick began into `out`
+    /// (which is cleared first), emptying the internal buffer — a second
+    /// drain in the same tick finds nothing.
+    ///
+    /// Allocation-free when `out` was reserved to [`MAX_ENTITIES`]; the
+    /// events are feedback, not state, and are excluded from
+    /// [`Self::state_hash`] by design.
+    pub fn drain_death_events(&mut self, out: &mut Vec<DeathEvent>) {
+        out.clear();
+        out.append(&mut self.death_events);
+    }
+
     /// Advance one fixed 1/60 s step.
     ///
     /// Systems are added by later tickets and each one runs at a fixed point in
@@ -2195,6 +2238,9 @@ impl RtsWorld {
     /// system decides whether to walk it.
     pub fn tick(&mut self) {
         self.tick_index += 1;
+        // Last tick's death events die here: drained or not, feedback never
+        // outlives one tick inside the world.
+        self.death_events.clear();
         self.entities.collect_live(&mut self.live_scratch);
         self.camera_system();
         self.enemy_wave_system();
