@@ -15,9 +15,10 @@
 
 use super::build::{Placement, PlacementCandidate, placement_candidate};
 use super::entity::{
-    BuildingKind, EntityKind, MAX_ENTITIES, RTS_UNIT_BODY_DIAMETER_CELLS, ResourceKind, UnitKind,
-    max_hp,
+    BuildingKind, EntityId, EntityKind, MAX_ENTITIES, RTS_UNIT_BODY_DIAMETER_CELLS, ResourceKind,
+    UnitKind, max_hp,
 };
+use super::orders::Order;
 use super::selection::{RTS_SPRITE_SIZE_PX, building_quad_px, normalise_rect, stand_on};
 use super::world::{DeathEvent, RtsWorld};
 use crate::render::{
@@ -128,6 +129,10 @@ pub const SELECTION_TINT: [f32; 4] = [0.0, 0.60, 0.24, 0.60];
 pub const SELECTION_RING_OUTER: f32 = 0.5;
 /// Selection-ring inner radius in normalised quad units.
 pub const SELECTION_RING_INNER: f32 = SELECTION_RING_OUTER - 1.0 / 24.0;
+/// Target-ring inner radius — same tint and outer as the selection ring, half
+/// the band thickness, so "targeted" is visually distinct from "selected" at
+/// a glance without a second hue.
+pub const TARGET_RING_INNER: f32 = SELECTION_RING_OUTER - 1.0 / 48.0;
 
 /// Drag-rectangle edge thickness in screen pixels.
 pub const DRAG_BOX_THICKNESS_PX: f32 = 2.0;
@@ -477,6 +482,21 @@ pub fn pack_frame(world: &RtsWorld, cursor: [f32; 2], drag: Option<DragBox>, fra
     );
 }
 
+/// The entity an order points at, if it points at one at all.
+///
+/// Exhaustive by design: a new [`Order`] variant has to decide here whether it
+/// wears a target ring, instead of silently inheriting "no ring". A goal-cell
+/// order ([`Order::Move`], [`Order::AttackMove`]) targets ground, not an
+/// entity, and gets nothing.
+fn order_ring_target(world: &RtsWorld, id: EntityId) -> Option<EntityId> {
+    match world.order_of(id)? {
+        Order::Gather { node, .. } => Some(node),
+        Order::Build { site, .. } => Some(site),
+        Order::Attack { target, .. } => Some(target),
+        Order::Idle | Order::Move { .. } | Order::AttackMove { .. } => None,
+    }
+}
+
 fn pack_frame_inner(
     world: &RtsWorld,
     cursor: [f32; 2],
@@ -584,7 +604,57 @@ fn pack_frame_inner(
         ));
     }
 
-    // 2c. Overlay: HP bars — two texture-free line instances per shown
+    // 2c. Target rings: one ring on whatever each selected entity is heading
+    //    toward, in the selection ring's tint but half its band. Derived from
+    //    the live order every frame, which is what makes it survive a
+    //    deselect/reselect; at most one ring per selected entity, so the
+    //    overlay reserve above still covers the worst case.
+    let sel_ids = world.selection().ids();
+    for (i, &id) in sel_ids.iter().enumerate() {
+        let Some(target_id) = order_ring_target(world, id) else {
+            continue;
+        };
+        // Skip: the target already wears a selection ring of its own.
+        if world.selection().contains(target_id) {
+            continue;
+        }
+        // Skip: an earlier selected entity already ringed this target. The
+        // rescan is O(n²) over the selection and allocates nothing, which is
+        // the trade `frame_allocations.rs` demands.
+        if sel_ids[..i]
+            .iter()
+            .any(|&prev| order_ring_target(world, prev) == Some(target_id))
+        {
+            continue;
+        }
+        let Some(target_slot) = store.slot(target_id) else {
+            continue;
+        };
+        let target_kind = store.kind(target_slot);
+        let radius_cells = match target_kind {
+            EntityKind::Unit(_) => body_radius,
+            _ => target_kind.footprint_cells() as f32 * 0.5,
+        };
+        let size = ring_quad_size_px(iso.tile_w, iso.tile_h, radius_cells);
+        if !size[0].is_finite() || !size[1].is_finite() || size[0] <= 0.0 || size[1] <= 0.0 {
+            continue;
+        }
+        let p = store.position(target_slot);
+        let ground = iso.project(p[0], p[1]);
+        let pos = [ground[0] - size[0] * 0.5, ground[1] - size[1] * 0.5];
+        if !quad_is_visible(pos, size, iso.view_size) {
+            continue;
+        }
+        frame.overlay.push(SpriteInstance::ring(
+            pos,
+            size,
+            TARGET_RING_INNER,
+            SELECTION_RING_OUTER,
+            SELECTION_TINT,
+        ));
+    }
+
+    // 2d. Overlay: HP bars — two texture-free line instances per shown
     //    entity, after the rings so a bar paints over its own ring. Shown =
     //    live, not a node, and damaged (hp < max) ∪ selected. Render-side
     //    derivation only: a bar can no more enter the world hash than a

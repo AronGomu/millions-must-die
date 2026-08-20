@@ -63,8 +63,9 @@ pub use hud::{
     clamp_settings_scroll, clamp_snap, clip_sprite_to_rect, command_slot_rect, command_slots,
     control_id_from_modal_hit, control_tint, control_visual_state, fmt_ratio, fmt_u32, kind_label,
     modal_hit_test, mute_label_rect, numeric_id_from_field_control, numeric_id_from_slider_control,
-    pack_hud, pack_hud_interactive, pack_modal, pack_modal_interactive, settings_max_scroll,
-    settings_scrollbar_thumb, slider_thumb_rect, snap_numeric_at_x, snap_track, value_field_rect,
+    order_status_label, pack_hud, pack_hud_interactive, pack_modal, pack_modal_interactive,
+    settings_max_scroll, settings_scrollbar_thumb, slider_thumb_rect, snap_numeric_at_x,
+    snap_track, value_field_rect,
 };
 pub use minimap::{
     HudHit, MinimapProjection, control_id_from_hud_hit, hud_hit_test, minimap_projection,
@@ -78,8 +79,8 @@ pub use pack::{
     DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DeathFlashes, DragBox,
     FramePackOptions, GHOST_TINT, GRID_LINE_PX, GRID_TINT, HP_BAR_BACKING_TINT, HP_BAR_GREEN_TINT,
     HP_BAR_RAISE_CELLS, HP_BAR_RED_TINT, HP_BAR_YELLOW_TINT, MAX_GRID_LINES, Prop, RtsFrame,
-    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, building_uv, hp_bar_fill_tint,
-    node_uv, pack_frame, pack_frame_with_options, prop_uv, unit_slot,
+    SELECTION_RING_INNER, SELECTION_RING_OUTER, SELECTION_TINT, TARGET_RING_INNER, building_uv,
+    hp_bar_fill_tint, node_uv, pack_frame, pack_frame_with_options, prop_uv, unit_slot,
 };
 pub use production::{
     PRODUCTION_QUEUE_CAP, ProduceError, ProductionQueue, ProductionTable, SOLDIER_COST,

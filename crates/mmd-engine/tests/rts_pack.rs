@@ -1551,3 +1551,195 @@ fn the_ghost_draws_one_tile_per_build_square() {
         );
     }
 }
+
+// --- T9: target rings --------------------------------------------------------
+
+#[test]
+fn a_gathering_worker_rings_its_node() {
+    use mmd_engine::rts::{GatherPhase, Order, SELECTION_RING_INNER, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node,
+            phase: GatherPhase::Mining { ticks_left: 10_000 },
+        },
+    );
+    h.world_mut().selection_mut().insert(w);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+    assert_eq!(rings.len(), 2, "worker selection ring + node target ring");
+    assert_eq!(
+        rings[0].uv_rect[1], SELECTION_RING_INNER,
+        "first ring is the selection ring (wider band)"
+    );
+    assert_eq!(
+        rings[1].uv_rect[1], TARGET_RING_INNER,
+        "second ring is the target ring (thinner band)"
+    );
+    assert!(
+        rings[1].uv_rect[1] > rings[0].uv_rect[1],
+        "target ring inner radius is larger than selection ring inner radius (thinner band)"
+    );
+}
+
+#[test]
+fn the_target_ring_survives_reselection() {
+    use mmd_engine::rts::{GatherPhase, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node,
+            phase: GatherPhase::Mining { ticks_left: 10_000 },
+        },
+    );
+
+    // First selection.
+    h.world_mut().selection_mut().insert(w);
+    let mut frame1 = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame1);
+    let target_rings_1: Vec<_> = frame1
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(target_rings_1.len(), 1, "node ring on first selection");
+
+    // Deselect, then re-select.
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(w);
+    let mut frame2 = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame2);
+    let target_rings_2: Vec<_> = frame2
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(target_rings_2.len(), 1, "node ring survives reselection");
+}
+
+#[test]
+fn two_workers_on_one_node_draw_one_target_ring() {
+    use mmd_engine::rts::{GatherPhase, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let ws = workers(&h);
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    for &w in ws.iter().take(2) {
+        h.world_mut().force_order_for_test(
+            w,
+            Order::Gather {
+                node,
+                phase: GatherPhase::Mining { ticks_left: 10_000 },
+            },
+        );
+        h.world_mut().selection_mut().insert(w);
+    }
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let all_rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+    let target_rings: Vec<_> = all_rings
+        .iter()
+        .filter(|i| i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(all_rings.len(), 3, "2 selection rings + 1 target ring");
+    assert_eq!(target_rings.len(), 1, "one target ring for the shared node");
+}
+
+#[test]
+fn a_selected_target_is_not_ringed_twice() {
+    use mmd_engine::rts::{GatherPhase, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let ws = workers(&h);
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    // Worker gathers the crystal node.
+    h.world_mut().force_order_for_test(
+        ws[0],
+        Order::Gather {
+            node,
+            phase: GatherPhase::Mining { ticks_left: 10_000 },
+        },
+    );
+    // Select both the worker AND the node it's gathering.
+    h.world_mut().selection_mut().insert(ws[0]);
+    h.world_mut().selection_mut().insert(node);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let target_rings: Vec<_> = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(
+        target_rings.len(),
+        0,
+        "node already has a selection ring; no second target ring"
+    );
+}
+
+#[test]
+fn an_attacking_unit_rings_its_target() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::{OWNER_ENEMY, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [162.5, 166.5],
+        )
+        .expect("room");
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [170.5, 166.5],
+        )
+        .expect("room");
+    h.world_mut().force_order_for_test(
+        soldier,
+        Order::Attack {
+            target: ghoul,
+            field: FieldRef { slot: 0, epoch: 0 },
+        },
+    );
+    h.world_mut().selection_mut().insert(soldier);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let target_rings: Vec<_> = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(
+        target_rings.len(),
+        1,
+        "an attack order rings the thing being attacked"
+    );
+}

@@ -349,7 +349,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
@@ -2127,4 +2127,244 @@ fn minimap_draws_enemy_dots() {
             "a dot is a tinted panel-fill stamp, like the camera polygon"
         );
     }
+}
+
+// --- T9: order_status_label --------------------------------------------------
+
+#[test]
+fn order_status_label_covers_every_order_and_phase() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::{FormationGoal, GatherPhase, Order, order_status_label};
+    use mmd_engine::scenario::Cell;
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let gas = h.ids_of_kind(EntityKind::Node(ResourceKind::Gas))[0];
+    let hq = h.world().start_hq().expect("hq");
+    let slot = h.world().entities().slot(w).expect("live");
+
+    let dummy = FieldRef { slot: 0, epoch: 0 };
+    let dummy_goal = FormationGoal {
+        anchor: Cell { x: 1, y: 1 },
+        slot: Cell { x: 1, y: 1 },
+    };
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::ToNode {
+                goal: dummy_goal,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "MOVING TO MINERAL");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "COLLECTING MINERAL");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Returning {
+                drop_off: hq,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "RETURNING MINERAL");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: gas,
+            phase: GatherPhase::ToNode {
+                goal: dummy_goal,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "MOVING TO GAS");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: gas,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "COLLECTING GAS");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: gas,
+            phase: GatherPhase::Returning {
+                drop_off: hq,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "RETURNING GAS");
+
+    let dummy_id = EntityId {
+        index: 9_999,
+        generation: 0,
+    };
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Build {
+            site: dummy_id,
+            goal: dummy_goal,
+            field: dummy,
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "BUILDING");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Move {
+            goal: dummy_goal,
+            field: dummy,
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "MOVING");
+
+    h.world_mut().force_order_for_test(w, Order::Idle);
+    assert_eq!(order_status_label(h.world(), slot), "IDLE");
+}
+
+#[test]
+fn a_stale_gather_target_degrades_to_moving() {
+    use mmd_engine::rts::{GatherPhase, Order, order_status_label};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let slot = h.world().entities().slot(w).expect("live");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    // Despawn the node so the id becomes stale.
+    h.world_mut().entities_mut().despawn(crystal);
+    assert_eq!(
+        order_status_label(h.world(), slot),
+        "MOVING",
+        "stale gather target must degrade to MOVING, not panic"
+    );
+}
+
+#[test]
+fn the_card_shows_the_status_under_the_hp_line() {
+    use mmd_engine::rts::{GatherPhase, Order};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    // Give the worker some carry so CARRYING is non-empty.
+    let slot = h.world().entities().slot(w).expect("live");
+    h.world_mut()
+        .entities_mut()
+        .set_carry(slot, Some((ResourceKind::Crystal, 8)));
+
+    h.world_mut().selection_mut().insert(w);
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+
+    // Line 0: kind
+    assert_eq!(
+        text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10),
+        "WORKER"
+    );
+    // Line 1: HP
+    let hp_line = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        12,
+    );
+    assert!(
+        hp_line.contains("HP"),
+        "line 1 must be HP, got: {hp_line:?}"
+    );
+    // Line 2: status
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            20,
+        ),
+        "COLLECTING MINERAL"
+    );
+    // Line 3: CARRYING (unchanged position relative to status)
+    let carry = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        25,
+    );
+    assert!(
+        carry.contains("CARRYING"),
+        "line 3 must be CARRYING, got: {carry:?}"
+    );
+}
+
+#[test]
+fn a_node_card_shows_yield_per_trip() {
+    use mmd_engine::rts::WORKER_CARRY_CAPACITY;
+
+    let mut h = scene();
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    h.world_mut().selection_mut().insert(node);
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+
+    // Line 0: kind label
+    assert_eq!(
+        text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10),
+        "CRYSTAL"
+    );
+    // Line 1: REMAINING <n>
+    let remaining = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        25,
+    );
+    assert!(
+        remaining.contains("REMAINING"),
+        "line 1 must contain REMAINING, got: {remaining:?}"
+    );
+    // Line 2: YIELD <WORKER_CARRY_CAPACITY>
+    let expected_yield = format!("YIELD {WORKER_CARRY_CAPACITY}");
+    let yield_line = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        15,
+    );
+    assert_eq!(yield_line, expected_yield, "line 2 must be YIELD 8");
 }

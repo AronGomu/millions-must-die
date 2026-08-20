@@ -905,3 +905,18 @@ up after three seconds and refunds.
 - [ ] Build several ordinary buildings in open ground during one session and confirm **none** of them ever cancels itself — the three-second give-up must only ever fire when evacuation is genuinely impossible.
 - [ ] Run `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` in a window and confirm the whole scripted flow still plays out visibly and ends in a clean quit.
 - [ ] Confirm `git status --porcelain -- assets/scenarios` is clean after that run.
+
+## T9 order-status-and-target-ring
+
+- [ ] Launch `cargo run -- rts`. Select one Worker and right-click a crystal node. Confirm the selection card's third line (`WORKER` → `HP <cur>/<max>` → status) switches from `IDLE` to `MOVING TO MINERAL` while the worker walks to the node.
+- [ ] Watch the worker arrive at the node. Confirm the card switches to `COLLECTING MINERAL`, and the crystal node wears a thin green ring distinct from the worker's own selection ring.
+- [ ] Watch the worker depart with a full load. Confirm the card switches to `RETURNING MINERAL` while the worker walks back to the HQ.
+- [ ] While the worker is en route to the node (`MOVING TO MINERAL`): click empty ground to deselect the worker, then click the worker again to re-select it. Confirm the thin green target ring is still present on the crystal node — it must survive the deselect/reselect cycle.
+- [ ] Select the crystal node directly (click it). Confirm the card shows `REMAINING <n>` on one line and `YIELD 8` on the line immediately below it.
+- [ ] Select a Soldier (spawn one if needed via a Barracks). Confirm the status line reads `IDLE` when the soldier has no order, and `MOVING` when it is walking to a destination.
+- [ ] Send two Workers to gather the same crystal node; select both at once. Confirm there is exactly one thin green ring on that node — not two overlapping rings.
+- [ ] Select a Worker and the crystal node it is already gathering, at the same time. Confirm the node does NOT get a second (target) ring on top of its selection ring — only one ring total should appear on the node.
+- [ ] Issue an Attack command to a Soldier targeting an enemy unit. Confirm the status line reads `MOVING` — the label set has no dedicated attack word — and that the enemy wears the thin green target ring.
+- [ ] Issue an Attack-move command to a Soldier onto open ground. Confirm the status line reads `MOVING` and nothing on the map wears a target ring: attack-move aims at a cell, not an entity.
+- [ ] Send a Worker to build a Depot. Confirm the card reads `BUILDING` while the worker attends the site, and the site itself wears the thin green target ring for as long as that worker is selected.
+- [ ] Select an enemy Ghoul. Confirm its read-only card still stops after the kind label and the `HP` line — no status line is added to an enemy card.

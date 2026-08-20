@@ -14,11 +14,13 @@ use crate::render::{DrawGroup, GLYPH_H_PX, GLYPH_W_PX, SpriteInstance, frame_uv_
 
 use super::build::supply_grant;
 use super::combat::weapon;
+use super::economy::WORKER_CARRY_CAPACITY;
 use super::entity::{
     BuildingKind, EntityId, EntityKind, EntityStore, OWNER_ENEMY, OWNER_PLAYER, ResourceKind,
     UnitKind, max_hp,
 };
 use super::minimap::minimap_projection;
+use super::orders::{GatherPhase, Order};
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
 use super::production::produce_ticks;
 use super::world::RtsWorld;
@@ -1009,6 +1011,51 @@ fn push_to_target(
     }
 }
 
+/// Derives a human-readable status word from the live order an entity carries.
+///
+/// Everything is computed per frame from the current `Order`, which is why the
+/// label survives deselect/reselect without any persistent state. Status strings
+/// follow the user's feedback vocabulary (`MINERAL`) rather than the code's
+/// `ResourceKind::Crystal`, by deliberate design.
+pub fn order_status_label(world: &RtsWorld, slot: usize) -> &'static str {
+    let store = world.entities();
+    let Some(id) = store.id_at(slot) else {
+        return "IDLE";
+    };
+    let Some(order) = world.order_of(id) else {
+        return "IDLE";
+    };
+    match order {
+        Order::Idle => "IDLE",
+        Order::Move { .. } => "MOVING",
+        Order::AttackMove { .. } => "MOVING",
+        Order::Attack { .. } => "MOVING",
+        Order::Build { .. } => "BUILDING",
+        Order::Gather { node, phase } => {
+            let Some(node_slot) = store.slot(node) else {
+                return "MOVING";
+            };
+            let EntityKind::Node(res_kind) = store.kind(node_slot) else {
+                return "MOVING";
+            };
+            match phase {
+                GatherPhase::ToNode { .. } => match res_kind {
+                    ResourceKind::Crystal => "MOVING TO MINERAL",
+                    ResourceKind::Gas => "MOVING TO GAS",
+                },
+                GatherPhase::Mining { .. } => match res_kind {
+                    ResourceKind::Crystal => "COLLECTING MINERAL",
+                    ResourceKind::Gas => "COLLECTING GAS",
+                },
+                GatherPhase::Returning { .. } => match res_kind {
+                    ResourceKind::Crystal => "RETURNING MINERAL",
+                    ResourceKind::Gas => "RETURNING GAS",
+                },
+            }
+        }
+    }
+}
+
 /// The selection card's detail text, right of the portrait: kind, then a
 /// state line (carry/idle/progress/ready/remaining), then rally if any.
 fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance>) {
@@ -1037,6 +1084,19 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
         return;
     }
 
+    // Status line: one line for every friendly unit, derived per frame from
+    // the live order so it survives deselect/reselect without extra state.
+    if matches!(kind, EntityKind::Unit(_)) {
+        push_text(
+            font,
+            order_status_label(world, slot),
+            [x, y],
+            PANEL_TEXT_SCALE,
+            TEXT_TINT,
+        );
+        y += PANEL_LINE_PX;
+    }
+
     match kind {
         EntityKind::Unit(UnitKind::Worker) => match store.carry(slot) {
             Some((res_kind, amount)) => {
@@ -1063,12 +1123,9 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                 );
             }
         },
-        EntityKind::Unit(UnitKind::Soldier) => {
-            push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
-        }
-        EntityKind::Unit(UnitKind::Ghoul) => {
-            push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
-        }
+        // Nothing beyond the status line above: the old hard-coded `IDLE`
+        // these arms drew is exactly what `order_status_label` now derives.
+        EntityKind::Unit(UnitKind::Soldier | UnitKind::Ghoul) => {}
         EntityKind::Building(b) => {
             let id = store.id_at(slot).expect("live slot");
 
@@ -1160,6 +1217,11 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             let mut cx = x;
             cx += push_text(font, "REMAINING ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
             let s = fmt_u32(&mut buf, amount);
+            push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            y += PANEL_LINE_PX;
+            let mut cx = x;
+            cx += push_text(font, "YIELD ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            let s = fmt_u32(&mut buf, WORKER_CARRY_CAPACITY);
             push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
         }
     }
