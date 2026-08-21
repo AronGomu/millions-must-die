@@ -11,10 +11,10 @@ use mmd_engine::rts::{
     BARRACKS_BUILD_TICKS, BARRACKS_COST, BARRACKS_SUPPLY_GRANT, BuildingKind, DEPOT_BUILD_TICKS,
     DEPOT_COST, DEPOT_SUPPLY_GRANT, EntityId, EntityKind, HQ_BUILD_TICKS, HQ_COST, HQ_SUPPLY_GRANT,
     IssuedOrder, OWNER_PLAYER, Order, OrderReceiptBuffer, Placement, PlacementError, ResourceKind,
-    Resources, Supply, UnitKind, UnitOrderReceipt, build_ticks, building_cost, ghost_min_corner,
-    placement_candidate, placement_valid, supply_grant,
+    Resources, STALLED_SITE_TICKS, Supply, UnitKind, UnitOrderReceipt, build_ticks, building_cost,
+    ghost_min_corner, placement_candidate, placement_valid, snap_to_build_square, supply_grant,
 };
-use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP};
+use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell, MAX_SUPPLY_CAP};
 use mmd_engine::testkit::RtsHarness;
 
 fn first_worker(h: &RtsHarness) -> EntityId {
@@ -27,7 +27,7 @@ fn crystal_node(h: &RtsHarness) -> EntityId {
 
 /// A clear, obstacle-free, node-free, HQ-free corner within easy walking
 /// distance of the six spawn workers.
-const CLEAR_CORNER: Cell = Cell { x: 180, y: 176 };
+const CLEAR_CORNER: Cell = Cell { x: 144, y: 176 };
 
 // --- constants ---------------------------------------------------------------
 
@@ -121,7 +121,7 @@ fn placement_rejects_overlap_with_a_site() {
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
 
-    let overlapping = Cell { x: 183, y: 176 };
+    let overlapping = Cell { x: 148, y: 176 };
     assert_eq!(
         placement_valid(h.world(), BuildingKind::Depot, overlapping),
         Err(PlacementError::OverlapsBuilding)
@@ -587,19 +587,25 @@ fn cancel_of_a_stale_id_is_refused() {
 #[test]
 fn a_builder_walks_to_a_far_site() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    // (298.5, 298.5), not the raw (300.5, 300.5): the direct entity-store
-    // spawn below bypasses `RtsWorld`'s own collision-safe placement search,
-    // so it must land on a cell that is itself legal in the inflated
-    // navigation mask, or the mover never takes its first step — its own
-    // cell would sample as blocked, which `FieldPool::reachable` correctly
-    // reports as unreachable.
+    // (20.5, 298.5), not the raw (0.5, 300.5): the direct entity-store spawn
+    // below bypasses `RtsWorld`'s own collision-safe placement search, so it
+    // must land on a cell that is itself legal in the inflated navigation
+    // mask, or the mover never takes its first step — its own cell would
+    // sample as blocked, which `FieldPool::reachable` correctly reports as
+    // unreachable.
+    //
+    // The *south-west* corner, not the south-east one T7 inherited: since T7
+    // moved [`CLEAR_CORNER`] west of the enlarged HQ, a walk in from the
+    // south-east threads the six parked starting workers and wedges against
+    // them. Hard bodies are a real obstacle, and this case is about the walk,
+    // not about a traffic jam.
     let far = h
         .world_mut()
         .entities_mut()
         .spawn(
             EntityKind::Unit(UnitKind::Worker),
             OWNER_PLAYER,
-            [298.5, 298.5],
+            [20.5, 298.5],
         )
         .expect("spawn a far worker");
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
@@ -855,8 +861,8 @@ fn completion_evacuates_every_overlapping_body() {
     // Two bodies inside the 8 x 8 footprint, one body diameter apart, plus the
     // builder standing against its east edge — all three penetrate the
     // footprint the finished Depot will occupy.
-    let inside_a = spawn_worker(&mut h, [180.5, 176.5]);
-    let inside_b = spawn_worker(&mut h, [186.5, 182.5]);
+    let inside_a = spawn_worker(&mut h, [145.5, 177.5]);
+    let inside_b = spawn_worker(&mut h, [150.5, 182.5]);
     let caught = [inside_a, inside_b];
 
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
@@ -939,6 +945,12 @@ fn a_completion_never_runs_overlap_repair() {
 /// A site whose completion would leave a body with nowhere legal to stand does
 /// not finish: it holds at one tick short of complete, stays walkable, grants
 /// no supply, and moves nobody.
+///
+/// The hold is bounded — [`STALLED_SITE_TICKS`] consecutive discarded plans
+/// cancel the site, which is
+/// [`a_site_that_cannot_evacuate_resolves_within_a_bounded_time`]'s subject —
+/// so this case looks at the site one tick before that deadline, which is the
+/// last tick on which "still waiting" is the whole of the behaviour.
 #[test]
 fn completion_waits_when_evacuation_impossible() {
     let mut h = RtsHarness::spec(sealed_site_spec())
@@ -952,7 +964,10 @@ fn completion_waits_when_evacuation_impossible() {
         .world_mut()
         .confirm_placement(SEALED_SITE_MIN, builder)
         .expect("confirm");
-    h.step_exact(DEPOT_BUILD_TICKS as u64 + 600);
+    // The site needs `DEPOT_BUILD_TICKS - 1` attended ticks to reach one tick
+    // short of complete; every tick after that is a discarded plan. Stop one
+    // short of the cancel deadline.
+    h.step_exact(DEPOT_BUILD_TICKS as u64 + STALLED_SITE_TICKS as u64 - 2);
 
     assert!(h.world().is_site(site), "the sealed site must not finish");
     let slot = h.world().entities().slot(site).expect("live site");
@@ -1005,8 +1020,8 @@ fn later_completion_sees_earlier_building() {
     // Two Depots, one body diameter apart, each attended by a builder standing
     // on its own footprint edge (`rect_distance == 0`, so attendance needs no
     // walk-in) and therefore caught by its own completion.
-    let first_min = Cell { x: 176, y: 176 };
-    let second_min = Cell { x: 187, y: 176 };
+    let first_min = Cell { x: 139, y: 176 };
+    let second_min = Cell { x: 150, y: 176 };
     let mut sites = Vec::new();
     for (min, builder) in [(first_min, workers[0]), (second_min, workers[1])] {
         let slot = h.world().entities().slot(builder).expect("live worker");
@@ -1060,7 +1075,7 @@ fn later_completion_sees_earlier_building() {
 #[test]
 fn valid_raw_placement_is_unchanged() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 148, y: 180 });
     assert_eq!(cand.min, CLEAR_CORNER, "clear raw returns unchanged min");
     assert!(cand.valid);
 }
@@ -1074,7 +1089,7 @@ fn blocked_raw_snaps_to_nearest_valid_footprint() {
     assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
 
     // Cursor whose raw min == CLEAR_CORNER is now blocked.
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 148, y: 180 });
     assert!(cand.valid, "snap must find a nearby valid cell");
     assert_ne!(
         cand.min, CLEAR_CORNER,
@@ -1125,16 +1140,17 @@ fn candidate_tie_uses_lowest_flat_index() {
     assert!(h.world_mut().confirm_placement(CLEAR_CORNER, w0).is_ok());
 
     let width = h.world().scenario().width();
-    // Cursor giving raw = CLEAR_CORNER. Four equidistant candidates (dist2=64):
-    // (172,176), (188,176), (180,168), (180,184).
-    // Lowest flat: 180 + 168*320 = 53940 → (180, 168).
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 184, y: 180 });
+    // Cursor giving raw = CLEAR_CORNER. The search steps whole build squares,
+    // so the four equidistant candidates (dist2 = 64) are
+    // (136,176), (152,176), (144,168), (144,184).
+    // Lowest flat: 144 + 168*320 = 53904 → (144, 168).
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 148, y: 180 });
     assert!(cand.valid);
     let winner_flat = cand.min.x as u64 + cand.min.y as u64 * width as u64;
-    // All equidistant candidates at dist2=64 have flat >= 53940.
+    // All equidistant candidates at dist2=64 have flat >= 53904.
     assert_eq!(
         cand.min,
-        Cell { x: 180, y: 168 },
+        Cell { x: 144, y: 168 },
         "lowest flat index among equidistant candidates must win"
     );
     let _ = winner_flat;
@@ -1171,9 +1187,10 @@ fn map_edge_search_is_safe() {
 #[test]
 fn no_nearby_candidate_returns_raw_invalid() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
-    // HQ at [160,172)x[160,172). Depot cursor at HQ centre: raw=(162,162).
-    // Any Depot min within radius 8 of (162,162) still overlaps the HQ.
-    let cursor = Cell { x: 166, y: 166 };
+    // HQ at [160,184)x[160,184). Depot cursor at the HQ centre snaps to
+    // raw=(168,168); every build square the search reaches — x and y in
+    // {160, 168, 176} — still lies inside the HQ footprint.
+    let cursor = Cell { x: 172, y: 172 };
     let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor);
     assert_eq!(
         cand.min,
@@ -1190,7 +1207,7 @@ fn red_preview_click_is_noop() {
     let resources_before = h.world().resources();
 
     // Cursor at HQ centre: no valid candidate.
-    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 166, y: 166 });
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, Cell { x: 172, y: 172 });
     assert!(!cand.valid);
 
     // Confirm_placement with the invalid raw min must fail (placement_valid rejects it).
@@ -1209,4 +1226,320 @@ fn red_preview_click_is_noop() {
         },
         "ghost must remain pending"
     );
+}
+
+// --- the build square --------------------------------------------------------
+
+#[test]
+fn every_footprint_is_a_whole_number_of_build_squares() {
+    let square = BUILD_SQUARE_CELLS;
+    for kind in [
+        BuildingKind::Hq,
+        BuildingKind::Depot,
+        BuildingKind::Barracks,
+        BuildingKind::Turret,
+    ] {
+        let edge = kind.footprint_cells();
+        assert_eq!(
+            edge % square,
+            0,
+            "{kind:?} footprint {edge} is not a whole number of {square}-cell squares"
+        );
+    }
+    assert_eq!(BuildingKind::Depot.footprint_cells() / square, 1);
+    assert_eq!(BuildingKind::Turret.footprint_cells() / square, 1);
+    assert_eq!(BuildingKind::Barracks.footprint_cells() / square, 2);
+    assert_eq!(BuildingKind::Hq.footprint_cells() / square, 3);
+}
+
+#[test]
+fn the_ghost_snaps_its_min_corner_to_a_build_square() {
+    let square = BUILD_SQUARE_CELLS;
+    let edge = BuildingKind::Depot.footprint_cells();
+    for cursor in [
+        Cell { x: 163, y: 171 },
+        Cell { x: 160, y: 160 },
+        Cell { x: 167, y: 191 },
+    ] {
+        let min = ghost_min_corner(cursor, edge);
+        assert_eq!(min.x % square, 0, "{cursor:?}: x off-square");
+        assert_eq!(min.y % square, 0, "{cursor:?}: y off-square");
+
+        // Snapping only ever floors, and never by a whole square or more.
+        let unsnapped = Cell {
+            x: cursor.x.saturating_sub(edge / 2),
+            y: cursor.y.saturating_sub(edge / 2),
+        };
+        assert!(min.x <= unsnapped.x && unsnapped.x - min.x < square);
+        assert!(min.y <= unsnapped.y && unsnapped.y - min.y < square);
+        assert_eq!(min, snap_to_build_square(unsnapped));
+    }
+}
+
+#[test]
+fn an_assisted_placement_stays_on_the_grid() {
+    let h = RtsHarness::scene().build().expect("rts scene harness");
+    // Straight over the HQ footprint: the raw corner is illegal, so the
+    // assisted search has to move — and every corner it may move to is a
+    // build-square corner.
+    let cursor = Cell { x: 166, y: 166 };
+    let cand = placement_candidate(h.world(), BuildingKind::Depot, cursor);
+    assert!(cand.valid, "the ring search must find a legal square");
+    assert_eq!(cand.min.x % BUILD_SQUARE_CELLS, 0);
+    assert_eq!(cand.min.y % BUILD_SQUARE_CELLS, 0);
+    assert!(placement_valid(h.world(), BuildingKind::Depot, cand.min).is_ok());
+}
+
+// --- T8: the builder trap ------------------------------------------------------
+
+/// The one Barracks square on this scene whose centre *and* whose four
+/// body-diameter-apart neighbours are all legal body centres before the
+/// footprint is stamped — the tightest honest reproduction of the user's
+/// report ("a worker building a barrack is blocked because the barrack spawned
+/// over it"). Every other 16-cell square on the 8-cell build grid is either
+/// inside the HQ, over a node, or close enough to the obstacle lattice that
+/// one of the boxing bodies would start on an illegal centre, which would make
+/// the case about spawning rather than about finishing.
+const BARRACKS_MIN: Cell = Cell { x: 136, y: 152 };
+/// Centre of [`BARRACKS_MIN`] at edge 16 — where the builder stands.
+const BARRACKS_CENTER: [f32; 2] = [144.0, 160.0];
+/// A legal body centre 20 cells west of [`BARRACKS_CENTER`], well clear of the
+/// footprint, the HQ and the obstacle lattice.
+const ESCAPE_DEST: Cell = Cell { x: 124, y: 160 };
+
+/// One shape of the reported trap: seeds the world and returns the site, the
+/// builder, and the min corner of the footprint that is about to swallow it.
+type TrapSetup = fn(&mut RtsHarness) -> (EntityId, EntityId, Cell);
+
+/// Is `p` inside the closed cell rectangle `min`..`min + edge`?
+fn inside_footprint(p: [f32; 2], min: Cell, edge: u32) -> bool {
+    p[0] >= min.x as f32
+        && p[0] <= (min.x + edge) as f32
+        && p[1] >= min.y as f32
+        && p[1] <= (min.y + edge) as f32
+}
+
+/// Step until `site` stops being a site, or `limit` ticks pass. Returns the
+/// number of ticks actually stepped.
+fn step_until_finished(h: &mut RtsHarness, site: EntityId, limit: u64) -> u64 {
+    for t in 0..limit {
+        h.step_exact(1);
+        if !h.world().is_site(site) {
+            return t + 1;
+        }
+    }
+    limit
+}
+
+/// The builder standing in the middle of the Barracks it is building, boxed in
+/// on all four sides by other workers one body diameter away.
+fn boxed_in_barracks(h: &mut RtsHarness) -> (EntityId, EntityId, Cell) {
+    let builder = spawn_worker(h, BARRACKS_CENTER);
+    let ring = 2.0 * RTS_UNIT_BODY_RADIUS_CELLS + 0.5;
+    for [dx, dy] in [[ring, 0.0], [-ring, 0.0], [0.0, ring], [0.0, -ring]] {
+        spawn_worker(h, [BARRACKS_CENTER[0] + dx, BARRACKS_CENTER[1] + dy]);
+    }
+
+    assert!(
+        h.world_mut().begin_placement(BuildingKind::Barracks),
+        "the scene's starting stock must cover a Barracks"
+    );
+    let site = h
+        .world_mut()
+        .confirm_placement(BARRACKS_MIN, builder)
+        .expect("Barracks placement refused");
+    (site, builder, BARRACKS_MIN)
+}
+
+/// The user's report sequenced the way they played it: every worker already
+/// busy on a live order, a Barracks ghost dropped straight over one of them —
+/// through the same assisted placement the HUD uses — and that same worker
+/// sent to build it.
+fn barracks_over_a_busy_worker(h: &mut RtsHarness) -> (EntityId, EntityId, Cell) {
+    let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let dest = Cell {
+        x: BARRACKS_CENTER[0] as u32,
+        y: BARRACKS_CENTER[1] as u32,
+    };
+    for &w in &workers {
+        assert!(h.world_mut().order_move(w, dest), "move order refused");
+    }
+    // Long enough to walk over and pack in around the destination.
+    h.step_exact(600);
+
+    let builder = workers[0];
+    let p = position_of(h, builder);
+    let under = Cell {
+        x: p[0].floor() as u32,
+        y: p[1].floor() as u32,
+    };
+    let cand = placement_candidate(h.world(), BuildingKind::Barracks, under);
+    assert!(cand.valid, "no legal Barracks square over {under:?}");
+    assert!(h.world_mut().begin_placement(BuildingKind::Barracks));
+    let site = h
+        .world_mut()
+        .confirm_placement(cand.min, builder)
+        .expect("Barracks placement refused");
+    assert!(
+        h.world_mut().order_build(builder, site),
+        "the builder refused the build order"
+    );
+    (site, builder, cand.min)
+}
+
+/// The user's report, as an assertion: the Barracks finishes, the builder is
+/// alive and outside the footprint, and it answers a fresh move order.
+///
+/// Run against both shapes of the report — the builder boxed in at the centre
+/// of the plot, and the ghost dropped over a worker that was already mid-order
+/// with five more packed around it.
+#[test]
+fn a_builder_is_never_trapped_by_the_building_it_finished() {
+    let setups: [(&str, TrapSetup); 2] = [
+        ("boxed in at the plot centre", boxed_in_barracks),
+        (
+            "ghost dropped over a busy worker",
+            barracks_over_a_busy_worker,
+        ),
+    ];
+
+    for (label, setup) in setups {
+        let mut h = RtsHarness::scene().build().expect("rts scene harness");
+        let (site, builder, min) = setup(&mut h);
+        let edge = BuildingKind::Barracks.footprint_cells();
+
+        let waited = step_until_finished(&mut h, site, BARRACKS_BUILD_TICKS as u64 + 600);
+        h.step_exact(60);
+
+        let site_slot = h.world().entities().slot(site);
+        let target = site_slot.map_or(0, |s| h.world().entities().progress_target(s));
+        let progress = site_slot.map_or(0, |s| h.world().entities().progress(s));
+        let builder_pos = h
+            .world()
+            .entities()
+            .slot(builder)
+            .map(|s| h.world().entities().position(s));
+        let state = format!(
+            "[{label}] after {waited} ticks + 60: site progress {progress}/{target} \
+             (target 0 == finished), footprint {min:?}, builder {builder_pos:?}, \
+             order {:?}",
+            h.world().order_of(builder)
+        );
+
+        assert!(
+            site_slot.is_some(),
+            "the Barracks cancelled itself instead of finishing — {state}"
+        );
+        assert_eq!(target, 0, "the Barracks never finished — {state}");
+        let p = builder_pos.expect("the builder must still be alive");
+        assert!(
+            !inside_footprint(p, min, edge),
+            "the builder is still inside the footprint it finished — {state}"
+        );
+
+        let before = position_of(&h, builder);
+        assert!(
+            h.world_mut().order_move(builder, ESCAPE_DEST),
+            "the builder refused a move order — {state}"
+        );
+        h.step_exact(60);
+        let after = position_of(&h, builder);
+        let moved = ((after[0] - before[0]).powi(2) + (after[1] - before[1]).powi(2)).sqrt();
+        assert!(
+            moved >= 1.0,
+            "the builder moved {moved} cells in 60 ticks after a move order to \
+             {ESCAPE_DEST:?} — {state}"
+        );
+    }
+}
+
+/// Every body a completion evacuates lands where the mover would accept it:
+/// clear of static geometry by the same [`StaticNav::position_clear`] test
+/// movement uses, and merged with nobody.
+#[test]
+fn evacuated_bodies_land_on_legal_centres() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let (site, _builder, min) = boxed_in_barracks(&mut h);
+    let edge = BuildingKind::Barracks.footprint_cells();
+
+    // The builder plus its four boxers: five bodies the footprint swallows.
+    let evacuees: Vec<usize> = unit_bodies(&h)
+        .into_iter()
+        .filter(|&(_, p)| inside_footprint(p, min, edge))
+        .map(|(slot, _)| slot)
+        .collect();
+    assert_eq!(evacuees.len(), 5, "the setup must trap exactly five bodies");
+
+    step_until_finished(&mut h, site, BARRACKS_BUILD_TICKS as u64 + 600);
+    let site_slot = h
+        .world()
+        .entities()
+        .slot(site)
+        .expect("the Barracks cancelled itself instead of finishing");
+    assert_eq!(
+        h.world().entities().progress_target(site_slot),
+        0,
+        "the Barracks never finished"
+    );
+
+    for slot in evacuees {
+        let p = h.world().entities().position(slot);
+        assert!(
+            h.world()
+                .static_nav()
+                .position_clear(p, RTS_UNIT_BODY_RADIUS_CELLS),
+            "evacuated slot {slot} stands at {p:?}, which the mover would refuse"
+        );
+    }
+    assert_every_body_is_legal(&h);
+}
+
+/// A site whose completion can never evacuate the bodies it covers does not
+/// hold at `build_ticks - 1` forever: it gives up within
+/// [`STALLED_SITE_TICKS`], cancels itself and refunds the player.
+#[test]
+fn a_site_that_cannot_evacuate_resolves_within_a_bounded_time() {
+    let mut h = RtsHarness::spec(sealed_site_spec())
+        .build()
+        .expect("sealed-site scene");
+    let builder = first_worker(&h);
+    let stock_before = h.world().resources();
+    let cap_before = h.world().supply().cap();
+
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    let site = h
+        .world_mut()
+        .confirm_placement(SEALED_SITE_MIN, builder)
+        .expect("confirm");
+
+    let mut resolved_at = None;
+    for tick in 1..=(DEPOT_BUILD_TICKS as u64 + STALLED_SITE_TICKS as u64 + 60) {
+        h.step_exact(1);
+        if h.world().entities().slot(site).is_none() {
+            resolved_at = Some(tick);
+            break;
+        }
+    }
+    let at = resolved_at.expect("the sealed site never resolved");
+    assert!(
+        at <= DEPOT_BUILD_TICKS as u64 + STALLED_SITE_TICKS as u64 + 60,
+        "the sealed site took {at} ticks to resolve"
+    );
+
+    assert_eq!(
+        h.world().resources(),
+        stock_before,
+        "a cancelled site must refund the full cost"
+    );
+    assert_eq!(
+        h.world().supply().cap(),
+        cap_before,
+        "a site that never finished granted supply anyway"
+    );
+    assert_eq!(
+        h.world().order_of(builder),
+        Some(Order::Idle),
+        "the builder kept a Build order pointing at a site that no longer exists"
+    );
+    assert_every_body_is_legal(&h);
 }

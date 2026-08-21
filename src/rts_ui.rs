@@ -448,6 +448,8 @@ pub fn owner_for_point(world: &RtsWorld, ui: &RtsUiState, point: [f32; 2]) -> Po
 /// resources, no supply) is a no-op here exactly as it always was —
 /// `RtsWorld::begin_placement`/`enqueue_unit` already validate and refuse.
 pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: CommandId) {
+    // Any card command supersedes a pending attack-targeting mode.
+    session.pending_attack = false;
     match id {
         CommandId::BuildHq => {
             let _ = world.begin_placement(BuildingKind::Hq);
@@ -457,6 +459,9 @@ pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: Comma
         }
         CommandId::BuildBarracks => {
             let _ = world.begin_placement(BuildingKind::Barracks);
+        }
+        CommandId::BuildTurret => {
+            let _ = world.begin_placement(BuildingKind::Turret);
         }
         CommandId::TrainWorker => {
             if let Some(building) = world.selection().primary() {
@@ -472,6 +477,14 @@ pub fn execute_command(world: &mut RtsWorld, session: &mut RtsSession, id: Comma
             // Arms a pending action rather than acting immediately: the next
             // world left-click (not one over the HUD) sets the cell.
             session.pending_rally = world.selection().primary();
+        }
+        CommandId::Attack => {
+            world.cancel_placement();
+            session.pending_rally = None;
+            session.pending_attack = true;
+        }
+        CommandId::Stop => {
+            crate::rts_run::execute_stop(world, session);
         }
     }
 }
@@ -1744,6 +1757,29 @@ mod tests {
         let (mut session, _handle) = RtsSession::for_test();
         assert!(!execute_slot(&mut world, &mut session, 9));
         assert!(!execute_slot(&mut world, &mut session, 255));
+    }
+
+    #[test]
+    fn a_executes_turret_placement() {
+        let mut world = test_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let worker = (0..world.entities().slot_count())
+            .find_map(|slot| {
+                (world.entities().alive(slot)
+                    && world.entities().kind(slot)
+                        == mmd_engine::rts::EntityKind::Unit(UnitKind::Worker))
+                .then(|| world.entities().id_at(slot).expect("live slot"))
+            })
+            .expect("the tracked scene seeds workers");
+        world.select_only(worker);
+        let dispatched = execute_slot(&mut world, &mut session, 3); // A → slot 3
+        assert!(dispatched, "worker slot 3 must dispatch BuildTurret");
+        assert_eq!(
+            world.placement(),
+            mmd_engine::rts::Placement::Pending {
+                kind: mmd_engine::rts::BuildingKind::Turret
+            }
+        );
     }
 
     #[test]

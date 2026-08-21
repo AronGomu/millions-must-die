@@ -20,7 +20,7 @@ use mmd_engine::rts::{
     RTS_UNIT_BODY_DIAMETER_CELLS, RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, TickError, UnitKind,
     moving_circle_hits_point, units_overlap,
 };
-use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
+use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell, HQ_FOOTPRINT_CELLS, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
 
 mod common;
@@ -64,11 +64,14 @@ fn collision_spec(spawns: Vec<Cell>, obstacle_cells: Vec<u32>) -> ScenarioSpec {
             start_gas: 100,
             start_supply_cap: 10,
             hq_cell: Cell {
-                x: W - 13,
-                y: H - 13,
+                x: (W - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
+                y: (H - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
             },
             crystal_nodes: vec![Cell { x: 1, y: H - 2 }],
             gas_nodes: vec![Cell { x: 1, y: H - 3 }],
+            enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }
@@ -292,19 +295,25 @@ fn idle_units_are_collision_bodies() {
 fn all_rts_owners_collide() {
     let mut h = harness(scattered_spawns(1));
     let mover = workers(&h)[0];
-    // A non-player owner: nothing in phase 1 spawns one, and hard collision
-    // must already hold for the enemy units a later phase adds.
+    // A non-player owner: hard collision is owner-blind, and must hold for
+    // the enemy units later phases add.
+    //
+    // Deliberately an **unarmed** kind. The claim under test is about bodies,
+    // not about fire: an armed enemy auto-acquires this mover the moment it
+    // walks into reach and kills it long before 300 ticks are up, which would
+    // make this case fail on a combat fact rather than a collision one. The
+    // two kinds share one body radius, so nothing about the geometry changes.
     const OWNER_ENEMY: u8 = 1;
     assert_ne!(OWNER_ENEMY, OWNER_PLAYER);
     let enemy = h
         .world_mut()
         .entities_mut()
         .spawn(
-            EntityKind::Unit(UnitKind::Soldier),
+            EntityKind::Unit(UnitKind::Worker),
             OWNER_ENEMY,
             [20.5, 20.5],
         )
-        .expect("spawn enemy soldier");
+        .expect("spawn enemy worker");
     let enemy_start = pos(&h, enemy);
     assert!(h.world_mut().force_position_for_test(mover, [10.5, 20.5]));
     assert!(h.world_mut().order_move(mover, Cell { x: 30, y: 20 }));
@@ -1733,17 +1742,17 @@ fn fallback_priority_rotates() {
 const POCKET_GRID: u32 = 48;
 /// Half-open cell rectangle `[x0, x1) x [y0, y1)`.
 type OpenRect = (u32, u32, u32, u32);
-/// The HQ's own 12 x 12 footprint, which `StaticNav` stamps solid at load, so
+/// The HQ's own 24 x 24 footprint, which `StaticNav` stamps solid at load, so
 /// this block holds no legal body centre at all.
-const POCKET_HQ: OpenRect = (4, 16, 4, 16);
+const POCKET_HQ: OpenRect = (0, 24, 0, 24);
 /// Four cells wide: raw-walkable, so the scenario's point-agent reachability
 /// check passes, and far too narrow for a 3-cell body to stand or pass.
-const POCKET_CORRIDOR: OpenRect = (16, 20, 8, 12);
+const POCKET_CORRIDOR: OpenRect = (24, 28, 8, 12);
 /// A 7 x 7 pocket holds exactly one legal body centre — the smallest open
 /// square a 3-cell body fits in, and it fits in one place.
-const POCKET_ONE: OpenRect = (20, 27, 6, 13);
+const POCKET_ONE: OpenRect = (28, 35, 6, 13);
 /// The single legal body centre of [`POCKET_ONE`].
-const POCKET_ONE_CENTRE: [f32; 2] = [23.5, 9.5];
+const POCKET_ONE_CENTRE: [f32; 2] = [31.5, 9.5];
 
 /// An RTS scene whose only open ground is `open`, everything else solid.
 fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
@@ -1755,19 +1764,22 @@ fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
                 .any(|&(x0, x1, y0, y1)| x >= x0 && x < x1 && y >= y0 && y < y1)
         })
         .collect();
-    let mut spec = collision_spec(vec![Cell { x: 22, y: 9 }], obstacle_cells);
+    let mut spec = collision_spec(vec![Cell { x: 30, y: 9 }], obstacle_cells);
     spec.width = POCKET_GRID;
     spec.height = POCKET_GRID;
-    spec.destination = Cell { x: 23, y: 9 };
+    spec.destination = Cell { x: 31, y: 9 };
     spec.rts = Some(RtsSpec {
         start_crystal: 300,
         start_gas: 100,
         start_supply_cap: 10,
-        hq_cell: Cell { x: 4, y: 4 },
+        hq_cell: Cell { x: 0, y: 0 },
         // Both nodes sit in the corridor: raw-walkable and reachable, and no
         // body can stand there anyway, so they add and remove no centre.
-        crystal_nodes: vec![Cell { x: 17, y: 9 }],
-        gas_nodes: vec![Cell { x: 18, y: 10 }],
+        crystal_nodes: vec![Cell { x: 25, y: 9 }],
+        gas_nodes: vec![Cell { x: 26, y: 10 }],
+        enemies: None,
+        buildings: vec![],
+        start_units: vec![],
     });
     RtsHarness::spec(spec)
         .build()
@@ -2103,4 +2115,88 @@ fn gather_exit_state_reproduces_cross_process() {
         hash_from_child_process(EXIT_CHILD_ENV, EXIT_CHILD_TEST, EXIT_HASH_PREFIX),
         "a bounded exit must reproduce its state hash across processes"
     );
+}
+
+// --- T8: the builder-trap fix does not widen the overlap policy ----------------
+
+/// T8 changed how a *stalled* site resolves, and nothing else: it added no
+/// collision exemption, no phasing, no relaxed body placement. So the repro
+/// scenario that fix was written against must still end every single tick with
+/// ADR 021's policy claim intact — `body_overlap_count() == 0` — including the
+/// tick a 16-cell Barracks becomes solid on top of five bodies at once.
+#[test]
+fn the_builder_fix_does_not_widen_the_overlap_policy() {
+    // Same plot, builder and boxing ring as
+    // `rts_build::a_builder_is_never_trapped_by_the_building_it_finished`.
+    const BARRACKS_MIN: Cell = Cell { x: 136, y: 152 };
+    const BARRACKS_CENTER: [f32; 2] = [144.0, 160.0];
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let builder = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Worker),
+            OWNER_PLAYER,
+            BARRACKS_CENTER,
+        )
+        .expect("spawn the builder");
+    let ring = 2.0 * RADIUS + 0.5;
+    for [dx, dy] in [[ring, 0.0], [-ring, 0.0], [0.0, ring], [0.0, -ring]] {
+        h.world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Worker),
+                OWNER_PLAYER,
+                [BARRACKS_CENTER[0] + dx, BARRACKS_CENTER[1] + dy],
+            )
+            .expect("spawn a boxing worker");
+    }
+    assert!(h.world_mut().begin_placement(BuildingKind::Barracks));
+    let site = h
+        .world_mut()
+        .confirm_placement(BARRACKS_MIN, builder)
+        .expect("Barracks placement refused");
+
+    for tick in 1..=600u64 {
+        h.step_exact(1);
+        assert_eq!(
+            h.world().body_overlap_count(),
+            0,
+            "tick {tick} ended with a merged pair"
+        );
+    }
+    // A site that cancelled itself never stamped anything, so the tick this
+    // case exists to sample would never have happened.
+    let site_slot = h
+        .world()
+        .entities()
+        .slot(site)
+        .expect("the Barracks cancelled itself instead of finishing");
+    assert_eq!(
+        h.world().entities().progress_target(site_slot),
+        0,
+        "the Barracks never finished, so the completion tick was never sampled"
+    );
+
+    // The bodies are legal geometry too, not merely un-merged by policy.
+    let store = h.world().entities();
+    let bodies: Vec<(usize, [f32; 2])> = (0..store.slot_count())
+        .filter(|&s| store.alive(s) && matches!(store.kind(s), EntityKind::Unit(_)))
+        .map(|s| (s, store.position(s)))
+        .collect();
+    for &(slot, p) in &bodies {
+        assert!(
+            h.world().static_nav().position_clear(p, RADIUS),
+            "slot {slot} stands at {p:?}, inside static geometry"
+        );
+    }
+    for (i, &(sa, a)) in bodies.iter().enumerate() {
+        for &(sb, b) in &bodies[i + 1..] {
+            assert!(
+                !units_overlap(a, RADIUS, b, RADIUS),
+                "slots {sa} and {sb} are merged at {a:?} and {b:?}"
+            );
+        }
+    }
 }

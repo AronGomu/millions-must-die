@@ -10,13 +10,14 @@ use mmd_engine::render::{
     SpriteInstance, frame_uv_rect, quad_is_visible, screen_axes_to_cells,
 };
 use mmd_engine::rts::{
-    BuildingKind, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_BORDER_TINT, DRAG_BOX_FILL_TINT,
-    DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_ENTITIES, OWNER_PLAYER, Prop,
-    ResourceKind, RtsFrame, UnitKind, building_quad_px, building_uv, ghost_min_corner, node_uv,
-    pack_frame, placement_candidate, prop_uv, unit_slot,
+    BuildingKind, DASH_SEGMENTS, DEFAULT_CAMERA_PAN_SPEED, DRAG_BOX_BORDER_TINT,
+    DRAG_BOX_FILL_TINT, DRAG_BOX_THICKNESS_PX, DragBox, EntityId, EntityKind, MAX_DASH_LINES,
+    MAX_ENTITIES, MAX_SELECTION_FOR_DASHES, OWNER_PLAYER, Prop, RallyTarget, ResourceKind,
+    RtsFrame, UnitKind, building_quad_px, building_uv, ghost_min_corner, node_uv, pack_frame,
+    placement_candidate, prop_uv, unit_slot,
 };
 use mmd_engine::runtime::ring_quad_size_px;
-use mmd_engine::scenario::Cell;
+use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell};
 use mmd_engine::sim::TICK_DT;
 use mmd_engine::testkit::RtsHarness;
 
@@ -24,12 +25,12 @@ use mmd_engine::testkit::RtsHarness;
 /// centred on the HQ, so this pixel is the HQ's footprint centre.
 const CURSOR: [f32; 2] = [960.0, 540.0];
 
-/// The HQ's footprint centre in cell space (`hq_cell` 160,160 + 12/2).
-const HQ_CENTRE: [f32; 2] = [166.0, 166.0];
+/// The HQ's footprint centre in cell space (`hq_cell` 160,160 + 24/2).
+const HQ_CENTRE: [f32; 2] = [172.0, 172.0];
 
 /// Clear, obstacle-free, node-free, HQ-free Depot corner — the same one
 /// `rts_production.rs` builds on.
-const DEPOT_CORNER: Cell = Cell { x: 180, y: 176 };
+const DEPOT_CORNER: Cell = Cell { x: 144, y: 176 };
 
 fn scene() -> RtsHarness {
     RtsHarness::scene().build().expect("rts scene harness")
@@ -87,7 +88,11 @@ fn frame_new_reserves_the_documented_groups() {
     }
     assert_eq!(
         frame.overlay.capacity(),
-        MAX_ENTITIES + mmd_engine::rts::MAX_GRID_LINES
+        4 * MAX_ENTITIES
+            + mmd_engine::rts::MAX_GRID_LINES
+            + MAX_DASH_LINES
+            + mmd_engine::rts::MAX_RALLY_DASH_LINES,
+        "grid + rings + two bar lines per entity + flashes + order dashes + rally dashes"
     );
     for g in &frame.ui[..4] {
         assert_eq!(g.instances.capacity(), MAX_ENTITIES, "slot {}", g.atlas_id);
@@ -118,6 +123,10 @@ fn prop_uv_maps_to_the_published_cells() {
         Prop::IconTrainWorker,
         Prop::IconTrainSoldier,
         Prop::IconSetRally,
+        Prop::IconAttack,
+        Prop::IconStop,
+        Prop::IconBuildTurret,
+        Prop::MoveMarker,
     ];
     for (i, p) in all.into_iter().enumerate() {
         let i = i as u32;
@@ -133,6 +142,8 @@ fn prop_uv_maps_to_the_published_cells() {
     assert_eq!(prop_uv(Prop::SelectionRing), frame_uv_rect(0, 0));
     assert_eq!(prop_uv(Prop::RallyFlag), frame_uv_rect(0, 3));
     assert_eq!(prop_uv(Prop::PanelFill), frame_uv_rect(1, 3));
+    assert_eq!(prop_uv(Prop::IconBuildTurret), frame_uv_rect(4, 2));
+    assert_eq!(prop_uv(Prop::MoveMarker), frame_uv_rect(4, 3));
 }
 
 #[test]
@@ -150,6 +161,11 @@ fn building_uv_switches_row_on_construction() {
         building_uv(BuildingKind::Barracks, true),
         frame_uv_rect(1, 2)
     );
+    assert_eq!(
+        building_uv(BuildingKind::Turret, false),
+        frame_uv_rect(0, 3)
+    );
+    assert_eq!(building_uv(BuildingKind::Turret, true), frame_uv_rect(1, 3));
 }
 
 #[test]
@@ -173,7 +189,7 @@ fn building_quad_matches_the_documented_sizes() {
     // The tracked scene's tile is 8 x 4. Width is the footprint diamond's full
     // width; height is twice the diamond's height, which is what makes a
     // building read as a solid rather than a decal.
-    assert_eq!(building_quad_px(12, 8.0, 4.0), [96.0, 96.0], "HQ");
+    assert_eq!(building_quad_px(24, 8.0, 4.0), [192.0, 192.0], "HQ");
     assert_eq!(building_quad_px(8, 8.0, 4.0), [64.0, 64.0], "Depot");
     assert_eq!(building_quad_px(10, 8.0, 4.0), [80.0, 80.0], "Barracks");
 }
@@ -186,11 +202,12 @@ fn ghost_min_corner_centres_the_footprint() {
         "the cursor's cell is the footprint's centre, not its corner"
     );
     assert_eq!(
-        ghost_min_corner(Cell { x: 200, y: 40 }, 12),
-        Cell { x: 194, y: 34 }
+        ghost_min_corner(Cell { x: 200, y: 40 }, 24),
+        Cell { x: 184, y: 24 },
+        "the centred corner (188, 28) then floors onto the build square"
     );
     assert_eq!(
-        ghost_min_corner(Cell { x: 2, y: 3 }, 10),
+        ghost_min_corner(Cell { x: 2, y: 3 }, 16),
         Cell { x: 0, y: 0 },
         "the corner saturates at zero rather than wrapping"
     );
@@ -480,10 +497,12 @@ fn selection_rings_are_procedural() {
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), CURSOR, None, &mut frame);
 
-    assert_eq!(frame.overlay.len(), 3);
+    // 3 rings, then 3 selected full-HP bars at 2 line instances each.
+    assert_eq!(frame.overlay.len(), 9);
+    assert_eq!(frame.overlay.iter().filter(|i| i.is_ring()).count(), 3);
     for inst in &frame.overlay {
         assert!(
-            inst.is_ring(),
+            inst.is_ring() || inst.is_diagonal_line(),
             "a textured instance in the overlay would sample slot 0, not the \
              sheet it was packed for: {inst:?}"
         );
@@ -508,11 +527,16 @@ fn a_selected_building_gets_a_ring_sized_to_its_footprint() {
 
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), CURSOR, None, &mut frame);
-    assert_eq!(frame.overlay.len(), 1);
+    assert_eq!(
+        frame.overlay.len(),
+        3,
+        "one ring, then the selected bar's two lines"
+    );
+    assert!(frame.overlay[0].is_ring(), "rings pack before bars");
     assert_eq!(
         frame.overlay[0].size,
-        ring_quad_size_px(iso.tile_w, iso.tile_h, 6.0),
-        "an edge-12 footprint's ring is drawn at radius 6 cells"
+        ring_quad_size_px(iso.tile_w, iso.tile_h, 12.0),
+        "an edge-24 footprint's ring is drawn at radius 12 cells"
     );
 }
 
@@ -532,19 +556,24 @@ fn the_ghost_follows_the_cursor_cell() {
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     let iso = h.world().iso_view();
 
+    // Over clear ground west of the HQ, so the raw corner is legal and the
+    // assisted search never moves the ghost on its own.
     let mut frame = RtsFrame::new();
-    pack_frame(h.world(), CURSOR, None, &mut frame);
+    pack_frame(h.world(), iso.project(148.5, 180.5), None, &mut frame);
     let before: Vec<[f32; 2]> = props(&frame).iter().map(|i| i.pos).collect();
 
-    // One cell of `+x`, which the projection moves half a tile right and half
-    // a tile down.
-    let cursor = iso.project(167.5, 166.5);
+    // One *build square* of `+x` — since T7 the ghost snaps, so a single
+    // cell of cursor travel inside the same square moves nothing.
+    let cursor = iso.project(148.5 + BUILD_SQUARE_CELLS as f32, 180.5);
     pack_frame(h.world(), cursor, None, &mut frame);
     let after: Vec<[f32; 2]> = props(&frame).iter().map(|i| i.pos).collect();
 
     assert_eq!(before.len(), after.len());
     assert!(!before.is_empty());
-    let expect = [iso.tile_w * 0.5, iso.tile_h * 0.5];
+    let expect = [
+        iso.tile_w * 0.5 * BUILD_SQUARE_CELLS as f32,
+        iso.tile_h * 0.5 * BUILD_SQUARE_CELLS as f32,
+    ];
     for (a, b) in before.iter().zip(after.iter()) {
         assert_eq!([b[0] - a[0], b[1] - a[1]], expect);
     }
@@ -557,19 +586,17 @@ fn a_valid_ghost_is_green() {
     let iso = h.world().iso_view();
     // The cursor's cell is the footprint's centre, so aim four cells past the
     // known-clear corner.
-    let cursor = iso.project(184.5, 180.5);
+    let cursor = iso.project(148.5, 180.5);
 
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), cursor, None, &mut frame);
     let packed = props(&frame);
-    assert_eq!(packed.len(), 65);
-    for inst in &packed[..64] {
-        assert_eq!(
-            inst.uv_rect,
-            frame_uv_rect(0, 1),
-            "a valid footprint tiles the placement-OK cell"
-        );
-    }
+    assert_eq!(packed.len(), 2, "one build square, plus the silhouette");
+    assert_eq!(
+        packed[0].uv_rect,
+        frame_uv_rect(0, 1),
+        "a valid footprint tiles the placement-OK square"
+    );
 }
 
 #[test]
@@ -581,8 +608,8 @@ fn an_invalid_ghost_is_red() {
     // The default cursor is the HQ's own centre: the footprint overlaps it.
     pack_frame(h.world(), CURSOR, None, &mut frame);
     let packed = props(&frame);
-    assert_eq!(packed.len(), 65);
-    for inst in &packed[..64] {
+    assert_eq!(packed.len(), 2, "one build square, plus the silhouette");
+    for inst in &packed[..1] {
         assert_eq!(
             inst.uv_rect,
             frame_uv_rect(0, 2),
@@ -602,23 +629,26 @@ fn the_ghost_covers_the_whole_footprint() {
     let packed = props(&frame);
     assert_eq!(
         packed.len(),
-        8 * 8 + 1,
-        "one tile per footprint cell, plus the building's own silhouette"
+        2,
+        "one tile per build square (Depot is 1 x 1), plus the silhouette"
     );
-    for inst in &packed[..64] {
+    for inst in &packed[..1] {
         assert_eq!(
             inst.size,
-            [iso.tile_w, iso.tile_h * 2.0],
-            "a ghost tile is one cell diamond's width by twice its height"
+            [
+                iso.tile_w * BUILD_SQUARE_CELLS as f32,
+                iso.tile_h * 2.0 * BUILD_SQUARE_CELLS as f32
+            ],
+            "a ghost tile is one build square's width by twice its height"
         );
     }
     assert_eq!(
-        packed[64].size,
+        packed[1].size,
         building_quad_px(8, iso.tile_w, iso.tile_h),
         "the silhouette is the building's own quad"
     );
     assert_eq!(
-        packed[64].uv_rect,
+        packed[1].uv_rect,
         frame_uv_rect(1, 1),
         "the silhouette is the under-construction sprite"
     );
@@ -728,8 +758,8 @@ fn no_drag_means_no_box() {
 fn a_rally_flag_draws_for_a_selected_building() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
-    let cell = Cell { x: 180, y: 176 };
-    assert!(h.world_mut().set_rally(hq, Some(cell)));
+    let cell = Cell { x: 144, y: 176 };
+    assert!(h.world_mut().set_rally(hq, Some(RallyTarget::Cell(cell))));
     h.world_mut().selection_mut().insert(hq);
     let iso = h.world().iso_view();
     let ground = iso.project(cell.x as f32 + 0.5, cell.y as f32 + 0.5);
@@ -755,7 +785,10 @@ fn a_rally_flag_draws_for_a_selected_building() {
 fn an_unselected_buildings_rally_is_not_drawn() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     assert!(h.world().selection().is_empty());
 
     let mut frame = RtsFrame::new();
@@ -993,8 +1026,8 @@ fn green_preview_commits_exact_displayed_min() {
 
     // Cursor giving raw = DEPOT_CORNER (blocked); snap finds a nearby cell.
     let iso = h.world().iso_view();
-    // Cell (184, 180) → ghost_min_corner = (180, 176) = DEPOT_CORNER.
-    let cursor = iso.project(184.5, 180.5);
+    // Cell (148, 180) → ghost_min_corner = (144, 176) = DEPOT_CORNER.
+    let cursor = iso.project(148.5, 180.5);
     let cursor_cell = h
         .world()
         .iso_view()
@@ -1017,11 +1050,17 @@ fn green_preview_commits_exact_displayed_min() {
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), cursor, None, &mut frame);
     let tiles = props(&frame);
-    assert_eq!(tiles.len(), 65, "64 tiles + 1 silhouette");
+    assert_eq!(tiles.len(), 2, "1 build-square tile + 1 silhouette");
 
     // The first ghost tile is at the footprint's (min.x, min.y) cell centre.
-    let expected_ground = iso.project(cand.min.x as f32 + 0.5, cand.min.y as f32 + 0.5);
-    let tile_size = [iso.tile_w, iso.tile_h * 2.0];
+    let expected_ground = iso.project(
+        cand.min.x as f32 + BUILD_SQUARE_CELLS as f32 * 0.5,
+        cand.min.y as f32 + BUILD_SQUARE_CELLS as f32 * 0.5,
+    );
+    let tile_size = [
+        iso.tile_w * BUILD_SQUARE_CELLS as f32,
+        iso.tile_h * 2.0 * BUILD_SQUARE_CELLS as f32,
+    ];
     let expected_pos = [
         expected_ground[0] - tile_size[0] * 0.5,
         expected_ground[1] - tile_size[1] * 0.5,
@@ -1072,7 +1111,7 @@ fn grid_packs_exact_map_lattice() {
     let w = h.world().scenario().width();
     let width = w;
     let height = h.world().scenario().height();
-    let expected = (width + 1 + height + 1) as usize;
+    let expected = (width / BUILD_SQUARE_CELLS + 1 + height / BUILD_SQUARE_CELLS + 1) as usize;
 
     let mut frame = RtsFrame::new();
     pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
@@ -1085,7 +1124,7 @@ fn grid_packs_exact_map_lattice() {
     assert_eq!(
         grid_lines.len(),
         expected,
-        "320×320 map needs {} grid lines",
+        "320×320 map needs {} build-square grid lines",
         expected
     );
 }
@@ -1158,12 +1197,12 @@ fn grid_toggle_does_not_change_world_hash() {
 
 #[test]
 fn grid_capacity_covers_max_map_and_selection() {
-    // MAX_GRID_LINES + MAX_ENTITIES is the overlay ceiling.
+    // MAX_GRID_LINES + 4 * MAX_ENTITIES is the overlay ceiling.
     // Simply confirm the constant is large enough for a 512×512 map.
     let max_lines = MAX_GRID_LINES;
     assert!(
-        max_lines >= 2 * (512 + 1),
-        "MAX_GRID_LINES={max_lines} must cover a 512×512 map"
+        max_lines >= 2 * (512 / BUILD_SQUARE_CELLS as usize + 1),
+        "MAX_GRID_LINES={max_lines} must cover a 512×512 map of build squares"
     );
 }
 
@@ -1185,4 +1224,719 @@ fn grid_follows_camera_projection() {
     );
     let end = [first.pos[0] + first.size[0], first.pos[1] + first.size[1]];
     assert_eq!(end, expected_b, "first line must end at project(0,height)");
+}
+
+// ── T6: HP bars and death flashes ────────────────────────────────────────────
+
+use mmd_engine::rts::{
+    DEATH_FLASH_TINT, DeathFlashes, HP_BAR_BACKING_TINT, HP_BAR_GREEN_TINT, HP_BAR_RED_TINT,
+    HP_BAR_YELLOW_TINT, OWNER_ENEMY, RTS_SPRITE_SIZE_PX, hp_bar_fill_tint,
+};
+
+#[test]
+fn bar_hidden_at_full_hp() {
+    let mut h = scene();
+    // A live, visible, undamaged, unselected soldier: no ring, no bar.
+    h.world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [166.5, 170.5],
+        )
+        .expect("store has room");
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    assert!(
+        frame.overlay.is_empty(),
+        "full HP and unselected must draw nothing in the overlay"
+    );
+}
+
+#[test]
+fn bar_shown_damaged_and_selected() {
+    let mut h = scene();
+    let iso = h.world().iso_view();
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [162.5, 166.5],
+        )
+        .expect("room");
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [170.5, 166.5],
+        )
+        .expect("room");
+    h.world_mut().selection_mut().insert(soldier);
+    // 5 damage through 0 armor: the ghoul sits at 25/30.
+    let _ = h.world_mut().apply_damage(ghoul, 5);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    // 1 ring (selected soldier), then 2 bars in ascending slot order:
+    // the soldier (selected, full HP) and the ghoul (damaged).
+    assert_eq!(frame.overlay.len(), 5);
+    assert!(frame.overlay[0].is_ring());
+    let bars = &frame.overlay[1..];
+    for inst in bars {
+        assert!(
+            inst.is_diagonal_line(),
+            "a bar line is texture-free: {inst:?}"
+        );
+        assert_eq!(
+            inst.uv_rect[1], DRAG_BOX_THICKNESS_PX,
+            "bar thickness is the drag-box constant"
+        );
+        assert_eq!(inst.size[1], 0.0, "a bar is screen-horizontal");
+    }
+    // Unit bar width: body diameter (6 cells) at tile_w px per cell.
+    let width = 6.0 * iso.tile_w;
+    assert_eq!(bars[0].tint, HP_BAR_BACKING_TINT);
+    assert_eq!(bars[0].size[0], width);
+    assert_eq!(
+        bars[1].tint, HP_BAR_GREEN_TINT,
+        "selected full HP fills green"
+    );
+    assert_eq!(bars[1].size[0], width, "full HP fills the whole width");
+    assert_eq!(bars[2].tint, HP_BAR_BACKING_TINT);
+    assert_eq!(bars[2].size[0], width);
+    assert_eq!(bars[3].tint, HP_BAR_GREEN_TINT, "25/30 is above 2/3");
+    assert_eq!(bars[3].size[0], width * (25.0 / 30.0));
+    // Placement: centred over the soldier, 1.5 cells above its sprite top.
+    let ground = iso.project(162.5, 166.5);
+    assert_eq!(
+        bars[0].pos,
+        [
+            ground[0] - width * 0.5,
+            ground[1] - RTS_SPRITE_SIZE_PX[1] - 1.5 * iso.tile_h
+        ]
+    );
+}
+
+#[test]
+fn bar_color_thresholds() {
+    // 70 % / 50 % / 20 % of a Soldier's 40 max HP: green, yellow, red.
+    assert_eq!(hp_bar_fill_tint(28, 40), HP_BAR_GREEN_TINT);
+    assert_eq!(hp_bar_fill_tint(20, 40), HP_BAR_YELLOW_TINT);
+    assert_eq!(hp_bar_fill_tint(8, 40), HP_BAR_RED_TINT);
+    // Both exact boundaries land yellow — no flicker on a threshold.
+    assert_eq!(hp_bar_fill_tint(100, 150), HP_BAR_YELLOW_TINT);
+    assert_eq!(hp_bar_fill_tint(50, 150), HP_BAR_YELLOW_TINT);
+
+    // …and through a packed frame, not only the table.
+    let mut h = scene();
+    for (i, hp) in [(0u32, 28u32), (1, 20), (2, 8)] {
+        let id = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [160.5 + 4.0 * i as f32, 166.5],
+            )
+            .expect("room");
+        let slot = h.world().entities().slot(id).expect("live");
+        h.world_mut().entities_mut().set_hp(slot, hp);
+    }
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    assert_eq!(frame.overlay.len(), 6, "three bars, two lines each");
+    assert_eq!(frame.overlay[1].tint, HP_BAR_GREEN_TINT);
+    assert_eq!(frame.overlay[3].tint, HP_BAR_YELLOW_TINT);
+    assert_eq!(frame.overlay[5].tint, HP_BAR_RED_TINT);
+}
+
+#[test]
+fn building_bar_spans_footprint() {
+    let mut h = scene();
+    let iso = h.world().iso_view();
+    // Raw-spawned finished turret; nav stamping is irrelevant to a pack.
+    let turret = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Turret),
+            OWNER_PLAYER,
+            [180.0, 180.0],
+        )
+        .expect("room");
+    let slot = h.world().entities().slot(turret).expect("live");
+    // 75/150: damaged, and squarely inside the yellow band.
+    h.world_mut().entities_mut().set_hp(slot, 75);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    assert_eq!(frame.overlay.len(), 2, "one bar: backing + fill");
+    let quad = building_quad_px(8, iso.tile_w, iso.tile_h);
+    let width = 8.0 * iso.tile_w;
+    assert_eq!(
+        frame.overlay[0].size[0], width,
+        "the bar spans the 8-cell footprint edge"
+    );
+    assert_eq!(
+        frame.overlay[0].size[0], quad[0],
+        "footprint edge px = the building quad's own width"
+    );
+    assert_eq!(frame.overlay[1].size[0], width * (75.0 / 150.0));
+    assert_eq!(frame.overlay[1].tint, HP_BAR_YELLOW_TINT);
+    let ground = iso.project(180.0, 180.0);
+    assert_eq!(
+        frame.overlay[0].pos,
+        [
+            ground[0] - width * 0.5,
+            ground[1] - quad[1] - 1.5 * iso.tile_h
+        ],
+        "the bar sits 1.5 cells above the building quad's top"
+    );
+}
+
+#[test]
+fn flash_lasts_twelve_frames() {
+    let mut h = scene();
+    let w0 = workers(&h)[0];
+    let slot = h.world().entities().slot(w0).expect("live");
+    let center = h.world().entities().position(slot);
+    let iso = h.world().iso_view();
+    // 25 damage through 0 armor: exactly lethal for a full-HP worker.
+    let _ = h.world_mut().apply_damage(w0, 25);
+
+    let mut flashes = DeathFlashes::new();
+    flashes.absorb(h.world_mut());
+    assert_eq!(flashes.active_count(), 1);
+
+    let mut frame = RtsFrame::new();
+    let expect_size = ring_quad_size_px(iso.tile_w, iso.tile_h, 3.0);
+    let ground = iso.project(center[0], center[1]);
+    for frame_i in 0..12 {
+        pack_frame(h.world(), CURSOR, None, &mut frame);
+        flashes.pack(&iso, &mut frame);
+        let rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+        assert_eq!(rings.len(), 1, "frame {frame_i}: the flash must be present");
+        assert_eq!(
+            rings[0].size, expect_size,
+            "radius = the unit's body radius"
+        );
+        assert_eq!(rings[0].tint, DEATH_FLASH_TINT);
+        assert_eq!(
+            rings[0].pos,
+            [
+                ground[0] - expect_size[0] * 0.5,
+                ground[1] - expect_size[1] * 0.5
+            ],
+            "centred on the death position"
+        );
+        flashes.age();
+    }
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    flashes.pack(&iso, &mut frame);
+    assert_eq!(
+        frame.overlay.iter().filter(|i| i.is_ring()).count(),
+        0,
+        "frame 12: gone"
+    );
+    assert_eq!(flashes.active_count(), 0);
+}
+
+#[test]
+fn flash_radius_units_body_buildings_half_footprint() {
+    let mut h = scene();
+    let iso = h.world().iso_view();
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [170.5, 166.5],
+        )
+        .expect("room");
+    let depot = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Building(BuildingKind::Depot),
+            OWNER_PLAYER,
+            [180.0, 180.0],
+        )
+        .expect("room");
+    let _ = h.world_mut().apply_damage(ghoul, 1_000);
+    let _ = h.world_mut().apply_damage(depot, 1_000);
+
+    let mut flashes = DeathFlashes::new();
+    flashes.absorb(h.world_mut());
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    flashes.pack(&iso, &mut frame);
+    let rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+    assert_eq!(rings.len(), 2, "two deaths, two flashes, in event order");
+    assert_eq!(
+        rings[0].size,
+        ring_quad_size_px(iso.tile_w, iso.tile_h, 3.0),
+        "unit: body radius"
+    );
+    assert_eq!(
+        rings[1].size,
+        ring_quad_size_px(iso.tile_w, iso.tile_h, 4.0),
+        "Depot edge 8: half the footprint"
+    );
+}
+
+// ── T7: the build-square lattice ─────────────────────────────────────────────
+
+#[test]
+fn the_grid_overlay_draws_build_squares_not_cells() {
+    let h = scene();
+    let squares_x = h.world().scenario().width() / BUILD_SQUARE_CELLS;
+    let squares_y = h.world().scenario().height() / BUILD_SQUARE_CELLS;
+    let expected = (squares_x + 1 + squares_y + 1) as usize;
+    assert_eq!(expected, 82, "320 cells / 8 = 40 squares per axis, +1 edge");
+
+    let mut frame = RtsFrame::new();
+    pack_frame_with_options(h.world(), [0.0, 0.0], None, grid_on(), &mut frame);
+    let lines = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_diagonal_line())
+        .count();
+    assert_eq!(lines, expected, "one line per build-square boundary");
+}
+
+#[test]
+fn a_pending_ghost_forces_the_grid_on() {
+    let mut h = scene();
+    let mut frame = RtsFrame::new();
+
+    pack_frame_with_options(h.world(), CURSOR, None, grid_off(), &mut frame);
+    assert_eq!(
+        frame
+            .overlay
+            .iter()
+            .filter(|i| i.is_diagonal_line())
+            .count(),
+        0,
+        "grid off and nothing pending: no lattice"
+    );
+
+    assert!(h.world_mut().begin_placement(BuildingKind::Depot));
+    pack_frame_with_options(h.world(), CURSOR, None, grid_off(), &mut frame);
+    assert!(
+        frame.overlay.iter().any(|i| i.is_diagonal_line()),
+        "a pending ghost forces the lattice on whatever the setting says"
+    );
+}
+
+#[test]
+fn the_ghost_draws_one_tile_per_build_square() {
+    let mut h = scene();
+    h.world_mut().resources_mut().crystal = 10_000;
+    assert!(h.world_mut().begin_placement(BuildingKind::Hq));
+    let iso = h.world().iso_view();
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    let packed = props(&frame);
+    assert_eq!(
+        packed.len(),
+        3 * 3 + 1,
+        "one tile per build square, plus the building's own silhouette"
+    );
+    for inst in &packed[..9] {
+        assert_eq!(
+            inst.size,
+            [
+                iso.tile_w * BUILD_SQUARE_CELLS as f32,
+                iso.tile_h * 2.0 * BUILD_SQUARE_CELLS as f32
+            ],
+            "a ghost tile is one build square, not one cell"
+        );
+    }
+}
+
+// --- T9: target rings --------------------------------------------------------
+
+#[test]
+fn a_gathering_worker_rings_its_node() {
+    use mmd_engine::rts::{GatherPhase, Order, SELECTION_RING_INNER, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node,
+            phase: GatherPhase::Mining { ticks_left: 10_000 },
+        },
+    );
+    h.world_mut().selection_mut().insert(w);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+    assert_eq!(rings.len(), 2, "worker selection ring + node target ring");
+    assert_eq!(
+        rings[0].uv_rect[1], SELECTION_RING_INNER,
+        "first ring is the selection ring (wider band)"
+    );
+    assert_eq!(
+        rings[1].uv_rect[1], TARGET_RING_INNER,
+        "second ring is the target ring (thinner band)"
+    );
+    assert!(
+        rings[1].uv_rect[1] > rings[0].uv_rect[1],
+        "target ring inner radius is larger than selection ring inner radius (thinner band)"
+    );
+}
+
+#[test]
+fn the_target_ring_survives_reselection() {
+    use mmd_engine::rts::{GatherPhase, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node,
+            phase: GatherPhase::Mining { ticks_left: 10_000 },
+        },
+    );
+
+    // First selection.
+    h.world_mut().selection_mut().insert(w);
+    let mut frame1 = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame1);
+    let target_rings_1: Vec<_> = frame1
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(target_rings_1.len(), 1, "node ring on first selection");
+
+    // Deselect, then re-select.
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(w);
+    let mut frame2 = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame2);
+    let target_rings_2: Vec<_> = frame2
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(target_rings_2.len(), 1, "node ring survives reselection");
+}
+
+#[test]
+fn two_workers_on_one_node_draw_one_target_ring() {
+    use mmd_engine::rts::{GatherPhase, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let ws = workers(&h);
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    for &w in ws.iter().take(2) {
+        h.world_mut().force_order_for_test(
+            w,
+            Order::Gather {
+                node,
+                phase: GatherPhase::Mining { ticks_left: 10_000 },
+            },
+        );
+        h.world_mut().selection_mut().insert(w);
+    }
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let all_rings: Vec<_> = frame.overlay.iter().filter(|i| i.is_ring()).collect();
+    let target_rings: Vec<_> = all_rings
+        .iter()
+        .filter(|i| i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(all_rings.len(), 3, "2 selection rings + 1 target ring");
+    assert_eq!(target_rings.len(), 1, "one target ring for the shared node");
+}
+
+#[test]
+fn a_selected_target_is_not_ringed_twice() {
+    use mmd_engine::rts::{GatherPhase, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let ws = workers(&h);
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    // Worker gathers the crystal node.
+    h.world_mut().force_order_for_test(
+        ws[0],
+        Order::Gather {
+            node,
+            phase: GatherPhase::Mining { ticks_left: 10_000 },
+        },
+    );
+    // Select both the worker AND the node it's gathering.
+    h.world_mut().selection_mut().insert(ws[0]);
+    h.world_mut().selection_mut().insert(node);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let target_rings: Vec<_> = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(
+        target_rings.len(),
+        0,
+        "node already has a selection ring; no second target ring"
+    );
+}
+
+#[test]
+fn an_attacking_unit_rings_its_target() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::{OWNER_ENEMY, Order, TARGET_RING_INNER};
+
+    let mut h = scene();
+    let soldier = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [162.5, 166.5],
+        )
+        .expect("room");
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            OWNER_ENEMY,
+            [170.5, 166.5],
+        )
+        .expect("room");
+    h.world_mut().force_order_for_test(
+        soldier,
+        Order::Attack {
+            target: ghoul,
+            field: FieldRef { slot: 0, epoch: 0 },
+        },
+    );
+    h.world_mut().selection_mut().insert(soldier);
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let target_rings: Vec<_> = frame
+        .overlay
+        .iter()
+        .filter(|i| i.is_ring() && i.uv_rect[1] == TARGET_RING_INNER)
+        .collect();
+    assert_eq!(
+        target_rings.len(),
+        1,
+        "an attack order rings the thing being attacked"
+    );
+}
+
+// --- T10: move marker and dash packing ---------------------------------------
+
+#[test]
+fn the_marker_packs_one_quad_per_live_marker() {
+    let mut h = scene();
+    h.world_mut().push_move_marker(Cell { x: 50, y: 50 });
+    h.world_mut().push_move_marker(Cell { x: 60, y: 60 });
+    h.world_mut().push_move_marker(Cell { x: 70, y: 70 });
+
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    let marker_uv = prop_uv(Prop::MoveMarker);
+    let marker_count = props(&frame)
+        .iter()
+        .filter(|inst| inst.uv_rect == marker_uv)
+        .count();
+    assert_eq!(marker_count, 3);
+}
+
+#[test]
+fn a_selected_mover_draws_a_dashed_line_to_its_goal() {
+    // Frame with a selected mover.
+    let mut h = scene();
+    let w = workers(&h)[0];
+    h.world_mut().selection_mut().insert(w);
+    assert!(h.world_mut().order_move(w, Cell { x: 200, y: 200 }));
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    // Baseline: same worker selected, Idle order.
+    let mut h2 = scene();
+    let w2 = workers(&h2)[0];
+    h2.world_mut().selection_mut().insert(w2);
+    let mut frame_idle = RtsFrame::new();
+    pack_frame(h2.world(), CURSOR, None, &mut frame_idle);
+
+    assert_eq!(
+        frame.overlay.len(),
+        frame_idle.overlay.len() + DASH_SEGMENTS / 2,
+        "one dashed line = DASH_SEGMENTS/2 diagonal_line pieces",
+    );
+}
+
+#[test]
+fn an_unselected_mover_draws_nothing() {
+    // Mover but not selected: no dashes.
+    let mut h = scene();
+    let w = workers(&h)[0];
+    assert!(h.world_mut().order_move(w, Cell { x: 200, y: 200 }));
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+
+    // Baseline: same worker, no selection, Idle.
+    let h2 = scene();
+    let mut frame_idle = RtsFrame::new();
+    pack_frame(h2.world(), CURSOR, None, &mut frame_idle);
+
+    assert_eq!(frame.overlay.len(), frame_idle.overlay.len());
+}
+
+#[test]
+fn a_huge_selection_skips_dashes_entirely() {
+    // Build two identical worlds with > MAX_SELECTION_FOR_DASHES selected units.
+    // In one, they all have Move orders. In the other, they are Idle.
+    // The overlay must be equal (no dashes emitted).
+    let make = || {
+        let mut h = scene();
+        let ws = workers(&h);
+        let mut ids: Vec<_> = ws.clone();
+        while ids.len() <= MAX_SELECTION_FOR_DASHES {
+            if let Some(id) = h.world_mut().entities_mut().spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [50.0 + ids.len() as f32 * 4.0, 50.0],
+            ) {
+                ids.push(id);
+            } else {
+                break;
+            }
+        }
+        assert!(ids.len() > MAX_SELECTION_FOR_DASHES, "need > 24 entities");
+        for &id in &ids {
+            h.world_mut().selection_mut().insert(id);
+        }
+        (h, ids)
+    };
+
+    let (mut h_move, ids_move) = make();
+    for &id in &ids_move {
+        let _ = h_move.world_mut().order_move(id, Cell { x: 200, y: 200 });
+    }
+    let (h_idle, _) = make();
+
+    let mut frame_move = RtsFrame::new();
+    let mut frame_idle = RtsFrame::new();
+    pack_frame(h_move.world(), CURSOR, None, &mut frame_move);
+    pack_frame(h_idle.world(), CURSOR, None, &mut frame_idle);
+
+    assert_eq!(
+        frame_move.overlay.len(),
+        frame_idle.overlay.len(),
+        "dashes must be suppressed when selection exceeds MAX_SELECTION_FOR_DASHES",
+    );
+}
+
+// --- T11: entity rally flag + the dashed line to it --------------------------
+
+fn overlay_and_props(h: &RtsHarness) -> (usize, Vec<SpriteInstance>) {
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    (frame.overlay.len(), props(&frame).to_vec())
+}
+
+#[test]
+fn a_selected_producer_dashes_to_its_rally_point() {
+    // Baseline: the same selected HQ with no rally at all.
+    let mut base = scene();
+    let base_hq = base.world().start_hq().expect("hq");
+    base.world_mut().selection_mut().insert(base_hq);
+    let (baseline_overlay, baseline_props) = overlay_and_props(&base);
+    assert!(baseline_props.is_empty(), "no rally, no flag");
+
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let cell = Cell { x: 144, y: 176 };
+    assert!(h.world_mut().set_rally(hq, Some(RallyTarget::Cell(cell))));
+    h.world_mut().selection_mut().insert(hq);
+    let (overlay, packed) = overlay_and_props(&h);
+
+    assert_eq!(packed.len(), 1, "one rally flag quad");
+    assert_eq!(
+        overlay,
+        baseline_overlay + DASH_SEGMENTS / 2,
+        "one dashed line = DASH_SEGMENTS/2 diagonal_line pieces",
+    );
+}
+
+#[test]
+fn an_entity_rally_stands_its_flag_on_the_target() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let slot = h.world().entities().slot(crystal).expect("live node");
+    let node_pos = h.world().entities().position(slot);
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(crystal)))
+    );
+    h.world_mut().selection_mut().insert(hq);
+
+    let iso = h.world().iso_view();
+    let ground = iso.project(node_pos[0], node_pos[1]);
+    let (_, packed) = overlay_and_props(&h);
+
+    assert_eq!(packed.len(), 1, "one rally flag quad");
+    assert_eq!(
+        packed[0].uv_rect,
+        prop_uv(Prop::RallyFlag),
+        "the rally flag cell"
+    );
+    assert_eq!(
+        packed[0].pos[1] + packed[0].size[1],
+        ground[1],
+        "the flag stands on the target's own ground point"
+    );
+    assert_eq!(packed[0].pos[0] + packed[0].size[0] * 0.5, ground[0]);
+}
+
+#[test]
+fn a_stale_entity_rally_draws_nothing() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let target = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[1];
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(target)))
+    );
+    h.world_mut().selection_mut().insert(hq);
+    assert_eq!(overlay_and_props(&h).1.len(), 1);
+
+    assert!(h.world_mut().entities_mut().despawn(target));
+    assert!(
+        overlay_and_props(&h).1.is_empty(),
+        "a rally whose entity is gone plants no flag"
+    );
 }

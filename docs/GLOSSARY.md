@@ -69,6 +69,34 @@
 | placementassist  | Bounded search snapping a blocked ghost to the nearest legal min corner | `crates/mmd-engine/src/rts/build.rs`, `fn placement_candidate`         |
 | gathertransition | Bounded exit a formerly exempt gather pair walks before going hard again | `crates/mmd-engine/src/rts/collision.rs`, `struct GatherCollisionState` |
 
+## RTS (combat)
+
+| word         | short description                                                      | ref in code                                                              |
+| ------------ | ---------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| ghoul        | Melee enemy unit: 30 HP, damage 5, range 8, speed 18 cells/s            | `crates/mmd-engine/src/rts/entity.rs`, `UnitKind::Ghoul`                  |
+| turret       | Static defense building, auto-fires when finished, 75 crystal, no supply | `crates/mmd-engine/src/rts/entity.rs`, `BuildingKind::Turret`           |
+| attackmove   | Move order that halts to fight anything met en route                   | `crates/mmd-engine/src/rts/orders.rs`, `Order::AttackMove`               |
+| autoacquire  | Idle or attack-moving armed unit fires at nearest target in range      | `crates/mmd-engine/src/rts/world.rs`, `fn nearest_hostile_in_range`      |
+| wave         | Scenario-timed enemy spawn batch at one spawn point                    | `crates/mmd-engine/src/scenario.rs`, `struct WaveSpec`                    |
+| spawnpoint   | Map cell a wave's ghouls appear around                                 | `crates/mmd-engine/src/scenario.rs`, `EnemySpec::spawn_points`            |
+| objective    | The single approach cell the whole enemy faction marches at            | `crates/mmd-engine/src/rts/world.rs`, `fn recompute_enemy_objective`      |
+| owner        | Faction byte: player 0, enemy 1, neutral 255                           | `crates/mmd-engine/src/rts/entity.rs`, `OWNER_ENEMY`                      |
+| combattokens | Exit-line combat outcome: kills, losses, enemies_spawned, first_combat_tick, hq_alive | `src/rts_run.rs`                                          |
+
+## RTS (feedback round 2)
+
+| word        | short description                                                     | ref in code                                                        |
+| ----------- | --------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| buildsquare | Visible placement lattice, 8 cells; units still move in true cells     | `crates/mmd-engine/src/scenario.rs`, `BUILD_SQUARE_CELLS`          |
+| snap        | Floor a ghost's min corner to a build-square boundary                  | `crates/mmd-engine/src/rts/build.rs`, `fn snap_to_build_square`     |
+| stalledsite | Site that can never evacuate, cancelled and refunded after 180 ticks   | `crates/mmd-engine/src/rts/build.rs`, `STALLED_SITE_TICKS`         |
+| orderstatus | Card line naming what a selected unit is doing, from live order state  | `crates/mmd-engine/src/rts/hud.rs`, `fn order_status_label`         |
+| targetring  | Thin ring on whatever a selected unit's order points at                | `crates/mmd-engine/src/rts/pack.rs`, `TARGET_RING_INNER`            |
+| movemarker  | Self-expiring flag at a ground order's destination                     | `crates/mmd-engine/src/rts/pack.rs`, `Prop::MoveMarker`             |
+| follow      | Order that tracks a moving friendly target at interaction reach        | `crates/mmd-engine/src/rts/orders.rs`, `Order::Follow`              |
+| rallytarget | A rally point that is either a cell or an entity                       | `crates/mmd-engine/src/rts/production.rs`, `enum RallyTarget`       |
+| sandbox     | Untimed manual scene: prebuilt base, soldiers, 30 waves, off the gate  | `assets/scenarios/rts_sandbox_v1.ron`                              |
+
 ## Render
 
 | word      | short description                              | ref in code                                                             |

@@ -367,9 +367,10 @@ pub fn pick_at(world: &RtsWorld, view: &IsoView, screen: [f32; 2]) -> Pick {
         let mine = world.entities().owner(slot) == OWNER_PLAYER;
         let ground = world.entities().position(slot);
         let hit = match world.entities().kind(slot) {
-            EntityKind::Unit(kind) => (mine
-                && unit_pick_contains(view, ground, kind.body_radius_cells(), screen))
-            .then_some(PickTier::Exact),
+            EntityKind::Unit(kind) => {
+                unit_pick_contains(view, ground, kind.body_radius_cells(), screen)
+                    .then_some(PickTier::Exact)
+            }
             EntityKind::Building(b) => {
                 let edge = b.footprint_cells();
                 if !mine {

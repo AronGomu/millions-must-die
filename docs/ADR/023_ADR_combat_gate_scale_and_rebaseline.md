@@ -35,3 +35,13 @@ The ~8 engine tests that run the tracked scene past tick 3000 (economy, nav stal
 - Phase-1 close docs stay honest: they describe runs that still exist and still pass.
 - The waves-only deviation from the original "pre-placed group + waves" plan is deliberate and proven necessary; reversing it requires re-litigating the pin analysis above.
 - A longer gate run costs wall-clock time on every merge — accepted, since no perf number gates anything.
+
+## Amendment 2026-08-21 — what the shipped run pins, against what this record predicted
+
+The "Exit tokens and script" section above was written before the script ran. It is left standing as the decision it was; the shipped run is the contract, and where the two disagree the run wins:
+
+- The tracked script demonstrates **`kills >= 1` and `losses >= 1`, unattributed** — not "a soldier-ordered kill, an auto-acquire kill, a turret kill". Nothing on the exit line says which class killed anything (gap G6 in [the phase-2 close](../combat-prototype-functional-close.md)), so no attributed kill is provable from the gate, and the run's own total is `kills=2`. The pinned values are `kills=2 losses=5 enemies_spawned=400 first_combat_tick=3691 hq_alive=1` (`combat_tokens_exact`, `tests/rts_acceptance.rs`); `combat_begins_by_marching` asserts the weaker `>= 1` shape alongside them.
+- "First contact ≈ tick 3440" was a pre-run estimate and is superseded by the observed `first_combat_tick=3691`. The claim this record leaned on is unchanged and still pinned: first damage strictly after the first spawn at tick 3000, so combat began by marching.
+- `enemies_spawned=400` and `hq_alive=1` landed as decided.
+
+Nothing else moves: waves-only, the wave table, the one-time re-baseline and the long-horizon fixture repoint stand as recorded.

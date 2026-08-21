@@ -13,14 +13,15 @@ use mmd_engine::alloc_guard::{
 };
 use mmd_engine::render::Camera;
 use mmd_engine::rts::{
-    BuildingKind, DEPOT_BUILD_TICKS, DragBox, EntityKind, FramePackOptions, GatherPhase,
-    InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot, NumericSettingId, OWNER_PLAYER,
-    Order, OrderReceiptBuffer, ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS,
-    command_slots, hud_hit_test, minimap_projection, modal_hit_test, pack_frame,
-    pack_frame_with_options, pack_hud, pack_modal_interactive, placement_candidate,
+    BuildingKind, DASH_SEGMENTS, DEPOT_BUILD_TICKS, DeathFlashes, DragBox, EntityKind,
+    FramePackOptions, GatherPhase, InteractionSnapshot, MAX_GRID_LINES, ModalPage, ModalSnapshot,
+    NumericSettingId, OWNER_ENEMY, OWNER_PLAYER, Order, OrderReceiptBuffer, RallyTarget,
+    ResourceKind, RtsFrame, UnitKind, WORKER_PRODUCE_TICKS, command_slots, hud_hit_test,
+    minimap_projection, modal_hit_test, pack_frame, pack_frame_with_options, pack_hud,
+    pack_modal_interactive, placement_candidate,
 };
 use mmd_engine::runtime::InputAction;
-use mmd_engine::scenario::Cell;
+use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
 use mmd_engine::sim::SpatialGrid;
 use mmd_engine::testkit::{
     COLLISION_SPRITE_SCENE, FIXTURE_DENSE_V1, GridSpec, Harness, RtsHarness, ScenarioSource,
@@ -430,7 +431,10 @@ fn pack_frame_allocates_nothing() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     let cursor = [960.0, 540.0];
     let drag = Some(DragBox {
@@ -438,21 +442,45 @@ fn pack_frame_allocates_nothing() {
         b: [110.0, 60.0],
     });
 
+    // One live death flash rides the measured loop, so the flash pack and
+    // the (empty) event drain are measured beside the frame pack. Spawn and
+    // kill a sacrifice: the live count is back to the base scene's 17.
+    let victim = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Soldier),
+            OWNER_PLAYER,
+            [170.5, 166.5],
+        )
+        .expect("store has room");
+    let _ = h.world_mut().apply_damage(victim, 1_000);
+    let mut flashes = DeathFlashes::new();
+    flashes.absorb(h.world_mut());
+    let iso = h.world().iso_view();
+
     // Warm-up outside the scope: whatever the first pack would grow, it grows
     // now. `RtsFrame::new` itself allocates — that is construction, not a
     // frame.
     let mut frame = RtsFrame::new();
     pack_frame(h.world(), cursor, drag, &mut frame);
+    flashes.pack(&iso, &mut frame);
     let packed = frame.instance_count();
+    // Since T7 a pending ghost forces the build-square lattice on whatever
+    // `show_grid` says, so the 320-cell map's 82 boundary lines ride along.
+    // Since T11 a selected building's rally also draws a dashed line to its
+    // flag, which is `DASH_SEGMENTS / 2` more overlay instances.
     assert_eq!(
         packed,
-        17 + 1 + 1 + 65 + 5,
-        "the warm-up must exercise all three layers: world, ring, UI"
+        17 + 1 + 2 + 1 + DASH_SEGMENTS / 2 + 2 + 5 + 1 + 2 * (320 / 8 + 1),
+        "world, ring, the selected HQ's bar, rally flag + its dashes, ghost, drag box, flash, grid"
     );
 
     let guard = MeasureGuard::enter();
     for _ in 0..600 {
         pack_frame(h.world(), cursor, drag, &mut frame);
+        flashes.absorb(h.world_mut());
+        flashes.pack(&iso, &mut frame);
         std::hint::black_box(frame.instance_count());
     }
     assert_eq!(guard.allocations(), 0, "packing an RTS frame allocated");
@@ -486,7 +514,10 @@ fn new_hud_pack_allocates_nothing() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     let cursor = [960.0, 540.0];
 
@@ -760,7 +791,7 @@ fn movement_allocates_nothing() {
     let slot = h.world().entities().slot(workers[0]).expect("worker slot");
     assert_ne!(
         h.world().entities().position(slot),
-        [162.5, 178.5],
+        [162.5, 190.5],
         "the measured ticks moved nobody"
     );
 }
@@ -918,8 +949,8 @@ fn selection_operations_allocate_nothing() {
 
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let view = Camera::new(320, 320, 4.0, [1920.0, 1080.0], [166.0, 172.0]).iso_view();
-    let a = view.project(162.5, 178.5);
-    let b = view.project(167.5, 178.5);
+    let a = view.project(162.5, 190.5);
+    let b = view.project(167.5, 190.5);
 
     // T3's radius-aware initial spawn scatters the scene's six workers well
     // outside this box (they cannot share a cell one apart at a 3-cell body
@@ -931,7 +962,7 @@ fn selection_operations_allocate_nothing() {
         let slot = h.world().entities().slot(*id).expect("live worker");
         h.world_mut()
             .entities_mut()
-            .set_position(slot, [162.5 + i as f32, 178.5]);
+            .set_position(slot, [162.5 + i as f32, 190.5]);
     }
 
     // Warm-up outside the scope: whatever the selection/scratch buffers grow
@@ -965,7 +996,7 @@ fn construction_allocates_nothing() {
     // Three obstacle-, node- and HQ-free Depot footprints, mutually
     // non-overlapping, each paid from the scene's exact starting 300 crystal.
     let sites: Vec<_> = [
-        Cell { x: 180, y: 176 },
+        Cell { x: 144, y: 176 },
         Cell { x: 198, y: 176 },
         Cell { x: 210, y: 176 },
     ]
@@ -1235,7 +1266,10 @@ fn blocked_transitions_allocate_nothing() {
         "the production head must be ready and blocked before measuring"
     );
 
-    // B. A site whose completion can never evacuate its own builder.
+    // B. A site whose completion can never evacuate its own builder. The
+    //    measured window is long enough to cover both halves of that story:
+    //    the discarded-plan retries, and the bounded cancel that ends them at
+    //    `STALLED_SITE_TICKS`.
     let mut build = RtsHarness::spec(sealed_site_spec())
         .build()
         .expect("sealed-site scene");
@@ -1258,18 +1292,24 @@ fn blocked_transitions_allocate_nothing() {
     assert_eq!(
         guard.allocations(),
         0,
-        "a blocked production or completion retry allocated"
+        "a blocked production or completion retry, or the bounded cancel that \
+         ends it, allocated"
     );
     guard.assert_zero();
     drop(guard);
 
-    // ...and both really did stay blocked for the whole measured window.
+    // ...and each really did do what it was measured doing: the head stayed
+    // blocked for the whole window, and the sealed site took the bounded
+    // escape rather than finishing on top of its builder.
     assert_eq!(
         prod.ids_of_kind(EntityKind::Unit(UnitKind::Worker)).len(),
         1,
         "the blocked head produced a unit after all"
     );
-    assert!(build.world().is_site(site), "the sealed site finished");
+    assert!(
+        build.world().entities().slot(site).is_none(),
+        "the sealed site must resolve by cancelling, not by finishing"
+    );
 }
 
 /// T17: one *joined* phase-1.1 frame — the whole per-frame surface the
@@ -1376,7 +1416,10 @@ fn full_building_detail_pack_allocates_nothing() {
     for _ in 0..4 {
         assert!(h.world_mut().enqueue_unit(hq, UnitKind::Worker).is_ok());
     }
-    assert!(h.world_mut().set_rally(hq, Some(Cell { x: 180, y: 176 })));
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Cell(Cell { x: 144, y: 176 })))
+    );
     let cursor = [960.0, 540.0];
 
     // Warm-up: any first-frame growth settles now.
@@ -1419,7 +1462,7 @@ fn placement_search_allocates_nothing() {
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
     assert!(
         h.world_mut()
-            .confirm_placement(Cell { x: 180, y: 176 }, w0)
+            .confirm_placement(Cell { x: 144, y: 176 }, w0)
             .is_ok()
     );
     assert!(h.world_mut().begin_placement(BuildingKind::Depot));
@@ -1613,5 +1656,117 @@ fn combined_feedback_frame_allocates_nothing() {
         h.world().body_overlap_count(),
         0,
         "the measured window left a collision-policy violation behind"
+    );
+}
+
+/// The combat tick — enemy march AI, targeting, fire and despawn — is under
+/// the same zero-allocation invariant every other per-frame path is.
+///
+/// The pool is warmed *outside* the scope on purpose: the enemy AI's single
+/// `nav.acquire` for the faction objective is a **miss** on tick 1, and that
+/// miss is the one bounded exception the plan grants. Inside the scope the
+/// whole faction rides that one field — an `AttackMove` whose anchor already
+/// equals the objective is never re-issued, so nothing re-acquires.
+///
+/// The two workers standing on the march line are what make the measured
+/// window contain real fire and real despawns rather than a quiet walk: the
+/// assertions bracket the guard, `losses() == 0` going in and `2` coming out.
+#[test]
+fn combat_march_allocates_nothing() {
+    let _lock = lock_alloc_tests();
+    reset_count();
+
+    const W: u32 = 96;
+    let spec = ScenarioSpec {
+        version: "rts_prototype_v1".to_string(),
+        width: W,
+        height: 96,
+        cell_size_px: 4,
+        sprite_size_px: 48,
+        hard_agent_count: 0,
+        stretch_agent_count: 0,
+        seed: 1,
+        destination: Cell { x: 0, y: 0 },
+        spawn_cells: vec![Cell { x: 4, y: 4 }],
+        atlas_count: 4,
+        direction_count: 8,
+        frame_count: 4,
+        collision_radius_q8: 0,
+        separation_strength_q8: 0,
+        separation_phases: 1,
+        mass_class_count: 1,
+        separation_threads: 1,
+        obstacle_cells: vec![],
+        rts: Some(RtsSpec {
+            start_crystal: 300,
+            start_gas: 100,
+            start_supply_cap: 10,
+            hq_cell: Cell { x: 72, y: 72 },
+            crystal_nodes: vec![Cell { x: 94, y: 1 }],
+            gas_nodes: vec![Cell { x: 93, y: 1 }],
+            enemies: None,
+            buildings: vec![],
+            start_units: vec![],
+        }),
+    };
+    let mut h = RtsHarness::spec(spec).build().expect("combat harness");
+    let hq = h.world().start_hq().expect("seeded hq");
+
+    // Six ghouls, far enough back that nothing is in reach during warm-up…
+    for i in 0..3 {
+        for x in [52.5_f32, 58.5] {
+            h.world_mut()
+                .entities_mut()
+                .spawn(
+                    EntityKind::Unit(UnitKind::Ghoul),
+                    OWNER_ENEMY,
+                    [x, 56.5 + 6.0 * i as f32],
+                )
+                .expect("store has room");
+        }
+    }
+    // …and two workers parked on the line they march down. Since T7 the
+    // 24-cell HQ spans [72, 96) on each axis, so the march's own goal is its
+    // north-west approach cell and the line runs east along y = 62..68.
+    for pos in [[64.5_f32, 62.5], [64.5, 68.5]] {
+        h.world_mut()
+            .entities_mut()
+            .spawn(EntityKind::Unit(UnitKind::Worker), OWNER_PLAYER, pos)
+            .expect("store has room");
+    }
+
+    // Warm-up outside the scope: the objective acquire is the miss that
+    // builds the field and settles the scratch heap, and the raw spawns
+    // above arm one overlap-repair pass.
+    h.step_exact(20);
+    assert_eq!(
+        h.world().losses(),
+        0,
+        "nothing may die during warm-up, or the guarded window is not what \
+         contains the deaths"
+    );
+    assert!(
+        h.world()
+            .order_of(h.ids_of_kind(EntityKind::Unit(UnitKind::Ghoul))[0])
+            .is_some_and(|o| matches!(o, Order::AttackMove { .. })),
+        "the faction must already be marching, or this measures an idle sweep"
+    );
+
+    let guard = MeasureGuard::enter();
+    h.step_exact(300);
+    std::hint::black_box(h.tick_index());
+    assert_eq!(guard.allocations(), 0, "the RTS combat tick allocated");
+    guard.assert_zero();
+    drop(guard);
+
+    assert_eq!(
+        h.world().losses(),
+        2,
+        "both workers must have died inside the measured window"
+    );
+    assert!(
+        h.world().entities().contains(hq),
+        "the HQ must survive the window: its death rebuilds the pooled mask, \
+         which is not what this case is measuring"
     );
 }

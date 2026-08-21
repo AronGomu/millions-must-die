@@ -18,12 +18,16 @@ use super::static_nav::StaticNav;
 pub const WORKER_SPEED_CELLS_PER_SEC: f32 = 30.0;
 /// See [`WORKER_SPEED_CELLS_PER_SEC`].
 pub const SOLDIER_SPEED_CELLS_PER_SEC: f32 = 24.0;
+/// See [`WORKER_SPEED_CELLS_PER_SEC`]. Slower than both player units:
+/// a ghoul is walked away from, never outrun by accident.
+pub const GHOUL_SPEED_CELLS_PER_SEC: f32 = 18.0;
 
 /// Walk speed of a unit kind, in cells per second.
 pub fn unit_speed(kind: UnitKind) -> f32 {
     match kind {
         UnitKind::Worker => WORKER_SPEED_CELLS_PER_SEC,
         UnitKind::Soldier => SOLDIER_SPEED_CELLS_PER_SEC,
+        UnitKind::Ghoul => GHOUL_SPEED_CELLS_PER_SEC,
     }
 }
 
@@ -52,6 +56,9 @@ pub const fn interaction_reach(kind: UnitKind) -> f32 {
 pub(crate) fn adaptive_reach(kind: UnitKind, chosen_cell_dist: f32) -> f32 {
     interaction_reach(kind).max(chosen_cell_dist + NAV_CENTER_TOLERANCE_CELLS)
 }
+
+/// A follower re-paths when its target has moved this many cells from `goal`.
+pub const FOLLOW_REPATH_CELLS: f32 = 4.0;
 
 /// Where a gathering worker is in its round trip.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -102,6 +109,25 @@ pub enum Order {
         goal: FormationGoal,
         field: FieldRef,
     },
+    /// Close on `target` until it is inside weapon range, then stand and
+    /// fire until it dies. The field tracks the target's current cell.
+    Attack {
+        target: EntityId,
+        field: FieldRef,
+    },
+    /// Walk toward `goal`, but stop and fire on anything hostile that comes
+    /// into range on the way; resume the walk when nothing is.
+    AttackMove {
+        goal: FormationGoal,
+        field: FieldRef,
+    },
+    /// Walk toward `target` and hold at interaction reach, re-pathing when it
+    /// has moved more than [`FOLLOW_REPATH_CELLS`] from `goal`.
+    Follow {
+        target: EntityId,
+        goal: FormationGoal,
+        field: FieldRef,
+    },
 }
 
 impl Order {
@@ -112,6 +138,9 @@ impl Order {
             Self::Move { .. } => 1,
             Self::Gather { .. } => 2,
             Self::Build { .. } => 3,
+            Self::Attack { .. } => 4,
+            Self::AttackMove { .. } => 5,
+            Self::Follow { .. } => 6,
         }
     }
 
@@ -138,6 +167,13 @@ impl Order {
             } => Self::Gather {
                 node,
                 phase: GatherPhase::Returning { drop_off, field },
+            },
+            Self::Attack { target, .. } => Self::Attack { target, field },
+            Self::AttackMove { goal, .. } => Self::AttackMove { goal, field },
+            Self::Follow { target, goal, .. } => Self::Follow {
+                target,
+                goal,
+                field,
             },
             other => other,
         }
@@ -220,6 +256,25 @@ impl OrderTable {
                 Order::Build { site, goal, field } => {
                     h.update(site.index.to_le_bytes());
                     h.update(site.generation.to_le_bytes());
+                    hash_goal(h, goal);
+                    hash_field(h, field);
+                }
+                Order::Attack { target, field } => {
+                    h.update(target.index.to_le_bytes());
+                    h.update(target.generation.to_le_bytes());
+                    hash_field(h, field);
+                }
+                Order::AttackMove { goal, field } => {
+                    hash_goal(h, goal);
+                    hash_field(h, field);
+                }
+                Order::Follow {
+                    target,
+                    goal,
+                    field,
+                } => {
+                    h.update(target.index.to_le_bytes());
+                    h.update(target.generation.to_le_bytes());
                     hash_goal(h, goal);
                     hash_field(h, field);
                 }

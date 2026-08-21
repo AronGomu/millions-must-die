@@ -49,19 +49,44 @@ Feedback polish (branch `plan/rts-feedback-polish`) extends phase 1.1 on user
 feedback: framed control states with a `MENU`/`CLOSE MENU` pair, live sliders
 and typed numeric settings fields, per-bus mute labels, a scrolled settings
 body, a persisted default-on world grid, assisted building placement, a
-sprite ∪ footprint building pick with a six-line card, positional QWE/ASD/ZXC
-command keys, an exact pure-green drag box, and an order-scoped gather-worker
+sprite ∪ footprint building pick with an exact-line card (six lines then, seven
+since phase 2 added HP), positional QWE/ASD/ZXC command keys, an exact
+pure-green drag box, and an order-scoped gather-worker
 collision policy. Decision: ADR 021, which narrows ADR 017's invariant (see
 the collision constraint below) and amends ADR 018–020 forward. What it proves
 and does not — including the `rts_economy` node-click regression this branch
 introduced at `af16e7c` and then fixed by ranking exact pickshapes above a
 building's sprite quad: `docs/rts-feedback-polish-functional-close.md`.
 
+Phase 2 (combat prototype, branch `plan/combat-prototype`) is closed on
+functional scope: an enemy faction (`OWNER_ENEMY = 1`, melee `UnitKind::Ghoul`)
+spawns from scenario waves into the gate scene — 400 across the scripted run,
+not the phase-3 horde — marches on **one** objective cell over one shared
+pooled flow field and melees the first player thing in range; `Idle` and
+`AttackMove` auto-acquire, plain `Move`/`Gather`/`Build`/`Follow` never fire;
+damage is instant-hit `max(1, damage - armor)` with no projectile entities;
+units despawn, buildings (HQ included) are destructible with
+queue-cancel-no-refund, and a worker-built Turret (75 crystal, no supply)
+auto-fires — silently, a named gap. The same branch folded in feedback round 2:
+an 8-cell build grid buildings snap to while units keep moving in true cells, a
+bounded `STALLED_SITE_TICKS = 180` give-up for a site that can never evacuate,
+order status text, target rings, move markers with dashed bearings, follow
+orders, entity rally points, and an untimed sandbox scene deliberately kept off
+the gate. Enemies are ordinary hard bodies under the ADR 021 policy; the gather
+exception is not widened and the horde's soft separation is untouched. Sandbox
+— no win/lose: the outcome rides five exit tokens (`kills`, `losses`,
+`enemies_spawned`, `first_combat_tick`, `hq_alive`) pinned by the tracked
+`assets/scenarios/rts_combat_v1.script`, and both phase-1 scripts plus the
+scene sha256 were re-baselined (the phase-1 close docs describe the pre-enemy
+runs). The scripted defence loses on its pinned numbers and that is recorded,
+not tuned away. What it proves and does not:
+`docs/combat-prototype-functional-close.md`; decisions in ADR 022–025.
+
 ## Workspace layout
 
 - `.` (root) — app binary crate: `cargo run -- run` (game), `bench` (frozen, non-gating). Entry `src/main.rs`.
 - `crates/mmd-engine` — engine library: sim, nav (flow fields, `nav/field_pool.rs`), render (SDL3/GPU sprite renderer, `render/camera.rs`, `render/text.rs`), `runtime.rs`, `scenario.rs`, `alloc_guard.rs`, `testkit/` (headless deterministic test harness, excluded from shipping build).
-- `crates/mmd-engine/src/rts/` — the RTS world: `entity.rs` (SoA store, generational ids), `orders.rs`, `economy.rs`, `build.rs`, `production.rs`, `selection.rs` (pick geometry), `static_nav.rs` (body-inflated navigation mask + sweeps), `collision.rs`, `formation.rs`, `pack.rs`, `hud.rs`, `minimap.rs` (minimap projection + `hud_hit_test`), `world.rs` (`RtsWorld::tick`'s fixed system order). Separate from `sim/`, which stays frozen.
+- `crates/mmd-engine/src/rts/` — the RTS world: `entity.rs` (SoA store, generational ids), `orders.rs`, `economy.rs`, `build.rs`, `production.rs`, `selection.rs` (pick geometry), `combat.rs` (per-kind weapon table + surface-distance range rule; the combat system itself lives in `world.rs`), `static_nav.rs` (body-inflated navigation mask + sweeps), `collision.rs`, `formation.rs`, `pack.rs`, `hud.rs`, `minimap.rs` (minimap projection + `hud_hit_test`), `world.rs` (`RtsWorld::tick`'s fixed system order). Separate from `sim/`, which stays frozen.
 - `src/rts_*.rs` — the app's `rts` subcommand: input table, script injection (incl. the `quit` token), overlay, run loop, plus phase-1.1's app-side halves: `rts_settings.rs` (persisted schema-1 settings), `rts_window.rs` (window modes, focus, pointer grab), `rts_ui.rs` (pause/settings menu FSM), `rts_feedback.rs` (audio events + buses), `rts_audio.rs` (SDL audio sink).
 - `assets/audio/generated/` — seven generated MIT-0 placeholder WAVs + manifest, produced and verified by `cargo run -p xtask -- audio [--check]`. No copyrighted audio may enter this repo.
 - `tools/mmd-lab` — trusted local lab CLI (`doctor`, `validate`, plus frozen cross-host validation/calibration/release code). Frozen/non-gating since phase-0 close but still builds.
@@ -89,11 +114,12 @@ cargo run -- run --agents 5000 --frames 300
 cargo run -- run --scenario assets/scenarios/collision_mid_v1.ron --frames 300
 cargo run -- run --scenario assets/scenarios/collision_sprite_v1.ron --frames 300
 cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script
+cargo run -- rts --frames 4500 --inject-input-file assets/scenarios/rts_combat_v1.script
 ```
 - DCO: `./scripts/check-dco TRUSTED_BASE_SHA EXACT_CANDIDATE_SHA` on candidate range only; substitute real SHAs for the two tokens; see `docs/05-testing.md`.
-- The `rts` line is the interactive RTS smoke: one tracked script drives select → gather → build (command card) → produce → minimap jump → pause menu → settings edit → `quit`, and asserts an exit line carrying `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`, then the feedback-polish tokens `settings_scroll_px=<n> show_grid=<bool>`. A second tracked script, `assets/scenarios/rts_feedback_polish_v1.script`, drives the chrome path (menu → positional `q` → Settings → slider → grid → wheel → Back → Close Menu) and is asserted by `tests/rts_acceptance.rs`. `audio --check` regenerates every tracked WAV + manifest and byte-compares. Single source of truth for the gate: `docs/05-testing.md`.
+- The `rts` line is the interactive RTS smoke: one tracked script drives select → gather → build (command card) → produce → minimap jump → pause menu → settings edit → `quit`, and asserts an exit line carrying `body_overlaps=0 ui_page=gameplay music_starts=1 voice_select=8 voice_order=9 voice_reject=1 sfx_ui=8 keyboard_pan=78`, then the feedback-polish tokens `settings_scroll_px=<n> show_grid=<bool>`. A second tracked script, `assets/scenarios/rts_feedback_polish_v1.script`, drives the chrome path (menu → positional `q` → Settings → slider → grid → wheel → Back → Close Menu) and is asserted by `tests/rts_acceptance.rs`. `audio --check` regenerates every tracked WAV + manifest and byte-compares. The combat line is the phase-2 smoke: `assets/scenarios/rts_combat_v1.script` drives economy → forward Turret → Barracks → rallied Soldiers → attack-move into a marching wave, and asserts the combat tokens `kills=2 losses=5 enemies_spawned=400 first_combat_tick=3691 hq_alive=1` on the exit line. Single source of truth for the gate: `docs/05-testing.md`.
 - Toolchain: Rust 1.95.0 pinned via `rust-toolchain.toml`. Linux/NixOS: `nix develop` / `nix flake check`. Windows/macOS: rustup from `rust-toolchain.toml`.
-- On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip.
+- On a host with a real GPU, run tests with `MMD_REQUIRE_GPU=1` to disable the headless skip. Known and pre-existing: two tests that deliberately force `SDL_VIDEODRIVER=dummy` (`dummy_driver_run_does_not_touch_settings`, `no_rts_run_creates_the_real_user_config`) fail while that variable is set, because `or_skip` turns their intended `EXIT_NO_GPU` skip into a failure. The documented gate command, without the variable, is green.
 - Golden regeneration (explicit, reviewed): `MMD_UPDATE_GOLDEN=1 cargo test -p mmd-engine --test gpu_golden -- --ignored update_host_golden`.
 - No online CI/GitHub Actions (forbidden — see `SECURITY.md`). PRs require DCO sign-off (`git commit -s`); maintainer reviews and merges only the exact tested commit hash.
 
@@ -134,5 +160,5 @@ Read and activate `.claude/skills/make-glossary-aron/SKILL.md` — maintains `do
 ## Directories
 
 - `docs/` : Project documentation. Contains CONTEXT.md, DESIGN.md, GLOSSARY.md, 05-testing.md, ADR/.
-- `.dev/` : Future implementation resources. Contains bugs.md, feedback.md, ideas.md, decisions/.
+- `.dev/` : Future implementation resources. Contains bugs.md, feedback.md, ideas.md, decisions/. Round-2 user feedback (the phase-2 items) lives in the repo-root `feedback.md`, not here.
 - `artifacts/` : Documents generated by agents.

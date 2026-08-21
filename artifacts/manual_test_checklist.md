@@ -62,8 +62,8 @@
 - [ ] Queue two units back to back at one building with a crowded exit: confirm they come out one after the other, each on its own free spot, and none of them is ever drawn overlapping another.
 - [ ] Place a Depot so its footprint covers two or three of your own idle workers and let it finish: confirm every covered worker is moved clear on the completion tick, all to different spots, none of them left standing inside the finished building.
 - [ ] Watch the same completion closely: confirm the workers move *at the moment* the building becomes solid — not a beat later, and never visibly standing inside a finished building for a frame.
-- [ ] Box a worker into a dead-end pocket that a Depot's own footprint would fill entirely, and build that Depot with that worker: confirm the build bar reaches the end and **holds** just short of finishing (the site stays walkable, the supply cap does not rise) instead of finishing on top of the worker.
-- [ ] Walk that trapped worker out of the pocket (or cancel the site): confirm the site finishes normally on the following tick once its bodies can be moved clear.
+- [ ] Box a worker into a dead-end pocket that a Depot's own footprint would fill entirely, and build that Depot with that worker: confirm the build bar reaches the end and **holds** just short of finishing (the site stays walkable, the supply cap does not rise) instead of finishing on top of the worker. Since T8 the hold is bounded — keep watching and the site cancels itself and refunds after about three seconds (see the T8 section).
+- [ ] Walk that trapped worker out of the pocket **within those three seconds**: confirm the site finishes normally on the following tick once its bodies can be moved clear.
 - [ ] Finish two buildings on nearly the same tick with workers standing between them: confirm no worker is left inside either finished footprint, and no two workers end up merged.
 - [ ] Run the tracked acceptance script (`cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script`) and confirm the whole gather → build Depot → produce Worker → build Barracks → produce Soldier flow still completes visibly, with the produced units appearing clear of every other body.
 
@@ -115,7 +115,7 @@
 - [ ] Select a single worker: confirm a 128x128 portrait (cropped from the worker sheet) appears at the selection card's left edge, with kind/carry text to its right.
 - [ ] Select a single HQ or Barracks: confirm its portrait shows the building art, "READY", and (if a rally point is set) a `RALLY x,y` line.
 - [ ] Box-select more than 24 units: confirm the selection card switches to an 8x3 grid of 48px icons (first 24 by ascending id) and a `+N` marker appears to the right of the grid for the remainder.
-- [ ] With only workers selected: confirm the command grid's top-left three cells light up with distinct build icons (HQ/Depot/Barracks).
+- [ ] With only workers selected: confirm the command grid's first four cells light up with distinct build icons — Q=HQ, W=Depot, E=Barracks, A=Turret. (Three when this ticket was written; phase-2 T5 added the Turret at slot 3.)
 - [ ] With a single finished HQ selected: confirm the command grid shows a Train-Worker icon top-left and a Rally icon bottom-right (slot 8), and nothing else.
 - [ ] With a single finished Barracks selected: confirm the command grid shows a Train-Soldier icon top-left and the same Rally icon bottom-right.
 - [ ] Select nothing, then select a worker and a building together: confirm the command grid goes fully blank in both cases.
@@ -299,11 +299,11 @@ command below except what a browser or a human eye must judge.
 - [x] `cargo test -p mmd-engine --test frame_allocations --locked -- --test-threads=1` exits 0 (26 tests)
 - [ ] Manual: click on the top/side of a building sprite (above the footprint) — confirm it selects the building
 - [ ] Manual: click on a footprint cell below the building sprite — confirm it selects the building
-- [ ] Manual: select HQ with no queue — confirm six-line card: HQ / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
+- [ ] Manual: select HQ with no queue — confirm seven-line card: HQ / HP <cur>/<max> / READY / SUPPLY +10 / QUEUE - / PROGRESS - / RALLY -
 - [ ] Manual: enqueue Workers at HQ — confirm QUEUE W,W,... and PROGRESS N% update live
-- [ ] Manual: rally flag set — confirm RALLY x,y on line 6
-- [ ] Manual: select Barracks — confirm SUPPLY +0 on line 3
-- [ ] Manual: select an under-construction site — confirm BUILDING N% on line 2, remaining lines explicit
+- [ ] Manual: rally flag set — confirm RALLY x,y on line 7
+- [ ] Manual: select Barracks — confirm SUPPLY +0 on line 4
+- [ ] Manual: select an under-construction site — confirm BUILDING N% on line 3, remaining lines explicit
 
 ## T10 — Assisted placement (snap to nearest valid footprint)
 
@@ -491,6 +491,15 @@ What moved, and why:
 - `assets/scenarios/rts_feedback_polish_v1.script` — new, focused, and deliberately *not* folded
   into the canonical script: `acceptance_audio_counts_are_exact` pins the canonical run's audio
   counters cue by cue, and adding chrome to it would inflate every one of those numbers.
+
+**Historical evidence, recorded on the feedback-polish branch.** The values in
+the rest of this section — the counters just below and the exit-line hashes in
+the gate list under them — are what that branch measured and are kept as
+written. They predate the phase-2 build-grid recut, which re-authored
+`assets/scenarios/rts_acceptance_v1.script` and moved the scene geometry, and
+the enemy commit, which appended five combat tokens to every RTS exit line.
+Do not expect a run today to reproduce them; the live numbers are the ones
+pinned in `tests/rts_acceptance.rs`.
 
 No expected value in `tests/rts_acceptance.rs` changed. Once the script was re-timed, every
 pinned counter recovered its documented value on its own — `buildings=3`, `units=8`,
@@ -709,7 +718,7 @@ Run `cargo run -- rts` on the development host, with sound on and a real pointer
 
 - [ ] Click the top of an HQ sprite corner, well above its footprint: the building is selected,
       not the worker standing next to it.
-- [ ] Read the card: exactly six lines — kind, READY/BUILDING %, SUPPLY, QUEUE, PROGRESS, RALLY.
+- [ ] Read the card: exactly seven lines — kind, HP, READY/BUILDING %, SUPPLY, QUEUE, PROGRESS, RALLY.
       Queue entries read oldest first.
 
 **Commands**
@@ -737,3 +746,320 @@ Run `cargo run -- rts` on the development host, with sound on and a real pointer
 
 - [ ] Open `docs/rts-feedback-polish-architecture.html` in a browser: the badge reads LANDED,
       the evidence table resolves, and both footer links open.
+
+## T1 combat-data-model
+
+These items cannot be verified by the automated gate — they confirm the data model
+behaves as expected in a running session where a human can observe world state.
+
+**HP and armor stats visible in a debugger / logging session**
+
+- [ ] Start `cargo run -- rts`, open the dev console or attach a debugger to a breakpoint in
+      `apply_damage`. Fire a shot at a Worker (25 HP, 0 armor): confirm the first hit deals
+      exactly the requested damage, reducing HP below 25.
+- [ ] Fire a shot at the HQ (400 HP, 2 armor) with damage value 1: confirm the actual dealt
+      damage floors to 1 and HP drops to 399, not 400 and not 398.
+- [ ] Fire a shot at a resource Crystal node: confirm the call returns `Indestructible` and the
+      node's amount is unchanged.
+
+**Unit death**
+
+- [ ] Kill a Worker with exactly 25 damage in a running session. Confirm the worker sprite
+      disappears from the scene on the same frame, and any selection ring that was on it also
+      disappears on the next tick.
+- [ ] Confirm the entity count visible in any debug overlay drops by 1 after the kill.
+
+**Building death — footprint cleared**
+
+- [ ] Build a Depot and kill it with `apply_damage`. Confirm you can now place a new building in
+      the cells the Depot occupied — the footprint is gone and no phantom solid remains.
+- [ ] Confirm worker pathfinding can now route through those cells (units walk straight through
+      the gap left by the dead building).
+
+**Building death — supply grant revoked**
+
+- [ ] Note the supply cap with a Depot alive. Kill the Depot. Confirm the cap number decreases
+      by 10 (the Depot's supply grant).
+
+**Building death — production queue cancelled without refund**
+
+- [ ] Enqueue a Soldier in a Barracks, then destroy the Barracks. Confirm the Soldier never
+      spawns and the resources spent to enqueue it are not refunded — the stock stays at the
+      post-enqueue value.
+
+**HQ death**
+
+- [ ] While a worker is hauling resources back to the HQ, kill the HQ mid-trip. Confirm the
+      worker immediately stops heading to the HQ and goes idle on the same tick as the kill —
+      it does not walk at the dead building's former location for even one extra frame.
+
+**Site death**
+
+- [ ] Cancel (destroy) a construction site while a worker is walking toward it. Confirm the
+      worker goes `Idle` on the same tick as the site disappears, and the cost of the site is
+      not refunded.
+
+**State hash**
+
+- [ ] Using the harness (e.g., `cargo test -p mmd-engine --test rts_combat -- hp_enters_the_state_hash`):
+      confirm the test passes, proving a damaged entity produces a different state hash from an
+      undamaged twin.
+
+## T2 enemy-faction-and-waves
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron` (or any RTS run) and confirm no crash or panic on startup — the enemy pre-placement ran silently.
+- [ ] In the fixture scene, let the simulation advance past tick 50 and confirm the enemy count visually increases on screen (Ghouls appear near spawn point 0 at (76, 76) in cell space).
+- [ ] Advance past tick 120 and confirm a second batch of enemies appears near spawn point 1 at (20, 76).
+- [ ] Attempt to drag-box-select across the screen in an area containing both workers and Ghouls — confirm only the player's workers are selected (the selection ring never appears on a Ghoul).
+- [ ] Confirm the supply counter never rises above its initial cap as Ghouls are spawned — the "supply used" figure stays at the player-unit count only.
+- [ ] Confirm Ghouls stand idle (no movement, no pathfinding) — they render using the soldier sheet as a placeholder but do not walk or attack. **(Superseded by T3, which gave them the march AI: from T3 on they walk. Run this line only against a T2-era build.)**
+
+## T3 weapons-and-targeting
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron` and confirm no crash or panic — combat, enemy AI and the new order variants run silently on a real window.
+- [ ] Watch the two pre-placed Ghouls for a few seconds and confirm they now **walk** rather than stand idle (T2's checklist said they stood still; that line is superseded here) — they head toward the player's HQ in the south-east.
+- [ ] Confirm every Ghoul on screen walks toward the **same** place — the faction shares one objective; nobody wanders off on a private route.
+- [ ] Let the marching Ghouls reach a starting worker and confirm the Ghoul **stops walking** while it attacks, rather than shoving past its target.
+- [ ] Confirm that worker eventually disappears (dies), and that the Ghoul then **resumes walking** toward the HQ instead of standing where it killed it.
+- [ ] Select a worker, right-click it onto a Ghoul's path, then confirm the worker never fights back — Workers are unarmed, so it just dies or walks on.
+- [ ] Select a worker, send it on a long move across the map straight past a Ghoul, and confirm it keeps walking the whole way — a unit under a move order never stops to shoot.
+- [ ] Send a worker to gather from a node with a Ghoul nearby and confirm the round trip continues uninterrupted — a gathering worker never stops to shoot either.
+- [ ] Let the Ghouls reach the HQ and keep watching: confirm the HQ is eventually destroyed and vanishes from the map.
+- [ ] Immediately after the HQ dies, confirm the remaining Ghouls **stop moving** and stand where they are — no player building is left to march on.
+- [ ] Confirm units can walk over the ground the dead HQ used to occupy — the footprint is released, not left as an invisible wall.
+- [ ] Watch a Ghoul attacking the HQ and confirm the attacks are evenly spaced pulses, not a continuous stream — there is a visible pause between one hit and the next.
+- [ ] Run the same fixture twice, letting each run reach the same tick, and confirm the two fights look identical — same Ghouls dead, same positions.
+
+## T4 player-combat-commands
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron`. Produce a Soldier from the Barracks (or wait for one to arrive). Select the Soldier — confirm slots **A** (Attack) and **S** (Stop) appear in the command card with colored icons, and slots Q/W/E/Z/X/C remain empty.
+- [ ] With a Worker selected (no Soldier), confirm the command card shows only the four build buttons (Q=HQ, W=Depot, E=Barracks, A=Turret) and **no** Attack or Stop buttons.
+- [ ] Left-click a Ghoul on screen — confirm its card appears in the detail panel showing `GHOUL` on line 1 and `HP <cur>/<max>` on line 2. Confirm **no** command buttons are visible.
+- [ ] With the Ghoul still selected, right-click anywhere on open ground — confirm a **reject sound** plays and the Ghoul stays selected (no order is issued).
+- [ ] Select a Soldier. Press **A** (arm attack-targeting mode). Without clicking, press **Escape** — confirm no order was issued, the Pause Menu did **not** open, and the attack mode is cancelled (pressing A again re-arms it).
+- [ ] Select a Soldier. Press **A**. Right-click on empty ground — confirm a **reject beep** is *not* heard (right-click cancels the mode silently, same as placement ghost).
+- [ ] Select a Soldier. Press **A**. Left-click on an empty ground cell — confirm the Soldier begins walking toward that cell and a **voice order sound** plays (attack-move).
+- [ ] Select a Soldier. Press **A**. Left-click directly on a Ghoul's sprite — confirm the Soldier closes on that specific Ghoul and fires when in range (targeted attack), and a voice sound plays.
+- [ ] Select a Soldier. **Right-click** directly on a Ghoul without pressing A first — confirm the Soldier immediately begins attacking that Ghoul (direct attack shortcut), and a voice sound plays.
+- [ ] With a Soldier on an attack order (chasing a Ghoul), press **S** (Stop) — confirm the Soldier halts immediately and a voice order sound plays; it should resume auto-attacking nearby Ghouls from its new idle position.
+- [ ] Select a mixed group (Worker + Soldier). Press **A** and click on a Ghoul — confirm the Soldier attacks the Ghoul and the Worker walks to a position near it (formation) rather than fighting.
+- [ ] Select a mixed group (Worker + Soldier). Press **S** — confirm both units idle and a single voice batch plays (not two separate sounds).
+- [ ] Shift-click a Ghoul while a Worker is selected — confirm the Worker is **deselected** and only the Ghoul appears in the selection panel (no owner-mixing).
+- [ ] Drag-box across a group of Workers and Ghouls — confirm only the Workers end up selected; the Ghouls are excluded from the box selection.
+
+## T5 turret
+
+- [ ] Launch `cargo run -- rts`. Select a Worker and confirm the command card now shows a **fourth** build button in the middle-left slot, keyed **A**, with its own colored icon — Q=HQ, W=Depot, E=Barracks, A=Turret.
+- [ ] With the Worker still selected, press **A** and confirm a placement ghost appears under the cursor and follows it — since the build-grid re-cut the ghost is exactly **one build square**, the same size as the Depot's and a quarter of the Barracks' 2 x 2.
+- [ ] Move the ghost over the map edge and over a crystal/gas node, and confirm it reads as invalid there; move it back onto open ground and confirm it reads as valid again.
+- [ ] Left-click on valid open ground and confirm 75 crystal is deducted immediately, a construction site appears, and the Worker walks over and starts building it.
+- [ ] Watch the site while it is still under construction with a Ghoul standing close by, and confirm the **site never shoots** — an unfinished turret is inert.
+- [ ] Confirm the site finishes into a different-looking finished sprite (no longer the hatched under-construction look) and that the supply cap number in the HUD is **unchanged** by the turret.
+- [ ] Click the finished turret and confirm its detail card reads `TURRET` with an HP line.
+- [ ] Order a unit to walk straight through the finished turret and confirm it paths **around** it — the finished footprint is solid.
+- [ ] Let a Ghoul wander into the turret's reach and confirm the turret fires on its own, without any order from you, and that the Ghoul takes damage.
+- [ ] Confirm the turret fires in evenly spaced pulses at one target at a time, and note for the record that turret fire is **silent and unanimated** this phase (no muzzle flash, no SFX) — that is expected, not a bug.
+- [ ] Let a large group of Ghouls swarm a single turret and confirm the turret is eventually destroyed, disappears, and the ground it stood on becomes walkable again.
+- [ ] Build a turret right next to a crystal node, then send a Worker to gather from that node, and confirm the Worker hauls its cargo back to the **HQ** and never to the turret.
+
+## T6 combat-feedback
+
+- [ ] Launch `cargo run -- rts --scenario assets/scenarios/fixtures/fixture_rts_combat_v1.ron`. Let the Ghouls march toward the HQ without intervening. Confirm that green HP bars appear above damaged Ghouls as they take fire from the turret or any placed unit.
+- [ ] Click a Ghoul before it takes any damage and confirm a **full green bar** appears above it (selected, full HP = bar shown, full width, green).
+- [ ] Damage a unit or building down to about 50 % health (yellow band) and confirm the bar turns **yellow**; damage it further below one-third and confirm it turns **red**.
+- [ ] Watch a Ghoul die and confirm a brief **red-orange ring flash** expands at the point of death for roughly half a second (12 rendered frames) then disappears cleanly.
+- [ ] Watch a finished building (e.g., Turret) get destroyed and confirm its death flash ring is **visibly wider** than a unit's death flash (building ring sized to half the footprint, unit ring sized to its body radius).
+- [ ] Click the finished HQ — confirm the detail panel shows `HP <cur>/<max>` as the second line (immediately below the kind label), and that the values match the HQ's current state.
+- [ ] Click a resource node — confirm the detail panel shows **no** HP line (nodes have no HP).
+- [ ] Observe the minimap while Ghouls are alive on the map — confirm each Ghoul appears as a small **red dot** on the minimap in the correct relative position.
+- [ ] Kill all Ghouls (or wait for them to die) — confirm the red dots disappear from the minimap once no enemy units remain.
+- [ ] Confirm that nothing in `git status --porcelain -- assets/scenarios` shows a tracked scenario asset as modified.
+
+## T7 build-grid-and-footprint-recut
+
+- [ ] Launch `cargo run -- rts` and confirm the world grid overlay now draws **large squares**, not one line per cell: eight cells to a square, so the base area reads as a coarse lattice rather than fine graph paper.
+- [ ] Open the pause menu (gear at top-right) -> SETTINGS, turn the grid setting **off**, close the menu, and confirm the lattice disappears from the world.
+- [ ] With the grid setting still off, select a Worker and press **W** (Depot): confirm the square lattice **appears anyway** while the ghost is pending, and disappears again the moment you cancel the ghost with a right-click.
+- [ ] With a Depot ghost pending, move the mouse slowly across the map: confirm the ghost does not slide smoothly cell by cell but **snaps** from one square to the next, and that its outline always sits flush inside one lattice square.
+- [ ] Confirm the Depot ghost is drawn as **one** tile covering the whole square, not as 64 small cell tiles.
+- [ ] Press **E** (Barracks) instead: confirm its ghost covers exactly **2 x 2** squares. Press **Q** (HQ): confirm **3 x 3** squares. Press **A** (Turret): confirm **1 x 1**, the same size as the Depot.
+- [ ] Place a Depot immediately beside the starting HQ: confirm the finished Depot's edge lines up flush with a lattice line and with the HQ's own edge — no half-square offset anywhere.
+- [ ] Move the ghost over the HQ itself so it reads invalid (red), then drag it outwards: confirm the assisted placement, when it does snap to a legal spot, lands on a **square boundary** and never half a square off.
+- [ ] Confirm the starting HQ is visibly larger than before this change (it now covers 3 x 3 squares) and that the camera opens centred on it.
+- [ ] Confirm the six starting Workers spawn **south of** the HQ, clear of its footprint, and that none of them is standing inside the building.
+- [ ] Select a Worker and walk it around: confirm movement is still smooth and continuous — units are **not** snapped to the build grid, only buildings are.
+- [ ] Run `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` in a window and watch it: confirm the whole select -> gather -> build Depot -> produce Worker -> build Barracks -> produce Soldier -> minimap -> menu flow still plays out visibly and ends in a clean quit.
+- [ ] Confirm `git status --porcelain -- assets/scenarios` is clean after that run — the scripts and the scene are inputs, never outputs.
+
+## T8 builder-trap-repro-and-fix
+
+The reported bug ("a worker building a barrack is blocked because the barrack
+spawned over it, and I cannot move the worker anymore") did **not** reproduce
+through the completion path — a finished building already evacuates every body
+its footprint covers to a legal, distinct spot, and clears the builder's build
+order. The first four items exist to confirm that on a real window; the rest
+cover the one genuine permanent freeze this ticket did fix — a site that can
+never evacuate used to hold one tick short of complete forever, and now gives
+up after three seconds and refunds.
+
+- [ ] Launch `cargo run -- rts`. Select one Worker, press **E** (Barracks) and drop the ghost so the 2 x 2-square footprint is centred **on that same Worker**. Confirm the site appears under the Worker and the Worker starts building it.
+- [ ] Watch the moment the Barracks finishes: confirm the Worker is moved **outside** the finished building on that same frame — never left standing inside it, never sliding out a beat later.
+- [ ] Immediately after the finish, right-click open ground about twenty cells away: confirm the Worker accepts the order and starts walking within a fraction of a second. It must not sit still with an order showing.
+- [ ] Repeat with several Workers packed around the plot (walk five or six of them onto the square first, then drop the Barracks over one of them and build it): confirm every covered Worker ends up outside the finished building, on its own spot, none merged into another, and each answers a move order.
+- [ ] Now the bounded-stall path. Wall a single Worker into a dead-end pocket exactly the size of a Depot footprint (use terrain plus other finished buildings), and have that Worker build a Depot filling the pocket. Confirm the build bar reaches the end and **holds** just short of complete.
+- [ ] Keep watching that held site for about **three seconds** without touching anything: confirm it then disappears on its own, the full Depot cost (100 crystal) is refunded in the HUD, and the supply cap does not change.
+- [ ] Confirm the Worker that was trapped in that pocket is still alive, is not inside any building, and answers a move/gather order after the cancel.
+- [ ] Confirm the Worker's command card goes back to its idle state after the cancel — no build order left pointing at a site that no longer exists.
+- [ ] Repeat the pocket case but free the Worker (walk it out, or cancel the site yourself) **before** the three seconds are up: confirm the site finishes normally instead of cancelling.
+- [ ] Build several ordinary buildings in open ground during one session and confirm **none** of them ever cancels itself — the three-second give-up must only ever fire when evacuation is genuinely impossible.
+- [ ] Run `cargo run -- rts --frames 1600 --inject-input-file assets/scenarios/rts_acceptance_v1.script` in a window and confirm the whole scripted flow still plays out visibly and ends in a clean quit.
+- [ ] Confirm `git status --porcelain -- assets/scenarios` is clean after that run.
+
+## T9 order-status-and-target-ring
+
+- [ ] Launch `cargo run -- rts`. Select one Worker and right-click a crystal node. Confirm the selection card's third line (`WORKER` → `HP <cur>/<max>` → status) switches from `IDLE` to `MOVING TO MINERAL` while the worker walks to the node.
+- [ ] Watch the worker arrive at the node. Confirm the card switches to `COLLECTING MINERAL`, and the crystal node wears a thin green ring distinct from the worker's own selection ring.
+- [ ] Watch the worker depart with a full load. Confirm the card switches to `RETURNING MINERAL` while the worker walks back to the HQ.
+- [ ] While the worker is en route to the node (`MOVING TO MINERAL`): click empty ground to deselect the worker, then click the worker again to re-select it. Confirm the thin green target ring is still present on the crystal node — it must survive the deselect/reselect cycle.
+- [ ] Select the crystal node directly (click it). Confirm the card shows `REMAINING <n>` on one line and `YIELD 8` on the line immediately below it.
+- [ ] Select a Soldier (spawn one if needed via a Barracks). Confirm the status line reads `IDLE` when the soldier has no order, and `MOVING` when it is walking to a destination.
+- [ ] Send two Workers to gather the same crystal node; select both at once. Confirm there is exactly one thin green ring on that node — not two overlapping rings.
+- [ ] Select a Worker and the crystal node it is already gathering, at the same time. Confirm the node does NOT get a second (target) ring on top of its selection ring — only one ring total should appear on the node.
+- [ ] Issue an Attack command to a Soldier targeting an enemy unit. Confirm the status line reads `MOVING` — the label set has no dedicated attack word — and that the enemy wears the thin green target ring.
+- [ ] Issue an Attack-move command to a Soldier onto open ground. Confirm the status line reads `MOVING` and nothing on the map wears a target ring: attack-move aims at a cell, not an entity.
+- [ ] Send a Worker to build a Depot. Confirm the card reads `BUILDING` while the worker attends the site, and the site itself wears the thin green target ring for as long as that worker is selected.
+- [ ] Select an enemy Ghoul. Confirm its read-only card still stops after the kind label and the `HP` line — no status line is added to an enemy card.
+
+## T10 move-marker-and-path-line
+
+- [ ] Launch `cargo run -- rts`. Box-select two or three Workers, then right-click open ground well away from them. Confirm exactly **one** green pennant flag appears at the clicked cell — one flag per order, not one per selected unit.
+- [ ] While the group walks, confirm each selected Worker draws a **dashed** green line from its own body to its own destination — the lines fan out to each unit's formation slot, they do not all end on the same point.
+- [ ] Keep watching without touching anything: the flag disappears on its own about a second and a half after the click (90 ticks at 60 Hz), while the units are still walking. The dashed lines stay for as long as the units still have the order.
+- [ ] Confirm the flag renders as an opaque pennant sprite (staff + triangle), not as a black or garbled square — a wrong draw layer would sample the zombie atlas instead.
+- [ ] Click empty ground to deselect the walking group. Confirm every dashed line disappears immediately even though the units keep walking: dashes are drawn for the current selection only.
+- [ ] Re-select one of those still-walking Workers. Confirm its dashed line comes back on its own, from its current body position to its goal.
+- [ ] Right-click a crystal node with a Worker selected. Confirm no flag is planted at the node (that is an entity target, and T9's thin target ring is what marks it) but the walk phase still draws dashes toward the node.
+- [ ] Send a Worker to build a Depot. Confirm the walk to the site draws dashes to the site.
+- [ ] Spam right-click on open ground more than eight times in quick succession. Confirm at most eight flags are ever visible at once, that the oldest ones drop off first, and that nothing stutters or leaks.
+- [ ] Set a rally point on the HQ and produce a Worker. Confirm the newly produced Worker walks to the rally point and **no** flag is planted for it — rally is not a player ground order.
+- [ ] Select more than 24 units at once (produce enough Soldiers, or box-select the whole army) and right-click open ground. Confirm the flag still appears but **no** dashed lines are drawn at all — dashes are suppressed above 24 selected units rather than drawn for only some of them.
+- [ ] Right-click open ground with a Soldier selected, then immediately press `S` (Stop). Confirm the dashed line disappears with the order while the already-planted flag keeps counting itself down and then vanishes.
+
+## T11 follow-order-and-entity-rally
+
+Follow holds at *hull* distance: a unit body is 3 cells of radius, so "arm's
+length" is roughly half a body-width of daylight between two sprites, never a
+merge and never a shove.
+
+- [ ] Launch `cargo run -- rts`. Select two Workers and right-click a third Worker that is **not** in the selection. Confirm both walk to it and stop with a visible gap — they must not push it, climb onto it, or jitter against it once parked.
+- [ ] With that follow still running, select the target Worker on its own and send it somewhere far. Confirm the two followers set off after it and park at the same gap again, without stuttering or re-deciding every step of the way.
+- [ ] Let an enemy Ghoul kill a followed target while units are following it. Confirm the followers stop where they are and their cards read `IDLE` — no walking to a corpse, no stuck order.
+- [ ] Select a Worker following something and read its card. Confirm the status line reads `FOLLOWING`, and that T9's target ring is drawn around the entity it is following.
+- [ ] With Workers selected, right-click an enemy Ghoul. Confirm this is still the attack gesture (an armed selection attacks, an unarmed one walks over) and never a Follow.
+- [ ] With Workers selected, right-click one of the *already selected* Workers. Confirm this is still a plain ground move to that spot — the flag and the dashed line from T10 appear, and nobody starts following anybody.
+- [ ] Select the HQ, press `C` (command card slot 8, Rally), then left-click a crystal node. Confirm the rally flag stands on the node, a dashed line runs from the HQ to that flag, and the card's last line reads `RALLY CRYSTAL`.
+- [ ] With that node rally set, queue a Worker at the HQ. Confirm the new Worker walks over and starts mining that node by itself, with no second order from you.
+- [ ] Select the HQ, press `C`, then left-click a finished Barracks. Confirm the card reads `RALLY BARRACKS` and the flag stands on the Barracks. Queue a Worker and confirm it walks to the Barracks and parks at arm's length instead of mining.
+- [ ] Set a building's rally onto a Worker, then get that Worker killed. Confirm the card's last line changes to `RALLY -` and the flag disappears, and that producing a unit from that building leaves it standing idle rather than walking off somewhere.
+- [ ] Select the HQ, press `C`, then left-click an enemy Ghoul. Confirm the rally does not move: the old flag stays exactly where it was.
+- [ ] Select **only** the HQ (no units) and right-click a friendly Worker. Confirm nothing at all happens — right-click is not the rally gesture; `C` then a left-click is.
+- [ ] Select a mixed group of Workers and right-click a finished friendly building. Confirm every one of them heads for it and parks around its footprint without any of them walking into the building.
+- [ ] Watch the rally dashed line while panning the camera and while the rally target is a moving unit. Confirm the line keeps both ends attached — building at one end, flag at the other — and never smears across the screen.
+
+## T12 combat-gate
+
+The gate scene now scripts a real invasion: 400 Ghouls across four waves, from
+the two far south corners, first wave at tick 3000. Nothing offscreen can tell
+you whether a horde walking at you *reads* as a horde walking at you — that is
+what this pass is for. `cargo run -- rts` alone puts you on that scene, and the
+first wave is about fifty seconds in.
+
+- [ ] Launch `cargo run -- rts` and just watch the minimap for the first minute. Confirm that around the fifty-second mark red enemy dots appear together at the **left (west) corner** of the minimap diamond — the minimap is isometric, so the south-west map corner projects to the left corner, not the bottom-left — and that they then crawl steadily inward toward the centre as one loose group rather than teleporting or snapping between positions.
+- [ ] Follow that first wave with the camera the whole way in. Confirm the Ghouls read as marching — a continuous walk with their sprites animating — and that they pick a route around the terrain instead of grinding against an obstacle edge.
+- [ ] Leave a single Worker parked well out on the route the wave walks, then let the wave reach it. Confirm you can see it being attacked (its HP bar drops in visible steps), that it dies with a death flash, and that its supply is given back on the HUD.
+- [ ] Build a Turret forward of the base, on the route, and let the wave reach it. Confirm the Turret opens fire before the Ghouls are on top of it, that each hit is legible as a hit, and that Ghouls actually die rather than simply losing HP forever.
+- [ ] With two Soldiers rallied behind that Turret, confirm the idle one starts shooting by itself when a Ghoul comes into its range — you should not have to give it an order for it to defend itself.
+- [ ] Select one Soldier, press `A` and left-click ground down the route. Confirm it walks that way and engages what it meets on the way. Its card status will read `MOVING` — the shipped vocabulary has no attack-move or `ATTACKING` string, so the only visible difference from a plain move is that it stops to fight. That is a named gap (G7 in the close doc), not a defect.
+- [ ] Watch the HUD while the fight is on. Confirm enemy Ghouls show a hostile-coloured HP bar, that your own units' bars are visibly different from theirs, and that clicking an enemy gives you a read-only card you cannot issue orders from.
+- [ ] Let the later hordes (150 + 150 + 88 Ghouls) spawn and watch the frame pacing and the minimap with hundreds of enemies alive at once. Confirm the picture stays readable — no flicker, no dots vanishing, no audio dropouts — and note anything that feels wrong, since no gate command measures this.
+- [ ] Play a round where you deliberately let the wave through to the HQ. Confirm the HQ takes visible damage, and that if you let it die the game does not crash or freeze — this is a sandbox, so there is no win or lose screen, and that is expected.
+- [ ] Run `cargo run -- rts --frames 4500 --inject-input-file assets/scenarios/rts_combat_v1.script` in a real window and watch it play itself. Confirm what you see matches what the exit line says: enemies spawned, something of yours died, something of theirs died, and the HQ survived.
+
+## T13 manual-sandbox-scenario
+
+A second tracked scene, `assets/scenarios/rts_sandbox_v1.ron`, exists purely
+for hands-on play: the base is already built (HQ, Depot, Barracks, two
+Turrets), eight Soldiers are already standing south-west of it, the stock
+starts at 1 500 crystal / 400 gas, and thirty authored waves march in from the
+two far south corners — the first at tick 1 800 (about thirty seconds), then
+one every fifteen seconds, ramping 6, 6, 8, 8, 10 … up to 20. It is
+deliberately **not** on the merge gate and no timed test drives it, so
+everything it is for is a human step. Launch it with
+`cargo run -- rts --scenario assets/scenarios/rts_sandbox_v1.ron` and omit
+`--frames` so the run keeps going until you quit.
+
+Known and expected on this scene: the six Workers start **idle**, not
+gathering. Nothing in the engine gives a seeded unit a starting order, and this
+ticket added no such behaviour — an unattended run at 3 000 ticks still reads
+`crystal=1500 gas=400`. Give them their first gather order by hand.
+
+- [ ] Launch the sandbox and confirm on frame 1 that the camera opens on a finished base: HQ, Depot, Barracks and two Turrets all drawn as completed buildings with no construction-site look, no build progress bar, and no worker attending any of them.
+- [ ] Read the HUD on frame 1. Confirm it shows 1 500 crystal, 400 gas and 22/60 supply — the Depot's grant is already in the ceiling, and the six Workers plus eight Soldiers are already charged against it.
+- [ ] Box-select the eight Soldiers and confirm the command card and the selection count both read eight, then give them a move order and confirm all eight walk without any pair sliding through each other.
+- [ ] Select the six Workers and right-click a crystal node. Confirm they start gathering from a standing start and that the crystal counter begins to climb — this is the step that proves the seeded base is a working base, not just a picture of one.
+- [ ] Select the Barracks and produce a Soldier. Confirm there is enough stock and supply headroom for it to start immediately, and that it walks out of the building when it finishes.
+- [ ] Wait out the first wave without touching anything. Confirm enemy dots appear at the **left (west) corner** of the minimap diamond about thirty seconds in (the isometric minimap projects the south-west map corner to its left corner), that they come up the west flank towards the base, and that the west Turret opens fire on them before they reach the HQ.
+- [ ] Let the run keep going past several waves and confirm the waves keep arriving on a rhythm of roughly fifteen seconds and keep getting bigger. Confirm the run does not end on its own — no scripted quit, no frame budget — and that Escape then Quit is what ends it.
+- [ ] Confirm the gate scene is untouched by all of this: `cargo run -- rts` with no `--scenario` still opens the ordinary prototype scene with one HQ, six Workers and nothing else built.
+
+## T14 docs-close
+
+The phase-2 close is docs-only: no behaviour changed in this ticket. What a
+human still has to do is check that the written record matches the running
+game, and run the two passes no offscreen test can make. The claims under test
+here live in `docs/combat-prototype-functional-close.md`, `docs/CONTEXT.md`
+roadmap item 2, `docs/DESIGN.md` (`## Combat`, `## Feedback round 2`),
+`AGENTS.md` and `docs/GLOSSARY.md`.
+
+Read-the-record pass:
+
+- [ ] Open `docs/combat-prototype-functional-close.md` in a markdown renderer and click every link: `05-testing.md`, ADR 022, ADR 023, ADR 024, ADR 025, both architecture pages, the three prior close docs, and the two in-page anchors. Confirm each one opens on the thing it names.
+- [ ] Open the same file's `## System \u2192 test map` and spot-check three rows by grepping the named test out of the named binary. The table is hand-verified only \u2014 no test resolves it (gap G4), so this step is the only thing standing behind it.
+- [ ] Read the `## What this slice does not prove` list against your own play session and confirm nothing on it is something you actually saw working. If one of those absences is in fact present, the doc is wrong and needs an edit before merge.
+- [ ] Confirm `docs/CONTEXT.md` roadmap item 2 and the `AGENTS.md` phase-2 paragraph agree with each other and with the close doc on the five combat tokens, on 400 enemies, and on the sandbox being off the gate.
+
+Combat, the human-only pass \u2014 run `cargo run -- rts` (the enemy-bearing gate
+scene) and check what no offscreen test can prove:
+
+- [ ] **HP bars are visible and legible.** Damage a unit and select another: bars appear over damaged and selected entities only, vanish at full HP for unselected ones, and read clearly against the terrain at 1080p.
+- [ ] **The death flash is visible.** Kill a Ghoul and lose a worker: each death shows a brief ring flash at the death spot \u2014 noticeable in a melee, not just in isolation.
+- [ ] **Enemy dots are red on the minimap.** Marching Ghouls show as red dots distinct from player, building and node colours; a wave spawning at the far edge is visible on the minimap before it is visible on screen.
+- [ ] **Attack-arming resolves correctly \u2014 knowing there is no cursor visual.** Select soldiers, arm Attack from the card (or its positional key), then click an enemy: they attack it. Arm again and click open ground: they attack-move, engaging Ghouls met on the way. Nothing on screen marks the armed state \u2014 that is named gap G3, not a defect; confirm only that the *next* click resolves as attack/attack-move and that a right-click still cancels back into normal orders.
+- [ ] **The turret visibly fires, and is silent.** Build a Turret in the enemy approach path: once finished it engages Ghouls on screen and its target dies without the turret ever moving. Confirm no fire sound is played \u2014 silence is expected this phase (gap G1).
+- [ ] **An enemy answers a click, and says nothing more.** Click a Ghoul: a read-only card shows its kind and HP and **no status line** (gap G8); the drag box never picks it up.
+- [ ] **The defence really does lose.** Play the gate scene straight, without micro. Confirm that the result feels like the pinned `kills=2 losses=5`: your soldiers spread their fire across a clump instead of finishing single Ghouls (gap G5). This is the step that decides whether the recorded weakness matches what a player experiences.
+- [ ] **Hundreds read as hundreds.** Let the three late waves (150 + 150 + 88) land: the screen and minimap stay readable with hundreds of enemies marching \u2014 a judgment call, recorded here because no test makes it.
+- [ ] **One approach, whichever corner.** Follow both spawn corners in turn and confirm every wave converges on the same place \u2014 the HQ's north approach cell. There is no separate southern line to hold; if you find yourself defending two independent fronts, the close doc's one-objective claim is wrong.
+
+Feedback round 2, the human-only pass \u2014 run
+`cargo run -- rts --scenario assets/scenarios/rts_sandbox_v1.ron` (untimed,
+prebuilt base) and check what no offscreen test can prove:
+
+- [ ] **The build grid reads as a grid.** Arm any build command: the square lattice appears even with the world-grid setting off, the ghost is one tile per square, and it snaps square to square as the cursor moves. A placed Depot sits flush against a neighbouring square edge with no half-cell seam.
+- [ ] **Units still move between squares.** Walk a worker diagonally across a square boundary: it moves smoothly in true cells and never snaps to the lattice \u2014 the grid is for buildings only.
+- [ ] **A builder always gets out.** Place a Barracks centred on the worker that will build it, order the build, and watch the finish: the worker ends up outside and answers a move order at once.
+- [ ] **The still-open traffic case.** Order six or seven bodies to one shared destination at once and watch the ones at the back. If a body sits at 0 cells of progress for a long stretch while others queue ahead of it, that is the known unfixed formation/traffic gap (G11) \u2014 record what you saw rather than filing it as the builder trap.
+- [ ] **Status text tracks the round trip.** Right-click a worker onto a crystal node and read the card through `MOVING TO MINERAL` \u2192 `COLLECTING MINERAL` \u2192 `RETURNING MINERAL`. Note that the carry line still says `CRYSTAL` \u2014 that mismatch is named gap G9, not a defect.
+- [ ] **The target ring survives reselection.** With that worker gathering, click empty ground to deselect, then re-select it: the thin ring is back on the node it is working.
+- [ ] **Ground orders are legible, and the dashes are bearings.** Right-click open ground with a group selected: one flag lands at the click, dashes run from each unit to its own slot, and the flag clears itself shortly after. Confirm the dashes are straight lines to the goal even when the unit has to walk around an obstacle \u2014 they show *where*, never *how* (gap G10).
+- [ ] **Follow and entity rally behave.** Right-click a friendly unit with a squad selected: they escort it at arm's length. Rally the Barracks onto a node and produce a worker: it starts gathering without another order, and a dashed line runs from the building to the flag while the building is selected.
+- [ ] **The workers start idle, and that is expected.** Confirm the six seeded Workers do nothing until ordered, and that leaving the scene unattended does not raise the crystal or gas counters (gap G12). Then give them their first gather order by hand and confirm the counters climb.
+- [ ] **The sandbox is playable for as long as you want.** No frame budget, waves keep arriving for about seven minutes of play, and quitting is Escape \u2014 nothing about this scene is on the gate.
+
+## Review fixes — code and tests
+
+One behavioural fix from the post-close review. Run
+`cargo run -- rts --scenario assets/scenarios/rts_sandbox_v1.ron` (untimed,
+prebuilt base) and check what no offscreen test can show you:
+
+- [ ] **A building finished next to the HQ does not stop the war.** Place and finish an ordinary building — a Depot is easiest — on the build square immediately north of the HQ, the one the marching Ghouls walk onto. Then wait out the next wave. Every wave must keep arriving and keep attacking, exactly as before the build. Previously this silently killed the whole enemy faction for the rest of the run: waves kept spawning and then stood still forever, with no error and no visible cause.

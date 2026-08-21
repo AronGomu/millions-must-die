@@ -8,7 +8,17 @@ use mmd_engine::rts::{
     IssuedOrder, MAX_ENTITIES, MAX_SELECTION, OWNER_PLAYER, Order, OrderReceiptBuffer, Pick,
     ResourceKind, UnitKind, UnitOrderReceipt, WORKER_CARRY_CAPACITY,
 };
-use mmd_engine::testkit::RtsHarness;
+use mmd_engine::testkit::{RtsHarness, fixture_path};
+
+/// The enemy-free twin of the tracked scene, for horizons that cross its
+/// first wave tick (3000): `fixture_rts_baseline_v1.ron` is a byte-identical
+/// copy taken immediately before the combat gate scripted enemies into the
+/// scene, so every pinned number below keeps its meaning.
+fn baseline_scene() -> RtsHarness {
+    RtsHarness::path(fixture_path("fixture_rts_baseline_v1"))
+        .build()
+        .expect("baseline scene harness")
+}
 
 fn first_worker(h: &RtsHarness) -> EntityId {
     h.ids_of_kind(EntityKind::Unit(UnitKind::Worker))[0]
@@ -113,7 +123,7 @@ fn carry_columns_are_reserved() {
             .expect("spawn");
     }
     let caps = store.column_capacities();
-    assert_eq!(caps.len(), 13);
+    assert_eq!(caps.len(), 15);
     for cap in caps {
         assert_eq!(cap, MAX_ENTITIES, "no column may grow past its reservation");
     }
@@ -369,7 +379,7 @@ fn a_full_round_trip_banks_gas() {
 
 #[test]
 fn the_worker_keeps_cycling() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let n_crystal = crystal_node(&h);
     assert!(h.world_mut().order_gather(w0, n_crystal));
@@ -429,11 +439,11 @@ fn delivery_uses_the_footprint_not_the_centre() {
     ));
     assert_eq!(h.world().entities().amount(node_slot), 0);
 
-    // HQ centre is [166.0, 166.0], footprint edge 12: the footprint spans
-    // 160..172 on each axis. One cell outside the edge on the x axis is
-    // (172 + 1.0, 166.0) — 7.0 from the centre, well past a centre-distance
+    // HQ centre is [172.0, 172.0], footprint edge 24: the footprint spans
+    // 160..184 on each axis. One cell outside the edge on the x axis is
+    // (184 + 1.0, 172.0) — 13.0 from the centre, well past a centre-distance
     // rule, but exactly `DROP_OFF_REACH_CELLS` from the footprint rectangle.
-    let boundary = [173.0, 166.0];
+    let boundary = [185.0, 172.0];
     h.world_mut().entities_mut().set_position(w0_slot, boundary);
     let before_crystal = h.world().resources().crystal;
 
@@ -473,7 +483,7 @@ fn delivery_one_cell_further_does_not_fire() {
     // footprint" is no longer guaranteed to be outside it. 8 cells clear of
     // the footprint edge is comfortably past any approach cell this scene's
     // terrain could ever produce.
-    let far_outside = [180.0, 166.0];
+    let far_outside = [192.0, 172.0];
     h.world_mut()
         .entities_mut()
         .set_position(w0_slot, far_outside);
@@ -576,7 +586,7 @@ fn no_drop_off_stops_the_worker_holding_cargo() {
 
 #[test]
 fn six_workers_on_one_node_all_deliver() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     let n_crystal = crystal_node(&h);
     assert_eq!(h.world_mut().order_gather_group(&workers, n_crystal), Ok(6));
@@ -593,8 +603,8 @@ fn six_workers_on_one_node_all_deliver() {
 
 #[test]
 fn the_economy_is_reproducible() {
-    let mut a = RtsHarness::scene().build().expect("a");
-    let mut b = RtsHarness::scene().build().expect("b");
+    let mut a = baseline_scene();
+    let mut b = baseline_scene();
     for h in [&mut a, &mut b] {
         let w0 = first_worker(h);
         let n_crystal = crystal_node(h);
@@ -676,7 +686,7 @@ fn a_worker_that_arrives_starts_mining_the_same_tick() {
 /// corner (not the node centre) starts a real gather round trip.
 #[test]
 fn click_path_gather_banks_crystal() {
-    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let mut h = baseline_scene();
     let w0 = first_worker(&h);
     let n_crystal = crystal_node(&h);
     h.world_mut().selection_mut().insert(w0);

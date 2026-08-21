@@ -11,12 +11,13 @@ use mmd_engine::render::{
 };
 use mmd_engine::rts::{
     BuildingKind, COMMAND_GRID_RECT, COMMAND_SLOT_KEYS, CommandId, DETAIL_TEXT_X, DETAIL_TEXT_Y,
-    EntityId, EntityKind, HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_MAP_RECT,
-    MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN, MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER,
-    PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS, PORTRAIT_PX, ResourceKind, RtsFrame, TEXT_TINT,
-    TEXT_TINT_BLOCKED, TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv,
-    command_slot_rect, command_slots, fmt_ratio, fmt_u32, hud_hit_test, kind_label,
-    minimap_projection, node_uv, pack_frame, pack_hud,
+    EntityId, EntityKind, HudHit, HudLayout, MENU_RECT, MENU_TEXT_POS, MINIMAP_ENEMY_DOT_PX,
+    MINIMAP_ENEMY_TINT, MINIMAP_MAP_RECT, MULTI_ICON_COLS, MULTI_ICON_GAP_PX, MULTI_ICON_ORIGIN,
+    MULTI_ICON_PX, NUM_BUF, OWNER_PLAYER, PANEL_LINE_PX, PANEL_TEXT_SCALE, PORTRAIT_POS,
+    PORTRAIT_PX, Prop, RallyTarget, ResourceKind, RtsFrame, TEXT_TINT, TEXT_TINT_BLOCKED,
+    TEXT_TINT_HOTKEY, TOP_BAR_RECT, TOP_TEXT_SCALE, UnitKind, building_uv, command_slot_rect,
+    command_slots, fmt_ratio, fmt_u32, hud_hit_test, kind_label, minimap_projection, node_uv,
+    pack_frame, pack_hud, prop_uv,
 };
 use mmd_engine::testkit::RtsHarness;
 
@@ -348,7 +349,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
@@ -380,7 +381,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -390,10 +391,13 @@ fn single_selection_draws_portrait_and_full_details() {
 
     // Building, finished, with a rally point.
     let hq = h.world().start_hq().expect("hq");
-    assert!(
-        h.world_mut()
-            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 200, y: 210 }))
-    );
+    assert!(h.world_mut().set_rally(
+        hq,
+        Some(RallyTarget::Cell(mmd_engine::scenario::Cell {
+            x: 200,
+            y: 210
+        }))
+    ));
     h.world_mut().selection_mut().insert(hq);
     let slot = h.world().entities().slot(hq).expect("live hq");
     let mut frame = RtsFrame::new();
@@ -413,7 +417,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -422,7 +426,7 @@ fn single_selection_draws_portrait_and_full_details() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 5.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 6.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             25
         ),
@@ -558,9 +562,10 @@ fn worker_card_uses_stable_three_build_slots() {
     assert_eq!(slots[0].command, Some(CommandId::BuildHq));
     assert_eq!(slots[1].command, Some(CommandId::BuildDepot));
     assert_eq!(slots[2].command, Some(CommandId::BuildBarracks));
-    assert!(slots[0].enabled && slots[1].enabled && slots[2].enabled);
+    assert_eq!(slots[3].command, Some(CommandId::BuildTurret));
+    assert!(slots[0].enabled && slots[1].enabled && slots[2].enabled && slots[3].enabled);
     for (i, s) in slots.iter().enumerate() {
-        if !(0..=2).contains(&i) {
+        if !(0..=3).contains(&i) {
             assert_eq!(s.command, None, "slot {i} must be empty");
         }
     }
@@ -658,10 +663,13 @@ fn pack_hud_does_not_mutate_the_world() {
     let mut h = scene();
     let hq = h.world().start_hq().expect("hq");
     h.world_mut().selection_mut().insert(hq);
-    assert!(
-        h.world_mut()
-            .set_rally(hq, Some(mmd_engine::scenario::Cell { x: 180, y: 176 }))
-    );
+    assert!(h.world_mut().set_rally(
+        hq,
+        Some(RallyTarget::Cell(mmd_engine::scenario::Cell {
+            x: 144,
+            y: 176
+        }))
+    ));
 
     let before = h.state_hash();
     let mut frame = RtsFrame::new();
@@ -1668,53 +1676,54 @@ fn building_details_use_exact_six_line_contract() {
         text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10),
         kind_label(EntityKind::Building(BuildingKind::Hq))
     );
-    // Line 2: READY (no construction in progress)
-    assert_eq!(
-        text_at(
-            &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
-            PANEL_TEXT_SCALE,
-            10
-        ),
-        "READY"
-    );
-    // Line 3: SUPPLY +N
-    let mut buf = [0u8; NUM_BUF];
-    let expected_supply = format!("SUPPLY +{}", fmt_u32(&mut buf, HQ_SUPPLY_GRANT));
+    // Line 2: HP (added by T6)
+    // Line 3: READY (no construction in progress)
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
-            20
+            10
         ),
-        expected_supply
+        "READY"
     );
-    // Line 4: QUEUE - (no entries)
+    // Line 4: SUPPLY +N
+    let mut buf = [0u8; NUM_BUF];
+    let expected_supply = format!("SUPPLY +{}", fmt_u32(&mut buf, HQ_SUPPLY_GRANT));
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
-            10
+            20
         ),
-        "QUEUE -"
+        expected_supply
     );
-    // Line 5: PROGRESS - (no head)
+    // Line 5: QUEUE - (no entries)
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
-            12
+            10
         ),
-        "PROGRESS -"
+        "QUEUE -"
     );
-    // Line 6: RALLY - (no rally set)
+    // Line 6: PROGRESS - (no head)
     assert_eq!(
         text_at(
             &frame,
             [DETAIL_TEXT_X, DETAIL_TEXT_Y + 5.0 * PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12
+        ),
+        "PROGRESS -"
+    );
+    // Line 7: RALLY - (no rally set)
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 6.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -1744,7 +1753,7 @@ fn queue_entries_render_oldest_first() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             20
         ),
@@ -1799,7 +1808,7 @@ fn zero_supply_and_empty_queue_are_explicit() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             15
         ),
@@ -1808,7 +1817,7 @@ fn zero_supply_and_empty_queue_are_explicit() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             10
         ),
@@ -1817,7 +1826,7 @@ fn zero_supply_and_empty_queue_are_explicit() {
     assert_eq!(
         text_at(
             &frame,
-            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 4.0 * PANEL_LINE_PX],
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 5.0 * PANEL_LINE_PX],
             PANEL_TEXT_SCALE,
             12
         ),
@@ -1853,4 +1862,610 @@ fn control_id_from_grid_hit_returns_grid_control() {
         control_id_from_modal_hit(ModalHit::Grid),
         Some(ControlId::Grid)
     );
+}
+
+// ─── T4: armed card + enemy card tests ───────────────────────────────────────
+
+#[test]
+fn card_shows_attack_stop_for_armed() {
+    // (a) Soldier selected
+    {
+        let mut h = scene();
+        let soldier = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [100.5, 100.5],
+            )
+            .expect("spawn soldier");
+        h.world_mut().selection_mut().clear();
+        h.world_mut().selection_mut().insert(soldier);
+        let slots = command_slots(h.world());
+        assert_eq!(slots[3].command, Some(CommandId::Attack));
+        assert!(slots[3].enabled);
+        assert_eq!(slots[4].command, Some(CommandId::Stop));
+        assert!(slots[4].enabled);
+        for i in [0, 1, 2, 5, 6, 7, 8] {
+            assert!(
+                slots[i].command.is_none(),
+                "slot {i} must be empty for armed-only card"
+            );
+        }
+    }
+    // (b) Soldier + Worker selected: Attack/Stop still shown
+    {
+        let mut h = scene();
+        let soldier = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Unit(UnitKind::Soldier),
+                OWNER_PLAYER,
+                [100.5, 100.5],
+            )
+            .expect("spawn soldier");
+        let ww = workers(&h);
+        h.world_mut().selection_mut().clear();
+        h.world_mut().selection_mut().insert(soldier);
+        h.world_mut().selection_mut().insert(ww[0]);
+        let slots = command_slots(h.world());
+        assert_eq!(slots[3].command, Some(CommandId::Attack));
+        assert_eq!(slots[4].command, Some(CommandId::Stop));
+    }
+    // (c) workers only: slots 0/1/2/3 build, 4 None. Slot 3 is Attack only
+    // on an armed card — a worker card spends it on the Turret build.
+    {
+        let mut h = scene();
+        let ww = workers(&h);
+        h.world_mut().selection_mut().clear();
+        h.world_mut().selection_mut().insert(ww[0]);
+        let slots = command_slots(h.world());
+        assert_eq!(
+            slots[3].command,
+            Some(CommandId::BuildTurret),
+            "worker-only slot 3 is the turret build, never Attack"
+        );
+        assert!(
+            slots[4].command.is_none(),
+            "slot 4 must be empty for worker-only"
+        );
+        assert!(slots[0].command.is_some(), "worker card has slot 0");
+    }
+}
+
+#[test]
+fn enemy_selection_shows_no_commands() {
+    use mmd_engine::rts::OWNER_ENEMY;
+    let mut h = scene();
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [60.5, 60.5])
+        .expect("spawn ghoul");
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(ghoul);
+    let slots = command_slots(h.world());
+    for (i, slot) in slots.iter().enumerate() {
+        assert!(
+            slot.command.is_none(),
+            "slot {i} must be None for enemy selection"
+        );
+    }
+}
+
+#[test]
+fn enemy_card_two_lines_kind_and_hp() {
+    use mmd_engine::rts::OWNER_ENEMY;
+    let mut h = scene();
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [60.5, 60.5])
+        .expect("spawn ghoul");
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(ghoul);
+
+    // Line 1: kind
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    let line1 = text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10);
+    assert_eq!(line1, kind_label(EntityKind::Unit(UnitKind::Ghoul)));
+
+    // Line 2: HP 30/30 (undamaged)
+    let hp_line = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        12,
+    );
+    assert!(
+        hp_line.contains("30/30"),
+        "expected HP 30/30, got: {hp_line:?}"
+    );
+
+    // After 6 damage: armor=0 → hp = 30 - 6 = 24 → HP 24/30
+    h.world_mut().apply_damage(ghoul, 6);
+    let mut frame2 = RtsFrame::new();
+    pack_hud(h.world(), &mut frame2);
+    let hp_line2 = text_at(
+        &frame2,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        12,
+    );
+    assert!(
+        hp_line2.contains("24/30"),
+        "expected HP 24/30 after 6 damage, got: {hp_line2:?}"
+    );
+}
+
+// --- T6: HP line in single-selection card ------------------------------------
+
+#[test]
+fn the_card_shows_hp_for_every_hp_bearing_kind() {
+    // A damaged Worker must show an HP line.
+    {
+        let mut h = scene();
+        let w = workers(&h)[0];
+        let slot = h.world().entities().slot(w).expect("live");
+        h.world_mut().entities_mut().set_hp(slot, 10);
+        h.world_mut().selection_mut().insert(w);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let hp_line = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12,
+        );
+        assert!(
+            hp_line.contains("10/25"),
+            "damaged worker must show HP 10/25, got: {hp_line:?}"
+        );
+    }
+    // A damaged Barracks must show an HP line.
+    {
+        let mut h = scene();
+        let barracks = h
+            .world_mut()
+            .entities_mut()
+            .spawn(
+                EntityKind::Building(BuildingKind::Barracks),
+                OWNER_PLAYER,
+                [203.0, 181.0],
+            )
+            .expect("spawn barracks");
+        let slot = h.world().entities().slot(barracks).expect("live");
+        h.world_mut().entities_mut().set_hp(slot, 50);
+        h.world_mut().selection_mut().insert(barracks);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let hp_line = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12,
+        );
+        assert!(
+            hp_line.contains("50/"),
+            "damaged barracks must show HP, got: {hp_line:?}"
+        );
+    }
+    // A Ghoul (enemy) must show an HP line.
+    {
+        use mmd_engine::rts::OWNER_ENEMY;
+        let mut h = scene();
+        let ghoul = h
+            .world_mut()
+            .entities_mut()
+            .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, [60.5, 60.5])
+            .expect("spawn ghoul");
+        h.world_mut().selection_mut().insert(ghoul);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let hp_line = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            12,
+        );
+        assert!(
+            hp_line.contains("30/30"),
+            "ghoul must show HP 30/30, got: {hp_line:?}"
+        );
+    }
+    // A resource node must not show an HP line.
+    {
+        let mut h = scene();
+        let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+        h.world_mut().selection_mut().insert(node);
+        let mut frame = RtsFrame::new();
+        pack_hud(h.world(), &mut frame);
+        let line2 = text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            25,
+        );
+        assert!(
+            !line2.contains("HP"),
+            "resource node must not show any HP line, got: {line2:?}"
+        );
+    }
+}
+
+// --- T6: minimap enemy dots ---------------------------------------------------
+
+#[test]
+fn minimap_draws_enemy_dots() {
+    let h = RtsHarness::path(mmd_engine::testkit::fixture_path(
+        mmd_engine::testkit::FIXTURE_RTS_COMBAT_V1,
+    ))
+    .build()
+    .expect("combat fixture loads hash-verified");
+    let mut frame = RtsFrame::new();
+    pack_frame(h.world(), CURSOR, None, &mut frame);
+    pack_hud(h.world(), &mut frame);
+
+    let projection = minimap_projection(h.world());
+    let origin = [MINIMAP_MAP_RECT[0], MINIMAP_MAP_RECT[1]];
+    let dots: Vec<_> = props(&frame)
+        .iter()
+        .filter(|i| i.tint == MINIMAP_ENEMY_TINT)
+        .collect();
+    assert_eq!(dots.len(), 2, "two pre-placed ghouls, two dots");
+    for (dot, cell) in dots.iter().zip([[20.5_f32, 20.5], [26.5, 20.5]]) {
+        let p = projection.map_to_minimap(cell);
+        assert_eq!(
+            dot.pos,
+            [
+                origin[0] + p[0] - MINIMAP_ENEMY_DOT_PX * 0.5,
+                origin[1] + p[1] - MINIMAP_ENEMY_DOT_PX * 0.5
+            ],
+            "same projection as the camera polygon, centred"
+        );
+        assert_eq!(dot.size, [MINIMAP_ENEMY_DOT_PX, MINIMAP_ENEMY_DOT_PX]);
+        assert_eq!(
+            dot.uv_rect,
+            prop_uv(Prop::PanelFill),
+            "a dot is a tinted panel-fill stamp, like the camera polygon"
+        );
+    }
+}
+
+// --- T9: order_status_label --------------------------------------------------
+
+#[test]
+fn order_status_label_covers_every_order_and_phase() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::{FormationGoal, GatherPhase, Order, order_status_label};
+    use mmd_engine::scenario::Cell;
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let gas = h.ids_of_kind(EntityKind::Node(ResourceKind::Gas))[0];
+    let hq = h.world().start_hq().expect("hq");
+    let slot = h.world().entities().slot(w).expect("live");
+
+    let dummy = FieldRef { slot: 0, epoch: 0 };
+    let dummy_goal = FormationGoal {
+        anchor: Cell { x: 1, y: 1 },
+        slot: Cell { x: 1, y: 1 },
+    };
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::ToNode {
+                goal: dummy_goal,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "MOVING TO MINERAL");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "COLLECTING MINERAL");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Returning {
+                drop_off: hq,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "RETURNING MINERAL");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: gas,
+            phase: GatherPhase::ToNode {
+                goal: dummy_goal,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "MOVING TO GAS");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: gas,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "COLLECTING GAS");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: gas,
+            phase: GatherPhase::Returning {
+                drop_off: hq,
+                field: dummy,
+            },
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "RETURNING GAS");
+
+    let dummy_id = EntityId {
+        index: 9_999,
+        generation: 0,
+    };
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Build {
+            site: dummy_id,
+            goal: dummy_goal,
+            field: dummy,
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "BUILDING");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Move {
+            goal: dummy_goal,
+            field: dummy,
+        },
+    );
+    assert_eq!(order_status_label(h.world(), slot), "MOVING");
+
+    h.world_mut().force_order_for_test(w, Order::Idle);
+    assert_eq!(order_status_label(h.world(), slot), "IDLE");
+}
+
+#[test]
+fn a_stale_gather_target_degrades_to_moving() {
+    use mmd_engine::rts::{GatherPhase, Order, order_status_label};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    let slot = h.world().entities().slot(w).expect("live");
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    // Despawn the node so the id becomes stale.
+    h.world_mut().entities_mut().despawn(crystal);
+    assert_eq!(
+        order_status_label(h.world(), slot),
+        "MOVING",
+        "stale gather target must degrade to MOVING, not panic"
+    );
+}
+
+#[test]
+fn the_card_shows_the_status_under_the_hp_line() {
+    use mmd_engine::rts::{GatherPhase, Order};
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+
+    h.world_mut().force_order_for_test(
+        w,
+        Order::Gather {
+            node: crystal,
+            phase: GatherPhase::Mining { ticks_left: 10 },
+        },
+    );
+    // Give the worker some carry so CARRYING is non-empty.
+    let slot = h.world().entities().slot(w).expect("live");
+    h.world_mut()
+        .entities_mut()
+        .set_carry(slot, Some((ResourceKind::Crystal, 8)));
+
+    h.world_mut().selection_mut().insert(w);
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+
+    // Line 0: kind
+    assert_eq!(
+        text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10),
+        "WORKER"
+    );
+    // Line 1: HP
+    let hp_line = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        12,
+    );
+    assert!(
+        hp_line.contains("HP"),
+        "line 1 must be HP, got: {hp_line:?}"
+    );
+    // Line 2: status
+    assert_eq!(
+        text_at(
+            &frame,
+            [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+            PANEL_TEXT_SCALE,
+            20,
+        ),
+        "COLLECTING MINERAL"
+    );
+    // Line 3: CARRYING (unchanged position relative to status)
+    let carry = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + 3.0 * PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        25,
+    );
+    assert!(
+        carry.contains("CARRYING"),
+        "line 3 must be CARRYING, got: {carry:?}"
+    );
+}
+
+#[test]
+fn a_node_card_shows_yield_per_trip() {
+    use mmd_engine::rts::WORKER_CARRY_CAPACITY;
+
+    let mut h = scene();
+    let node = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    h.world_mut().selection_mut().insert(node);
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+
+    // Line 0: kind label
+    assert_eq!(
+        text_at(&frame, [DETAIL_TEXT_X, DETAIL_TEXT_Y], PANEL_TEXT_SCALE, 10),
+        "CRYSTAL"
+    );
+    // Line 1: REMAINING <n>
+    let remaining = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        25,
+    );
+    assert!(
+        remaining.contains("REMAINING"),
+        "line 1 must contain REMAINING, got: {remaining:?}"
+    );
+    // Line 2: YIELD <WORKER_CARRY_CAPACITY>
+    let expected_yield = format!("YIELD {WORKER_CARRY_CAPACITY}");
+    let yield_line = text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + 2.0 * PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        15,
+    );
+    assert_eq!(yield_line, expected_yield, "line 2 must be YIELD 8");
+}
+
+// --- T11: an entity rally on the card, and FOLLOWING -------------------------
+
+/// Line 7 of a building card, read back as text.
+fn rally_line(h: &RtsHarness) -> String {
+    let mut frame = RtsFrame::new();
+    pack_hud(h.world(), &mut frame);
+    text_at(
+        &frame,
+        [DETAIL_TEXT_X, DETAIL_TEXT_Y + 6.0 * PANEL_LINE_PX],
+        PANEL_TEXT_SCALE,
+        20,
+    )
+}
+
+#[test]
+fn the_card_names_an_entity_rally() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let crystal = h.ids_of_kind(EntityKind::Node(ResourceKind::Crystal))[0];
+    h.world_mut().selection_mut().insert(hq);
+
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(crystal)))
+    );
+    assert_eq!(
+        rally_line(&h).trim_end(),
+        format!(
+            "RALLY {}",
+            kind_label(EntityKind::Node(ResourceKind::Crystal))
+        ),
+        "an entity rally is named by its kind, not by a cell"
+    );
+
+    // A cell rally still reads as coordinates.
+    assert!(h.world_mut().set_rally(
+        hq,
+        Some(RallyTarget::Cell(mmd_engine::scenario::Cell {
+            x: 200,
+            y: 210
+        }))
+    ));
+    assert_eq!(rally_line(&h).trim_end(), "RALLY 200,210");
+}
+
+#[test]
+fn a_stale_entity_rally_reads_as_a_dash() {
+    let mut h = scene();
+    let hq = h.world().start_hq().expect("hq");
+    let target = workers(&h)[1];
+    h.world_mut().selection_mut().insert(hq);
+
+    assert!(
+        h.world_mut()
+            .set_rally(hq, Some(RallyTarget::Entity(target)))
+    );
+    assert_eq!(
+        rally_line(&h).trim_end(),
+        format!("RALLY {}", kind_label(EntityKind::Unit(UnitKind::Worker)))
+    );
+
+    assert!(h.world_mut().entities_mut().despawn(target));
+    assert_eq!(
+        rally_line(&h).trim_end(),
+        "RALLY -",
+        "a rally whose entity is gone reads as a dash, not as a stale name"
+    );
+}
+
+#[test]
+fn order_status_label_covers_follow() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::{FormationGoal, Order, order_status_label};
+    use mmd_engine::scenario::Cell;
+
+    let mut h = scene();
+    let w = workers(&h)[0];
+    let target = workers(&h)[1];
+    let slot = h.world().entities().slot(w).expect("live");
+
+    let cell = Cell { x: 1, y: 1 };
+    assert!(h.world_mut().force_order_for_test(
+        w,
+        Order::Follow {
+            target,
+            goal: FormationGoal {
+                anchor: cell,
+                slot: cell,
+            },
+            field: FieldRef { slot: 0, epoch: 0 },
+        }
+    ));
+    assert_eq!(order_status_label(h.world(), slot), "FOLLOWING");
 }

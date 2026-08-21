@@ -1670,7 +1670,9 @@ const MANUAL_FLOWS: &[(&str, &[&str])] = &[
     ),
     ("world grid", &["grid", "persist"]),
     ("placement", &["snap", "map corner"]),
-    ("building card", &["sprite corner", "six line"]),
+    // Seven since T6 put an HP line under the kind line; the checklist has
+    // said "seven lines" since that ticket, and this token had not followed.
+    ("building card", &["sprite corner", "seven line"]),
     ("commands", &["positional", "right-click"]),
     (
         "gather collision",
@@ -2119,4 +2121,22 @@ fn bench_binary_still_builds() {
         stdout.to_ascii_lowercase().contains("not a gate"),
         "bench must be labelled non-gating developer tooling:\n{stdout}"
     );
+}
+
+/// The manual sandbox scene stays off the merge gate, by construction (T13).
+///
+/// `rts_sandbox_v1` is an untimed hands-on tool: thirty authored waves, no
+/// scripted end, no pinned counts. Putting it on the gate would add a run that
+/// proves nothing and can only ever fail for reasons nobody has bounded. The
+/// only way to keep that promise honest is to assert the absence.
+#[test]
+fn the_sandbox_is_not_on_the_merge_gate() {
+    for rel in [CONTRACT_DOC, "README.md"] {
+        let doc = read_doc(rel);
+        assert!(
+            !doc.contains("rts_sandbox_v1"),
+            "{rel} names `rts_sandbox_v1`; the sandbox is a manual tool and must \
+             not appear in a gate block"
+        );
+    }
 }

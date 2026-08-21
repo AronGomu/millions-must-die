@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Feedback round 2 architecture — Millions Must Die</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --red:#f87171; --green:#4ade80; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 ui-sans-serif,system-ui,sans-serif; }
+  main { width:min(1080px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+  h1 { font-size:clamp(1.8rem,4.5vw,2.8rem); line-height:1.08; letter-spacing:-.03em; margin:0 0 8px; }
+  h2 { font-size:1.35rem; margin:44px 0 14px; color:var(--accent); }
+  p { margin:0 0 12px; max-width:85ch; }
+  .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+  .lede { color:var(--muted); max-width:85ch; }
+  code { background:var(--panel-2); border:1px solid var(--line); border-radius:5px; padding:1px 6px; font-size:.875em; }
+  table { width:100%; border-collapse:collapse; margin:16px 0; font-size:.925rem; }
+  th,td { text-align:left; padding:9px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-size:.75rem; text-transform:uppercase; letter-spacing:.08em; }
+  svg { display:block; width:100%; height:auto; margin:16px 0; }
+  svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+  .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; }
+  .svg-node.hot { stroke:var(--accent); }
+  .svg-node.new { stroke:var(--green); }
+  .svg-line { fill:none; stroke:var(--line); stroke-width:2; }
+  .svg-label { fill:var(--text); font-size:12px; }
+  .svg-note { fill:var(--muted); font-size:10px; }
+  .warn { border-left:3px solid var(--red); padding:12px 16px; background:var(--panel); border-radius:0 10px 10px 0; margin:16px 0; max-width:85ch; }
+  .ok { border-left:3px solid var(--green); padding:12px 16px; background:var(--panel); border-radius:0 10px 10px 0; margin:16px 0; max-width:85ch; }
+  figure { margin:16px 0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+  figcaption { color:var(--muted); font-size:.85rem; margin-bottom:10px; } figcaption b { color:var(--text); display:block; font-size:1rem; }
+  ul { margin:0 0 12px; padding-left:22px; max-width:85ch; } li { margin-bottom:6px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; margin:20px 0; }
+  .card { padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+  .card b { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <span class="eyebrow">Architecture · phase 2 · feedback round 2</span>
+  <h1>Build grid, order feedback and follow</h1>
+  <p class="lede">The shape of the six systems the user's second feedback round adds to the RTS: a visible build square for placement, a repro-first fix for the trapped builder, derived order feedback on the card and in the overlay, bounded ground-order markers, follow orders with entity rally, and an untimed sandbox scene. Decisions live in <a href="ADR/024_ADR_build_grid_and_placement_snap.md">ADR 024</a> and <a href="ADR/025_ADR_order_feedback_follow_and_entity_rally.md">ADR 025</a>.</p>
+
+  <h2>Two grids, one world</h2>
+  <div class="ok"><b>The load-bearing distinction:</b> unit positions stay <code>[f32; 2]</code> on the true cell grid and no movement code reads the build square. The square exists for placement and for what the player is shown — nothing else.</div>
+  <figure role="img" aria-labelledby="g-t g-d">
+    <figcaption><b id="g-t">Who reads which grid</b><span id="g-d">Movement, collision, flow fields and gathering read true cells; placement, the ghost, the overlay and scenario validation read build squares.</span></figcaption>
+    <svg viewBox="0 0 900 200">
+      <title>Grid consumers</title><desc>Left column: systems reading the true cell grid. Right column: systems reading the eight-cell build square.</desc>
+      <rect class="svg-node" x="20" y="20" width="380" height="160" rx="12"/>
+      <text class="svg-label" x="210" y="46" text-anchor="middle" font-weight="700">True coordinate cells — unchanged</text>
+      <text class="svg-note" x="210" y="72" text-anchor="middle">movement sweep · body separation · hard collision</text>
+      <text class="svg-note" x="210" y="94" text-anchor="middle">pooled flow fields · approach cells · formations</text>
+      <text class="svg-note" x="210" y="116" text-anchor="middle">gather round trip · combat range · state hash</text>
+      <text class="svg-note" x="210" y="150" text-anchor="middle">positions are floats; a unit never snaps to anything</text>
+      <rect class="svg-node new" x="500" y="20" width="380" height="160" rx="12"/>
+      <text class="svg-label" x="690" y="46" text-anchor="middle" font-weight="700">Build squares — 8 cells</text>
+      <text class="svg-note" x="690" y="72" text-anchor="middle">ghost min corner · assisted placement search</text>
+      <text class="svg-note" x="690" y="94" text-anchor="middle">grid overlay lattice · ghost tiles</text>
+      <text class="svg-note" x="690" y="116" text-anchor="middle">scenario validation of declared buildings</text>
+      <text class="svg-note" x="690" y="150" text-anchor="middle">every footprint is a whole number of squares</text>
+      <path class="svg-line" d="M400 100 H500"/>
+      <text class="svg-note" x="450" y="92" text-anchor="middle">no</text>
+      <text class="svg-note" x="450" y="118" text-anchor="middle">shared state</text>
+    </svg>
+  </figure>
+  <table>
+    <tr><th>Building</th><th>Cells before</th><th>Cells after</th><th>Squares</th></tr>
+    <tr><td>Depot</td><td>8</td><td>8</td><td>1 × 1</td></tr>
+    <tr><td>Turret</td><td>6</td><td>8</td><td>1 × 1</td></tr>
+    <tr><td>Barracks</td><td>10</td><td>16</td><td>2 × 2</td></tr>
+    <tr><td>HQ</td><td>12</td><td>24</td><td>3 × 3</td></tr>
+  </table>
+  <div class="warn"><b>The HQ growth is not free.</b> At <code>hq_cell (160,160)</code> a 24-cell footprint covers <code>160..184</code>, which swallows the tracked scene's worker spawn row and the acceptance script's Depot plot, and moves the camera's start cell from <code>(166,166)</code> to <code>(172,172)</code>. The scene's spawn row moves to <code>y = 190</code>, the Depot plot to <code>(184,176)</code>, and both tracked scripts are re-authored once, in the same commit as the constants.</div>
+
+  <h2>Placement, end to end</h2>
+  <figure role="img" aria-labelledby="p-t p-d">
+    <figcaption><b id="p-t">One funnel, one snap</b><span id="p-d">Cursor pixel unprojects to a cell, the ghost corner is snapped, the four placement rules run, and the assisted search enumerates squares.</span></figcaption>
+    <svg viewBox="0 0 900 120">
+      <title>Placement pipeline</title><desc>Cursor to cell to snapped min corner to placement rules to either a valid ghost or an assisted square search.</desc>
+      <rect class="svg-node" x="10" y="30" width="120" height="40" rx="8"/><text class="svg-label" x="70" y="55" text-anchor="middle">cursor px</text>
+      <rect class="svg-node" x="150" y="30" width="130" height="40" rx="8"/><text class="svg-label" x="215" y="49" text-anchor="middle">iso.cell_at</text><text class="svg-note" x="215" y="63" text-anchor="middle">true cell</text>
+      <rect class="svg-node new" x="300" y="30" width="180" height="40" rx="8"/><text class="svg-label" x="390" y="49" text-anchor="middle">ghost_min_corner + snap</text><text class="svg-note" x="390" y="63" text-anchor="middle">multiple of 8</text>
+      <rect class="svg-node" x="500" y="30" width="170" height="40" rx="8"/><text class="svg-label" x="585" y="49" text-anchor="middle">placement_valid</text><text class="svg-note" x="585" y="63" text-anchor="middle">bounds · terrain · overlap · node</text>
+      <rect class="svg-node new" x="690" y="30" width="200" height="40" rx="8"/><text class="svg-label" x="790" y="49" text-anchor="middle">assisted search</text><text class="svg-note" x="790" y="63" text-anchor="middle">steps squares, not cells</text>
+      <path class="svg-line" d="M130 50 H150 M280 50 H300 M480 50 H500 M670 50 H690"/>
+      <text class="svg-note" x="450" y="100" text-anchor="middle">Units are never an obstruction — a body standing on the plot is evacuated when the site finishes, not refused at placement.</text>
+    </svg>
+  </figure>
+
+  <h2>Order feedback is derived state</h2>
+  <p>Nothing stores "what you last clicked". Every frame, the packer and the card read the live <code>Order</code> and describe it. That is why a target ring reappears when you re-select a worker, and why an order changed by a script, a rally or the combat system is described correctly without any extra bookkeeping.</p>
+  <table>
+    <tr><th>Order</th><th>Card status</th><th>Overlay</th></tr>
+    <tr><td><code>Idle</code></td><td><code>IDLE</code></td><td>—</td></tr>
+    <tr><td><code>Move</code></td><td><code>MOVING</code></td><td>dashed bearing to the unit's formation slot; flag at the destination</td></tr>
+    <tr><td><code>Gather</code> · <code>ToNode</code></td><td><code>MOVING TO MINERAL</code> / <code>GAS</code></td><td>target ring on the node</td></tr>
+    <tr><td><code>Gather</code> · <code>Mining</code></td><td><code>COLLECTING MINERAL</code> / <code>GAS</code></td><td>target ring on the node</td></tr>
+    <tr><td><code>Gather</code> · <code>Returning</code></td><td><code>RETURNING MINERAL</code> / <code>GAS</code></td><td>target ring on the node</td></tr>
+    <tr><td><code>Build</code></td><td><code>BUILDING</code></td><td>target ring on the site</td></tr>
+    <tr><td><code>Follow</code></td><td><code>FOLLOWING</code></td><td>target ring on the followed entity</td></tr>
+  </table>
+  <div class="grid">
+    <div class="card"><b>Ring, not a second colour</b><p>Target rings use the selection ring's green at half its band width. One hue means "the world drew this shape for you"; thickness carries the difference between selected and targeted.</p></div>
+    <div class="card"><b>Markers are hashed</b><p>Ground-order flags are bounded (<code>MAX_MOVE_MARKERS</code>), self-expiring (<code>MOVE_MARKER_TICKS</code>) and fed into <code>state_hash</code> — a feedback affordance two processes could disagree about would be a determinism hole.</p></div>
+    <div class="card"><b>Bearing, not route</b><p>The dashed line is a straight segment to the unit's own formation slot. It answers "where is this going", not "which way around the rock" — a named gap, not an oversight.</p></div>
+    <div class="card"><b>Vocabulary gap, recorded</b><p>The status line says <code>MINERAL</code> (the user's word) while <code>kind_label</code> says <code>CRYSTAL</code> (the code's). Deliberate, written down, one token to unify.</p></div>
+  </div>
+
+  <h2>Follow and rally</h2>
+  <figure role="img" aria-labelledby="r-t r-d">
+    <figcaption><b id="r-t">One right-click, decided by what you clicked and who owns it</b><span id="r-d">Enemy attacks, friendly follows, node gathers, ground moves and plants a marker.</span></figcaption>
+    <svg viewBox="0 0 900 170">
+      <title>Right-click dispatch</title><desc>A right-click resolves a pick, then dispatches on ownership to attack, follow, gather or move.</desc>
+      <rect class="svg-node hot" x="20" y="60" width="150" height="44" rx="9"/><text class="svg-label" x="95" y="79" text-anchor="middle">right-click</text><text class="svg-note" x="95" y="94" text-anchor="middle">pick_at</text>
+      <rect class="svg-node" x="260" y="6" width="200" height="36" rx="8"/><text class="svg-label" x="360" y="29" text-anchor="middle">enemy ⇒ attack (ADR 022)</text>
+      <rect class="svg-node new" x="260" y="52" width="200" height="36" rx="8"/><text class="svg-label" x="360" y="75" text-anchor="middle">friendly ⇒ follow</text>
+      <rect class="svg-node" x="260" y="98" width="200" height="36" rx="8"/><text class="svg-label" x="360" y="121" text-anchor="middle">node ⇒ gather</text>
+      <rect class="svg-node new" x="260" y="144" width="200" height="26" rx="8"/><text class="svg-label" x="360" y="162" text-anchor="middle">ground ⇒ move + marker</text>
+      <rect class="svg-node new" x="540" y="30" width="330" height="100" rx="10"/>
+      <text class="svg-label" x="705" y="56" text-anchor="middle" font-weight="700">Rally reuses the same three verbs</text>
+      <text class="svg-note" x="705" y="80" text-anchor="middle">RallyTarget::Cell ⇒ move · Entity(node) ⇒ gather</text>
+      <text class="svg-note" x="705" y="100" text-anchor="middle">Entity(unit | building) ⇒ follow</text>
+      <text class="svg-note" x="705" y="120" text-anchor="middle">flag + dashed line while the producer is selected</text>
+      <path class="svg-line" d="M170 82 C215 82 215 24 260 24 M170 82 C215 82 215 70 260 70 M170 82 C215 82 215 116 260 116 M170 82 C215 82 215 157 260 157 M460 70 H540"/>
+    </svg>
+  </figure>
+  <ul>
+    <li><b>Follow holds, it does not stack.</b> A follower stops at <code>interaction_reach</code> from the target's shape and re-paths only when the target drifts more than <code>FOLLOW_REPATH_CELLS</code> from the goal it last pathed to — bounded field churn, no per-tick rebuild.</li>
+    <li><b>A dead target ends the order</b> as <code>Idle</code> on the tick it is noticed, the same discipline a mined-out gather node already gets.</li>
+    <li><b>Rally onto minerals means gather</b>, because that is what an RTS player means by it — not "walk to a spot near the rocks".</li>
+    <li><b>Enemies are not rally targets.</b> A rally click on an enemy is rejected with a receipt, so a mis-click is legible instead of silent.</li>
+  </ul>
+
+  <h2>The trapped builder</h2>
+  <p>The reported bug — "the barracks spawned over my worker and I cannot move it" — lands on machinery that already handles exactly that case. <code>finish_site</code> plans an evacuation for every body the finishing footprint covers, and if one evacuee has nowhere legal to go it discards the whole plan and leaves the site walkable at <code>build_ticks - 1</code>.</p>
+  <div class="warn"><b>So the symptom is a failure mode, not a gap</b> — a permanently stalled site, a body sealed by the mask rebuilt after the commit, or an order still pointing at the finished site. The ticket reproduces it first and names which; the user's "phasing" grace period is the fallback design, applied only if the repro proves no legal centre exists.</div>
+
+  <h2>The sandbox scene</h2>
+  <p>The last item is the one that makes all the others testable by hand: a scene that starts with the base already built. That needs one small schema addition — a declarative list of finished buildings and starting units, both <code>serde</code>-defaulted so every existing scene file stays byte-identical and hash-stable — plus validation that a declared building is square-aligned and overlaps nothing.</p>
+  <table>
+    <tr><th>Field</th><th>Shape</th><th>Validated</th></tr>
+    <tr><td><code>rts.buildings</code></td><td><code>[{ kind, cell }]</code>, seeded finished and stamped</td><td>square-aligned, in bounds, clear of terrain, other buildings, the HQ and every node</td></tr>
+    <tr><td><code>rts.start_units</code></td><td><code>[{ kind, cell, count }]</code>, seeded with radius-aware relocation</td><td>clear of every footprint, on the map, <code>count ≥ 1</code></td></tr>
+  </table>
+  <p><code>assets/scenarios/rts_sandbox_v1.ron</code> uses both: HQ, Depot, Barracks and two Turrets already standing, six workers, eight soldiers, and thirty authored waves arriving from the two far corners. It runs with <code>--scenario</code> and no <code>--frames</code>, and it is deliberately <b>not</b> on the merge gate — an untimed scene proves nothing on a timer, and its job is to be played.</p>
+</main>
+</body>
+</html>

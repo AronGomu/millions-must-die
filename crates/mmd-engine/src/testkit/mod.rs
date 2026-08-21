@@ -38,8 +38,9 @@ mod rts;
 
 pub use fixtures::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE,
-    FIXTURE_CORRIDOR_V1, FIXTURE_DENSE_V1, FIXTURE_DIR, FIXTURE_SMALL_V1, FIXTURE_WALLED_V1,
-    GATE_SCENARIO, RTS_SCENE, fixture_path, gate_scenario_path, rts_scene_path, scene_path,
+    FIXTURE_CORRIDOR_V1, FIXTURE_DENSE_V1, FIXTURE_DIR, FIXTURE_RTS_COMBAT_V1,
+    FIXTURE_RTS_PREBUILT_V1, FIXTURE_SMALL_V1, FIXTURE_WALLED_V1, GATE_SCENARIO, RTS_SANDBOX_SCENE,
+    RTS_SCENE, fixture_path, gate_scenario_path, rts_scene_path, scene_path,
 };
 pub use rng::SplitMix64;
 pub use rts::{RtsHarness, RtsHarnessBuilder};

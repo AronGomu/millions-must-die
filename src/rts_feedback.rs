@@ -31,7 +31,8 @@
 //! both run it from `rts_run::apply`, so the two cannot drift.
 
 use mmd_engine::rts::{
-    ContextOrderResult, EntityId, EntityKind, IssuedOrder, OWNER_PLAYER, RtsWorld, UnitOrderReceipt,
+    CommandReceipt, ContextOrderResult, EntityId, EntityKind, IssuedOrder, OWNER_PLAYER, RtsWorld,
+    UnitOrderReceipt,
 };
 
 use crate::rts_settings::AudioSettings;
@@ -68,6 +69,11 @@ impl VoiceCue {
             IssuedOrder::Move => Self::Move,
             IssuedOrder::Gather => Self::Gather,
             IssuedOrder::Build => Self::Build,
+            // Attack/follow family voices as Move: no new tracked voice asset.
+            IssuedOrder::Attack
+            | IssuedOrder::AttackMove
+            | IssuedOrder::Stop
+            | IssuedOrder::Follow => Self::Move,
         }
     }
 }
@@ -506,6 +512,11 @@ pub fn order_cues(receipts: &[UnitOrderReceipt]) -> Option<VoiceBatch> {
 /// [`MAX_UNIT_CUES_PER_ACTION`] — that is a cap, not a rejection.
 pub fn reject_cue(result: &ContextOrderResult) -> Option<AudioEvent> {
     (result.rejected > 0).then_some(AudioEvent::Reject)
+}
+
+/// The single reject cue for one `cmd_*` command, when it was refused whole.
+pub fn command_reject_cue(receipt: &CommandReceipt) -> Option<AudioEvent> {
+    receipt.reason.is_some().then_some(AudioEvent::Reject)
 }
 
 #[cfg(test)]
@@ -967,6 +978,44 @@ mod tests {
             quiet_world.state_hash(),
             "audio derivation must never reach world state"
         );
+    }
+
+    // -- T4 feedback tests -----------------------------------------------
+
+    #[test]
+    fn attack_family_receipts_voice_as_move_orders() {
+        let receipts = [
+            receipt(1, IssuedOrder::Attack),
+            receipt(2, IssuedOrder::AttackMove),
+            receipt(3, IssuedOrder::Stop),
+        ];
+        let batch = order_cues(&receipts).expect("must produce a batch");
+        assert_eq!(batch.len, 3);
+        for entry in batch.entries.iter().take(3) {
+            let cue = entry.expect("must have cue");
+            assert_eq!(cue.cue, VoiceCue::Move, "attack family must map to Move");
+        }
+        // AudioCounters counts them as order_cues
+        let mut counters = AudioCounters::default();
+        counters.record(&AudioEvent::Voice(batch));
+        assert_eq!(counters.order_cues, 3);
+    }
+
+    #[test]
+    fn command_reject_cue_fires_on_reason_only() {
+        use mmd_engine::rts::{CommandReceipt, CommandRejectReason};
+        let no_reason = CommandReceipt {
+            accepted: 2,
+            rejected: 0,
+            reason: None,
+        };
+        assert!(command_reject_cue(&no_reason).is_none());
+        let with_reason = CommandReceipt {
+            accepted: 0,
+            rejected: 1,
+            reason: Some(CommandRejectReason::EmptySelection),
+        };
+        assert_eq!(command_reject_cue(&with_reason), Some(AudioEvent::Reject));
     }
 
     // -- Fake sink discipline --------------------------------------------

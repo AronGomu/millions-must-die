@@ -9,12 +9,12 @@
   seed: 1743218095512340987,
   destination: (x: 165, y: 176),
   spawn_cells: [
-    (x: 162, y: 178),
-    (x: 163, y: 178),
-    (x: 164, y: 178),
-    (x: 165, y: 178),
-    (x: 166, y: 178),
-    (x: 167, y: 178),
+    (x: 162, y: 190),
+    (x: 163, y: 190),
+    (x: 164, y: 190),
+    (x: 165, y: 190),
+    (x: 166, y: 190),
+    (x: 167, y: 190),
   ],
   atlas_count: 4,
   direction_count: 8,
@@ -96,5 +96,18 @@
       (x: 136, y: 168),
       (x: 196, y: 168),
     ],
+    enemies: Some((
+      pre_placed: [],
+      spawn_points: [
+        (x: 14, y: 304),
+        (x: 306, y: 304),
+      ],
+      waves: [
+        (at_tick: 3000, count: 12, spawn_point: 0),
+        (at_tick: 4100, count: 150, spawn_point: 0),
+        (at_tick: 4160, count: 150, spawn_point: 1),
+        (at_tick: 4220, count: 88, spawn_point: 1),
+      ],
+    )),
   )),
 )

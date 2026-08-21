@@ -13,10 +13,16 @@
 use crate::render::{DrawGroup, GLYPH_H_PX, GLYPH_W_PX, SpriteInstance, frame_uv_rect, push_text};
 
 use super::build::supply_grant;
-use super::entity::{BuildingKind, EntityId, EntityKind, EntityStore, ResourceKind, UnitKind};
+use super::combat::weapon;
+use super::economy::WORKER_CARRY_CAPACITY;
+use super::entity::{
+    BuildingKind, EntityId, EntityKind, EntityStore, OWNER_ENEMY, OWNER_PLAYER, ResourceKind,
+    UnitKind, max_hp,
+};
 use super::minimap::minimap_projection;
+use super::orders::{GatherPhase, Order};
 use super::pack::{Prop, RtsFrame, building_uv, node_uv, prop_uv};
-use super::production::produce_ticks;
+use super::production::{RallyTarget, produce_ticks};
 use super::world::RtsWorld;
 
 /// Every fixed logical-space rect the HUD's chrome occupies.
@@ -591,10 +597,11 @@ pub const MENU_TEXT_POS: [f32; 2] = [1840.0, 20.0];
 /// worse than no menu. This slice's command grid does not draw these letters
 /// (that lands with the interactive menu, `T13`); the table stays the single
 /// source both sides read.
-pub const BUILD_MENU: [(u8, BuildingKind); 3] = [
+pub const BUILD_MENU: [(u8, BuildingKind); 4] = [
     (b'Q', BuildingKind::Hq),
     (b'W', BuildingKind::Depot),
     (b'E', BuildingKind::Barracks),
+    (b'A', BuildingKind::Turret),
 ];
 
 /// Longest decimal a `u32` needs, plus room for a `/` pair.
@@ -653,9 +660,11 @@ pub fn kind_label(kind: EntityKind) -> &'static str {
     match kind {
         EntityKind::Unit(UnitKind::Worker) => "WORKER",
         EntityKind::Unit(UnitKind::Soldier) => "SOLDIER",
+        EntityKind::Unit(UnitKind::Ghoul) => "GHOUL",
         EntityKind::Building(BuildingKind::Hq) => "HQ",
         EntityKind::Building(BuildingKind::Depot) => "DEPOT",
         EntityKind::Building(BuildingKind::Barracks) => "BARRACKS",
+        EntityKind::Building(BuildingKind::Turret) => "TURRET",
         EntityKind::Node(ResourceKind::Crystal) => "CRYSTAL",
         EntityKind::Node(ResourceKind::Gas) => "GAS",
     }
@@ -670,6 +679,9 @@ pub enum CommandId {
     TrainWorker,
     TrainSoldier,
     SetRally,
+    Attack,
+    Stop,
+    BuildTurret,
 }
 
 /// One cell of the 3x3 command grid.
@@ -693,6 +705,9 @@ fn command_icon(cmd: CommandId) -> Prop {
         CommandId::TrainWorker => Prop::IconTrainWorker,
         CommandId::TrainSoldier => Prop::IconTrainSoldier,
         CommandId::SetRally => Prop::IconSetRally,
+        CommandId::Attack => Prop::IconAttack,
+        CommandId::Stop => Prop::IconStop,
+        CommandId::BuildTurret => Prop::IconBuildTurret,
     }
 }
 
@@ -712,6 +727,7 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
     let store = world.entities();
 
     let mut worker_count = 0u32;
+    let mut armed_count = 0u32;
     let mut building_count = 0u32;
     let mut disqualified = false;
     let mut finished_building: Option<BuildingKind> = None;
@@ -720,8 +736,15 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
         let Some(slot) = store.slot(id) else {
             continue; // stale — not counted either way
         };
+        if store.owner(slot) != OWNER_PLAYER {
+            // The read-only enemy card offers no command at all.
+            disqualified = true;
+            continue;
+        }
         match store.kind(slot) {
             EntityKind::Unit(UnitKind::Worker) => worker_count += 1,
+            EntityKind::Unit(kind) if weapon(kind).is_some() => armed_count += 1,
+            EntityKind::Unit(_) => disqualified = true,
             EntityKind::Building(kind) => {
                 building_count += 1;
                 if store.progress_target(slot) == 0 {
@@ -736,7 +759,17 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
 
     let mut out = [EMPTY_SLOT; 9];
 
-    if worker_count > 0 && building_count == 0 && !disqualified {
+    if armed_count > 0 && building_count == 0 && !disqualified {
+        // Slot 3 = key A, slot 4 = key S (row-major QWE/ASD/ZXC).
+        out[3] = CommandSlot {
+            command: Some(CommandId::Attack),
+            enabled: true,
+        };
+        out[4] = CommandSlot {
+            command: Some(CommandId::Stop),
+            enabled: true,
+        };
+    } else if worker_count > 0 && building_count == 0 && !disqualified {
         out[0] = CommandSlot {
             command: Some(CommandId::BuildHq),
             enabled: true,
@@ -749,7 +782,11 @@ pub fn command_slots(world: &RtsWorld) -> [CommandSlot; 9] {
             command: Some(CommandId::BuildBarracks),
             enabled: true,
         };
-    } else if worker_count == 0 && building_count == 1 && !disqualified {
+        out[3] = CommandSlot {
+            command: Some(CommandId::BuildTurret),
+            enabled: true,
+        };
+    } else if worker_count == 0 && armed_count == 0 && building_count == 1 && !disqualified {
         let produce = match finished_building {
             Some(BuildingKind::Hq) => Some(CommandId::TrainWorker),
             Some(BuildingKind::Barracks) => Some(CommandId::TrainSoldier),
@@ -842,6 +879,13 @@ pub const CAMERA_POLY_TINT: [f32; 4] = [0.95, 0.85, 0.30, 1.0];
 /// renderer), not a single line primitive.
 pub const CAMERA_POLY_PX: f32 = 2.0;
 
+/// Enemy-unit dot tint on the minimap — a red claimed by nothing else on
+/// the minimap or its chrome (the camera polygon is yellow, panels are
+/// atlas-tinted white, blocked text is a muted `[0.75, 0.28, 0.24]`).
+pub const MINIMAP_ENEMY_TINT: [f32; 4] = [0.90, 0.12, 0.10, 1.0];
+/// Enemy dot edge, in pixels — the camera polygon's stamp size.
+pub const MINIMAP_ENEMY_DOT_PX: f32 = 2.0;
+
 /// Stamp one polygon edge (`a` to `b`, minimap-local, offset onto screen by
 /// the caller) as a run of [`CAMERA_POLY_PX`] squares.
 fn push_camera_edge(props: &mut Vec<SpriteInstance>, a: [f32; 2], b: [f32; 2]) {
@@ -866,10 +910,11 @@ fn push_camera_edge(props: &mut Vec<SpriteInstance>, a: [f32; 2], b: [f32; 2]) {
 
 /// Section: the minimap frame, its map area, and the camera's footprint.
 ///
-/// Draws no entities, resources, fog or terrain detail (`T12`'s scope): only
-/// the map diamond's chrome and a projected outline of what the camera can
-/// currently see. Clicking/dragging the minimap is the app's pointer router,
-/// not this packer — see `mmd_engine::rts::hud_hit_test`.
+/// Draws the map diamond's chrome, one dot per live enemy unit, and a
+/// projected outline of what the camera can currently see — still no player
+/// entities, resources, fog or terrain detail. Clicking/dragging the minimap
+/// is the app's pointer router, not this packer — see
+/// `mmd_engine::rts::hud_hit_test`.
 fn push_minimap(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
     push_panel(props, HudLayout::MINIMAP_PANEL, PANEL_TINT);
     props.push(SpriteInstance::new(
@@ -881,6 +926,30 @@ fn push_minimap(world: &RtsWorld, props: &mut Vec<SpriteInstance>) {
 
     let projection = minimap_projection(world);
     let origin = [HudLayout::MINIMAP_MAP[0], HudLayout::MINIMAP_MAP[1]];
+
+    // Enemy units, as dots: "where is the attack coming from" at a glance.
+    // Same projection as the camera polygon, drawn before it so the camera
+    // frame stays the minimap's top element.
+    let store = world.entities();
+    for slot in 0..store.slot_count() {
+        if !store.alive(slot)
+            || store.owner(slot) != OWNER_ENEMY
+            || !matches!(store.kind(slot), EntityKind::Unit(_))
+        {
+            continue;
+        }
+        let p = projection.map_to_minimap(store.position(slot));
+        props.push(SpriteInstance::new(
+            [
+                origin[0] + p[0] - MINIMAP_ENEMY_DOT_PX * 0.5,
+                origin[1] + p[1] - MINIMAP_ENEMY_DOT_PX * 0.5,
+            ],
+            [MINIMAP_ENEMY_DOT_PX, MINIMAP_ENEMY_DOT_PX],
+            prop_uv(Prop::PanelFill),
+            MINIMAP_ENEMY_TINT,
+        ));
+    }
+
     let corners = projection.camera_polygon(&world.iso_view());
     for i in 0..corners.len() {
         let a = corners[i];
@@ -913,6 +982,10 @@ fn portrait_source(store: &EntityStore, slot: usize) -> (PortraitTarget, [f32; 4
             PortraitTarget::Soldier,
             frame_uv_rect(PORTRAIT_DIR, PORTRAIT_FRAME),
         ),
+        EntityKind::Unit(UnitKind::Ghoul) => (
+            PortraitTarget::Soldier,
+            frame_uv_rect(PORTRAIT_DIR, PORTRAIT_FRAME),
+        ),
         EntityKind::Building(kind) => (
             PortraitTarget::Building,
             building_uv(kind, store.progress_target(slot) > 0),
@@ -938,6 +1011,52 @@ fn push_to_target(
     }
 }
 
+/// Derives a human-readable status word from the live order an entity carries.
+///
+/// Everything is computed per frame from the current `Order`, which is why the
+/// label survives deselect/reselect without any persistent state. Status strings
+/// follow the user's feedback vocabulary (`MINERAL`) rather than the code's
+/// `ResourceKind::Crystal`, by deliberate design.
+pub fn order_status_label(world: &RtsWorld, slot: usize) -> &'static str {
+    let store = world.entities();
+    let Some(id) = store.id_at(slot) else {
+        return "IDLE";
+    };
+    let Some(order) = world.order_of(id) else {
+        return "IDLE";
+    };
+    match order {
+        Order::Idle => "IDLE",
+        Order::Move { .. } => "MOVING",
+        Order::AttackMove { .. } => "MOVING",
+        Order::Attack { .. } => "MOVING",
+        Order::Follow { .. } => "FOLLOWING",
+        Order::Build { .. } => "BUILDING",
+        Order::Gather { node, phase } => {
+            let Some(node_slot) = store.slot(node) else {
+                return "MOVING";
+            };
+            let EntityKind::Node(res_kind) = store.kind(node_slot) else {
+                return "MOVING";
+            };
+            match phase {
+                GatherPhase::ToNode { .. } => match res_kind {
+                    ResourceKind::Crystal => "MOVING TO MINERAL",
+                    ResourceKind::Gas => "MOVING TO GAS",
+                },
+                GatherPhase::Mining { .. } => match res_kind {
+                    ResourceKind::Crystal => "COLLECTING MINERAL",
+                    ResourceKind::Gas => "COLLECTING GAS",
+                },
+                GatherPhase::Returning { .. } => match res_kind {
+                    ResourceKind::Crystal => "RETURNING MINERAL",
+                    ResourceKind::Gas => "RETURNING GAS",
+                },
+            }
+        }
+    }
+}
+
 /// The selection card's detail text, right of the portrait: kind, then a
 /// state line (carry/idle/progress/ready/remaining), then rally if any.
 fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance>) {
@@ -949,6 +1068,35 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
     let kind = store.kind(slot);
     push_text(font, kind_label(kind), [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
     y += PANEL_LINE_PX;
+
+    // HP line: one line for every entity that has HP (units, buildings,
+    // enemies). Nodes have max_hp == 0 and are excluded.
+    let mhp = max_hp(kind);
+    if mhp > 0 {
+        let mut cx = x;
+        cx += push_text(font, "HP ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+        let s = fmt_ratio(&mut buf, store.hp(slot), mhp);
+        push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+        y += PANEL_LINE_PX;
+    }
+
+    // Read-only enemy card stops after the kind + HP lines.
+    if store.owner(slot) == OWNER_ENEMY {
+        return;
+    }
+
+    // Status line: one line for every friendly unit, derived per frame from
+    // the live order so it survives deselect/reselect without extra state.
+    if matches!(kind, EntityKind::Unit(_)) {
+        push_text(
+            font,
+            order_status_label(world, slot),
+            [x, y],
+            PANEL_TEXT_SCALE,
+            TEXT_TINT,
+        );
+        y += PANEL_LINE_PX;
+    }
 
     match kind {
         EntityKind::Unit(UnitKind::Worker) => match store.carry(slot) {
@@ -976,13 +1124,13 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                 );
             }
         },
-        EntityKind::Unit(UnitKind::Soldier) => {
-            push_text(font, "IDLE", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
-        }
+        // Nothing beyond the status line above: the old hard-coded `IDLE`
+        // these arms drew is exactly what `order_status_label` now derives.
+        EntityKind::Unit(UnitKind::Soldier | UnitKind::Ghoul) => {}
         EntityKind::Building(b) => {
             let id = store.id_at(slot).expect("live slot");
 
-            // Line 2: READY or BUILDING N%
+            // Line 3: READY or BUILDING N%
             let target = store.progress_target(slot);
             // Not a manual `checked_div`: `target == 0` is the site-vs-finished
             // business branch (READY has no percentage at all), not a guard
@@ -1001,7 +1149,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 3: SUPPLY +N (zero grant still shown)
+            // Line 4: SUPPLY +N (zero grant still shown)
             {
                 let grant = supply_grant(b);
                 let mut cx = x;
@@ -1011,7 +1159,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 4: QUEUE
+            // Line 5: QUEUE
             let queue = world.production_queue(id);
             if let Some(q) = queue
                 && !q.is_empty()
@@ -1025,6 +1173,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
                     let label = match kind {
                         UnitKind::Worker => "W",
                         UnitKind::Soldier => "S",
+                        UnitKind::Ghoul => "G",
                     };
                     cx += push_text(font, label, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
                 }
@@ -1034,7 +1183,7 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 5: PROGRESS (head only; saturated at 100)
+            // Line 6: PROGRESS (head only; saturated at 100)
             if let Some(q) = queue
                 && let Some(head) = q.head()
             {
@@ -1050,18 +1199,31 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             }
             y += PANEL_LINE_PX;
 
-            // Line 6: RALLY
-            if let Some(cell) = world.rally(id) {
-                let mut cx = x;
-                cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                let s = fmt_u32(&mut buf, cell.x);
-                cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                let s = fmt_u32(&mut buf, cell.y);
-                push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
-                let _ = cx;
-            } else {
-                push_text(font, "RALLY -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            // Line 7: RALLY
+            match world.rally(id) {
+                Some(RallyTarget::Cell(cell)) => {
+                    let mut cx = x;
+                    cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let s = fmt_u32(&mut buf, cell.x);
+                    cx += push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    cx += push_text(font, ",", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let s = fmt_u32(&mut buf, cell.y);
+                    push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let _ = cx;
+                }
+                Some(RallyTarget::Entity(eid)) => {
+                    let mut cx = x;
+                    cx += push_text(font, "RALLY ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let label = store
+                        .slot(eid)
+                        .map(|s| kind_label(store.kind(s)))
+                        .unwrap_or("-");
+                    push_text(font, label, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                    let _ = cx;
+                }
+                None => {
+                    push_text(font, "RALLY -", [x, y], PANEL_TEXT_SCALE, TEXT_TINT);
+                }
             }
         }
         EntityKind::Node(_) => {
@@ -1069,6 +1231,11 @@ fn push_detail_text(world: &RtsWorld, slot: usize, font: &mut Vec<SpriteInstance
             let mut cx = x;
             cx += push_text(font, "REMAINING ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
             let s = fmt_u32(&mut buf, amount);
+            push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            y += PANEL_LINE_PX;
+            let mut cx = x;
+            cx += push_text(font, "YIELD ", [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
+            let s = fmt_u32(&mut buf, WORKER_CARRY_CAPACITY);
             push_text(font, s, [cx, y], PANEL_TEXT_SCALE, TEXT_TINT);
         }
     }

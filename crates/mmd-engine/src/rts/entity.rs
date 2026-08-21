@@ -15,6 +15,8 @@ pub const MAX_ENTITIES: usize = 2_048;
 
 /// Owner id of the human player.
 pub const OWNER_PLAYER: u8 = 0;
+/// Owner id of the enemy faction.
+pub const OWNER_ENEMY: u8 = 1;
 /// Owner id of unowned world objects (resource nodes).
 pub const OWNER_NEUTRAL: u8 = 255;
 
@@ -29,6 +31,8 @@ pub const RTS_UNIT_BODY_DIAMETER_CELLS: f32 = 6.0;
 pub enum UnitKind {
     Worker = 0,
     Soldier = 1,
+    /// Phase-2 melee enemy. Never player-producible, never supply-counted.
+    Ghoul = 2,
 }
 
 impl UnitKind {
@@ -39,6 +43,7 @@ impl UnitKind {
         match self {
             Self::Worker => RTS_UNIT_BODY_RADIUS_CELLS,
             Self::Soldier => RTS_UNIT_BODY_RADIUS_CELLS,
+            Self::Ghoul => RTS_UNIT_BODY_RADIUS_CELLS,
         }
     }
 }
@@ -50,6 +55,29 @@ pub enum BuildingKind {
     Hq = 0,
     Depot = 1,
     Barracks = 2,
+    /// Phase-2 static defence. The first armed building; fires on its own,
+    /// takes no orders.
+    Turret = 3,
+}
+
+impl From<scenario::UnitKindSpec> for UnitKind {
+    fn from(spec: scenario::UnitKindSpec) -> Self {
+        match spec {
+            scenario::UnitKindSpec::Worker => Self::Worker,
+            scenario::UnitKindSpec::Soldier => Self::Soldier,
+        }
+    }
+}
+
+impl From<scenario::BuildingKindSpec> for BuildingKind {
+    fn from(spec: scenario::BuildingKindSpec) -> Self {
+        match spec {
+            scenario::BuildingKindSpec::Hq => Self::Hq,
+            scenario::BuildingKindSpec::Depot => Self::Depot,
+            scenario::BuildingKindSpec::Barracks => Self::Barracks,
+            scenario::BuildingKindSpec::Turret => Self::Turret,
+        }
+    }
 }
 
 /// Harvestable resource kinds.
@@ -96,12 +124,72 @@ impl BuildingKind {
             Self::Hq => scenario::HQ_FOOTPRINT_CELLS,
             Self::Depot => scenario::DEPOT_FOOTPRINT_CELLS,
             Self::Barracks => scenario::BARRACKS_FOOTPRINT_CELLS,
+            Self::Turret => scenario::TURRET_FOOTPRINT_CELLS,
         }
     }
 
     /// Whether workers may return cargo here. Only the HQ, in this slice.
     pub fn is_drop_off(self) -> bool {
         matches!(self, Self::Hq)
+    }
+}
+
+/// Full hit points per kind — phase-2 placeholder stats, not balance.
+pub const WORKER_MAX_HP: u32 = 25;
+/// See [`WORKER_MAX_HP`].
+pub const SOLDIER_MAX_HP: u32 = 40;
+/// See [`WORKER_MAX_HP`].
+pub const HQ_MAX_HP: u32 = 400;
+/// See [`WORKER_MAX_HP`].
+pub const DEPOT_MAX_HP: u32 = 150;
+/// See [`WORKER_MAX_HP`].
+pub const BARRACKS_MAX_HP: u32 = 200;
+/// See [`WORKER_MAX_HP`].
+pub const TURRET_MAX_HP: u32 = 150;
+
+/// Flat damage reduction per kind — a hit deals `max(1, damage - armor)`.
+pub const WORKER_ARMOR: u32 = 0;
+/// See [`WORKER_ARMOR`].
+pub const SOLDIER_ARMOR: u32 = 0;
+/// See [`WORKER_ARMOR`].
+pub const HQ_ARMOR: u32 = 2;
+/// See [`WORKER_ARMOR`].
+pub const DEPOT_ARMOR: u32 = 1;
+/// See [`WORKER_ARMOR`].
+pub const BARRACKS_ARMOR: u32 = 1;
+/// See [`WORKER_ARMOR`].
+pub const TURRET_ARMOR: u32 = 1;
+
+/// Hit points a full-health entity of `kind` spawns with.
+///
+/// `0` for a resource node: nodes are indestructible and carry no HP
+/// semantics at all — damage refuses them by kind, never by reading this.
+/// The exhaustive match forces a future kind to decide its own value
+/// instead of silently inheriting one.
+pub fn max_hp(kind: EntityKind) -> u32 {
+    match kind {
+        EntityKind::Unit(UnitKind::Worker) => WORKER_MAX_HP,
+        EntityKind::Unit(UnitKind::Soldier) => SOLDIER_MAX_HP,
+        EntityKind::Unit(UnitKind::Ghoul) => 30,
+        EntityKind::Building(BuildingKind::Hq) => HQ_MAX_HP,
+        EntityKind::Building(BuildingKind::Depot) => DEPOT_MAX_HP,
+        EntityKind::Building(BuildingKind::Barracks) => BARRACKS_MAX_HP,
+        EntityKind::Building(BuildingKind::Turret) => TURRET_MAX_HP,
+        EntityKind::Node(_) => 0,
+    }
+}
+
+/// Flat damage reduction of `kind`: one hit deals `max(1, damage - armor)`.
+pub fn armor(kind: EntityKind) -> u32 {
+    match kind {
+        EntityKind::Unit(UnitKind::Worker) => WORKER_ARMOR,
+        EntityKind::Unit(UnitKind::Soldier) => SOLDIER_ARMOR,
+        EntityKind::Unit(UnitKind::Ghoul) => 0,
+        EntityKind::Building(BuildingKind::Hq) => HQ_ARMOR,
+        EntityKind::Building(BuildingKind::Depot) => DEPOT_ARMOR,
+        EntityKind::Building(BuildingKind::Barracks) => BARRACKS_ARMOR,
+        EntityKind::Building(BuildingKind::Turret) => TURRET_ARMOR,
+        EntityKind::Node(_) => 0,
     }
 }
 
@@ -139,6 +227,12 @@ pub struct EntityStore {
     amount: Vec<u32>,
     carry_kind: Vec<u8>,
     carry_amount: Vec<u32>,
+    /// Remaining hit points. `0` for a resource node — indestructible, no HP
+    /// semantics (see [`max_hp`]).
+    hp: Vec<u32>,
+    /// Ticks until this entity may fire again; `0` means ready, and stays
+    /// `0` for anything unarmed.
+    cooldown: Vec<u32>,
     /// LIFO free list of dead slot indices.
     free: Vec<u32>,
     live: usize,
@@ -166,6 +260,8 @@ impl EntityStore {
             amount: Vec::with_capacity(MAX_ENTITIES),
             carry_kind: Vec::with_capacity(MAX_ENTITIES),
             carry_amount: Vec::with_capacity(MAX_ENTITIES),
+            hp: Vec::with_capacity(MAX_ENTITIES),
+            cooldown: Vec::with_capacity(MAX_ENTITIES),
             free: Vec::with_capacity(MAX_ENTITIES),
             live: 0,
         }
@@ -229,6 +325,8 @@ impl EntityStore {
             self.amount.push(0);
             self.carry_kind.push(CARRY_NONE);
             self.carry_amount.push(0);
+            self.hp.push(0);
+            self.cooldown.push(0);
             i
         } else {
             return None;
@@ -246,6 +344,8 @@ impl EntityStore {
         self.amount[idx] = 0;
         self.carry_kind[idx] = CARRY_NONE;
         self.carry_amount[idx] = 0;
+        self.hp[idx] = max_hp(kind);
+        self.cooldown[idx] = 0;
         self.live += 1;
 
         Some(EntityId {
@@ -386,6 +486,29 @@ impl EntityStore {
         self.amount[slot] = amount;
     }
 
+    /// Remaining hit points; `0` for a resource node, which has no HP
+    /// semantics.
+    pub fn hp(&self, slot: usize) -> u32 {
+        self.assert_live(slot);
+        self.hp[slot]
+    }
+
+    pub fn set_hp(&mut self, slot: usize, hp: u32) {
+        self.assert_live(slot);
+        self.hp[slot] = hp;
+    }
+
+    /// Ticks until this entity may fire again. `0` means ready.
+    pub fn cooldown(&self, slot: usize) -> u32 {
+        self.assert_live(slot);
+        self.cooldown[slot]
+    }
+
+    pub fn set_cooldown(&mut self, slot: usize, ticks: u32) {
+        self.assert_live(slot);
+        self.cooldown[slot] = ticks;
+    }
+
     /// What this unit is carrying, and how much. `None` when empty-handed.
     pub fn carry(&self, slot: usize) -> Option<(ResourceKind, u32)> {
         self.assert_live(slot);
@@ -444,6 +567,8 @@ impl EntityStore {
             h.update(self.amount[i].to_le_bytes());
             h.update([self.carry_kind[i]]);
             h.update(self.carry_amount[i].to_le_bytes());
+            h.update(self.hp[i].to_le_bytes());
+            h.update(self.cooldown[i].to_le_bytes());
         }
     }
 
@@ -451,7 +576,7 @@ impl EntityStore {
     /// hook only: proves the zero-growth contract without exposing the
     /// storage layout to production code.
     #[cfg(feature = "testkit")]
-    pub fn column_capacities(&self) -> [usize; 13] {
+    pub fn column_capacities(&self) -> [usize; 15] {
         [
             self.alive.capacity(),
             self.generation.capacity(),
@@ -466,6 +591,8 @@ impl EntityStore {
             self.amount.capacity(),
             self.carry_kind.capacity(),
             self.carry_amount.capacity(),
+            self.hp.capacity(),
+            self.cooldown.capacity(),
         ]
     }
 }

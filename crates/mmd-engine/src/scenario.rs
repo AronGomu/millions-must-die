@@ -93,13 +93,24 @@ pub const RTS_MAX_MAP_EDGE: u32 = 512;
 /// Largest cell count (`width * height`) an RTS-family map may declare.
 pub const RTS_MAX_MAP_CELLS: u32 = 262_144;
 
-/// Footprint edge of the HQ, in cells. The validator needs it to prove the HQ
-/// site is buildable; the build system reuses the same constant.
-pub const HQ_FOOTPRINT_CELLS: u32 = 12;
-/// Footprint edge of the Depot, in cells.
+/// Edge of one *visible build square*, in true coordinate cells.
+///
+/// Units move on the cell grid as floats and ignore this entirely; it
+/// exists so buildings line up with each other and with what the player
+/// is shown. Every building footprint is a whole number of squares, and
+/// every building's min corner is a multiple of this.
+pub const BUILD_SQUARE_CELLS: u32 = 8;
+
+/// Footprint edge of the HQ, in cells — 3 × 3 squares. The validator needs it
+/// to prove the HQ site is buildable; the build system reuses the same
+/// constant.
+pub const HQ_FOOTPRINT_CELLS: u32 = 24;
+/// Footprint edge of the Depot, in cells — 1 × 1 square.
 pub const DEPOT_FOOTPRINT_CELLS: u32 = 8;
-/// Footprint edge of the Barracks, in cells.
-pub const BARRACKS_FOOTPRINT_CELLS: u32 = 10;
+/// Footprint edge of the Barracks, in cells — 2 × 2 squares.
+pub const BARRACKS_FOOTPRINT_CELLS: u32 = 16;
+/// Footprint edge of the Turret, in cells — 1 × 1 square.
+pub const TURRET_FOOTPRINT_CELLS: u32 = 8;
 
 /// Largest starting stock a scene may grant, per resource. Generous, but not
 /// "the whole slice is already paid for".
@@ -108,6 +119,20 @@ pub const MAX_START_RESOURCE: u32 = 2_000;
 pub const MAX_SUPPLY_CAP: u32 = 500;
 /// Most resource nodes a scene may declare, per kind.
 pub const MAX_RESOURCE_NODES: usize = 64;
+/// Most units a scene may *start* with: one per `spawn_cells` entry plus
+/// every `start_units` batch.
+///
+/// Not a cap on the live army — production raises that at runtime, bounded by
+/// [`MAX_SUPPLY_CAP`]. This bounds only what construction seeds, so a scene
+/// cannot fill the entity store before its first tick and leave the wave
+/// spawner nowhere to put [`MAX_ENEMIES`].
+pub const MAX_START_UNITS: u32 = 200;
+/// Most enemies a scene may script in total: pre-placed plus every wave.
+///
+/// Chosen under the 2 048-entity store with room left for the 500-supply
+/// player army, its buildings and the scene's nodes; the wave spawner's
+/// bounded deferral absorbs a store that is momentarily fuller.
+pub const MAX_ENEMIES: u32 = 1_200;
 
 /// Grid cell coordinate (cell space, not pixels).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -134,6 +159,107 @@ pub struct RtsSpec {
     pub crystal_nodes: Vec<Cell>,
     /// Gas node cells. At least one.
     pub gas_nodes: Vec<Cell>,
+    /// Scripted enemy content. Absent on every scene shipped before combat.
+    ///
+    /// `#[serde(default)]` is load-bearing: it is what keeps every tracked
+    /// RTS `.ron` byte-identical, and therefore its `.sha256` sidecar valid,
+    /// across this change.
+    #[serde(default)]
+    pub enemies: Option<EnemySpec>,
+    /// Buildings the scene starts with, already finished. `cell` is the min
+    /// corner and must sit on the build square, like every placed building.
+    ///
+    /// Defaults to empty, which is why every pre-existing scene stays
+    /// byte-identical and hash-stable across this change.
+    #[serde(default)]
+    pub buildings: Vec<PrebuiltSpec>,
+    /// Units the scene starts with, beyond the workers `spawn_cells` seeds.
+    ///
+    /// Defaults to empty, for the same hash-stability reason as `buildings`.
+    #[serde(default)]
+    pub start_units: Vec<StartUnitSpec>,
+}
+
+/// Scripted enemy content of an RTS scene: pre-placed Ghouls, wave
+/// origins and a finite timed wave list. Validated by
+/// [`validate_rts_block`]; capped by [`MAX_ENEMIES`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct EnemySpec {
+    /// Ghoul positions seeded at world construction (tick 0).
+    pub pre_placed: Vec<Cell>,
+    /// Wave origins, indexed by [`WaveSpec::spawn_point`].
+    pub spawn_points: Vec<Cell>,
+    /// Timed waves, sorted non-decreasing by `at_tick`.
+    pub waves: Vec<WaveSpec>,
+}
+
+/// Building kind, as a scenario file spells it.
+///
+/// A separate enum from the engine's `BuildingKind` on purpose: the file
+/// format names a kind by word, never by discriminant, so the engine may
+/// reorder its own enum without silently re-reading a tracked scene as a
+/// different building.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum BuildingKindSpec {
+    Hq,
+    Depot,
+    Barracks,
+    Turret,
+}
+
+impl BuildingKindSpec {
+    /// Footprint edge in cells, from the same constants the build system uses.
+    pub fn footprint_cells(self) -> u32 {
+        match self {
+            Self::Hq => HQ_FOOTPRINT_CELLS,
+            Self::Depot => DEPOT_FOOTPRINT_CELLS,
+            Self::Barracks => BARRACKS_FOOTPRINT_CELLS,
+            Self::Turret => TURRET_FOOTPRINT_CELLS,
+        }
+    }
+}
+
+/// Player unit kind a scene may seed. Enemies are declared by [`EnemySpec`]
+/// and are always Ghouls, so no enemy kind appears here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum UnitKindSpec {
+    Worker,
+    Soldier,
+}
+
+/// One building the scene starts with, already finished.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct PrebuiltSpec {
+    pub kind: BuildingKindSpec,
+    /// **Minimum corner** of the footprint, exactly like [`RtsSpec::hq_cell`]
+    /// and exactly like a player-placed building: it must sit on the
+    /// [`BUILD_SQUARE_CELLS`] build square.
+    pub cell: Cell,
+}
+
+/// One batch of units the scene starts with, beyond the workers
+/// [`ScenarioSpec::spawn_cells`] seeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct StartUnitSpec {
+    pub kind: UnitKindSpec,
+    /// Preferred cell. Bodies are relocated to the nearest legal free centre,
+    /// exactly as the worker seeding does, so a batch of more than one unit
+    /// spreads out instead of stacking.
+    pub cell: Cell,
+    /// Units in the batch. At least 1.
+    pub count: u32,
+}
+
+/// One timed enemy wave.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct WaveSpec {
+    /// Tick the wave fires on, compared against the post-increment tick
+    /// counter: the first tick after construction is tick 1.
+    pub at_tick: u32,
+    /// Ghouls in the wave. At least 1.
+    pub count: u32,
+    /// Index into [`EnemySpec::spawn_points`].
+    pub spawn_point: u8,
 }
 
 /// Immutable validated scenario.
@@ -793,6 +919,10 @@ fn validate_rts_scene_dims(doc: &ScenarioSpec) -> Result<(), ScenarioError> {
 
 /// The RTS block is present exactly on the RTS family, and every cell it names
 /// is a cell a base could actually use.
+///
+/// `hq_cell` is additionally checked for [`BUILD_SQUARE_CELLS`] alignment, and
+/// that check runs *before* the footprint bounds check so a misaligned cell
+/// reports as misaligned rather than as an overflow.
 fn validate_rts_block(
     doc: &ScenarioSpec,
     blocked: &[bool],
@@ -886,6 +1016,15 @@ fn validate_rts_block(
         seen.push(**cell);
     }
 
+    // Alignment is checked *before* bounds so a misaligned cell reports as
+    // misaligned rather than as a footprint overflow.
+    if rts.hq_cell.x % BUILD_SQUARE_CELLS != 0 || rts.hq_cell.y % BUILD_SQUARE_CELLS != 0 {
+        return Err(ScenarioError::InvalidRts(format!(
+            "hq_cell ({}, {}): not aligned to the {BUILD_SQUARE_CELLS}-cell build square",
+            rts.hq_cell.x, rts.hq_cell.y
+        )));
+    }
+
     let hq_min_x = rts.hq_cell.x;
     let hq_min_y = rts.hq_cell.y;
     let hq_max_x = hq_min_x.checked_add(HQ_FOOTPRINT_CELLS);
@@ -927,6 +1066,187 @@ fn validate_rts_block(
             return Err(ScenarioError::InvalidRts(format!(
                 "spawn ({}, {}) lies inside the HQ footprint",
                 sp.x, sp.y
+            )));
+        }
+    }
+
+    // Declared pre-built buildings. Same shape of rule as the HQ, in the same
+    // order — alignment, then bounds, then "covers nothing that was already
+    // there" — so a misaligned cell reports as misaligned rather than as an
+    // overlap. `footprints` accumulates as it goes, so building *i* is checked
+    // against the HQ and against every earlier declaration.
+    let mut footprints: Vec<(Cell, u32)> = Vec::with_capacity(rts.buildings.len() + 1);
+    footprints.push((rts.hq_cell, HQ_FOOTPRINT_CELLS));
+    let covers = |min: Cell, edge: u32, c: Cell| {
+        c.x >= min.x && c.x < min.x + edge && c.y >= min.y && c.y < min.y + edge
+    };
+    for (i, b) in rts.buildings.iter().enumerate() {
+        let edge = b.kind.footprint_cells();
+        if b.cell.x % BUILD_SQUARE_CELLS != 0 || b.cell.y % BUILD_SQUARE_CELLS != 0 {
+            return Err(ScenarioError::InvalidRts(format!(
+                "buildings[{i}] ({}, {}): not aligned to the {BUILD_SQUARE_CELLS}-cell build square",
+                b.cell.x, b.cell.y
+            )));
+        }
+        let (Some(max_x), Some(max_y)) = (b.cell.x.checked_add(edge), b.cell.y.checked_add(edge))
+        else {
+            return Err(ScenarioError::InvalidRts(format!(
+                "buildings[{i}] ({}, {}): footprint overflows",
+                b.cell.x, b.cell.y
+            )));
+        };
+        if max_x > doc.width || max_y > doc.height {
+            return Err(ScenarioError::InvalidRts(format!(
+                "buildings[{i}] ({}, {}): {edge}x{edge} footprint is out of bounds on a {}x{} grid",
+                b.cell.x, b.cell.y, doc.width, doc.height
+            )));
+        }
+        for y in b.cell.y..max_y {
+            for x in b.cell.x..max_x {
+                if blocked[(x + y * doc.width) as usize] {
+                    return Err(ScenarioError::InvalidRts(format!(
+                        "buildings[{i}] footprint cell ({x}, {y}) is blocked"
+                    )));
+                }
+            }
+        }
+        for (j, (min, other_edge)) in footprints.iter().enumerate() {
+            let disjoint = max_x <= min.x
+                || min.x + other_edge <= b.cell.x
+                || max_y <= min.y
+                || min.y + other_edge <= b.cell.y;
+            if !disjoint {
+                let what = match j {
+                    0 => "the HQ footprint".to_string(),
+                    _ => format!("buildings[{}]", j - 1),
+                };
+                return Err(ScenarioError::InvalidRts(format!(
+                    "buildings[{i}] ({}, {}) overlaps {what}",
+                    b.cell.x, b.cell.y
+                )));
+            }
+        }
+        for cell in &all_nodes {
+            if covers(b.cell, edge, **cell) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "buildings[{i}] ({}, {}) covers node ({}, {})",
+                    b.cell.x, b.cell.y, cell.x, cell.y
+                )));
+            }
+        }
+        footprints.push((b.cell, edge));
+    }
+
+    // Declared start units: on the map, and standing clear of every footprint
+    // the scene just declared — seeding a body inside a building would seal it
+    // in on tick 0.
+    for (i, u) in rts.start_units.iter().enumerate() {
+        if cell_index(u.cell, doc.width, doc.height).is_none() {
+            return Err(ScenarioError::InvalidRts(format!(
+                "start_units[{i}] ({}, {}) is out of bounds",
+                u.cell.x, u.cell.y
+            )));
+        }
+        for (j, (min, edge)) in footprints.iter().enumerate() {
+            if covers(*min, *edge, u.cell) {
+                let what = match j {
+                    0 => "the HQ footprint".to_string(),
+                    _ => format!("buildings[{}]", j - 1),
+                };
+                return Err(ScenarioError::InvalidRts(format!(
+                    "start_units[{i}] ({}, {}) lies inside {what}",
+                    u.cell.x, u.cell.y
+                )));
+            }
+        }
+    }
+
+    let mut start_unit_total = doc.spawn_cells.len() as u64;
+    for (i, u) in rts.start_units.iter().enumerate() {
+        if u.count == 0 {
+            return Err(ScenarioError::InvalidRts(format!(
+                "start_units[{i}]: count must be >= 1"
+            )));
+        }
+        start_unit_total += u64::from(u.count);
+    }
+    if start_unit_total > u64::from(MAX_START_UNITS) {
+        return Err(ScenarioError::InvalidRts(format!(
+            "start unit total {start_unit_total} (workers included) exceeds cap {MAX_START_UNITS}"
+        )));
+    }
+
+    // Enemy block: every cell it names must be ground an enemy could
+    // actually stand on and walk out of, and the whole scripted invasion
+    // must stay under the entity budget.
+    if let Some(enemies) = rts.enemies.as_ref() {
+        let enemy_cell_ok = |cell: &Cell, what: &str| -> Result<(), ScenarioError> {
+            let idx = cell_index(*cell, doc.width, doc.height).ok_or_else(|| {
+                ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) is out of bounds",
+                    cell.x, cell.y
+                ))
+            })?;
+            if blocked[idx] {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) is blocked",
+                    cell.x, cell.y
+                )));
+            }
+            if !reachable[idx] {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) is unreachable from the destination",
+                    cell.x, cell.y
+                )));
+            }
+            if in_hq_footprint(*cell) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) lies inside the HQ footprint",
+                    cell.x, cell.y
+                )));
+            }
+            if all_nodes.iter().any(|n| **n == *cell) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "{what} ({}, {}) sits on a resource node",
+                    cell.x, cell.y
+                )));
+            }
+            Ok(())
+        };
+        for c in &enemies.pre_placed {
+            enemy_cell_ok(c, "enemy pre_placed cell")?;
+        }
+        for c in &enemies.spawn_points {
+            enemy_cell_ok(c, "enemy spawn_point cell")?;
+        }
+
+        let mut total = enemies.pre_placed.len() as u64;
+        let mut prev_tick: Option<u32> = None;
+        for (i, w) in enemies.waves.iter().enumerate() {
+            if w.count == 0 {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "wave {i}: count must be >= 1"
+                )));
+            }
+            if (w.spawn_point as usize) >= enemies.spawn_points.len() {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "wave {i}: spawn_point {} out of range ({} spawn points)",
+                    w.spawn_point,
+                    enemies.spawn_points.len()
+                )));
+            }
+            if prev_tick.is_some_and(|p| w.at_tick < p) {
+                return Err(ScenarioError::InvalidRts(format!(
+                    "wave {i}: at_tick {} is not sorted non-decreasing",
+                    w.at_tick
+                )));
+            }
+            prev_tick = Some(w.at_tick);
+            total += u64::from(w.count);
+        }
+        if total > u64::from(MAX_ENEMIES) {
+            return Err(ScenarioError::InvalidRts(format!(
+                "enemy total {total} exceeds cap {MAX_ENEMIES}"
             )));
         }
     }

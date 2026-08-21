@@ -19,12 +19,12 @@
     {
       "id": 2,
       "file": "buildings.png",
-      "sha256": "8722f3b0041980a39e7f9d2546649f27346cceea207abb12143cbeecd0f23a23"
+      "sha256": "e04d3c4d6495f6e6d58d09924c29040b3c802610c6f345c94a7472fb43da47ba"
     },
     {
       "id": 3,
       "file": "props.png",
-      "sha256": "a53a2ab737772041bdd0a6382697e9f4b543cf57d87089001875da3c62742e10"
+      "sha256": "50501ba52b14e5ceb2dd26546b6dec129906c458d01d6d198445cec2ef470723"
     }
   ]
 }

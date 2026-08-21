@@ -69,6 +69,10 @@ const ICON_BUILD_BARRACKS_COLOR: [u8; 4] = [150, 110, 60, 255];
 const ICON_TRAIN_WORKER_COLOR: [u8; 4] = [60, 150, 220, 255];
 const ICON_TRAIN_SOLDIER_COLOR: [u8; 4] = [190, 70, 60, 255];
 const ICON_SET_RALLY_COLOR: [u8; 4] = [240, 200, 60, 255];
+const ICON_ATTACK_COLOR: [u8; 4] = [220, 60, 40, 255];
+const ICON_STOP_COLOR: [u8; 4] = [200, 200, 210, 255];
+const ICON_BUILD_TURRET_COLOR: [u8; 4] = [120, 90, 160, 255];
+const MOVE_MARKER_COLOR: [u8; 4] = [80, 220, 120, 255];
 
 /// Tracked placeholder set manifest (one per family).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +193,8 @@ fn buildings_table(row: u32, col: u32) -> Option<([u8; 4], [u8; 4], bool)> {
         (1, 0) => Some(([35, 55, 85, 255], [120, 125, 130, 255], true)),
         (1, 1) => Some(([40, 70, 55, 255], [120, 125, 130, 255], true)),
         (1, 2) => Some(([75, 55, 30, 255], [120, 125, 130, 255], true)),
+        (0, 3) => Some(([120, 90, 160, 255], [230, 235, 245, 255], false)),
+        (1, 3) => Some(([60, 45, 80, 255], [120, 125, 130, 255], true)),
         (2, 0) => Some(([120, 200, 235, 255], [235, 250, 255, 255], false)),
         (2, 1) => Some(([170, 120, 220, 255], [240, 225, 255, 255], false)),
         (2, 2) => Some(([70, 95, 105, 255], [130, 140, 145, 255], false)),
@@ -315,6 +321,21 @@ fn draw_props_cell(tile: &mut [u8], row: u32, col: u32) {
         (3, 1) => draw_hud_icon(tile, ICON_TRAIN_WORKER_COLOR),
         (3, 2) => draw_hud_icon(tile, ICON_TRAIN_SOLDIER_COLOR),
         (3, 3) => draw_hud_icon(tile, ICON_SET_RALLY_COLOR),
+        (4, 0) => draw_hud_icon(tile, ICON_ATTACK_COLOR),
+        (4, 1) => draw_hud_icon(tile, ICON_STOP_COLOR),
+        (4, 2) => draw_hud_icon(tile, ICON_BUILD_TURRET_COLOR),
+        (4, 3) => {
+            // 2-px staff, full tile height.
+            blit_rect(tile, RTS_FRAME_SIZE_PX, 14, 4, 16, 27, [200, 200, 200, 255]);
+            // Triangular pennant pointing right from the staff top.
+            for y in 5..=14u32 {
+                for x in 17..=26u32 {
+                    if (y as i64 - 5) <= (26 - x as i64) {
+                        set_px(tile, RTS_FRAME_SIZE_PX, x, y, MOVE_MARKER_COLOR);
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -919,8 +940,13 @@ mod tests {
         }
         let props = encode_rts_png(3).expect("props");
         let (w2, _h2, px2) = decode_png(&props);
+        // Row 4 col 0 = IconAttack, col 1 = IconStop, col 2 = IconBuildTurret — not transparent.
+        let used_in_row4: &[(u32, u32)] = &[(4, 0), (4, 1), (4, 2), (4, 3)];
         for row in 4..RTS_FRAMES_Y {
             for col in 0..RTS_FRAMES_X {
+                if used_in_row4.contains(&(row, col)) {
+                    continue;
+                }
                 let cell = extract_cell(&px2, w2, col, row);
                 assert!(
                     cell.chunks_exact(4).all(|p| p == [0, 0, 0, 0]),
@@ -945,6 +971,13 @@ mod tests {
                 cells.push(cell);
             }
         }
+        // Also check IconBuildTurret at (row=4, col=2).
+        let cell = extract_cell(&px, w, 2, 4);
+        assert!(
+            cell.chunks_exact(4).any(|p| p[3] > 0),
+            "row=4 col=2 must draw something"
+        );
+        cells.push(cell);
         for i in 0..cells.len() {
             for j in (i + 1)..cells.len() {
                 assert_ne!(

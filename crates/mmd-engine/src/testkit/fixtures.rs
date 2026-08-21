@@ -28,6 +28,24 @@ pub const FIXTURE_DENSE_V1: &str = "fixture_dense_v1";
 /// [`crate::nav::flow_field::COST_UNREACHABLE`] with a zero vector.
 pub const FIXTURE_WALLED_V1: &str = "fixture_walled_v1";
 
+/// 96×96 RTS combat fixture: two pre-placed Ghouls, two spawn points,
+/// two timed waves (8 at tick 50, 4 at tick 120), two workers, one node
+/// of each kind.
+///
+/// Deliberately **not** in [`ALL_FIXTURES`]: that list feeds the phase-0
+/// flow-field suites, and this is an RTS-family scene
+/// (`version: "rts_prototype_v1"` — the validator requires that version
+/// on any scene carrying an `rts:` block) with `hard_agent_count: 0`.
+pub const FIXTURE_RTS_COMBAT_V1: &str = "fixture_rts_combat_v1";
+
+/// 96×96 RTS fixture for the declarative pre-built base: one declared Depot,
+/// one declared Barracks, three declared Soldiers, no enemies.
+///
+/// Deliberately **not** in [`ALL_FIXTURES`], for exactly the reason
+/// [`FIXTURE_RTS_COMBAT_V1`] is not: that list feeds the phase-0 flow-field
+/// suites and this is an RTS-family scene.
+pub const FIXTURE_RTS_PREBUILT_V1: &str = "fixture_rts_prebuilt_v1";
+
 /// Every tracked fixture, for suites that assert across all of them.
 pub const ALL_FIXTURES: &[&str] = &[
     FIXTURE_SMALL_V1,
@@ -59,6 +77,12 @@ pub const ALL_COLLISION_SCENES: &[&str] = &[COLLISION_MID_SCENE, COLLISION_SPRIT
 
 /// The phase-1 RTS prototype scene, relative to `assets/scenarios/`.
 pub const RTS_SCENE: &str = "rts_prototype_v1.ron";
+
+/// The untimed manual sandbox scene, relative to the workspace root.
+///
+/// Deliberately absent from the merge gate: it is a hands-on playtest tool
+/// with 30 authored waves and no scripted end, not a timed run.
+pub const RTS_SANDBOX_SCENE: &str = "assets/scenarios/rts_sandbox_v1.ron";
 
 /// Absolute path of the tracked RTS prototype scene.
 ///

@@ -6,11 +6,18 @@
 use std::collections::HashSet;
 
 use mmd_engine::rts::{
-    BuildingKind, EntityKind, EntityStore, FORMATION_ARRIVAL_CELLS, MAX_ENTITIES, OWNER_PLAYER,
-    Order, ResourceKind, Resources, RtsWorldError, Supply, UnitKind, unit_speed,
+    BuildingKind, EntityId, EntityKind, EntityStore, FOLLOW_REPATH_CELLS, FORMATION_ARRIVAL_CELLS,
+    MAX_ENTITIES, MAX_MOVE_MARKERS, MOVE_MARKER_TICKS, OWNER_PLAYER, Order, OrderReceiptBuffer,
+    RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, Resources, RtsWorldError, SOLDIER_SUPPLY_COST,
+    Supply, UnitKind, WORKER_SUPPLY_COST, interaction_reach, supply_grant, unit_speed,
 };
-use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
-use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
+use mmd_engine::scenario::{
+    Cell, MAX_ENEMIES, MAX_SUPPLY_CAP, RtsSpec, Scenario, ScenarioSpec, StartUnitSpec, UnitKindSpec,
+};
+use mmd_engine::testkit::{
+    FIXTURE_RTS_PREBUILT_V1, HarnessError, RTS_SANDBOX_SCENE, RtsHarness, fixture_path,
+    gate_scenario_path, scene_path,
+};
 
 // --- EntityStore ------------------------------------------------------------
 
@@ -151,14 +158,18 @@ fn collect_live_is_ascending_and_excludes_the_dead() {
 
 #[test]
 fn footprints_come_from_the_scenario_constants() {
-    assert_eq!(EntityKind::Building(BuildingKind::Hq).footprint_cells(), 12);
+    assert_eq!(EntityKind::Building(BuildingKind::Hq).footprint_cells(), 24);
     assert_eq!(
         EntityKind::Building(BuildingKind::Depot).footprint_cells(),
         8
     );
     assert_eq!(
         EntityKind::Building(BuildingKind::Barracks).footprint_cells(),
-        10
+        16
+    );
+    assert_eq!(
+        EntityKind::Building(BuildingKind::Turret).footprint_cells(),
+        8
     );
     assert_eq!(EntityKind::Unit(UnitKind::Worker).footprint_cells(), 1);
     assert_eq!(EntityKind::Node(ResourceKind::Crystal).footprint_cells(), 1);
@@ -169,6 +180,7 @@ fn only_the_hq_takes_a_drop_off() {
     assert!(BuildingKind::Hq.is_drop_off());
     assert!(!BuildingKind::Depot.is_drop_off());
     assert!(!BuildingKind::Barracks.is_drop_off());
+    assert!(!BuildingKind::Turret.is_drop_off());
 }
 
 #[test]
@@ -176,14 +188,16 @@ fn kind_tags_are_distinct() {
     let kinds = [
         EntityKind::Unit(UnitKind::Worker),
         EntityKind::Unit(UnitKind::Soldier),
+        EntityKind::Unit(UnitKind::Ghoul),
         EntityKind::Building(BuildingKind::Hq),
         EntityKind::Building(BuildingKind::Depot),
         EntityKind::Building(BuildingKind::Barracks),
+        EntityKind::Building(BuildingKind::Turret),
         EntityKind::Node(ResourceKind::Crystal),
         EntityKind::Node(ResourceKind::Gas),
     ];
     let tags: HashSet<u8> = kinds.iter().map(|k| k.tag()).collect();
-    assert_eq!(tags.len(), 7, "every kind must have a distinct tag byte");
+    assert_eq!(tags.len(), 9, "every kind must have a distinct tag byte");
 }
 
 #[test]
@@ -295,7 +309,7 @@ fn the_hq_sits_at_its_footprint_centre() {
     let h = RtsHarness::scene().build().expect("rts scene harness");
     let hq = h.world().start_hq().expect("start hq");
     let slot = h.world().entities().slot(hq).expect("hq slot");
-    assert_eq!(h.world().entities().position(slot), [166.0, 166.0]);
+    assert_eq!(h.world().entities().position(slot), [172.0, 172.0]);
 }
 
 /// The seeded HQ is a *finished* building, and a finished building blocks
@@ -359,12 +373,12 @@ fn workers_start_on_the_scenario_spawn_cells() {
     // shows up as a diff against a known-good layout, not a vague "positions
     // changed".
     let expected: Vec<[f32; 2]> = vec![
-        [162.5, 178.5],
-        [168.5, 178.5],
-        [164.5, 184.5],
-        [170.5, 184.5],
-        [174.5, 178.5],
-        [175.5, 172.5],
+        [162.5, 190.5],
+        [168.5, 190.5],
+        [164.5, 196.5],
+        [170.5, 196.5],
+        [174.5, 190.5],
+        [158.5, 195.5],
     ];
     let workers = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
     assert_eq!(workers.len(), expected.len());
@@ -553,9 +567,12 @@ fn rts_spec(obstacles: Vec<u32>, spawns: Vec<Cell>, destination: Cell) -> Scenar
             start_crystal: 300,
             start_gas: 100,
             start_supply_cap: 10,
-            hq_cell: Cell { x: 100, y: 100 },
+            hq_cell: Cell { x: 96, y: 96 },
             crystal_nodes: vec![Cell { x: 100, y: 50 }],
             gas_nodes: vec![Cell { x: 101, y: 50 }],
+            enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }
@@ -727,8 +744,8 @@ fn a_unit_reaches_its_destination() {
     let worker = h
         .ids_of_kind(EntityKind::Unit(UnitKind::Worker))
         .into_iter()
-        .find(|id| position_of(&h, *id) == [174.5, 178.5])
-        .expect("a worker spawned near (174, 178) after relocation");
+        .find(|id| position_of(&h, *id) == [174.5, 190.5])
+        .expect("a worker spawned near (174, 190) after relocation");
     let dest = Cell { x: 200, y: 200 };
     assert!(h.world_mut().order_move(worker, dest));
 
@@ -947,4 +964,523 @@ fn state_hash_sees_an_order() {
     let before = h.state_hash();
     assert!(h.world_mut().order_move(worker, Cell { x: 200, y: 200 }));
     assert_ne!(h.state_hash(), before, "an order must reach the state hash");
+}
+
+// --- T10: ground-order markers --------------------------------------------------
+
+#[test]
+fn a_ground_order_plants_one_marker() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    h.world_mut().selection_mut().insert(worker);
+
+    let iso = h.world().iso_view();
+    // Cell (200, 200) is open ground in the tracked scene.
+    let screen = iso.project(200.5, 200.5);
+    let mut receipts = OrderReceiptBuffer::new();
+    let result = h
+        .world_mut()
+        .issue_context_order_at(&iso, screen, &mut receipts);
+    assert!(result.accepted > 0, "order must be accepted: {result:?}");
+    assert_eq!(
+        h.world().move_markers().count(),
+        1,
+        "exactly one marker per order, not one per unit",
+    );
+    let (cell, _) = h.world().move_markers().next().unwrap();
+    assert_eq!(cell.x, 200);
+    assert_eq!(cell.y, 200);
+}
+
+#[test]
+fn a_marker_expires_on_schedule() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    h.world_mut().push_move_marker(Cell { x: 10, y: 10 });
+
+    // Present through MOVE_MARKER_TICKS - 1 complete ticks.
+    h.step_exact((MOVE_MARKER_TICKS - 1) as u64);
+    assert_eq!(
+        h.world().move_markers().count(),
+        1,
+        "marker must still be present at tick MOVE_MARKER_TICKS - 1",
+    );
+    // Gone after the MOVE_MARKER_TICKS-th tick.
+    h.step_exact(1);
+    assert_eq!(
+        h.world().move_markers().count(),
+        0,
+        "marker must be gone at tick MOVE_MARKER_TICKS",
+    );
+}
+
+#[test]
+fn markers_are_bounded_and_drop_oldest_first() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    for i in 0..12u32 {
+        h.world_mut().push_move_marker(Cell { x: i, y: i });
+    }
+    let markers: Vec<_> = h.world().move_markers().collect();
+    assert_eq!(markers.len(), MAX_MOVE_MARKERS);
+    // The 8 most recent: cells (4,4) through (11,11).
+    for (j, &(cell, _)) in markers.iter().enumerate() {
+        let expected = 4 + j as u32;
+        assert_eq!(
+            cell,
+            Cell {
+                x: expected,
+                y: expected
+            }
+        );
+    }
+}
+
+#[test]
+fn a_rallied_unit_plants_no_marker() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    // order_move is the same call the rally-from-production path uses.
+    assert!(h.world_mut().order_move(worker, Cell { x: 200, y: 200 }));
+    assert_eq!(
+        h.world().move_markers().count(),
+        0,
+        "order_move must not plant a marker",
+    );
+}
+
+#[test]
+fn markers_enter_the_state_hash() {
+    let mut a = RtsHarness::scene().build().expect("a");
+    let b = RtsHarness::scene().build().expect("b");
+    assert_eq!(a.state_hash(), b.state_hash());
+    a.world_mut().push_move_marker(Cell { x: 50, y: 50 });
+    assert_ne!(
+        a.state_hash(),
+        b.state_hash(),
+        "a planted marker must change the state hash",
+    );
+}
+
+// --- T11: Follow ------------------------------------------------------------
+
+/// A follower's own body is radius [`RTS_UNIT_BODY_RADIUS_CELLS`] and so is its
+/// target's, so "how far apart are they" is only meaningful as a gap between
+/// hulls — which is exactly what the mover's hold test measures.
+/// Two build-square corners the seeded worker cluster has a proven walk to,
+/// and which are two dozen cells apart from each other. Most of this scene's
+/// open ground is fenced off from the spawn by its obstacle lattice, so a
+/// follow test that wants a real approach has to use cells a plain
+/// `Order::Move` is already known to complete against.
+const FOLLOW_HOME: [f32; 2] = [144.5, 176.5];
+const FOLLOW_AWAY: [f32; 2] = [144.5, 152.5];
+
+fn body_gap(h: &RtsHarness, follower: EntityId, target: EntityId) -> f32 {
+    let a = position_of(h, follower);
+    let b = position_of(h, target);
+    let dx = a[0] - b[0];
+    let dy = a[1] - b[1];
+    (dx * dx + dy * dy).sqrt() - RTS_UNIT_BODY_RADIUS_CELLS
+}
+
+fn follow_anchor(h: &RtsHarness, follower: EntityId) -> Option<Cell> {
+    match h.world().order_of(follower) {
+        Some(Order::Follow { goal, .. }) => Some(goal.anchor),
+        _ => None,
+    }
+}
+
+/// A static Soldier, dropped on one of the two build-square corners the spawn
+/// cluster has a proven walk to (`FOLLOW_HOME` / `FOLLOW_AWAY`), far enough
+/// out that the follower has a real approach to make.
+fn static_target(h: &mut RtsHarness, at: [f32; 2]) -> EntityId {
+    h.world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Soldier), OWNER_PLAYER, at)
+        .expect("spawn a follow target")
+}
+
+#[test]
+fn a_follower_closes_to_interaction_reach_and_holds() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_AWAY);
+    assert!(
+        body_gap(&h, worker, target) > 30.0,
+        "the follower must start well outside reach"
+    );
+
+    assert!(h.world_mut().order_follow(worker, target));
+    h.step_exact(900);
+
+    let reach = interaction_reach(UnitKind::Worker);
+    let closed = body_gap(&h, worker, target);
+    assert!(
+        closed <= reach + 0.01,
+        "follower stopped {closed} cells off its target's hull, reach is {reach}"
+    );
+    assert!(
+        closed >= -0.01,
+        "the follower penetrated its target's body: gap {closed}"
+    );
+    assert!(
+        matches!(h.world().order_of(worker), Some(Order::Follow { .. })),
+        "a Follow order holds; it does not clear itself on arrival"
+    );
+
+    // Hold: with a static target the follower stops stepping entirely, so 120
+    // more ticks must not move it about.
+    let parked = position_of(&h, worker);
+    h.step_exact(120);
+    let after = position_of(&h, worker);
+    let drift = ((after[0] - parked[0]).powi(2) + (after[1] - parked[1]).powi(2)).sqrt();
+    assert!(drift < 0.1, "a parked follower oscillated by {drift} cells");
+    assert!(body_gap(&h, worker, target) <= reach + 0.01);
+}
+
+#[test]
+fn a_follower_repaths_when_its_target_walks_away() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_AWAY);
+    assert!(h.world_mut().order_follow(worker, target));
+    h.step_exact(900);
+
+    let reach = interaction_reach(UnitKind::Worker);
+    assert!(
+        body_gap(&h, worker, target) <= reach + 0.01,
+        "not caught up"
+    );
+    let before_anchor = follow_anchor(&h, worker).expect("following");
+
+    // The target walks away — two dozen cells, far past FOLLOW_REPATH_CELLS.
+    let jump = ((FOLLOW_AWAY[0] - FOLLOW_HOME[0]).powi(2)
+        + (FOLLOW_AWAY[1] - FOLLOW_HOME[1]).powi(2))
+    .sqrt();
+    assert!(
+        jump > FOLLOW_REPATH_CELLS,
+        "the displacement must be past the re-path threshold to prove anything"
+    );
+    let t_slot = h.world().entities().slot(target).expect("live target");
+    h.world_mut()
+        .entities_mut()
+        .set_position(t_slot, FOLLOW_HOME);
+
+    // Tick one at a time and count how often the follower re-paths. The
+    // target is static again from here, so one drift past FOLLOW_REPATH_CELLS
+    // must buy exactly one new field, not one per tick.
+    let mut anchor = before_anchor;
+    let mut repaths = 0;
+    for _ in 0..900 {
+        h.step_exact(1);
+        let now = follow_anchor(&h, worker).expect("still following");
+        if now != anchor {
+            repaths += 1;
+            anchor = now;
+        }
+    }
+    assert_eq!(
+        repaths, 1,
+        "one target displacement must cost exactly one re-path, got {repaths}"
+    );
+    assert_ne!(
+        anchor, before_anchor,
+        "the goal never moved with the target"
+    );
+    let closed = body_gap(&h, worker, target);
+    assert!(
+        closed <= reach + 0.01,
+        "the follower never caught up: gap {closed}"
+    );
+}
+
+#[test]
+fn a_follow_order_dies_with_its_target() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_HOME);
+    assert!(h.world_mut().order_follow(worker, target));
+    h.step_exact(10);
+    assert!(matches!(
+        h.world().order_of(worker),
+        Some(Order::Follow { .. })
+    ));
+
+    assert!(h.world_mut().entities_mut().despawn(target));
+    h.step_exact(1);
+    assert_eq!(
+        h.world().order_of(worker),
+        Some(Order::Idle),
+        "a dead target ends the order on the tick it is noticed"
+    );
+}
+
+#[test]
+fn follow_never_targets_an_enemy_or_itself() {
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(
+            EntityKind::Unit(UnitKind::Ghoul),
+            mmd_engine::rts::OWNER_ENEMY,
+            [200.5, 200.5],
+        )
+        .expect("spawn a ghoul");
+
+    assert!(
+        !h.world_mut().order_follow(worker, ghoul),
+        "an enemy is an attack target, not a follow target"
+    );
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+
+    assert!(
+        !h.world_mut().order_follow(worker, worker),
+        "a unit cannot follow itself"
+    );
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+
+    // And a stale id is refused too.
+    let target = static_target(&mut h, FOLLOW_HOME);
+    assert!(h.world_mut().entities_mut().despawn(target));
+    assert!(!h.world_mut().order_follow(worker, target));
+    assert_eq!(h.world().order_of(worker), Some(Order::Idle));
+}
+
+#[test]
+fn follow_enters_the_state_hash_distinctly() {
+    use mmd_engine::nav::field_pool::FieldRef;
+    use mmd_engine::rts::FormationGoal;
+
+    let mut h = RtsHarness::scene().build().expect("rts scene harness");
+    let worker = first_worker(&h);
+    let target = static_target(&mut h, FOLLOW_HOME);
+
+    // Same goal, same field handle: only the order's own tag (and the target
+    // it names) can move the hash.
+    let cell = Cell { x: 200, y: 200 };
+    let goal = FormationGoal {
+        anchor: cell,
+        slot: cell,
+    };
+    let field = FieldRef { slot: 0, epoch: 0 };
+
+    assert!(
+        h.world_mut()
+            .force_order_for_test(worker, Order::Move { goal, field })
+    );
+    let moving = h.state_hash();
+    assert!(h.world_mut().force_order_for_test(
+        worker,
+        Order::Follow {
+            target,
+            goal,
+            field,
+        }
+    ));
+    assert_ne!(
+        h.state_hash(),
+        moving,
+        "Follow must not hash like Move at the same goal"
+    );
+}
+
+// --- declared pre-built base and start units (T13) ---------------------------
+
+#[test]
+fn prebuilt_buildings_seed_finished_and_stamped() {
+    let h = RtsHarness::path(fixture_path(FIXTURE_RTS_PREBUILT_V1))
+        .build()
+        .expect("the pre-built fixture loads");
+    let w = h.world();
+    let nav = w.static_nav();
+
+    for (kind, min) in [
+        (BuildingKind::Depot, Cell { x: 32, y: 64 }),
+        (BuildingKind::Barracks, Cell { x: 64, y: 64 }),
+    ] {
+        let ids = h.ids_of_kind(EntityKind::Building(kind));
+        assert_eq!(ids.len(), 1, "exactly one declared {kind:?}");
+        let slot = w
+            .entities()
+            .slot(ids[0])
+            .expect("declared building is alive");
+        assert_eq!(
+            w.entities().progress_target(slot),
+            0,
+            "{kind:?} must seed finished, not as a construction site"
+        );
+
+        let edge = kind.footprint_cells();
+        assert_eq!(
+            w.entities().position(slot),
+            [
+                min.x as f32 + edge as f32 * 0.5,
+                min.y as f32 + edge as f32 * 0.5
+            ],
+            "{kind:?} stands at its footprint centre, anchored on the declared min corner"
+        );
+
+        for y in min.y..min.y + edge {
+            for x in min.x..min.x + edge {
+                let idx = (x + y * nav.width()) as usize;
+                assert!(
+                    nav.placement_solids()[idx],
+                    "{kind:?} footprint cell ({x}, {y}) must be stamped solid"
+                );
+                assert!(
+                    nav.center_blocked()[idx],
+                    "no body centre may stand inside the {kind:?} footprint"
+                );
+            }
+        }
+    }
+
+    // The Depot's grant is on top of the scene's `start_supply_cap`; the
+    // Barracks grants nothing.
+    assert_eq!(
+        w.supply().cap(),
+        10 + supply_grant(BuildingKind::Depot),
+        "a declared building grants its supply exactly once, at construction"
+    );
+    // Two workers from `spawn_cells`, three declared Soldiers.
+    assert_eq!(
+        w.supply().used(),
+        2 * WORKER_SUPPLY_COST + 3 * SOLDIER_SUPPLY_COST
+    );
+}
+
+#[test]
+fn start_units_seed_at_their_declared_count() {
+    let mut spec = rts_spec(vec![], vec![Cell { x: 8, y: 8 }], Cell { x: 8, y: 8 });
+    {
+        let rts = spec.rts.as_mut().expect("rts block");
+        rts.start_supply_cap = 40;
+        rts.start_units = vec![StartUnitSpec {
+            kind: UnitKindSpec::Soldier,
+            cell: Cell { x: 200, y: 60 },
+            count: 8,
+        }];
+    }
+    let h = RtsHarness::spec(spec)
+        .build()
+        .expect("start-unit spec builds");
+    let w = h.world();
+
+    let soldiers = h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier));
+    assert_eq!(
+        soldiers.len(),
+        8,
+        "eight declared Soldiers, eight live ones"
+    );
+
+    let centres: Vec<[f32; 2]> = soldiers
+        .iter()
+        .map(|id| {
+            w.entities()
+                .position(w.entities().slot(*id).expect("alive"))
+        })
+        .collect();
+    for (i, a) in centres.iter().enumerate() {
+        assert!(
+            w.static_nav()
+                .position_clear(*a, RTS_UNIT_BODY_RADIUS_CELLS),
+            "soldier {i} at {a:?} stands on illegal ground"
+        );
+        for b in centres.iter().skip(i + 1) {
+            let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
+            let touch = 2.0 * RTS_UNIT_BODY_RADIUS_CELLS;
+            assert!(
+                d2 >= touch * touch - 1e-3,
+                "declared soldiers seeded overlapping: {a:?} and {b:?}"
+            );
+        }
+    }
+    assert_eq!(
+        w.supply().used(),
+        WORKER_SUPPLY_COST + 8 * SOLDIER_SUPPLY_COST,
+        "one worker from `spawn_cells` plus the declared squad"
+    );
+}
+
+#[test]
+fn the_sandbox_scene_loads_and_is_playable() {
+    let scene = Scenario::load_verified(scene_path(RTS_SANDBOX_SCENE))
+        .expect("the sandbox scene loads hash-verified");
+    let rts = scene.rts().expect("rts block").clone();
+    assert_eq!(rts.buildings.len(), 4, "Barracks, Depot and two Turrets");
+    assert_eq!(rts.start_units.len(), 1, "one declared Soldier batch");
+    assert_eq!(rts.start_units[0].count, 8);
+
+    let enemies = rts
+        .enemies
+        .as_ref()
+        .expect("the sandbox scripts an invasion");
+    assert_eq!(enemies.waves.len(), 30, "thirty authored waves");
+    let total: u32 =
+        enemies.pre_placed.len() as u32 + enemies.waves.iter().map(|w| w.count).sum::<u32>();
+    assert!(
+        total <= MAX_ENEMIES,
+        "scripted enemy total {total} must stay under the {MAX_ENEMIES} cap"
+    );
+
+    let h = RtsHarness::path(scene_path(RTS_SANDBOX_SCENE))
+        .build()
+        .expect("the sandbox scene builds a world");
+    let counts = |kind| h.ids_of_kind(kind).len();
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Hq)), 1);
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Depot)), 1);
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Barracks)), 1);
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Turret)), 2);
+    assert_eq!(counts(EntityKind::Unit(UnitKind::Worker)), 6);
+    assert_eq!(counts(EntityKind::Unit(UnitKind::Soldier)), 8);
+
+    // Every building is finished from tick 0 — the whole point of the scene.
+    for kind in [
+        BuildingKind::Hq,
+        BuildingKind::Depot,
+        BuildingKind::Barracks,
+        BuildingKind::Turret,
+    ] {
+        for id in h.ids_of_kind(EntityKind::Building(kind)) {
+            let slot = h.world().entities().slot(id).expect("alive");
+            assert_eq!(
+                h.world().entities().progress_target(slot),
+                0,
+                "{kind:?} must start finished, not as a site"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_sandbox_scene_fights_without_the_player() {
+    let mut h = RtsHarness::path(scene_path(RTS_SANDBOX_SCENE))
+        .build()
+        .expect("the sandbox scene builds a world");
+    // The first wave fires at tick 1800; 2 400 ticks clears it with margin.
+    h.step_exact(2_400);
+
+    assert!(
+        h.world().enemies_spawned() >= 6,
+        "the first authored wave (6 Ghouls) must have marched in by tick 2400, \
+         got {}",
+        h.world().enemies_spawned()
+    );
+    assert!(
+        h.world().start_hq().is_some(),
+        "the HQ must survive an unattended first wave — the sandbox opens playable"
+    );
+    // Spawning and surviving are both satisfied by a scene where combat was
+    // deleted (surviving the more easily so), which is why the fight itself
+    // is asserted too: the seeded Turrets and Soldiers must actually have
+    // engaged the wave, unattended.
+    assert!(
+        h.world().first_combat_tick().is_some(),
+        "the seeded defence must have traded shots with the first wave"
+    );
+    assert!(
+        h.world().kills() >= 1,
+        "the seeded defence must have killed at least one Ghoul, got {}",
+        h.world().kills()
+    );
 }

@@ -15,7 +15,7 @@ use mmd_engine::rts::{
     EntityId, EntityKind, FORMATION_ARRIVAL_CELLS, FORMATION_SPACING_CELLS, FormationError,
     FormationGoal, OWNER_PLAYER, Order, RTS_UNIT_BODY_RADIUS_CELLS, UnitKind,
 };
-use mmd_engine::scenario::{Cell, RtsSpec, ScenarioSpec};
+use mmd_engine::scenario::{BUILD_SQUARE_CELLS, Cell, HQ_FOOTPRINT_CELLS, RtsSpec, ScenarioSpec};
 use mmd_engine::testkit::RtsHarness;
 
 /// A small, validly-shaped RTS scenario with `obstacle_cells` as its terrain.
@@ -47,8 +47,8 @@ fn scene(width: u32, height: u32, obstacle_cells: Vec<u32>) -> ScenarioSpec {
             start_gas: 100,
             start_supply_cap: 200,
             hq_cell: Cell {
-                x: width - 13,
-                y: height - 13,
+                x: (width - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
+                y: (height - HQ_FOOTPRINT_CELLS) / BUILD_SQUARE_CELLS * BUILD_SQUARE_CELLS,
             },
             crystal_nodes: vec![Cell {
                 x: 1,
@@ -58,6 +58,9 @@ fn scene(width: u32, height: u32, obstacle_cells: Vec<u32>) -> ScenarioSpec {
                 x: 1,
                 y: height - 3,
             }],
+            enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }

@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>The 24-cell HQ lands on the spawn row</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b0a08; --panel:#17130d; --panel-2:#1f190f; --text:#fff7ed; --muted:#c9b99f; --line:#4a3b25; --accent:#fbbf24; --accent-2:#fb923c; --focus:#facc15; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.55 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(960px,calc(100% - 32px)); margin:0 auto; padding:48px 0 96px; }
+    header { display:grid; gap:12px; margin-bottom:32px; }
+    .eyebrow { color:var(--accent); font-size:.75rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    h1,h2,p { margin:0; } h1 { font-size:clamp(2rem,5vw,3.5rem); line-height:1.08; letter-spacing:-.035em; }
+    .lede { max-width:70ch; color:var(--muted); }
+    .tree { display:flex; align-items:center; gap:8px; overflow:auto; padding:16px; margin:24px 0 32px; border:1px solid var(--line); border-radius:12px; background:var(--panel); color:var(--muted); white-space:nowrap; }
+    .tree b { color:var(--text); } .node { padding:6px 10px; border:1px solid var(--line); border-radius:999px; } .node.active { border-color:var(--accent); color:var(--accent); } .node.done { border-color:#3f6212; color:#a3b18a; } .arrow { color:var(--line); }
+    .visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; margin:0 0 32px; }
+    figure { min-width:0; margin:0; padding:18px; border:1px solid var(--line); border-radius:14px; background:var(--panel); }
+    figcaption { margin-bottom:14px; color:var(--muted); font-size:.85rem; } figcaption b { display:block; color:var(--text); font-size:1rem; }
+    svg { display:block; width:100%; height:auto; } svg text { font-family:ui-sans-serif,system-ui,sans-serif; }
+    .svg-node { fill:var(--panel-2); stroke:var(--line); stroke-width:2; } .svg-node.active { stroke:var(--accent); } .svg-line { fill:none; stroke:var(--line); stroke-width:2; } .svg-arrow { fill:var(--line); } .svg-label { fill:var(--text); font-size:12px; } .svg-note { fill:var(--muted); font-size:10px; } .svg-accent { fill:var(--accent); }
+    form { display:grid; gap:20px; }
+    fieldset { min-width:0; margin:0; padding:24px; border:1px solid var(--line); border-radius:16px; background:var(--panel); }
+    legend { max-width:100%; padding:0 8px; font-size:1.15rem; font-weight:750; }
+    .why { margin:0 0 18px; color:var(--muted); font-size:.925rem; }
+    .why code, .detail code, .facts code { background:#100d08; border:1px solid var(--line); border-radius:5px; padding:0 4px; font-size:.9em; }
+    .choices { display:grid; gap:10px; }
+    .choice { display:grid; grid-template-columns:auto 1fr; gap:12px; align-items:start; padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--panel-2); cursor:pointer; }
+    .choice:has(input:checked) { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent) inset; }
+    input { width:18px; height:18px; margin-top:3px; accent-color:var(--accent); }
+    .rank { display:inline-block; margin-left:7px; color:var(--accent-2); font-size:.72rem; font-weight:800; letter-spacing:.06em; text-transform:uppercase; }
+    .detail { display:block; margin-top:3px; color:var(--muted); font-size:.875rem; }
+    label.precision { display:block; margin-top:18px; font-size:.85rem; font-weight:700; color:var(--muted); }
+    textarea { width:100%; min-height:90px; margin-top:7px; padding:12px; resize:vertical; border:1px solid var(--line); border-radius:10px; background:#100d08; color:var(--text); font:inherit; }
+    input:focus-visible,textarea:focus-visible,button:focus-visible { outline:3px solid var(--focus); outline-offset:2px; }
+    .actions { position:sticky; bottom:16px; display:flex; gap:12px; align-items:center; justify-content:space-between; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(19,23,28,.96); box-shadow:0 16px 40px #0008; backdrop-filter:blur(10px); }
+    button { padding:11px 16px; border:0; border-radius:9px; background:var(--accent); color:#211500; font:inherit; font-weight:800; cursor:pointer; }
+    #status { color:var(--muted); font-size:.875rem; }
+    .facts { margin:0 0 32px; padding:18px 22px; border:1px solid var(--line); border-left:3px solid var(--accent-2); border-radius:12px; background:var(--panel); }
+    .facts h2 { font-size:1rem; margin-bottom:10px; }
+    .facts ul { margin:0; padding-left:18px; color:var(--muted); font-size:.9rem; }
+    .facts li { margin:5px 0; }
+    @media (max-width:700px) { .visuals { grid-template-columns:1fr; } }
+    @media (max-width:600px) { main { width:min(100% - 20px,960px); padding-top:28px; } fieldset { padding:18px 14px; } .actions { align-items:flex-start; flex-direction:column; } button { width:100%; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="eyebrow">Grill me · Round 2 · Scene surgery, follow binding, sandbox waves</span>
+    <h1>The 24-cell HQ lands on the spawn row</h1>
+    <p class="lede">Round 1 settled the build square at 8 cells with a 3×3 HQ. Writing that ticket exposed a collision that was not visible when the question was asked: a 24-cell HQ swallows the six worker spawn cells and the acceptance script's Depot plot. Three questions, then the plan gets written.</p>
+  </header>
+
+  <nav class="tree" aria-label="Design tree progress">
+    <span class="node done">Plan shape ✓</span><span class="arrow">→</span>
+    <span class="node done">Build grid ✓</span><span class="arrow">→</span>
+    <span class="node active">Scene surgery</span><span class="arrow">→</span>
+    <span class="node done">Order feedback ✓</span><span class="arrow">→</span>
+    <span class="node active">Follow binding</span><span class="arrow">→</span>
+    <span class="node active">Sandbox waves</span><span class="arrow">→</span>
+    <span class="node">Ticket cut</span>
+  </nav>
+
+  <section class="facts" aria-label="Scout facts">
+    <h2>What the 8-cell square costs, measured not guessed</h2>
+    <ul>
+      <li><code>hq_cell: (160,160)</code> with a 24-cell edge covers <code>160..184</code> on both axes.</li>
+      <li>The six RTS worker spawn cells sit at <code>y = 178</code>, <code>x = 162..167</code> — <b>all six now land inside the HQ</b>, which the scenario validator rejects outright (<code>scenario.rs:915-930</code>).</li>
+      <li>The acceptance script places its Depot at min corner <code>(180,176)</code> — <b>also inside the new HQ</b>, so that step stops being a valid placement rather than merely moving on screen (<code>rts_acceptance_v1.script:27</code>).</li>
+      <li>Camera start = HQ centre, so the centre moving <code>(166,166) → (172,172)</code> shifts <b>every world-targeting click in both scripts by exactly <code>(0, +24)</code> px</b>; HUD clicks are screen-fixed and do not move.</li>
+      <li>Resource nodes are all clear of the bigger footprint — they need no move.</li>
+      <li>An HQ of <b>16 cells (2×2 squares)</b> covers <code>160..176</code>: spawn row clear, Depot plot clear after snapping, camera centre moves only <code>(+2,+2)</code> cells = <code>(0,+8)</code> px.</li>
+    </ul>
+  </section>
+
+  <section class="visuals" aria-label="Technical context">
+    <figure>
+      <figcaption><b>3×3 vs 2×2 HQ, against the real scene</b>Same map cells, same nodes, same spawn row.</figcaption>
+      <svg viewBox="0 0 380 250" role="img" aria-labelledby="r2at r2ad">
+        <title id="r2at">The 24-cell HQ covering the worker spawn row, next to a 16-cell HQ that clears it</title>
+        <desc id="r2ad">Left: a 24-cell HQ from cell 160 to 184 covers the spawn row at y equals 178 and the depot plot at 180 by 176. Right: a 16-cell HQ from 160 to 176 leaves both clear.</desc>
+        <g>
+          <text class="svg-label" x="14" y="16">HQ 24 (3×3) — collides</text>
+          <rect x="14" y="26" width="160" height="160" fill="none" stroke="#4a3b25" stroke-width="1"/>
+          <rect x="34" y="46" width="96" height="96" fill="#ef4444" opacity="0.22" stroke="#ef4444" stroke-width="2"/>
+          <text class="svg-note" x="60" y="96">HQ 160..184</text>
+          <g fill="#22c55e"><circle cx="42" cy="118" r="4"/><circle cx="54" cy="118" r="4"/><circle cx="66" cy="118" r="4"/><circle cx="78" cy="118" r="4"/><circle cx="90" cy="118" r="4"/><circle cx="102" cy="118" r="4"/></g>
+          <text class="svg-note" x="36" y="136">spawn row y=178 — inside</text>
+          <rect x="114" y="106" width="32" height="32" fill="#fb923c" opacity="0.3" stroke="#fb923c" stroke-width="2"/>
+          <text class="svg-note" x="112" y="152">depot plot — inside</text>
+        </g>
+        <g>
+          <text class="svg-label" x="204" y="16">HQ 16 (2×2) — clears</text>
+          <rect x="204" y="26" width="160" height="160" fill="none" stroke="#4a3b25" stroke-width="1"/>
+          <rect x="224" y="46" width="64" height="64" fill="#22c55e" opacity="0.18" stroke="#22c55e" stroke-width="2"/>
+          <text class="svg-note" x="234" y="82">HQ 160..176</text>
+          <g fill="#22c55e"><circle cx="232" cy="130" r="4"/><circle cx="244" cy="130" r="4"/><circle cx="256" cy="130" r="4"/><circle cx="268" cy="130" r="4"/><circle cx="280" cy="130" r="4"/><circle cx="292" cy="130" r="4"/></g>
+          <text class="svg-note" x="226" y="148">spawn row — clear</text>
+          <rect x="304" y="106" width="32" height="32" fill="#fb923c" opacity="0.3" stroke="#fb923c" stroke-width="2"/>
+          <text class="svg-note" x="300" y="152">depot plot — clear</text>
+        </g>
+        <text class="svg-note" x="14" y="214">Both options keep the 8-cell build square and the 1×1 Depot / 2×2 Barracks ratios the feedback asked for.</text>
+        <text class="svg-note" x="14" y="230">Only the HQ's own size, the spawn row and the scripted click coordinates are in question.</text>
+      </svg>
+    </figure>
+    <figure>
+      <figcaption><b>Blast radius of each option</b>What has to be re-authored, per choice.</figcaption>
+      <svg viewBox="0 0 380 250" role="img" aria-labelledby="r2bt r2bd">
+        <title id="r2bt">Files touched by each HQ sizing option</title>
+        <desc id="r2bd">Keeping a 24-cell HQ requires moving spawn cells, re-authoring both scripts' world clicks and re-pinning counts. A 16-cell HQ requires only a uniform pixel shift and a sidecar regeneration.</desc>
+        <g>
+          <rect class="svg-node active" x="12" y="20" width="164" height="26" rx="7"/><text class="svg-label" x="22" y="37">Option A — HQ 24 (as chosen)</text>
+          <rect class="svg-node" x="12" y="56" width="164" height="22" rx="6"/><text class="svg-note" x="22" y="71">scenario: move 6 spawn cells</text>
+          <rect class="svg-node" x="12" y="84" width="164" height="22" rx="6"/><text class="svg-note" x="22" y="99">script: re-author depot plot step</text>
+          <rect class="svg-node" x="12" y="112" width="164" height="22" rx="6"/><text class="svg-note" x="22" y="127">script: +24px on every world click</text>
+          <rect class="svg-node" x="12" y="140" width="164" height="22" rx="6"/><text class="svg-note" x="22" y="155">re-pin counts + sha256 sidecar</text>
+          <rect class="svg-node" x="12" y="168" width="164" height="22" rx="6"/><text class="svg-note" x="22" y="183">rts_cli_contract geometry header</text>
+        </g>
+        <g>
+          <rect class="svg-node active" x="200" y="20" width="168" height="26" rx="7"/><text class="svg-label" x="210" y="37">Option B — HQ 16 (2×2)</text>
+          <rect class="svg-node" x="200" y="56" width="168" height="22" rx="6"/><text class="svg-note" x="210" y="71">scenario: nothing moves</text>
+          <rect class="svg-node" x="200" y="84" width="168" height="22" rx="6"/><text class="svg-note" x="210" y="99">script: +8px on every world click</text>
+          <rect class="svg-node" x="200" y="112" width="168" height="22" rx="6"/><text class="svg-note" x="210" y="127">re-pin counts + sha256 sidecar</text>
+          <rect class="svg-node" x="200" y="140" width="168" height="22" rx="6"/><text class="svg-note" x="210" y="155">rts_cli_contract geometry header</text>
+        </g>
+        <text class="svg-note" x="12" y="216">Either way the re-baseline stays a single ticket, as round 1 Q12 settled.</text>
+        <text class="svg-note" x="12" y="232">The difference is how much of the scene has to be re-authored by hand inside it.</text>
+      </svg>
+    </figure>
+  </section>
+
+  <form id="questions">
+
+    <fieldset data-question="The 24-cell HQ swallows the spawn row and the scripted depot plot — how is that resolved?">
+      <legend>1. The 24-cell HQ swallows the spawn row and the scripted Depot plot — how is that resolved?</legend>
+      <p class="why">This is the one collision that makes the chosen square size cost more than a hash regeneration; every option below keeps the 8-cell square, the 1×1 Depot and the 2×2 Barracks exactly as you chose them.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Keep HQ 24 (3x3): move the six spawn cells south out of the footprint, re-author the depot step's plot, shift every world click by +24px, re-pin"><span><b>Keep HQ 3×3 — move the spawn row south, re-author the Depot step, shift every world click <code>+24</code> px</b><span class="rank">Recommended</span><span class="detail">You get the HQ size you picked; the re-baseline ticket grows to include hand-re-authoring two scripted steps and re-verifying both runs end to end.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Cut HQ to 16 cells (2x2 squares): nothing in the scene moves, only a uniform +8px shift and a sidecar regen"><span><b>Cut the HQ to 2×2 squares (16 cells) — nothing in the scene moves</b><span class="rank">Second</span><span class="detail">Smallest possible re-baseline and the scene layout survives untouched; the HQ reads only twice a Depot instead of three times.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Keep HQ 24 but move hq_cell to 152,152 so the footprint clears the spawn row while staying square-aligned"><span><b>Keep HQ 3×3 but move it to <code>(152,152)</code> so the footprint clears the spawn row</b><span class="rank">Third</span><span class="detail">Stays square-aligned and keeps the spawn row where it is; the whole base shifts north-west, so both scripts still need every world click re-derived.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. keep 3x3 and take the surgery — I care more about how it looks than about churn"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="How does a player order a unit to follow, given rally-onto-entity is in?">
+      <legend>2. How does a <em>player</em> order a follow, given rally-onto-entity is already in?</legend>
+      <p class="why">Round 1 put <code>Order::Follow { target }</code> in scope via rally, but no player-facing binding was selected — as answered, a unit can only end up following if it was produced by a rallied building.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Right-click a friendly unit or building with units selected issues Follow; right-click an enemy stays Attack from the combat ticket"><span><b>Right-click a friendly entity ⇒ Follow · right-click an enemy ⇒ Attack (combat ticket keeps that binding)</b><span class="rank">Recommended</span><span class="detail">One consistent right-click rule keyed on ownership, matching every RTS; the follow ticket and the combat-command ticket must agree on one dispatch site.</span></span></label>
+        <label class="choice"><input type="checkbox" value="No player-facing follow this phase: Follow exists only as the order a rallied unit receives"><span><b>No player binding — <code>Follow</code> exists only as the order a rallied unit receives</b><span class="rank">Second</span><span class="detail">Smallest slice, zero overlap with the combat command ticket; you cannot make an existing squad escort a worker.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Dedicated command-card slot for Follow, click the card then click the target"><span><b>Dedicated Follow slot on the command card, then click a target</b><span class="rank">Third</span><span class="detail">Explicit and discoverable, no clash with right-click semantics; two clicks for what every RTS does in one, and one more card slot to lay out.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. right-click friendly = follow, and follow should keep ~4 cells of stand-off"></textarea></label>
+    </fieldset>
+
+    <fieldset data-question="Sandbox waves: finite long list or a genuinely endless spawner?">
+      <legend>3. Sandbox waves — finite long list, or a genuinely endless spawner?</legend>
+      <p class="why">You chose the sandbox option whose wording says "repeating" waves, while the combat plan deliberately scoped waves as a finite scenario list capped at 1200 enemies so the entity store cannot overflow. One of the two has to give.</p>
+      <div class="choices">
+        <label class="choice"><input type="checkbox" value="Finite but long: ~30 authored waves in the sandbox file, enough for a long manual session, no schema change"><span><b>Finite but long — ~30 authored waves in the sandbox file, no schema change</b><span class="rank">Recommended</span><span class="detail">Reuses the wave list exactly as the combat plan specifies it and stays inside the entity cap; the sandbox eventually runs dry if you play long enough.</span></span></label>
+        <label class="choice"><input type="checkbox" value="Endless: add a repeat interval to the wave schema, spawner loops forever, guarded by a live-enemy ceiling"><span><b>Endless — add a repeat interval to the wave schema, guarded by a live-enemy ceiling</b><span class="rank">Second</span><span class="detail">A sandbox that never runs out and doubles as a stress scene; widens the wave schema and needs a live-count guard so the store cannot fill.</span></span></label>
+      </div>
+      <label class="precision">Precision or custom answer<textarea placeholder="e.g. endless, and let me pick the interval from the CLI"></textarea></label>
+    </fieldset>
+
+    <div class="actions">
+      <span id="status" role="status">Selections stay in this page until copied.</span>
+      <button type="button" id="copy-summary">Copy answer summary</button>
+    </div>
+  </form>
+</main>
+<script>
+  const button = document.querySelector('#copy-summary');
+  const status = document.querySelector('#status');
+
+  function buildSummary() {
+    const sections = [...document.querySelectorAll('fieldset[data-question]')].map((field, index) => {
+      const question = field.dataset.question;
+      const selected = [...field.querySelectorAll('input[type="checkbox"]:checked')].map(input => `- ${input.value}`);
+      const precision = field.querySelector('textarea').value.trim();
+      const answers = selected.length ? selected.join('\n') : '- No recommended answer selected';
+      return `${index + 1}. ${question}\n${answers}${precision ? `\nPrecision: ${precision}` : ''}`;
+    });
+    return `Round 2 · Scene surgery, follow binding, sandbox waves — The 24-cell HQ lands on the spawn row\n\n${sections.join('\n\n')}`;
+  }
+
+  button.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(buildSummary());
+      status.textContent = 'Summary copied to clipboard.';
+    } catch (_) {
+      const fallback = document.createElement('textarea');
+      fallback.value = buildSummary();
+      document.body.appendChild(fallback);
+      fallback.select();
+      document.execCommand('copy');
+      fallback.remove();
+      status.textContent = 'Summary copied to clipboard.';
+    }
+  });
+</script>
+</body>
+</html>

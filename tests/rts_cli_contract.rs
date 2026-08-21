@@ -8,11 +8,11 @@
 //! # Geometry
 //!
 //! `assets/scenarios/rts_prototype_v1.ron` fixes the scene these tests click
-//! on: `hq_cell: (160, 160)`, `HQ_FOOTPRINT_CELLS = 12` so the HQ's centre —
+//! on: `hq_cell: (160, 160)`, `HQ_FOOTPRINT_CELLS = 24` so the HQ's centre —
 //! and the camera's start position, per `RtsWorld::from_scenario` — is cell
-//! `(166, 166)`. `cell_size_px: 4` makes `tile_w = 8`, `tile_h = 4`. Camera
+//! `(172, 172)`. `cell_size_px: 4` makes `tile_w = 8`, `tile_h = 4`. Camera
 //! start centres that cell on screen, so the projection's `origin` is fixed
-//! at `(960, -124)` for every run that never pans. [`screen_of`] reproduces
+//! at `(960, -148)` for every run that never pans. [`screen_of`] reproduces
 //! `mmd_engine::render::iso_project` against that fixed origin so a test can
 //! name a *cell* and get the *pixel* `click_select`/`pick_at` actually read
 //! (they unproject the click, not the sprite's drawn position).
@@ -54,7 +54,7 @@ const REQUIRE_GPU_ENV: &str = "MMD_REQUIRE_GPU";
 // ---------------------------------------------------------------------------
 
 /// Camera projection origin at the scene's start (HQ-centred, no pan).
-const ORIGIN: [f32; 2] = [960.0, -124.0];
+const ORIGIN: [f32; 2] = [960.0, -148.0];
 const TILE_W: f32 = 8.0;
 const TILE_H: f32 = 4.0;
 
@@ -73,22 +73,22 @@ fn fmt_xy(p: [f32; 2]) -> String {
 }
 
 /// One worker's spawn point. `spawn_cells` names six cells one apart
-/// (`162..167 @ y=178`), but T3's radius-aware initial spawn relocates every
+/// (`162..167 @ y=190`), but T3's radius-aware initial spawn relocates every
 /// worker but the first (a 3-cell-radius body cannot share a cell that close
 /// with another) — the first cell is still legal on its own, so it is the one
 /// entry this helper can still name directly.
 fn worker_screen() -> [f32; 2] {
-    screen_of(162.5, 178.5)
+    screen_of(162.5, 190.5)
 }
 
 /// A drag rectangle in screen space covering every one of the six
 /// (T3-relocated) starting workers' projected positions:
-/// `(162.5, 178.5)`, `(168.5, 178.5)`, `(164.5, 184.5)`, `(170.5, 184.5)`,
-/// `(174.5, 178.5)`, `(175.5, 172.5)` — the same box
-/// `crates/mmd-engine/tests/rts_acceptance.rs`'s `DRAG_A`/`DRAG_B` use, for
-/// the same reason.
+/// `(162.5, 190.5)`, `(168.5, 190.5)`, `(164.5, 196.5)`, `(170.5, 196.5)`,
+/// `(174.5, 190.5)`, `(158.5, 195.5)` — screen `x` 812..896, `y` 558..586 —
+/// the same box `crates/mmd-engine/tests/rts_acceptance.rs`'s
+/// `DRAG_A`/`DRAG_B` use, for the same reason.
 fn spawn_group_drag() -> (String, String) {
-    (fmt_xy([850.0, 520.0]), fmt_xy([1000.0, 600.0]))
+    (fmt_xy([800.0, 520.0]), fmt_xy([940.0, 620.0]))
 }
 
 /// A point inside the HQ's own footprint that picks the HQ.
@@ -120,7 +120,7 @@ fn crystal_node_corner_screen() -> [f32; 2] {
     [g[0] - 20.0, g[1] - 4.0]
 }
 
-/// A cell well clear of the HQ footprint (`160..172`), both resource nodes,
+/// A cell well clear of the HQ footprint (`160..184`), both resource nodes,
 /// and — empirically, see `a_left_click_places_the_ghost` — the scenario's
 /// obstacle mask: `(180, 150)`, a Depot-sized (8-cell) footprint centred
 /// there.
@@ -2038,12 +2038,13 @@ fn audio_offscreen_survives_invalid_audio_driver() {
 #[test]
 fn a_red_click_with_no_snap_is_a_noop() {
     // Select the worker, open the Depot ghost (W key), then click at the HQ
-    // footprint centre (cell 166,166). ghost_min_corner → (162,162); every
-    // Depot candidate within radius 8 still overlaps the 12x12 HQ footprint,
-    // so no snap is found and the click is a no-op.
+    // footprint centre (cell 172,172). ghost_min_corner snaps to (168,168);
+    // every Depot candidate the build-square search reaches — x and y in
+    // {160, 168, 176} — still lies inside the 24x24 HQ footprint, so no snap
+    // is found and the click is a no-op.
     let w = fmt_xy(worker_screen());
-    // HQ footprint min=(160,160), edge=12, centre=(166,166).
-    let hq_centre = fmt_xy(screen_of(166.5, 166.5));
+    // HQ footprint min=(160,160), edge=24, centre=(172,172).
+    let hq_centre = fmt_xy(screen_of(172.5, 172.5));
     let script = format!("1:move:{w};2:lclick:{w};3:key:w;4:move:{hq_centre};5:lclick:{hq_centre}");
     let Some(cli) = or_skip(
         "a_red_click_with_no_snap_is_a_noop",
@@ -2122,4 +2123,49 @@ fn focused_script_is_independent_of_persisted_gameplay_settings() {
         persisted.contains("\"show_grid\": false"),
         "the replay wrote its own scripted settings back over the seeded file:\n{persisted}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// The untimed manual sandbox scene (T13)
+// ---------------------------------------------------------------------------
+
+/// The sandbox scene is a manual tool, so nothing on the merge gate drives it.
+/// This is its one automated claim: `--scenario` still reaches it, it stands up
+/// a real session, and it reports the combat tokens like any other RTS run.
+#[test]
+fn the_sandbox_scene_runs_from_the_cli() {
+    let Some(cli) = or_skip(
+        "the_sandbox_scene_runs_from_the_cli",
+        rts(&[
+            "--scenario",
+            "assets/scenarios/rts_sandbox_v1.ron",
+            "--frames",
+            "120",
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+
+    let exits = cli
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("rts: clean exit"))
+        .count();
+    assert_eq!(exits, 1, "{cli}\nexactly one clean exit line");
+
+    assert_eq!(cli.exit_field("frames"), "120", "{cli}");
+    assert_eq!(
+        cli.exit_field("quit"),
+        "false",
+        "{cli}\nthe sandbox is untimed: it ends on the frame budget, not on a scripted quit"
+    );
+    // The base is already standing, so the counts are the declared ones.
+    assert_eq!(cli.exit_field("buildings"), "5", "{cli}");
+    assert_eq!(cli.exit_field("units"), "14", "{cli}");
+    // Combat tokens are present and the HQ is up: the scene opens playable.
+    for key in ["kills", "losses", "enemies_spawned", "first_combat_tick"] {
+        cli.exit_field(key);
+    }
+    assert_eq!(cli.exit_field("hq_alive"), "1", "{cli}");
 }

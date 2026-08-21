@@ -13,8 +13,8 @@
 # in `crates/mmd-engine/tests/rts_acceptance.rs` re-derives each one from the
 # live layout/hit tests and fails if a rect ever moves.
 
-1:move:960,518
-4:lclick:960,518               # the HQ's own footprint corner (160.5,160.5): a Pick::Building
+1:move:960,494
+4:lclick:960,494               # the HQ's own footprint corner (160.5,160.5): a Pick::Building
 8:key:q                        # positional slot 0 = Worker; the HQ is selected, so it is enabled
 
 16:lclick:1888,24              # MENU_RECT centre -> paused menu

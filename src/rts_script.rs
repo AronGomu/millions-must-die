@@ -401,6 +401,23 @@ mod tests {
         );
     }
 
+    /// The committed combat script is on the merge gate too (`T12`); a typo in
+    /// it must fail here, not four minutes into a GPU run.
+    #[test]
+    fn the_tracked_combat_script_parses() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/scenarios/rts_combat_v1.script");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let script =
+            RtsScript::parse_file_text(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(
+            !script.entries.is_empty(),
+            "{} parsed to nothing",
+            path.display()
+        );
+    }
+
     /// A `Quit` scheduled behind another entry on the same frame stops the
     /// sweep: the later entry never fires.
     #[test]

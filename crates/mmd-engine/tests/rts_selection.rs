@@ -199,14 +199,14 @@ fn the_pick_radius_is_the_body_radius() {
 fn clicking_the_hq_selects_it_when_no_unit_is_near() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     // Radius-aware initial spawn (T3) can scatter a worker close enough to
-    // the HQ's ground point that its own (12-cell) sprite quad reaches back
+    // the HQ's ground point that its own (24-cell) sprite quad reaches back
     // over it; park every worker well clear first so this case is actually
     // testing "no unit is near".
     for id in workers(&h) {
         set_pos(&mut h, id, [40.5, 40.5]);
     }
     let hq = h.world().start_hq().expect("start hq");
-    let screen = view().project(166.0, 166.0);
+    let screen = view().project(172.0, 172.0);
     assert_eq!(pick_at(h.world(), &view(), screen), Pick::Building(hq));
 }
 
@@ -438,23 +438,23 @@ fn shift_click_on_nothing_keeps_the_selection() {
 
 // --- box_select ----------------------------------------------------------------
 
-/// Screen extent of a row of six cells (162..=167, 178). Radius-aware initial
+/// Screen extent of a row of six cells (162..=167, 190). Radius-aware initial
 /// spawn (T3) scatters the tracked scene's own six workers well outside this
 /// box, so every test below explicitly re-parks them into it first — the box
 /// itself, not the scenario's default spawn layout, is what these cases mean
 /// to exercise.
 fn six_worker_box() -> ([f32; 2], [f32; 2]) {
-    (view().project(162.5, 178.5), view().project(167.5, 178.5))
+    (view().project(162.5, 190.5), view().project(167.5, 190.5))
 }
 
-/// Re-park `ids` one cell apart along `(162..=167, 178)`, matching
+/// Re-park `ids` one cell apart along `(162..=167, 190)`, matching
 /// [`six_worker_box`]. Ignores body-radius overlap deliberately: box select
 /// only reads ground points, never clearance, so a tight test row is a valid
 /// fixture even though six live 3-cell-radius bodies could never really stand
 /// there at once.
 fn park_workers_in_a_row(h: &mut RtsHarness, ids: &[EntityId]) {
     for (i, &id) in ids.iter().enumerate() {
-        set_pos(h, id, [162.5 + i as f32, 178.5]);
+        set_pos(h, id, [162.5 + i as f32, 190.5]);
     }
 }
 
@@ -475,8 +475,8 @@ fn box_excludes_units_outside() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let ids = workers(&h);
     park_workers_in_a_row(&mut h, &ids);
-    let a = view().project(162.5, 178.5);
-    let b = view().project(164.5, 178.5);
+    let a = view().project(162.5, 190.5);
+    let b = view().project(164.5, 190.5);
 
     let n = h.world_mut().box_select_into_selection(&view(), a, b);
     assert_eq!(n, 3);
@@ -505,7 +505,13 @@ fn footprint_screen_box(view: &IsoView, center: [f32; 2], edge: u32) -> ([f32; 2
 #[test]
 fn box_never_selects_buildings() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
-    let (a, b) = footprint_screen_box(&view(), [166.0, 166.0], BuildingKind::Hq.footprint_cells());
+    // The 24-cell HQ's screen box now reaches down over the spawn cluster;
+    // park every worker well clear so this case tests the building rule, not
+    // an accidental unit hit.
+    for id in workers(&h) {
+        set_pos(&mut h, id, [40.5, 40.5]);
+    }
+    let (a, b) = footprint_screen_box(&view(), [172.0, 172.0], BuildingKind::Hq.footprint_cells());
 
     let n = h.world_mut().box_select_into_selection(&view(), a, b);
     assert_eq!(n, 0);
@@ -528,7 +534,7 @@ fn box_ignores_a_degenerate_rectangle() {
     let ids = workers(&h);
     h.world_mut().selection_mut().replace(&ids[0..2]);
 
-    let p = view().project(162.5, 178.5);
+    let p = view().project(162.5, 190.5);
     let n = h.world_mut().box_select_into_selection(&view(), p, p);
     assert_eq!(n, 0);
     assert!(h.world().selection().is_empty());
@@ -559,8 +565,8 @@ fn box_respects_the_camera() {
     let mut camera = Camera::new(320, 320, 4.0, [1920.0, 1080.0], [166.0, 172.0]);
     let old_view = camera.iso_view();
     let (a, b) = (
-        old_view.project(162.5, 178.5),
-        old_view.project(167.5, 178.5),
+        old_view.project(162.5, 190.5),
+        old_view.project(167.5, 190.5),
     );
 
     camera.pan_cells(40.0, 0.0);
@@ -574,11 +580,11 @@ fn box_respects_the_camera() {
 
 #[test]
 fn footprint_contains_matches_the_seeded_hq() {
-    let center = [166.0, 166.0];
-    assert!(footprint_contains(center, 12, Cell { x: 160, y: 160 }));
-    assert!(footprint_contains(center, 12, Cell { x: 171, y: 171 }));
-    assert!(!footprint_contains(center, 12, Cell { x: 159, y: 160 }));
-    assert!(!footprint_contains(center, 12, Cell { x: 172, y: 171 }));
+    let center = [172.0, 172.0];
+    assert!(footprint_contains(center, 24, Cell { x: 160, y: 160 }));
+    assert!(footprint_contains(center, 24, Cell { x: 183, y: 183 }));
+    assert!(!footprint_contains(center, 24, Cell { x: 159, y: 160 }));
+    assert!(!footprint_contains(center, 24, Cell { x: 184, y: 183 }));
 }
 
 #[test]
@@ -603,7 +609,7 @@ fn selection_survives_a_tick() {
 fn state_hash_sees_the_selection() {
     let mut h = RtsHarness::scene().build().expect("rts scene harness");
     let before = h.state_hash();
-    let screen = view().project(162.5, 178.5);
+    let screen = view().project(162.5, 190.5);
     let pick = h.world_mut().click_select(&view(), screen);
     assert!(matches!(pick, Pick::Unit(_)));
     assert_ne!(h.state_hash(), before);
@@ -662,9 +668,9 @@ fn building_footprint_only_region_remains_pickable() {
     let ground = h.world().entities().position(slot);
     let rect = building_screen_rect(&view(), ground, BuildingKind::Hq.footprint_cells());
 
-    // Cell [171, 171] is the far corner of the footprint (min [160,160], edge 12).
+    // Cell [183, 183] is the far corner of the footprint (min [160,160], edge 24).
     // Its screen centre projects below the sprite bottom.
-    let screen = view().project(171.5, 171.5);
+    let screen = view().project(183.5, 183.5);
     assert!(
         screen[1] > rect[3],
         "the footprint corner must project below the sprite rect (sprite bottom {}, \
@@ -691,7 +697,7 @@ fn outside_building_union_misses() {
     let rect = building_screen_rect(&view(), ground, BuildingKind::Hq.footprint_cells());
 
     // One cell past the far corner of the footprint — outside both sprite and footprint.
-    let screen = view().project(172.5, 172.5);
+    let screen = view().project(184.5, 184.5);
     assert!(
         screen[1] > rect[3],
         "the point must be below the sprite rect"
@@ -738,7 +744,7 @@ fn building_union_preserves_owner_and_depth_rules() {
 #[test]
 fn building_pick_contains_sprite_and_footprint() {
     let v = view();
-    let ground = [166.0, 166.0];
+    let ground = [172.0, 172.0];
     let edge = BuildingKind::Hq.footprint_cells();
     let rect = building_screen_rect(&v, ground, edge);
 
@@ -747,12 +753,12 @@ fn building_pick_contains_sprite_and_footprint() {
     assert!(building_pick_contains(&v, ground, edge, centre));
 
     // Below sprite but in footprint.
-    let footprint_screen = v.project(171.5, 171.5);
+    let footprint_screen = v.project(183.5, 183.5);
     assert!(footprint_screen[1] > rect[3]);
     assert!(building_pick_contains(&v, ground, edge, footprint_screen));
 
     // Outside both.
-    let outside = v.project(172.5, 172.5);
+    let outside = v.project(184.5, 184.5);
     assert!(!building_pick_contains(&v, ground, edge, outside));
 }
 
@@ -823,5 +829,120 @@ fn an_exact_shape_beats_a_building_sprite_quad() {
         pick_at(h.world(), &view(), screen),
         Pick::Node(node),
         "an exact node quad beats a building's sprite quad however deep the building"
+    );
+}
+
+// ─── T4 enemy-pick + selection-invariant tests ───────────────────────────────
+
+use mmd_engine::rts::OWNER_ENEMY;
+
+#[test]
+fn enemy_unit_is_pickable_and_click_selects_exactly_one() {
+    let mut h = RtsHarness::scene().build().expect("scene");
+    let ghoul_pos = [50.5f32, 50.5];
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, ghoul_pos)
+        .expect("spawn ghoul");
+
+    let v = view();
+    // Project the ghoul's ground point to screen space.
+    let screen = v.project(ghoul_pos[0], ghoul_pos[1]);
+    let pick = pick_at(h.world(), &v, screen);
+    assert_eq!(pick, Pick::Unit(ghoul), "ghoul must be pickable");
+
+    // click_select replaces selection with the ghoul
+    h.world_mut().click_select(&v, screen);
+    assert_eq!(h.world().selection().ids(), &[ghoul]);
+
+    // With a player worker selected, clicking the ghoul replaces
+    let workers_v = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(workers_v[0]);
+    h.world_mut().click_select(&v, screen);
+    assert_eq!(h.world().selection().ids(), &[ghoul]);
+}
+
+#[test]
+fn shift_click_never_mixes_enemy_and_player() {
+    let mut h = RtsHarness::scene().build().expect("scene");
+    let ghoul_pos = [50.5f32, 50.5];
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, ghoul_pos)
+        .expect("spawn ghoul");
+
+    let v = view();
+    let workers_v = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let worker = workers_v[0];
+    let worker_pos = h
+        .world()
+        .entities()
+        .position(h.world().entities().slot(worker).unwrap());
+    let worker_screen = v.project(worker_pos[0], worker_pos[1]);
+    let ghoul_screen = v.project(ghoul_pos[0], ghoul_pos[1]);
+
+    // Player worker selected, shift-click ghoul → selection = [ghoul] only
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(worker);
+    h.world_mut().shift_click_select(&v, ghoul_screen);
+    assert_eq!(h.world().selection().len(), 1);
+    assert_eq!(
+        h.world().entities().owner(
+            h.world()
+                .entities()
+                .slot(h.world().selection().ids()[0])
+                .unwrap()
+        ),
+        OWNER_ENEMY
+    );
+
+    // Ghoul selected, shift-click worker → selection = [worker] only
+    h.world_mut().selection_mut().clear();
+    h.world_mut().selection_mut().insert(ghoul);
+    h.world_mut().shift_click_select(&v, worker_screen);
+    assert_eq!(h.world().selection().len(), 1);
+    assert_eq!(
+        h.world().entities().owner(
+            h.world()
+                .entities()
+                .slot(h.world().selection().ids()[0])
+                .unwrap()
+        ),
+        OWNER_PLAYER
+    );
+}
+
+#[test]
+fn drag_box_still_excludes_enemies() {
+    let mut h = RtsHarness::scene().build().expect("scene");
+    let worker_ids = h.ids_of_kind(EntityKind::Unit(UnitKind::Worker));
+    let worker = worker_ids[0];
+    let worker_pos = h
+        .world()
+        .entities()
+        .position(h.world().entities().slot(worker).unwrap());
+    // Spawn a ghoul right next to the worker
+    let ghoul_pos = [worker_pos[0] + 7.0, worker_pos[1]];
+    let ghoul = h
+        .world_mut()
+        .entities_mut()
+        .spawn(EntityKind::Unit(UnitKind::Ghoul), OWNER_ENEMY, ghoul_pos)
+        .expect("spawn ghoul");
+
+    let v = view();
+    // Drag box covering both
+    let a = v.project(worker_pos[0] - 10.0, worker_pos[1] - 10.0);
+    let b = v.project(ghoul_pos[0] + 10.0, ghoul_pos[1] + 10.0);
+
+    use mmd_engine::rts::{EntityId as EId, box_select};
+    let mut out: Vec<EId> = Vec::new();
+    box_select(h.world(), &v, a, b, &mut out);
+    assert!(out.contains(&worker), "worker must be in box");
+    assert!(
+        !out.contains(&ghoul),
+        "ghoul must not be in box (drag excludes enemies)"
     );
 }
