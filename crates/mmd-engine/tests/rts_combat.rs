@@ -862,6 +862,70 @@ fn no_player_buildings_enemies_idle() {
     }
 }
 
+/// A player building that finishes **on top of** the cached objective
+/// approach cell must dirty the objective.
+///
+/// The failure this pins is silent, which is why it is worth a case of its
+/// own: the approach cell is computed once and cached, and a completion
+/// stamps its footprint into the centre mask the pool is then handed. Leave
+/// the cache alone and `enemy_ai`'s `acquire` fails on a now-solid cell and
+/// returns before ordering anyone — every tick, for the rest of the run. No
+/// `TickError`, no panic, no counter moves: the whole faction is inert.
+#[test]
+fn a_building_finished_over_the_objective_re_aims_the_faction() {
+    /// Build square immediately north-west of the HQ. The HQ's min corner is
+    /// (72, 72) with edge 24, and a body radius of 3 puts its approach ring
+    /// 3.5 cells off that footprint — so a Depot filling `[64, 72)^2` sits
+    /// half a cell from the objective and the inflated centre mask swallows
+    /// it. The Depot is still farther from the HQ centre than the HQ itself,
+    /// so the recompute keeps aiming at the same building.
+    const OBJECTIVE_BLOCKER: Cell = Cell { x: 64, y: 64 };
+    /// Far from the HQ, from the seeded worker, and 3 cells clear of every
+    /// map edge.
+    const ENEMY_START: [f32; 2] = [10.5, 10.5];
+
+    let mut h = harness();
+    let worker = first_worker(&h);
+
+    // One probe, purely to read the objective the world caches on its first
+    // tick, removed again before it can walk anywhere.
+    let probe = spawn_unit(&mut h, UnitKind::Ghoul, OWNER_ENEMY, ENEMY_START);
+    h.step_exact(1);
+    let stale = attack_move_goal(&h, probe).anchor;
+    let _ = h.world_mut().apply_damage(probe, OVERKILL);
+    assert!(!h.world().entities().contains(probe));
+
+    build_and_finish(&mut h, BuildingKind::Depot, OBJECTIVE_BLOCKER, worker);
+    assert!(
+        h.world().nav().blocked()[(stale.x + stale.y * W) as usize],
+        "the Depot must really block the cached objective {stale:?}, or this proves nothing"
+    );
+
+    // Only now does the faction appear, so nothing but the objective can
+    // explain whether it marches.
+    let ghoul = spawn_unit(&mut h, UnitKind::Ghoul, OWNER_ENEMY, ENEMY_START);
+    h.step_exact(1);
+    let goal = attack_move_goal(&h, ghoul).anchor;
+    assert_ne!(
+        goal, stale,
+        "the objective must have been recomputed off the blocked cell"
+    );
+
+    let hq = pos_of(&h, h.world().start_hq().expect("hq alive"));
+    let to_hq = |p: [f32; 2]| (p[0] - hq[0]).hypot(p[1] - hq[1]);
+    let before = to_hq(pos_of(&h, ghoul));
+    h.step_exact(600);
+    let after = to_hq(pos_of(&h, ghoul));
+    assert!(
+        after < before - 40.0,
+        "the ghoul must have closed on the hq: {before} -> {after}"
+    );
+    assert!(
+        h.world().first_combat_tick().is_some(),
+        "the march must have ended in a fight"
+    );
+}
+
 // --- counters and determinism --------------------------------------------
 
 /// The three exit-token counters, against a controlled one-sided fight.

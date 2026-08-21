@@ -1470,4 +1470,17 @@ fn the_sandbox_scene_fights_without_the_player() {
         h.world().start_hq().is_some(),
         "the HQ must survive an unattended first wave — the sandbox opens playable"
     );
+    // Spawning and surviving are both satisfied by a scene where combat was
+    // deleted (surviving the more easily so), which is why the fight itself
+    // is asserted too: the seeded Turrets and Soldiers must actually have
+    // engaged the wave, unattended.
+    assert!(
+        h.world().first_combat_tick().is_some(),
+        "the seeded defence must have traded shots with the first wave"
+    );
+    assert!(
+        h.world().kills() >= 1,
+        "the seeded defence must have killed at least one Ghoul, got {}",
+        h.world().kills()
+    );
 }

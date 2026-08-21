@@ -368,7 +368,7 @@ pub const POCKET_GRID: u32 = 48;
 /// Half-open cell rectangle `[x0, x1) x [y0, y1)`.
 pub type OpenRect = (u32, u32, u32, u32);
 
-/// The HQ's own 12 x 12 footprint, which `StaticNav` stamps solid at load.
+/// The HQ's own 24 x 24 footprint, which `StaticNav` stamps solid at load.
 const POCKET_HQ: OpenRect = (0, 24, 0, 24);
 /// A 4-cell corridor: raw-walkable, so validation's point-agent reachability
 /// passes, but far too narrow for a 3-cell body centre.

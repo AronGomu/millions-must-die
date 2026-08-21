@@ -3101,13 +3101,36 @@ mod exit_line_tests {
 #[cfg(test)]
 mod t4_combat_command_tests {
     use super::*;
-    use mmd_engine::rts::{EntityId, EntityKind, OWNER_ENEMY, OWNER_PLAYER, UnitKind};
+    use mmd_engine::rts::{EntityId, EntityKind, OWNER_ENEMY, OWNER_PLAYER, Order, UnitKind};
+    use mmd_engine::scenario::Cell;
 
     /// Load the combat fixture: has pre-placed ghouls + workers.
     fn combat_world() -> RtsWorld {
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("assets/scenarios/fixtures/fixture_rts_combat_v1.ron");
         RtsWorld::load(&path).expect("combat fixture loads")
+    }
+
+    /// Load the pre-built fixture: three declared Soldiers, no enemies. The
+    /// armed command card and every order that only an armed unit can take
+    /// need a Soldier in the selection, and a scene may now declare one.
+    fn prebuilt_world() -> RtsWorld {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/scenarios/fixtures/fixture_rts_prebuilt_v1.ron");
+        RtsWorld::load(&path).expect("prebuilt fixture loads")
+    }
+
+    fn first_soldier(world: &RtsWorld) -> EntityId {
+        let store = world.entities();
+        for slot in 0..store.slot_count() {
+            if let Some(id) = store.id_at(slot)
+                && store.kind(slot) == EntityKind::Unit(UnitKind::Soldier)
+                && store.owner(slot) == OWNER_PLAYER
+            {
+                return id;
+            }
+        }
+        panic!("no soldier found");
     }
 
     fn first_player_unit(world: &RtsWorld) -> EntityId {
@@ -3138,20 +3161,27 @@ mod t4_combat_command_tests {
 
     #[test]
     fn attack_mode_armed_by_execute_slot() {
-        // cmd_attack_target via cmd surface, not via apply, so we test the
-        // cmd function directly and check receipts
+        // Slot 3 (key A) of the *armed* card is Attack, so an armed selection
+        // must come out of `ExecuteSlot(3)` with the mode armed.
+        let mut world = prebuilt_world();
+        let (mut session, _handle) = RtsSession::for_test();
+        let soldier = first_soldier(&world);
+        let _ = world.select_only(soldier);
+        apply(&mut world, &mut session, RtsCommand::ExecuteSlot(3));
+        assert!(
+            session.pending_attack,
+            "slot 3 of the armed card must arm attack mode"
+        );
+        assert_eq!(session.audio_counters.reject, 0);
+
+        // The worker card is a different card: slot 3 is Build Turret there,
+        // and nothing on it arms the mode.
         let mut world = combat_world();
         let (mut session, _handle) = RtsSession::for_test();
-        // workers-only: ExecuteSlot(3) is a no-op (slot empty)
         let worker = first_player_unit(&world);
         let _ = world.select_only(worker);
         apply(&mut world, &mut session, RtsCommand::ExecuteSlot(3));
         assert!(!session.pending_attack, "worker card has no Attack slot");
-
-        // Can't test arming with a soldier without testkit, so just verify
-        // the counter stays clean on a no-op.
-        assert_eq!(session.audio_counters.order_cues, 0);
-        assert_eq!(session.audio_counters.reject, 0);
     }
 
     #[test]
@@ -3245,26 +3275,32 @@ mod t4_combat_command_tests {
 
     #[test]
     fn attack_move_ground_click_with_armed_mode() {
-        // Arm mode, click ground: resolve to cmd_attack_move
-        let mut world = combat_world();
+        // Arm the mode, click ground, and read the order back. The order is
+        // the whole point: `AttackGround` degrades an unarmed unit to `Move`,
+        // so a worker selection cannot tell `cmd_attack_move` apart from
+        // `cmd_move` and only an armed unit proves the branch.
+        let mut world = prebuilt_world();
         let (mut session, _handle) = RtsSession::for_test();
-        // Force mode on
+        let soldier = first_soldier(&world);
+        let _ = world.select_only(soldier);
         session.pending_attack = true;
-        let worker = first_player_unit(&world);
-        let _ = world.select_only(worker);
-        // Left click on ground — worker = unarmed → cmd_attack_move calls
-        // order_group(AttackGround) → workers get Move, no armed = EmptySelection reject
-        apply(
-            &mut world,
-            &mut session,
-            RtsCommand::LeftClick([960.0, 540.0]),
-        );
+
+        // Open ground south of the HQ, clear of the seeded Depot and
+        // Barracks. Addressed through the view's own projection, which is the
+        // exact inverse of the `cell_at` the click resolves through, so the
+        // click lands on this cell and no other.
+        let target = Cell { x: 48, y: 76 };
+        let p = world
+            .iso_view()
+            .project(target.x as f32 + 0.5, target.y as f32 + 0.5);
+        apply(&mut world, &mut session, RtsCommand::LeftClick(p));
+
         assert!(!session.pending_attack, "mode consumed");
-        // workers-only: attack_move gives them Move order OR rejects EmptySelection
-        // (no armed unit → cmd_attack_move succeeds with Move orders for workers)
-        // Actually workers ARE orderable and eligible for AttackGround → Move
-        // So accepted = 1, order_cues = 1
         assert_eq!(session.audio_counters.order_cues, 1);
+        match world.order_of(soldier) {
+            Some(Order::AttackMove { goal, .. }) => assert_eq!(goal.anchor, target),
+            other => panic!("an armed ground click must be an AttackMove, got {other:?}"),
+        }
     }
 }
 

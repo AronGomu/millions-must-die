@@ -2348,8 +2348,9 @@ impl RtsWorld {
     /// A caller inside [`Self::tick`] must run before any system that
     /// consumes `live_scratch`, or re-collect it: a slot despawned here
     /// stays in that buffer until the next collect, and the store's
-    /// accessors assert liveness. Nothing calls this from inside a tick in
-    /// this slice.
+    /// accessors assert liveness. The combat system is that caller, and it
+    /// re-collects `live_scratch` whenever a shot despawned something, so
+    /// the same tick's supply recount never reads a corpse.
     pub fn apply_damage(&mut self, target: EntityId, damage: u32) -> DamageResult {
         let Some(slot) = self.entities.slot(target) else {
             return DamageResult::NoTarget;
@@ -2672,6 +2673,13 @@ impl RtsWorld {
                 replaced.is_ok(),
                 "pool and static_nav grids must agree in size"
             );
+            // A finished footprint can swallow the cached objective approach
+            // cell — the legal build square next to the HQ is exactly that.
+            // A stale objective is not a detour but a dead faction: the cell
+            // is blocked in the mask the pool was just handed, so `enemy_ai`'s
+            // `acquire` fails and it returns before ordering anyone, every
+            // tick, silently and forever. Recompute instead.
+            self.enemy_objective_dirty = true;
         }
 
         // Clear the orders of every worker that was building something now

@@ -1046,3 +1046,11 @@ prebuilt base) and check what no offscreen test can prove:
 - [ ] **Follow and entity rally behave.** Right-click a friendly unit with a squad selected: they escort it at arm's length. Rally the Barracks onto a node and produce a worker: it starts gathering without another order, and a dashed line runs from the building to the flag while the building is selected.
 - [ ] **The workers start idle, and that is expected.** Confirm the six seeded Workers do nothing until ordered, and that leaving the scene unattended does not raise the crystal or gas counters (gap G12). Then give them their first gather order by hand and confirm the counters climb.
 - [ ] **The sandbox is playable for as long as you want.** No frame budget, waves keep arriving for about seven minutes of play, and quitting is Escape \u2014 nothing about this scene is on the gate.
+
+## Review fixes — code and tests
+
+One behavioural fix from the post-close review. Run
+`cargo run -- rts --scenario assets/scenarios/rts_sandbox_v1.ron` (untimed,
+prebuilt base) and check what no offscreen test can show you:
+
+- [ ] **A building finished next to the HQ does not stop the war.** Place and finish an ordinary building — a Depot is easiest — on the build square immediately north of the HQ, the one the marching Ghouls walk onto. Then wait out the next wave. Every wave must keep arriving and keep attacking, exactly as before the build. Previously this silently killed the whole enemy faction for the rest of the run: waves kept spawning and then stood still forever, with no error and no visible cause.
