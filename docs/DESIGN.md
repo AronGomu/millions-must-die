@@ -208,8 +208,9 @@ system. Everything here is app/render-side except the gather policy above.
   is actually drawn at; preview and commit consume the same candidate, so the
   green footprint a player sees is the one that gets built.
 - **Buildings answer clicks.** A player building is picked by its rendered
-  sprite rect ∪ its ground footprint, and its card is exactly six lines: kind,
-  ready/build %, supply grant, queue, head progress, rally.
+  sprite rect ∪ its ground footprint, and its card is exactly seven lines:
+  kind, HP, ready/build %, supply grant, queue, head progress, rally (six
+  until phase 2 inserted the HP line under the kind line).
 - **Command keys are positional.** `QWE`/`ASD`/`ZXC` map row-major onto the
   3×3 card, so the key is wherever the button is; keyboard and pointer share
   one executor and a disabled slot is a silent no-op.

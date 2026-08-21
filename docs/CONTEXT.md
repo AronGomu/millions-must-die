@@ -86,8 +86,9 @@ Consolidated from former `00-vision.md`, `02-prototype-roadmap.md`, `03-mvp.md`.
      systems answer the feedback a person driving the game gave: framed
      control states, a menu you can close, live and typed settings with
      per-bus mutes and a scrolled body, a persisted world grid, assisted
-     placement, a building pick that matches the drawn sprite plus a six-line
-     card, positional command keys, an exact pure-green selection box, and
+     placement, a building pick that matches the drawn sprite plus an
+     exact-line card (six lines then, seven since phase 2 added the HP line),
+     positional command keys, an exact pure-green selection box, and
      workers that may overlap **only** while both are gathering or while that
      pair is inside its bounded exit — every other merged pair is repaired or
      reported. The horde is untouched and still overlaps freely. Performance

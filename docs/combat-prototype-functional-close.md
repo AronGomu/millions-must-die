@@ -125,10 +125,16 @@ The values are exact, pinned by `combat_tokens_exact` in
 `body_overlaps=0`, `frames=4459` and the state hash — is compared between two
 independent processes. A drifted token is a red gate, not a curiosity.
 
-**Read `kills=2` as the honest number it is.** Two kills against four hundred
-spawned enemies is a losing defence, and the run is pinned that way on purpose
-rather than tuned until it looked heroic. The mechanism is known: an auto-acquiring firer
-re-picks its target every tick from `RtsWorld::nearest_hostile_in_range` while
+**Read `kills=2` as the honest number it is.** Two kills is a losing defence,
+and the run is pinned that way on purpose rather than tuned until it looked
+heroic. Read it against the *twelve* it fought, not against four hundred: only
+the 12-Ghoul first wave (tick 3000) ever reaches the base inside the run. The
+script's own header records that the 388 Ghouls of the three late waves "spawn
+before the exit and are still hundreds of ticks of marching short of the base
+when it comes", so `enemies_spawned=400` counts spawns, never contacts, and
+`kills=2 / 400` is not a rout by hundreds — it is a poor showing against
+twelve. The mechanism is known: an auto-acquiring firer re-picks its target
+every tick from `RtsWorld::nearest_hostile_in_range` while
 damage only lands when its cooldown reaches 0, so consecutive shots into a
 moving clump land on different Ghouls and finish none of them. Five player
 losses and two enemy deaths is what that produces. Fixing it is a targeting/balance
@@ -138,22 +144,54 @@ hiding it behind a re-baseline.
 **The one objective cell.** The enemy faction marches at a single cell — the
 approach cell of the player building nearest the faction's origin, which on the
 gate scene is the HQ's north approach cell `(160, 156)`. Both spawn corners are
-in the far south, so a wave from the south-west corner walks up the **west**
-flank on its way round to that cell. There is no "southern line" to hold, and
-any plan or checklist text that describes one is describing a scene that does
-not exist.
+in the far south — `(14, 304)` and `(306, 304)` — so a wave from the south-west
+corner arrives at the base from the **west** side. There is no "southern line"
+to hold, and any plan or checklist text that describes one is describing a
+scene that does not exist.
+
+**Naming the leg.** The tracked script's header says that same route "swings
+east, not up the west flank", and the two are not in conflict: they name
+different legs of one flow-field descent. The early leg cuts diagonally
+north-east across the south-west quadrant — which is why the script's
+sacrifice, turret and attack-move cells sit inland at `(94, 259)`, `(144, 224)`
+and `(136, 240)` rather than on the west edge — and only the last leg comes at
+`(160, 156)` from the west. Neither artifact describes a march up the west
+edge.
+
+**The objective is recomputed, not cached for the run.** It is re-aimed when a
+player building dies, the HQ included — and, since the post-close review fix,
+also when a building *finishes*. A finished footprint can swallow the cached
+approach cell (the legal build square next to the HQ is exactly that); the cell
+is then blocked in the mask the field pool was just handed, so `acquire` fails
+and `enemy_ai` returns before ordering anyone — every tick, silently, for the
+rest of the run. Recomputing on completion is what stops a Depot built north of
+the HQ from ending the war without an error
+(`RtsWorld::construction`, `crates/mmd-engine/src/rts/world.rs`).
 
 ## The re-baseline, named honestly
 
 Putting enemies into `assets/scenarios/rts_prototype_v1.ron` changed the world
 both phase-1 scripts run in, and the build-grid recut moved the scene's worker
-spawn row onto a square-aligned position. Their pinned counters and the scene's
-sha256 sidecar were re-baselined — once per change, in the same commit as the
-change, after verifying each moved value by hand. These were deliberate
-evidence updates, not a way to make a red test green. The phase-1 and phase-1.1
-close documents describe the pre-enemy, pre-recut runs and are not rewritten;
-their claims hold for the world they measured. `body_overlaps=0` still holds on
-both phase-1 scripts with marching enemies in the same scene — enemies are
+spawn row onto a square-aligned position. The scene's sha256 sidecar was
+regenerated once per change, in the same commit as the change. The two changes
+are not symmetric, and the record should not read as if they were:
+
+- **The build-grid recut** moved real pinned values as well as the sidecar: the
+  HQ footprint, the spawn row and the camera origin all moved, so the tracked
+  acceptance script was re-authored and the coordinates and geometry the
+  phase-1 tests pin moved with it — each verified by hand.
+- **The enemy commit** moved the sidecar and nothing else. It added a wave
+  table whose first spawn is at tick 3000, after both phase-1 scripts have
+  already exited, so their asserted counters kept their values untouched; the
+  only additions were the five zero-valued combat tokens on those runs' exit
+  lines. The engine tests whose horizons cross tick 3000 were repointed at a
+  byte-identical enemy-free fixture precisely so that no number they pin had to
+  move either.
+
+Both were deliberate evidence updates, not a way to make a red test green. The
+phase-1 and phase-1.1 close documents describe the pre-enemy, pre-recut runs
+and are not rewritten; their claims hold for the world they measured.
+`body_overlaps=0` still holds on both phase-1 scripts with marching enemies in the same scene — enemies are
 ordinary hard pairs under the ADR 021 policy.
 
 ## System → test map
@@ -166,7 +204,7 @@ name in it was checked by hand against a live `#[test]` fn at close time.
 | combat data model — HP, armor, damage floor, death routing | `crates/mmd-engine/tests/rts_combat.rs` | `stats_are_the_published_constants`, `every_entity_spawns_at_full_hp`, `damage_reduces_hp_by_damage_minus_armor`, `damage_floors_at_one`, `damage_to_a_node_is_a_no_op`, `damage_to_a_stale_id_is_refused`, `a_unit_dies_at_zero_hp_and_its_slot_frees`, `building_death_unstamps_its_footprint`, `building_death_cancels_its_queue_without_refund`, `building_death_revokes_its_supply_grant`, `hq_death_idles_its_returning_gatherers`, `site_death_idles_its_builders_without_refund`, `hp_enters_the_state_hash`, `death_events_drain_once`, `death_events_never_enter_the_state_hash` |
 | enemy faction and scenario waves | `crates/mmd-engine/tests/rts_enemy.rs` | `ghoul_kind_tags_stably`, `pre_placed_ghouls_spawn_at_start`, `wave_spawns_at_exact_tick`, `enemies_never_consume_supply`, `drag_box_excludes_enemies`, `spawn_determinism`, `wave_defers_when_store_full` |
 | enemy scenario schema and caps | `crates/mmd-engine/tests/scenario_contract.rs` | `enemy_baseline_block_is_valid`, `enemy_block_optional_old_scenes_parse`, `enemy_spec_validates_cells_and_totals` |
-| weapons, targeting and enemy march AI | `crates/mmd-engine/tests/rts_combat.rs` | `soldier_auto_acquires_idle`, `plain_move_never_fires`, `nearest_target_lowest_slot_tie`, `cooldown_gates_fire_rate`, `a_gathering_worker_never_fires`, `ghouls_march_on_hq`, `ghoul_attacks_first_thing_in_range`, `ghouls_besiege_and_kill_hq`, `objective_retargets_on_hq_death`, `no_player_buildings_enemies_idle`, `counters_and_first_combat_tick`, `combat_determinism`, `cooldown_enters_state_hash`, `field_pool_not_churned`, `the_ghoul_is_the_slowest_unit` |
+| weapons, targeting and enemy march AI | `crates/mmd-engine/tests/rts_combat.rs` | `soldier_auto_acquires_idle`, `plain_move_never_fires`, `nearest_target_lowest_slot_tie`, `cooldown_gates_fire_rate`, `a_gathering_worker_never_fires`, `ghouls_march_on_hq`, `ghoul_attacks_first_thing_in_range`, `ghouls_besiege_and_kill_hq`, `objective_retargets_on_hq_death`, `a_building_finished_over_the_objective_re_aims_the_faction`, `no_player_buildings_enemies_idle`, `counters_and_first_combat_tick`, `combat_determinism`, `cooldown_enters_state_hash`, `field_pool_not_churned`, `the_ghoul_is_the_slowest_unit` |
 | player combat commands — engine side | `crates/mmd-engine/tests/rts_combat_commands.rs` | `attack_target_orders_armed_selection`, `attack_target_walks_then_kills`, `attack_move_formation_semantics`, `workers_in_selection_move_dont_fight`, `attack_target_walks_workers_instead`, `attack_target_rejects_unarmed_dead_and_missing`, `stop_idles_and_cancels`, `enemy_selection_rejects_commands`, `command_receipts_do_not_grow_the_buffer` |
 | player combat commands — app side | `src/rts_run.rs` | `attack_mode_armed_by_execute_slot`, `escape_cancels_attack_mode_without_opening_menu`, `right_click_cancels_armed_attack_mode`, `enemy_selected_right_click_rejects`, `cmd_attack_target_on_ghoul_emits_voice`, `attack_move_ground_click_with_armed_mode` |
 | enemy pick and card | `crates/mmd-engine/tests/rts_selection.rs`, `crates/mmd-engine/tests/rts_hud.rs` | `enemy_unit_is_pickable_and_click_selects_exactly_one`, `shift_click_never_mixes_enemy_and_player`, `card_shows_attack_stop_for_armed`, `enemy_selection_shows_no_commands`, `enemy_card_two_lines_kind_and_hp` |
@@ -209,13 +247,28 @@ name in it was checked by hand against a live `#[test]` fn at close time.
 - **G3 — no attack-cursor visual.** Arming Attack changes nothing on screen
   until the resolving click (the same pattern as rally). A misclick while armed
   is easy; recorded as a feedback-phase candidate.
-- **G4 — the doc-lint scanners do not cover this page yet.**
-  `no_perf_claim_in_docs` (`LIVE_DOCS`) and
-  `rts_overlap_invariant_names_its_gather_exception` (`INVARIANT_DOCS`) in
-  `tests/validation_contract.rs` were not extended to this file — that is a
-  code change and this close is docs-only. Until a follow-up adds this page and
-  a phase-2 map-resolver test, the table above is hand-verified only.
-- **G5 — the defence loses.** `kills=2 losses=5` against 400 spawned enemies.
+- **G4 — the doc-lint scanners do not cover this phase yet.** Four scanners in
+  `tests/validation_contract.rs` carry phase-scoped lists, and no phase-2 entry
+  was added to any of them:
+  - `no_perf_claim_in_docs` (`LIVE_DOCS`) — this page and
+    `combat-prototype-architecture.html` are unscanned for perf claims;
+  - `rts_overlap_invariant_names_its_gather_exception` (`INVARIANT_DOCS`) —
+    same, for the ADR 021 gather exception;
+  - `manual_checklist_covers_every_human_only_flow` (`MANUAL_FLOWS`) — the
+    combat and feedback-round-2 human-only flows this close leans on have no
+    token forcing them onto `artifacts/manual_test_checklist.md`;
+  - `glossary_defines_the_feedback_polish_vocabulary`
+    (`POLISH_GLOSSARY_TERMS`) — the combat vocabulary added to
+    `docs/GLOSSARY.md` is pinned to no file.
+
+  Extending any of them is a source change, and the close commit that wrote
+  this page touched documentation only (`git show --stat` on it lists six `.md`
+  files and nothing else). Until a follow-up extends the four lists and adds a
+  phase-2 map-resolver test, the table above and those checklist sections are
+  hand-verified only.
+- **G5 — the defence loses.** `kills=2 losses=5` against the 12-Ghoul first
+  wave — the only wave that reaches the base before the run exits, out of 400
+  spawned.
   The per-tick retarget through `nearest_hostile_in_range` spreads consecutive
   shots across a clump instead of finishing one Ghoul. Targeting persistence and balance are
   later phases; the gate pins the current behaviour rather than a wish.

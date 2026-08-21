@@ -115,7 +115,7 @@
 - [ ] Select a single worker: confirm a 128x128 portrait (cropped from the worker sheet) appears at the selection card's left edge, with kind/carry text to its right.
 - [ ] Select a single HQ or Barracks: confirm its portrait shows the building art, "READY", and (if a rally point is set) a `RALLY x,y` line.
 - [ ] Box-select more than 24 units: confirm the selection card switches to an 8x3 grid of 48px icons (first 24 by ascending id) and a `+N` marker appears to the right of the grid for the remainder.
-- [ ] With only workers selected: confirm the command grid's top-left three cells light up with distinct build icons (HQ/Depot/Barracks).
+- [ ] With only workers selected: confirm the command grid's first four cells light up with distinct build icons — Q=HQ, W=Depot, E=Barracks, A=Turret. (Three when this ticket was written; phase-2 T5 added the Turret at slot 3.)
 - [ ] With a single finished HQ selected: confirm the command grid shows a Train-Worker icon top-left and a Rally icon bottom-right (slot 8), and nothing else.
 - [ ] With a single finished Barracks selected: confirm the command grid shows a Train-Soldier icon top-left and the same Rally icon bottom-right.
 - [ ] Select nothing, then select a worker and a building together: confirm the command grid goes fully blank in both cases.
@@ -492,6 +492,15 @@ What moved, and why:
   into the canonical script: `acceptance_audio_counts_are_exact` pins the canonical run's audio
   counters cue by cue, and adding chrome to it would inflate every one of those numbers.
 
+**Historical evidence, recorded on the feedback-polish branch.** The values in
+the rest of this section — the counters just below and the exit-line hashes in
+the gate list under them — are what that branch measured and are kept as
+written. They predate the phase-2 build-grid recut, which re-authored
+`assets/scenarios/rts_acceptance_v1.script` and moved the scene geometry, and
+the enemy commit, which appended five combat tokens to every RTS exit line.
+Do not expect a run today to reproduce them; the live numbers are the ones
+pinned in `tests/rts_acceptance.rs`.
+
 No expected value in `tests/rts_acceptance.rs` changed. Once the script was re-timed, every
 pinned counter recovered its documented value on its own — `buildings=3`, `units=8`,
 `supply=9/20`, `voice_select=8`, `voice_order=9`, `voice_reject=1`, `sfx_ui=8`, and the
@@ -803,7 +812,7 @@ behaves as expected in a running session where a human can observe world state.
 - [ ] Advance past tick 120 and confirm a second batch of enemies appears near spawn point 1 at (20, 76).
 - [ ] Attempt to drag-box-select across the screen in an area containing both workers and Ghouls — confirm only the player's workers are selected (the selection ring never appears on a Ghoul).
 - [ ] Confirm the supply counter never rises above its initial cap as Ghouls are spawned — the "supply used" figure stays at the player-unit count only.
-- [ ] Confirm Ghouls stand idle (no movement, no pathfinding) — they render using the soldier sheet as a placeholder but do not walk or attack.
+- [ ] Confirm Ghouls stand idle (no movement, no pathfinding) — they render using the soldier sheet as a placeholder but do not walk or attack. **(Superseded by T3, which gave them the march AI: from T3 on they walk. Run this line only against a T2-era build.)**
 
 ## T3 weapons-and-targeting
 
