@@ -29,6 +29,10 @@ Detailed phase-1 designs:
 - [RTS engine prototype](rts-engine-prototype-architecture.html)
 - [RTS interaction, UI and audio hardening](rts-interaction-ui-audio-hardening-architecture.html) (phase 1.1)
 
+Detailed phase-2 designs:
+- [Combat prototype](combat-prototype-architecture.html)
+- [RTS feedback round 2](rts-feedback-round2-architecture.html)
+
 ## Agent collision
 
 This section is about the **horde** (`crates/mmd-engine/src/sim`) only. Player
@@ -241,6 +245,126 @@ deterministic and audio-free.
   `AudioEvent`s (music, select/move/gather/build/reject voice, UI click),
   capped and sorted, weighted by Music/Voice/SFX buses under a master scalar,
   and handed to a sink. Offscreen runs use a fake sink and open no device.
+
+## Combat
+
+Phase 2. One combat contract for every armed thing, player or enemy. The
+[Agent collision](#agent-collision) section above still describes the horde's
+`sim/` soft separation, which phase 2 never touched; everything here is the
+RTS side.
+
+- **Instant hit, armor floor.** A weapon is damage / cooldown / range
+  (`crates/mmd-engine/src/rts/combat.rs`). A hit lands the tick it fires — no
+  projectile entities — for `max(1, damage - armor)`, so armor mitigates but
+  never zeroes a hit. Placeholder stats, balance being a later phase: Soldier
+  40 HP / 0 armor, damage 6, cooldown 15 ticks, range 24, speed 24 cells/s;
+  Ghoul 30 / 0, damage 5, cooldown 30, range 8, speed 18 cells/s; Turret
+  150 / 1, damage 10, cooldown 20, range 36; Worker 25 / 0, unarmed, speed
+  30 cells/s; HQ 400 / 2, Depot 150 / 1, Barracks 200 / 1.
+- **Targeting.** Nearest valid target inside weapon range, lowest-slot
+  tie-break, range measured against the target's body circle or footprint
+  rectangle rather than its centre. `Idle` and `AttackMove` auto-acquire and
+  hold in place to fight; `Attack` fires only at its own target, chases it
+  while out of range, and falls back to auto-acquire the tick that target
+  dies; `Move`, `Gather`, `Build` and `Follow` never fire, so a retreat order
+  is a real retreat. Target selection re-runs every tick while damage lands
+  only on the cooldown edge — which is why consecutive shots into a moving
+  clump spread instead of finishing one body. Persistent targeting is a later
+  phase.
+- **Enemy objective chain.** Every `OWNER_ENEMY` unit holds a permanent
+  `Order::AttackMove` at **one** faction objective: the approach cell of the
+  live player building nearest the faction origin (the HQ while it lives,
+  lowest-slot tie-break, then Idle when no player building remains). The
+  approach cell, not the building's own cell — a finished footprint is blocked
+  in the inflated centre mask, so no field can be built to it. The objective
+  recomputes on a building death, never by per-tick scan, and all enemies
+  descend one shared pooled flow field per objective — hundreds of enemies,
+  one field, so "no per-enemy pathfinding" and `NAV_FIELD_SLOTS = 8` both
+  stand. One objective cell also means one approach: on the gate scene every
+  wave converges on the HQ's north approach cell, whichever corner it spawned
+  from.
+- **Death is routed, not special-cased.** Units despawn; buildings — the HQ
+  included — un-stamp their footprint, which invalidates every pooled field; a
+  dying production building cancels its queue with no refund; HQ death sends
+  gatherers Idle. The run is a sandbox: no win or lose, the outcome rides the
+  exit tokens `kills`/`losses`/`enemies_spawned`/`first_combat_tick`/
+  `hq_alive`.
+- **Turret.** `BuildingKind::Turret`: worker-built for 75 crystal under the
+  unchanged four placement rules, an 8 × 8-cell footprint (one build square),
+  grants no supply, is no drop-off, and once finished auto-fires the nearest
+  enemy with range measured from its footprint rectangle — a corner Ghoul must
+  not cost it reach. An unfinished site never fires. Fire is silent this phase
+  (named gap in the close doc).
+- **Enemies are ordinary hard pairs.** The Ghoul takes the RTS hard-body
+  contract as-is — ADR 021's gather-worker exception is not widened, so every
+  enemy-touching pair is repaired, or counted by `body_overlaps` and reported.
+  The horde keeps ADR 009's soft separation and may still overlap; never merge
+  the two claims.
+- **Hundreds on the gate, horde later.** The gate scene spawns 400 enemies
+  across four scripted waves. The phase-3 claim — tens of thousands — is a
+  different scale and a different slice; nothing here advances or spends it.
+
+Decisions: [ADR 022](ADR/022_ADR_combat_model_and_enemy_faction.md) and
+[ADR 023](ADR/023_ADR_combat_gate_scale_and_rebaseline.md). Shape of the
+slice: the [combat architecture](combat-prototype-architecture.html) page.
+What it proves and does not:
+[functional close](combat-prototype-functional-close.md).
+
+## Feedback round 2
+
+Phase 2 as well, driven by user feedback rather than by a missing system. The
+collision sentences below are about **RTS hard bodies**, not the horde.
+
+- **A build grid for buildings only.** `BUILD_SQUARE_CELLS = 8`. Every
+  footprint is a whole number of squares — Depot 8 (1 × 1), Turret 8 (1 × 1),
+  Barracks 16 (2 × 2), HQ 24 (3 × 3) — the ghost floors its min corner to a
+  square boundary, and a scenario-declared building that is not square-aligned
+  is refused at load. The overlay draws squares instead of the per-cell lattice
+  when the world grid is on, and is forced on while a ghost is pending.
+  **Units keep moving in true float cells and ignore the square entirely**:
+  the grid is a placement device, never a movement one.
+- **A builder can always leave.** Completion already evacuated every body its
+  footprint covered to a legal, distinct centre and cleared the builder's
+  order; the reported trap did not reproduce through that path. What was
+  genuinely unbounded — and is now fixed — is a site whose evacuation can never
+  succeed: it used to hold at `build_ticks - 1` forever with the cost already
+  spent. `STALLED_SITE_TICKS = 180` consecutive discarded plans now cancel it
+  and refund in full. There is deliberately no "finish anyway" relaxation:
+  within one connected region a relaxed search could only return a position
+  that penetrates static geometry or one merged with another body, which the
+  ADR 021 policy forbids outside the gather exception.
+- **The card says what a unit is doing.** Status vocabulary: `IDLE`, `MOVING`,
+  `BUILDING`, `FOLLOWING`, `MOVING TO MINERAL|GAS`, `COLLECTING MINERAL|GAS`,
+  `RETURNING MINERAL|GAS`; node cards show `YIELD`. `Attack` and `AttackMove`
+  both read `MOVING` — there is no `ATTACKING` string this phase — and an
+  enemy card is kind plus HP only, with no status line at all.
+- **Target rings are derived, not stored.** Whatever a selected unit's live
+  order points at gets a thin ring each frame, which is what makes the ring
+  survive deselect-and-reselect. One ring per target, never doubled with the
+  selection ring.
+- **Move markers and dashed bearings.** A ground order plants a bounded,
+  hashed, self-expiring `Prop::MoveMarker` (`MAX_MOVE_MARKERS = 8`,
+  `MOVE_MARKER_TICKS = 90`, oldest dropped first); a rallied unit plants none.
+  A selected mover draws a dashed **straight bearing** to its goal — not the
+  flow-field route it will actually walk — and a huge selection skips dashes
+  entirely.
+- **Follow, and rally points that name an entity.** `Order::Follow { target }`
+  closes to interaction reach, holds there, re-paths once the target has moved
+  `FOLLOW_REPATH_CELLS`, dies with its target, and never targets an enemy or
+  itself. `RallyTarget` is either a `Cell` or an `Entity`, so a Barracks
+  rallied onto a node produces workers that gather without a second order.
+  Right-click resolves by ownership: enemy ⇒ attack, friendly ⇒ follow, node ⇒
+  gather, ground ⇒ move.
+- **A sandbox scene for hands.** `assets/scenarios/rts_sandbox_v1.ron`: a
+  prebuilt base, eight Soldiers, thirty authored waves, run with `--scenario`
+  and no `--frames`. It is **deliberately not on the merge gate** — an untimed
+  scene proves nothing on a timer, and a test asserts its absence from every
+  gate block.
+
+Decisions: [ADR 024](ADR/024_ADR_build_grid_and_placement_snap.md) and
+[ADR 025](ADR/025_ADR_order_feedback_follow_and_entity_rally.md). Shape of the
+slice: the
+[feedback round 2 architecture](rts-feedback-round2-architecture.html) page.
 
 ## Design Decisions
 

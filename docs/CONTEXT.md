@@ -99,6 +99,40 @@ Consolidated from former `00-vision.md`, `02-prototype-roadmap.md`, `03-mvp.md`.
      the shape of the slice on the
      [architecture page](rts-feedback-polish-architecture.html).
 2. **Combat Prototype** — weapons, damage, turrets, enemy AI.
+   - Status (2026-08-21): **closed on functional scope.** The game fights
+     back on the same gate scene: an enemy faction (`OWNER_ENEMY`) of melee
+     Ghouls spawns from scenario waves — 400 across the scripted run,
+     deliberately not yet the phase-3 horde — marches on **one** objective
+     cell over **one** shared pooled flow field and attacks the first player
+     thing in range; Soldiers auto-acquire while Idle or attack-moving, and
+     plain Move never fires; damage is instant-hit `max(1, damage - armor)`;
+     units despawn on death and buildings — the HQ included — are
+     destructible; a worker-built Turret auto-fires, silently for now. The
+     same phase folded in the user's second feedback round: an 8-cell build
+     grid buildings snap to while units still move in true cells, a bounded
+     give-up for a construction site that can never evacuate, order status
+     text, target rings, move markers with dashed bearings, follow orders,
+     rally points that can name an entity, and an untimed sandbox scene that
+     is deliberately off the gate. Enemies collide as ordinary hard RTS
+     bodies: ADR 021's gather exception is not widened, and the horde's soft
+     separation is untouched. The run is a sandbox — no win or lose; the
+     outcome rides five exit tokens (`kills`, `losses`, `enemies_spawned`,
+     `first_combat_tick`, `hq_alive`) pinned by a tracked combat script, and
+     both phase-1 scripts plus the scene's sha256 were re-baselined when the
+     gate scene gained its enemies and its square-aligned spawn row — the
+     phase-1 close docs describe the pre-enemy runs. The scripted defence
+     loses on purpose-pinned numbers (`kills=2 losses=5`), which is recorded
+     rather than tuned away. Performance stays **unmeasured**. What it
+     proves, what it does not, and every known gap:
+     [combat prototype functional close](combat-prototype-functional-close.md).
+     The decisions behind it:
+     [ADR 022](ADR/022_ADR_combat_model_and_enemy_faction.md),
+     [ADR 023](ADR/023_ADR_combat_gate_scale_and_rebaseline.md),
+     [ADR 024](ADR/024_ADR_build_grid_and_placement_snap.md) and
+     [ADR 025](ADR/025_ADR_order_feedback_follow_and_entity_rally.md), with
+     the shape of the slice on the
+     [combat architecture page](combat-prototype-architecture.html) and the
+     [feedback round 2 architecture page](rts-feedback-round2-architecture.html).
 3. **Horde Prototype** — tens of thousands of enemies.
 4. **Defense Prototype** — walls, waves, multiple entrances.
 5. **Economy Prototype** — tune macro gameplay.

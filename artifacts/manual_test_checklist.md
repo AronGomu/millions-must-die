@@ -965,12 +965,12 @@ you whether a horde walking at you *reads* as a horde walking at you — that is
 what this pass is for. `cargo run -- rts` alone puts you on that scene, and the
 first wave is about fifty seconds in.
 
-- [ ] Launch `cargo run -- rts` and just watch the minimap for the first minute. Confirm that around the fifty-second mark red enemy dots appear together at the bottom-left corner, and that they then crawl steadily up and to the left as one loose group rather than teleporting or snapping between positions.
+- [ ] Launch `cargo run -- rts` and just watch the minimap for the first minute. Confirm that around the fifty-second mark red enemy dots appear together at the **left (west) corner** of the minimap diamond — the minimap is isometric, so the south-west map corner projects to the left corner, not the bottom-left — and that they then crawl steadily inward toward the centre as one loose group rather than teleporting or snapping between positions.
 - [ ] Follow that first wave with the camera the whole way in. Confirm the Ghouls read as marching — a continuous walk with their sprites animating — and that they pick a route around the terrain instead of grinding against an obstacle edge.
 - [ ] Leave a single Worker parked well out on the route the wave walks, then let the wave reach it. Confirm you can see it being attacked (its HP bar drops in visible steps), that it dies with a death flash, and that its supply is given back on the HUD.
 - [ ] Build a Turret forward of the base, on the route, and let the wave reach it. Confirm the Turret opens fire before the Ghouls are on top of it, that each hit is legible as a hit, and that Ghouls actually die rather than simply losing HP forever.
 - [ ] With two Soldiers rallied behind that Turret, confirm the idle one starts shooting by itself when a Ghoul comes into its range — you should not have to give it an order for it to defend itself.
-- [ ] Select one Soldier, press `A` and left-click ground down the route. Confirm it walks that way and engages what it meets on the way, and that its card status reads as an attack-move rather than a plain move.
+- [ ] Select one Soldier, press `A` and left-click ground down the route. Confirm it walks that way and engages what it meets on the way. Its card status will read `MOVING` — the shipped vocabulary has no attack-move or `ATTACKING` string, so the only visible difference from a plain move is that it stops to fight. That is a named gap (G7 in the close doc), not a defect.
 - [ ] Watch the HUD while the fight is on. Confirm enemy Ghouls show a hostile-coloured HP bar, that your own units' bars are visibly different from theirs, and that clicking an enemy gives you a read-only card you cannot issue orders from.
 - [ ] Let the later hordes (150 + 150 + 88 Ghouls) spawn and watch the frame pacing and the minimap with hundreds of enemies alive at once. Confirm the picture stays readable — no flicker, no dots vanishing, no audio dropouts — and note anything that feels wrong, since no gate command measures this.
 - [ ] Play a round where you deliberately let the wave through to the HQ. Confirm the HQ takes visible damage, and that if you let it die the game does not crash or freeze — this is a sandbox, so there is no win or lose screen, and that is expected.
@@ -999,6 +999,50 @@ ticket added no such behaviour — an unattended run at 3 000 ticks still reads
 - [ ] Box-select the eight Soldiers and confirm the command card and the selection count both read eight, then give them a move order and confirm all eight walk without any pair sliding through each other.
 - [ ] Select the six Workers and right-click a crystal node. Confirm they start gathering from a standing start and that the crystal counter begins to climb — this is the step that proves the seeded base is a working base, not just a picture of one.
 - [ ] Select the Barracks and produce a Soldier. Confirm there is enough stock and supply headroom for it to start immediately, and that it walks out of the building when it finishes.
-- [ ] Wait out the first wave without touching anything. Confirm enemy dots appear at a bottom corner of the minimap about thirty seconds in, walk up the west flank towards the base, and that the west Turret opens fire on them before they reach the HQ.
+- [ ] Wait out the first wave without touching anything. Confirm enemy dots appear at the **left (west) corner** of the minimap diamond about thirty seconds in (the isometric minimap projects the south-west map corner to its left corner), that they come up the west flank towards the base, and that the west Turret opens fire on them before they reach the HQ.
 - [ ] Let the run keep going past several waves and confirm the waves keep arriving on a rhythm of roughly fifteen seconds and keep getting bigger. Confirm the run does not end on its own — no scripted quit, no frame budget — and that Escape then Quit is what ends it.
 - [ ] Confirm the gate scene is untouched by all of this: `cargo run -- rts` with no `--scenario` still opens the ordinary prototype scene with one HQ, six Workers and nothing else built.
+
+## T14 docs-close
+
+The phase-2 close is docs-only: no behaviour changed in this ticket. What a
+human still has to do is check that the written record matches the running
+game, and run the two passes no offscreen test can make. The claims under test
+here live in `docs/combat-prototype-functional-close.md`, `docs/CONTEXT.md`
+roadmap item 2, `docs/DESIGN.md` (`## Combat`, `## Feedback round 2`),
+`AGENTS.md` and `docs/GLOSSARY.md`.
+
+Read-the-record pass:
+
+- [ ] Open `docs/combat-prototype-functional-close.md` in a markdown renderer and click every link: `05-testing.md`, ADR 022, ADR 023, ADR 024, ADR 025, both architecture pages, the three prior close docs, and the two in-page anchors. Confirm each one opens on the thing it names.
+- [ ] Open the same file's `## System \u2192 test map` and spot-check three rows by grepping the named test out of the named binary. The table is hand-verified only \u2014 no test resolves it (gap G4), so this step is the only thing standing behind it.
+- [ ] Read the `## What this slice does not prove` list against your own play session and confirm nothing on it is something you actually saw working. If one of those absences is in fact present, the doc is wrong and needs an edit before merge.
+- [ ] Confirm `docs/CONTEXT.md` roadmap item 2 and the `AGENTS.md` phase-2 paragraph agree with each other and with the close doc on the five combat tokens, on 400 enemies, and on the sandbox being off the gate.
+
+Combat, the human-only pass \u2014 run `cargo run -- rts` (the enemy-bearing gate
+scene) and check what no offscreen test can prove:
+
+- [ ] **HP bars are visible and legible.** Damage a unit and select another: bars appear over damaged and selected entities only, vanish at full HP for unselected ones, and read clearly against the terrain at 1080p.
+- [ ] **The death flash is visible.** Kill a Ghoul and lose a worker: each death shows a brief ring flash at the death spot \u2014 noticeable in a melee, not just in isolation.
+- [ ] **Enemy dots are red on the minimap.** Marching Ghouls show as red dots distinct from player, building and node colours; a wave spawning at the far edge is visible on the minimap before it is visible on screen.
+- [ ] **Attack-arming resolves correctly \u2014 knowing there is no cursor visual.** Select soldiers, arm Attack from the card (or its positional key), then click an enemy: they attack it. Arm again and click open ground: they attack-move, engaging Ghouls met on the way. Nothing on screen marks the armed state \u2014 that is named gap G3, not a defect; confirm only that the *next* click resolves as attack/attack-move and that a right-click still cancels back into normal orders.
+- [ ] **The turret visibly fires, and is silent.** Build a Turret in the enemy approach path: once finished it engages Ghouls on screen and its target dies without the turret ever moving. Confirm no fire sound is played \u2014 silence is expected this phase (gap G1).
+- [ ] **An enemy answers a click, and says nothing more.** Click a Ghoul: a read-only card shows its kind and HP and **no status line** (gap G8); the drag box never picks it up.
+- [ ] **The defence really does lose.** Play the gate scene straight, without micro. Confirm that the result feels like the pinned `kills=2 losses=5`: your soldiers spread their fire across a clump instead of finishing single Ghouls (gap G5). This is the step that decides whether the recorded weakness matches what a player experiences.
+- [ ] **Hundreds read as hundreds.** Let the three late waves (150 + 150 + 88) land: the screen and minimap stay readable with hundreds of enemies marching \u2014 a judgment call, recorded here because no test makes it.
+- [ ] **One approach, whichever corner.** Follow both spawn corners in turn and confirm every wave converges on the same place \u2014 the HQ's north approach cell. There is no separate southern line to hold; if you find yourself defending two independent fronts, the close doc's one-objective claim is wrong.
+
+Feedback round 2, the human-only pass \u2014 run
+`cargo run -- rts --scenario assets/scenarios/rts_sandbox_v1.ron` (untimed,
+prebuilt base) and check what no offscreen test can prove:
+
+- [ ] **The build grid reads as a grid.** Arm any build command: the square lattice appears even with the world-grid setting off, the ghost is one tile per square, and it snaps square to square as the cursor moves. A placed Depot sits flush against a neighbouring square edge with no half-cell seam.
+- [ ] **Units still move between squares.** Walk a worker diagonally across a square boundary: it moves smoothly in true cells and never snaps to the lattice \u2014 the grid is for buildings only.
+- [ ] **A builder always gets out.** Place a Barracks centred on the worker that will build it, order the build, and watch the finish: the worker ends up outside and answers a move order at once.
+- [ ] **The still-open traffic case.** Order six or seven bodies to one shared destination at once and watch the ones at the back. If a body sits at 0 cells of progress for a long stretch while others queue ahead of it, that is the known unfixed formation/traffic gap (G11) \u2014 record what you saw rather than filing it as the builder trap.
+- [ ] **Status text tracks the round trip.** Right-click a worker onto a crystal node and read the card through `MOVING TO MINERAL` \u2192 `COLLECTING MINERAL` \u2192 `RETURNING MINERAL`. Note that the carry line still says `CRYSTAL` \u2014 that mismatch is named gap G9, not a defect.
+- [ ] **The target ring survives reselection.** With that worker gathering, click empty ground to deselect, then re-select it: the thin ring is back on the node it is working.
+- [ ] **Ground orders are legible, and the dashes are bearings.** Right-click open ground with a group selected: one flag lands at the click, dashes run from each unit to its own slot, and the flag clears itself shortly after. Confirm the dashes are straight lines to the goal even when the unit has to walk around an obstacle \u2014 they show *where*, never *how* (gap G10).
+- [ ] **Follow and entity rally behave.** Right-click a friendly unit with a squad selected: they escort it at arm's length. Rally the Barracks onto a node and produce a worker: it starts gathering without another order, and a dashed line runs from the building to the flag while the building is selected.
+- [ ] **The workers start idle, and that is expected.** Confirm the six seeded Workers do nothing until ordered, and that leaving the scene unattended does not raise the crystal or gas counters (gap G12). Then give them their first gather order by hand and confirm the counters climb.
+- [ ] **The sandbox is playable for as long as you want.** No frame budget, waves keep arriving for about seven minutes of play, and quitting is Escape \u2014 nothing about this scene is on the gate.
