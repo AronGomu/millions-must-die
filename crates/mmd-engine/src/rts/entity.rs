@@ -60,6 +60,26 @@ pub enum BuildingKind {
     Turret = 3,
 }
 
+impl From<scenario::UnitKindSpec> for UnitKind {
+    fn from(spec: scenario::UnitKindSpec) -> Self {
+        match spec {
+            scenario::UnitKindSpec::Worker => Self::Worker,
+            scenario::UnitKindSpec::Soldier => Self::Soldier,
+        }
+    }
+}
+
+impl From<scenario::BuildingKindSpec> for BuildingKind {
+    fn from(spec: scenario::BuildingKindSpec) -> Self {
+        match spec {
+            scenario::BuildingKindSpec::Hq => Self::Hq,
+            scenario::BuildingKindSpec::Depot => Self::Depot,
+            scenario::BuildingKindSpec::Barracks => Self::Barracks,
+            scenario::BuildingKindSpec::Turret => Self::Turret,
+        }
+    }
+}
+
 /// Harvestable resource kinds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[repr(u8)]

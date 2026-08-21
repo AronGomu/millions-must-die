@@ -8,11 +8,16 @@ use std::collections::HashSet;
 use mmd_engine::rts::{
     BuildingKind, EntityId, EntityKind, EntityStore, FOLLOW_REPATH_CELLS, FORMATION_ARRIVAL_CELLS,
     MAX_ENTITIES, MAX_MOVE_MARKERS, MOVE_MARKER_TICKS, OWNER_PLAYER, Order, OrderReceiptBuffer,
-    RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, Resources, RtsWorldError, Supply, UnitKind,
-    interaction_reach, unit_speed,
+    RTS_UNIT_BODY_RADIUS_CELLS, ResourceKind, Resources, RtsWorldError, SOLDIER_SUPPLY_COST,
+    Supply, UnitKind, WORKER_SUPPLY_COST, interaction_reach, supply_grant, unit_speed,
 };
-use mmd_engine::scenario::{Cell, MAX_SUPPLY_CAP, RtsSpec, ScenarioSpec};
-use mmd_engine::testkit::{HarnessError, RtsHarness, gate_scenario_path};
+use mmd_engine::scenario::{
+    Cell, MAX_ENEMIES, MAX_SUPPLY_CAP, RtsSpec, Scenario, ScenarioSpec, StartUnitSpec, UnitKindSpec,
+};
+use mmd_engine::testkit::{
+    FIXTURE_RTS_PREBUILT_V1, HarnessError, RTS_SANDBOX_SCENE, RtsHarness, fixture_path,
+    gate_scenario_path, scene_path,
+};
 
 // --- EntityStore ------------------------------------------------------------
 
@@ -566,6 +571,8 @@ fn rts_spec(obstacles: Vec<u32>, spawns: Vec<Cell>, destination: Cell) -> Scenar
             crystal_nodes: vec![Cell { x: 100, y: 50 }],
             gas_nodes: vec![Cell { x: 101, y: 50 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }
@@ -1274,5 +1281,193 @@ fn follow_enters_the_state_hash_distinctly() {
         h.state_hash(),
         moving,
         "Follow must not hash like Move at the same goal"
+    );
+}
+
+// --- declared pre-built base and start units (T13) ---------------------------
+
+#[test]
+fn prebuilt_buildings_seed_finished_and_stamped() {
+    let h = RtsHarness::path(fixture_path(FIXTURE_RTS_PREBUILT_V1))
+        .build()
+        .expect("the pre-built fixture loads");
+    let w = h.world();
+    let nav = w.static_nav();
+
+    for (kind, min) in [
+        (BuildingKind::Depot, Cell { x: 32, y: 64 }),
+        (BuildingKind::Barracks, Cell { x: 64, y: 64 }),
+    ] {
+        let ids = h.ids_of_kind(EntityKind::Building(kind));
+        assert_eq!(ids.len(), 1, "exactly one declared {kind:?}");
+        let slot = w
+            .entities()
+            .slot(ids[0])
+            .expect("declared building is alive");
+        assert_eq!(
+            w.entities().progress_target(slot),
+            0,
+            "{kind:?} must seed finished, not as a construction site"
+        );
+
+        let edge = kind.footprint_cells();
+        assert_eq!(
+            w.entities().position(slot),
+            [
+                min.x as f32 + edge as f32 * 0.5,
+                min.y as f32 + edge as f32 * 0.5
+            ],
+            "{kind:?} stands at its footprint centre, anchored on the declared min corner"
+        );
+
+        for y in min.y..min.y + edge {
+            for x in min.x..min.x + edge {
+                let idx = (x + y * nav.width()) as usize;
+                assert!(
+                    nav.placement_solids()[idx],
+                    "{kind:?} footprint cell ({x}, {y}) must be stamped solid"
+                );
+                assert!(
+                    nav.center_blocked()[idx],
+                    "no body centre may stand inside the {kind:?} footprint"
+                );
+            }
+        }
+    }
+
+    // The Depot's grant is on top of the scene's `start_supply_cap`; the
+    // Barracks grants nothing.
+    assert_eq!(
+        w.supply().cap(),
+        10 + supply_grant(BuildingKind::Depot),
+        "a declared building grants its supply exactly once, at construction"
+    );
+    // Two workers from `spawn_cells`, three declared Soldiers.
+    assert_eq!(
+        w.supply().used(),
+        2 * WORKER_SUPPLY_COST + 3 * SOLDIER_SUPPLY_COST
+    );
+}
+
+#[test]
+fn start_units_seed_at_their_declared_count() {
+    let mut spec = rts_spec(vec![], vec![Cell { x: 8, y: 8 }], Cell { x: 8, y: 8 });
+    {
+        let rts = spec.rts.as_mut().expect("rts block");
+        rts.start_supply_cap = 40;
+        rts.start_units = vec![StartUnitSpec {
+            kind: UnitKindSpec::Soldier,
+            cell: Cell { x: 200, y: 60 },
+            count: 8,
+        }];
+    }
+    let h = RtsHarness::spec(spec)
+        .build()
+        .expect("start-unit spec builds");
+    let w = h.world();
+
+    let soldiers = h.ids_of_kind(EntityKind::Unit(UnitKind::Soldier));
+    assert_eq!(
+        soldiers.len(),
+        8,
+        "eight declared Soldiers, eight live ones"
+    );
+
+    let centres: Vec<[f32; 2]> = soldiers
+        .iter()
+        .map(|id| {
+            w.entities()
+                .position(w.entities().slot(*id).expect("alive"))
+        })
+        .collect();
+    for (i, a) in centres.iter().enumerate() {
+        assert!(
+            w.static_nav()
+                .position_clear(*a, RTS_UNIT_BODY_RADIUS_CELLS),
+            "soldier {i} at {a:?} stands on illegal ground"
+        );
+        for b in centres.iter().skip(i + 1) {
+            let d2 = (a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2);
+            let touch = 2.0 * RTS_UNIT_BODY_RADIUS_CELLS;
+            assert!(
+                d2 >= touch * touch - 1e-3,
+                "declared soldiers seeded overlapping: {a:?} and {b:?}"
+            );
+        }
+    }
+    assert_eq!(
+        w.supply().used(),
+        WORKER_SUPPLY_COST + 8 * SOLDIER_SUPPLY_COST,
+        "one worker from `spawn_cells` plus the declared squad"
+    );
+}
+
+#[test]
+fn the_sandbox_scene_loads_and_is_playable() {
+    let scene = Scenario::load_verified(scene_path(RTS_SANDBOX_SCENE))
+        .expect("the sandbox scene loads hash-verified");
+    let rts = scene.rts().expect("rts block").clone();
+    assert_eq!(rts.buildings.len(), 4, "Barracks, Depot and two Turrets");
+    assert_eq!(rts.start_units.len(), 1, "one declared Soldier batch");
+    assert_eq!(rts.start_units[0].count, 8);
+
+    let enemies = rts
+        .enemies
+        .as_ref()
+        .expect("the sandbox scripts an invasion");
+    assert_eq!(enemies.waves.len(), 30, "thirty authored waves");
+    let total: u32 =
+        enemies.pre_placed.len() as u32 + enemies.waves.iter().map(|w| w.count).sum::<u32>();
+    assert!(
+        total <= MAX_ENEMIES,
+        "scripted enemy total {total} must stay under the {MAX_ENEMIES} cap"
+    );
+
+    let h = RtsHarness::path(scene_path(RTS_SANDBOX_SCENE))
+        .build()
+        .expect("the sandbox scene builds a world");
+    let counts = |kind| h.ids_of_kind(kind).len();
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Hq)), 1);
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Depot)), 1);
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Barracks)), 1);
+    assert_eq!(counts(EntityKind::Building(BuildingKind::Turret)), 2);
+    assert_eq!(counts(EntityKind::Unit(UnitKind::Worker)), 6);
+    assert_eq!(counts(EntityKind::Unit(UnitKind::Soldier)), 8);
+
+    // Every building is finished from tick 0 — the whole point of the scene.
+    for kind in [
+        BuildingKind::Hq,
+        BuildingKind::Depot,
+        BuildingKind::Barracks,
+        BuildingKind::Turret,
+    ] {
+        for id in h.ids_of_kind(EntityKind::Building(kind)) {
+            let slot = h.world().entities().slot(id).expect("alive");
+            assert_eq!(
+                h.world().entities().progress_target(slot),
+                0,
+                "{kind:?} must start finished, not as a site"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_sandbox_scene_fights_without_the_player() {
+    let mut h = RtsHarness::path(scene_path(RTS_SANDBOX_SCENE))
+        .build()
+        .expect("the sandbox scene builds a world");
+    // The first wave fires at tick 1800; 2 400 ticks clears it with margin.
+    h.step_exact(2_400);
+
+    assert!(
+        h.world().enemies_spawned() >= 6,
+        "the first authored wave (6 Ghouls) must have marched in by tick 2400, \
+         got {}",
+        h.world().enemies_spawned()
+    );
+    assert!(
+        h.world().start_hq().is_some(),
+        "the HQ must survive an unattended first wave — the sandbox opens playable"
     );
 }

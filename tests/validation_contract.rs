@@ -2122,3 +2122,21 @@ fn bench_binary_still_builds() {
         "bench must be labelled non-gating developer tooling:\n{stdout}"
     );
 }
+
+/// The manual sandbox scene stays off the merge gate, by construction (T13).
+///
+/// `rts_sandbox_v1` is an untimed hands-on tool: thirty authored waves, no
+/// scripted end, no pinned counts. Putting it on the gate would add a run that
+/// proves nothing and can only ever fail for reasons nobody has bounded. The
+/// only way to keep that promise honest is to assert the absence.
+#[test]
+fn the_sandbox_is_not_on_the_merge_gate() {
+    for rel in [CONTRACT_DOC, "README.md"] {
+        let doc = read_doc(rel);
+        assert!(
+            !doc.contains("rts_sandbox_v1"),
+            "{rel} names `rts_sandbox_v1`; the sandbox is a manual tool and must \
+             not appear in a gate block"
+        );
+    }
+}

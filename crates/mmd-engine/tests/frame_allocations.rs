@@ -1705,6 +1705,8 @@ fn combat_march_allocates_nothing() {
             crystal_nodes: vec![Cell { x: 94, y: 1 }],
             gas_nodes: vec![Cell { x: 93, y: 1 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     };
     let mut h = RtsHarness::spec(spec).build().expect("combat harness");

@@ -425,6 +425,8 @@ fn pocket_spec(
             crystal_nodes: vec![Cell { x: 25, y: 9 }],
             gas_nodes: vec![Cell { x: 26, y: 10 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }

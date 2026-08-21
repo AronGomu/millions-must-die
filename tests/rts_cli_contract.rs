@@ -2124,3 +2124,48 @@ fn focused_script_is_independent_of_persisted_gameplay_settings() {
         "the replay wrote its own scripted settings back over the seeded file:\n{persisted}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The untimed manual sandbox scene (T13)
+// ---------------------------------------------------------------------------
+
+/// The sandbox scene is a manual tool, so nothing on the merge gate drives it.
+/// This is its one automated claim: `--scenario` still reaches it, it stands up
+/// a real session, and it reports the combat tokens like any other RTS run.
+#[test]
+fn the_sandbox_scene_runs_from_the_cli() {
+    let Some(cli) = or_skip(
+        "the_sandbox_scene_runs_from_the_cli",
+        rts(&[
+            "--scenario",
+            "assets/scenarios/rts_sandbox_v1.ron",
+            "--frames",
+            "120",
+        ]),
+    ) else {
+        return;
+    };
+    cli.assert_success();
+
+    let exits = cli
+        .stdout
+        .lines()
+        .filter(|l| l.starts_with("rts: clean exit"))
+        .count();
+    assert_eq!(exits, 1, "{cli}\nexactly one clean exit line");
+
+    assert_eq!(cli.exit_field("frames"), "120", "{cli}");
+    assert_eq!(
+        cli.exit_field("quit"),
+        "false",
+        "{cli}\nthe sandbox is untimed: it ends on the frame budget, not on a scripted quit"
+    );
+    // The base is already standing, so the counts are the declared ones.
+    assert_eq!(cli.exit_field("buildings"), "5", "{cli}");
+    assert_eq!(cli.exit_field("units"), "14", "{cli}");
+    // Combat tokens are present and the HQ is up: the scene opens playable.
+    for key in ["kills", "losses", "enemies_spawned", "first_combat_tick"] {
+        cli.exit_field(key);
+    }
+    assert_eq!(cli.exit_field("hq_alive"), "1", "{cli}");
+}

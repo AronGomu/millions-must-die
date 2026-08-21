@@ -784,6 +784,30 @@ impl RtsWorld {
                 what: "hq".to_string(),
             })?;
 
+        // 1b. Declared pre-built buildings, in scenario order, each at its
+        //     footprint centre and each already finished: a fresh spawn's
+        //     `progress_target` is 0, which is exactly what "finished" means
+        //     everywhere else in this file. They are spawned *before*
+        //     `StaticNav::new` for the same reason the HQ is — that
+        //     constructor stamps every finished building in the store into
+        //     `solids` and `placement_solids`, so seeding here is the same
+        //     path a live `finish_site` takes, not a second one.
+        let mut prebuilt_supply_grant: u32 = 0;
+        for spec in &rts.buildings {
+            let kind = BuildingKind::from(spec.kind);
+            let edge = kind.footprint_cells() as f32;
+            let pos = [
+                spec.cell.x as f32 + edge * 0.5,
+                spec.cell.y as f32 + edge * 0.5,
+            ];
+            entities
+                .spawn(EntityKind::Building(kind), OWNER_PLAYER, pos)
+                .ok_or_else(|| RtsWorldError::StoreFull {
+                    what: "pre-built building".to_string(),
+                })?;
+            prebuilt_supply_grant += supply_grant(kind);
+        }
+
         // 2. Crystal nodes, then gas nodes, each at its cell centre.
         for c in &rts.crystal_nodes {
             let pos = [c.x as f32 + 0.5, c.y as f32 + 0.5];
@@ -820,8 +844,30 @@ impl RtsWorld {
         // single tick ever ran. Ties (equal squared distance to the
         // preferred cell) go to the lower flat cell index, so relocation is
         // reproducible independent of scan order.
-        let mut worker_count: u32 = 0;
+        // 3b. Declared start units, before the workers: an authored squad owns
+        //     the ground it names and the workers relocate around it, rather
+        //     than the other way round. Every body goes through the same
+        //     collision-free search, against the same `placed` list, so a
+        //     batch of eight spreads out instead of stacking.
         let mut placed: Vec<[f32; 2]> = Vec::with_capacity(scenario.spawn_cells().len());
+        let mut start_unit_supply: u32 = 0;
+        for spec in &rts.start_units {
+            let kind = UnitKind::from(spec.kind);
+            for _ in 0..spec.count {
+                let preferred = [spec.cell.x as f32 + 0.5, spec.cell.y as f32 + 0.5];
+                let pos = nearest_free_body_center(&static_nav, &placed, None, None, preferred)
+                    .ok_or(RtsWorldError::NoFreeUnitPosition)?;
+                entities
+                    .spawn(EntityKind::Unit(kind), OWNER_PLAYER, pos)
+                    .ok_or_else(|| RtsWorldError::StoreFull {
+                        what: "start unit".to_string(),
+                    })?;
+                placed.push(pos);
+                start_unit_supply += supply_cost(kind);
+            }
+        }
+
+        let mut worker_count: u32 = 0;
         for c in scenario.spawn_cells() {
             let preferred = [c.x as f32 + 0.5, c.y as f32 + 0.5];
             let pos = nearest_free_body_center(&static_nav, &placed, None, None, preferred)
@@ -862,7 +908,8 @@ impl RtsWorld {
             gas: rts.start_gas,
         };
         let mut supply = Supply::new(rts.start_supply_cap);
-        supply.add_used(WORKER_SUPPLY_COST * worker_count);
+        supply.grant_cap(prebuilt_supply_grant);
+        supply.add_used(WORKER_SUPPLY_COST * worker_count + start_unit_supply);
 
         // The seeded HQ is already stamped into `static_nav.solids` (it was
         // spawned before `StaticNav::new` ran), so the pool is built straight
@@ -4591,6 +4638,8 @@ mod tests {
                 crystal_nodes: vec![Cell { x: 1, y: 62 }],
                 gas_nodes: vec![Cell { x: 1, y: 61 }],
                 enemies: None,
+                buildings: vec![],
+                start_units: vec![],
             }),
         };
         RtsWorld::from_scenario(scenario::Scenario::from_spec(spec).expect("valid spec"))

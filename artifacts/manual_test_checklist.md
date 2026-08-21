@@ -975,3 +975,30 @@ first wave is about fifty seconds in.
 - [ ] Let the later hordes (150 + 150 + 88 Ghouls) spawn and watch the frame pacing and the minimap with hundreds of enemies alive at once. Confirm the picture stays readable — no flicker, no dots vanishing, no audio dropouts — and note anything that feels wrong, since no gate command measures this.
 - [ ] Play a round where you deliberately let the wave through to the HQ. Confirm the HQ takes visible damage, and that if you let it die the game does not crash or freeze — this is a sandbox, so there is no win or lose screen, and that is expected.
 - [ ] Run `cargo run -- rts --frames 4500 --inject-input-file assets/scenarios/rts_combat_v1.script` in a real window and watch it play itself. Confirm what you see matches what the exit line says: enemies spawned, something of yours died, something of theirs died, and the HQ survived.
+
+## T13 manual-sandbox-scenario
+
+A second tracked scene, `assets/scenarios/rts_sandbox_v1.ron`, exists purely
+for hands-on play: the base is already built (HQ, Depot, Barracks, two
+Turrets), eight Soldiers are already standing south-west of it, the stock
+starts at 1 500 crystal / 400 gas, and thirty authored waves march in from the
+two far south corners — the first at tick 1 800 (about thirty seconds), then
+one every fifteen seconds, ramping 6, 6, 8, 8, 10 … up to 20. It is
+deliberately **not** on the merge gate and no timed test drives it, so
+everything it is for is a human step. Launch it with
+`cargo run -- rts --scenario assets/scenarios/rts_sandbox_v1.ron` and omit
+`--frames` so the run keeps going until you quit.
+
+Known and expected on this scene: the six Workers start **idle**, not
+gathering. Nothing in the engine gives a seeded unit a starting order, and this
+ticket added no such behaviour — an unattended run at 3 000 ticks still reads
+`crystal=1500 gas=400`. Give them their first gather order by hand.
+
+- [ ] Launch the sandbox and confirm on frame 1 that the camera opens on a finished base: HQ, Depot, Barracks and two Turrets all drawn as completed buildings with no construction-site look, no build progress bar, and no worker attending any of them.
+- [ ] Read the HUD on frame 1. Confirm it shows 1 500 crystal, 400 gas and 22/60 supply — the Depot's grant is already in the ceiling, and the six Workers plus eight Soldiers are already charged against it.
+- [ ] Box-select the eight Soldiers and confirm the command card and the selection count both read eight, then give them a move order and confirm all eight walk without any pair sliding through each other.
+- [ ] Select the six Workers and right-click a crystal node. Confirm they start gathering from a standing start and that the crystal counter begins to climb — this is the step that proves the seeded base is a working base, not just a picture of one.
+- [ ] Select the Barracks and produce a Soldier. Confirm there is enough stock and supply headroom for it to start immediately, and that it walks out of the building when it finishes.
+- [ ] Wait out the first wave without touching anything. Confirm enemy dots appear at a bottom corner of the minimap about thirty seconds in, walk up the west flank towards the base, and that the west Turret opens fire on them before they reach the HQ.
+- [ ] Let the run keep going past several waves and confirm the waves keep arriving on a rhythm of roughly fifteen seconds and keep getting bigger. Confirm the run does not end on its own — no scripted quit, no frame budget — and that Escape then Quit is what ends it.
+- [ ] Confirm the gate scene is untouched by all of this: `cargo run -- rts` with no `--scenario` still opens the ordinary prototype scene with one HQ, six Workers and nothing else built.

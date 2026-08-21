@@ -4,10 +4,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use mmd_engine::scenario::{
-    BUILD_SQUARE_CELLS, COLLISION_SCENE_V1, Cell, EnemySpec, FIXTURE_MAX_AGENTS, FIXTURE_MAX_CELLS,
-    HQ_FOOTPRINT_CELLS, MAX_COLLISION_RADIUS_Q8, MAX_ENEMIES, MAX_LIVE_AGENTS,
-    MAX_SEPARATION_STRENGTH_Q8, MAX_START_RESOURCE, MAX_SUPPLY_CAP, RTS_PROTOTYPE_V1, RtsSpec,
-    Scenario, ScenarioError, ScenarioSpec, WaveSpec,
+    BUILD_SQUARE_CELLS, BuildingKindSpec, COLLISION_SCENE_V1, Cell, EnemySpec, FIXTURE_MAX_AGENTS,
+    FIXTURE_MAX_CELLS, HQ_FOOTPRINT_CELLS, MAX_COLLISION_RADIUS_Q8, MAX_ENEMIES, MAX_LIVE_AGENTS,
+    MAX_SEPARATION_STRENGTH_Q8, MAX_START_RESOURCE, MAX_START_UNITS, MAX_SUPPLY_CAP, PrebuiltSpec,
+    RTS_PROTOTYPE_V1, RtsSpec, Scenario, ScenarioError, ScenarioSpec, StartUnitSpec, UnitKindSpec,
+    WaveSpec,
 };
 use mmd_engine::testkit::{
     ALL_COLLISION_SCENES, ALL_FIXTURES, COLLISION_MID_SCENE, COLLISION_SPRITE_SCENE, fixture_path,
@@ -1051,6 +1052,8 @@ fn rts_spec() -> ScenarioSpec {
             crystal_nodes: vec![Cell { x: 5, y: 5 }],
             gas_nodes: vec![Cell { x: 6, y: 6 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }
@@ -1423,6 +1426,8 @@ fn a_phase0_family_with_an_rts_block_is_rejected() {
             crystal_nodes: vec![Cell { x: 4, y: 4 }],
             gas_nodes: vec![Cell { x: 5, y: 5 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
         ..fixture_spec()
     };
@@ -1564,4 +1569,145 @@ fn the_renderer_contract_still_binds_the_rts_family() {
         ..rts_spec()
     };
     expect_invalid_dimension(spec, "atlas_count");
+}
+
+// --- pre-built buildings and start units (T13) -------------------------------
+//
+// Two `#[serde(default)]` lists on the `rts` block: buildings the scene starts
+// with already finished, and units it starts with beyond the workers
+// `spawn_cells` seeds. `old_scenes_parse_without_the_new_blocks` is the
+// load-bearing one — it is what proves the defaults kept every tracked scene's
+// bytes, and therefore its `.sha256` sidecar, valid.
+
+/// `rts_spec()` with a small, fully legal pre-built base: a Depot and a
+/// Barracks clear of the HQ at (200, 200) and of the nodes at (5, 5)/(6, 6),
+/// plus one batch of Soldiers.
+fn prebuilt_rts_spec() -> ScenarioSpec {
+    let mut spec = rts_spec();
+    let rts = spec.rts.as_mut().expect("rts block");
+    rts.buildings = vec![
+        PrebuiltSpec {
+            kind: BuildingKindSpec::Depot,
+            cell: Cell { x: 160, y: 160 },
+        },
+        PrebuiltSpec {
+            kind: BuildingKindSpec::Barracks,
+            cell: Cell { x: 96, y: 96 },
+        },
+    ];
+    rts.start_units = vec![StartUnitSpec {
+        kind: UnitKindSpec::Soldier,
+        cell: Cell { x: 130, y: 130 },
+        count: 3,
+    }];
+    spec
+}
+
+#[test]
+fn prebuilt_baseline_block_is_valid() {
+    // Guards the negative cases below: each mutates exactly one thing.
+    Scenario::from_spec(prebuilt_rts_spec()).expect("baseline pre-built block must validate");
+}
+
+#[test]
+fn old_scenes_parse_without_the_new_blocks() {
+    // Every RTS-family scene tracked before this change: still hash-verified,
+    // and reading as "declares no pre-built base".
+    for name in ["fixture_rts_baseline_v1", "fixture_rts_combat_v1"] {
+        let scene = Scenario::load_verified(fixture_path(name))
+            .unwrap_or_else(|e| panic!("{name} loads hash-verified: {e}"));
+        let rts = scene.rts().expect("rts block");
+        assert!(rts.buildings.is_empty(), "{name} declares no buildings");
+        assert!(rts.start_units.is_empty(), "{name} declares no start units");
+    }
+    let gate = Scenario::load_verified(rts_scene_path()).expect("gate scene loads hash-verified");
+    let rts = gate.rts().expect("rts block");
+    assert!(
+        rts.buildings.is_empty() && rts.start_units.is_empty(),
+        "the gate scene must keep its bytes: it declares neither new block"
+    );
+
+    // ...and the phase-0 fixtures, which carry no `rts` block at all.
+    for name in ALL_FIXTURES {
+        let scene = Scenario::load_verified(fixture_path(name))
+            .unwrap_or_else(|e| panic!("{name} loads hash-verified: {e}"));
+        assert!(scene.rts().is_none(), "{name} is not an RTS scene");
+    }
+}
+
+#[test]
+fn a_prebuilt_building_must_be_square_aligned() {
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").buildings[0].cell = Cell { x: 161, y: 176 };
+    expect_invalid_rts(spec, "buildings[0] (161, 176)");
+
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").buildings[0].cell = Cell { x: 161, y: 176 };
+    expect_invalid_rts(spec, &format!("{BUILD_SQUARE_CELLS}-cell build square"));
+}
+
+#[test]
+fn prebuilt_buildings_may_not_overlap_anything() {
+    // 1. On the HQ, which sits at (200, 200) with a 24-cell footprint.
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").buildings[0].cell = Cell { x: 200, y: 200 };
+    expect_invalid_rts(spec, "overlaps the HQ footprint");
+
+    // 2. On a resource node: `crystal_nodes[0]` is (5, 5), inside an 8-cell
+    //    Depot anchored at the origin.
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").buildings[0].cell = Cell { x: 0, y: 0 };
+    expect_invalid_rts(spec, "covers node (5, 5)");
+
+    // 3. On blocked terrain.
+    let mut spec = prebuilt_rts_spec();
+    spec.obstacle_cells = vec![64 + 64 * 320];
+    spec.rts.as_mut().expect("rts block").buildings[0].cell = Cell { x: 64, y: 64 };
+    expect_invalid_rts(spec, "footprint cell (64, 64) is blocked");
+
+    // 4. On an earlier declaration: `buildings[1]` is a 16-cell Barracks at
+    //    (96, 96), so a Depot at (104, 104) lands inside it.
+    let mut spec = prebuilt_rts_spec();
+    {
+        let rts = spec.rts.as_mut().expect("rts block");
+        rts.buildings.push(PrebuiltSpec {
+            kind: BuildingKindSpec::Depot,
+            cell: Cell { x: 104, y: 104 },
+        });
+    }
+    expect_invalid_rts(spec, "buildings[2] (104, 104) overlaps buildings[1]");
+}
+
+#[test]
+fn start_units_must_stand_clear_of_buildings() {
+    // Inside `buildings[1]`, the 16-cell Barracks at (96, 96).
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").start_units[0].cell = Cell { x: 105, y: 105 };
+    expect_invalid_rts(spec, "start_units[0] (105, 105) lies inside buildings[1]");
+
+    // Inside the HQ.
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").start_units[0].cell = Cell { x: 205, y: 205 };
+    expect_invalid_rts(spec, "lies inside the HQ footprint");
+
+    // Off the map entirely.
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").start_units[0].cell = Cell { x: 320, y: 10 };
+    expect_invalid_rts(spec, "start_units[0] (320, 10) is out of bounds");
+}
+
+#[test]
+fn a_start_unit_batch_is_counted_and_capped() {
+    // An empty batch is a typo, not a declaration.
+    let mut spec = prebuilt_rts_spec();
+    spec.rts.as_mut().expect("rts block").start_units[0].count = 0;
+    expect_invalid_rts(spec, "start_units[0]: count must be >= 1");
+
+    // The cap counts the workers `spawn_cells` seeds, so a scene cannot fill
+    // the entity store before its first tick.
+    let mut spec = prebuilt_rts_spec();
+    let spawns = spec.spawn_cells.len() as u32;
+    spec.rts.as_mut().expect("rts block").start_units[0].count = MAX_START_UNITS - spawns + 1;
+    let over = MAX_START_UNITS + 1;
+    expect_invalid_rts(spec, &format!("start unit total {over} "));
 }

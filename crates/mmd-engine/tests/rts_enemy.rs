@@ -151,6 +151,8 @@ fn deferral_spec() -> ScenarioSpec {
                     spawn_point: 0,
                 }],
             }),
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }

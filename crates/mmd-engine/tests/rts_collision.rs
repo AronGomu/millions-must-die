@@ -70,6 +70,8 @@ fn collision_spec(spawns: Vec<Cell>, obstacle_cells: Vec<u32>) -> ScenarioSpec {
             crystal_nodes: vec![Cell { x: 1, y: H - 2 }],
             gas_nodes: vec![Cell { x: 1, y: H - 3 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }
@@ -1776,6 +1778,8 @@ fn pocket_scene(open: &[OpenRect]) -> RtsHarness {
         crystal_nodes: vec![Cell { x: 25, y: 9 }],
         gas_nodes: vec![Cell { x: 26, y: 10 }],
         enemies: None,
+        buildings: vec![],
+        start_units: vec![],
     });
     RtsHarness::spec(spec)
         .build()

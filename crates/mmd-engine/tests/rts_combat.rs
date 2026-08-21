@@ -418,6 +418,8 @@ fn combat_spec() -> ScenarioSpec {
             crystal_nodes: vec![Cell { x: 94, y: 1 }],
             gas_nodes: vec![Cell { x: 93, y: 1 }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }

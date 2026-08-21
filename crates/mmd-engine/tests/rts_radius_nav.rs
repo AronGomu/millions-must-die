@@ -83,6 +83,8 @@ fn small_spec(width: u32, height: u32, obstacle_cells: Vec<u32>) -> ScenarioSpec
                 y: height - 3,
             }],
             enemies: None,
+            buildings: vec![],
+            start_units: vec![],
         }),
     }
 }
